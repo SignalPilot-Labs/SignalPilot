@@ -90,18 +90,18 @@ export async function bootRuntime(
   navigate: (href: string) => void,
   signal: AbortSignal,
 ): Promise<BootResult> {
+  // Kiosk viewer (chat live notebook panel): DOCUMENT-FIRST, kernel-free.
+  // Branch BEFORE the token await so a slow token fetch never leaves the
+  // viewer in the runtime-health phase.
+  if (config.kioskAttach) {
+    onPhase("ready");
+    return bootKioskViewer(config, await config.getToken(), onPhase, navigate, signal);
+  }
+
   // Auth: the proxy verifies the caller's Clerk JWT (cloud) directly; in local
   // mode there's no token. Resolve once for the boot fetches; the long-lived
   // embed client gets the getToken thunk so it always uses a fresh token.
   const bootToken = await config.getToken();
-
-  // Kiosk viewer (chat live notebook panel): DOCUMENT-FIRST, kernel-free.
-  // Renders immediately from the best available document; the websocket is
-  // attached in the background purely for live updates and its failure is
-  // silent. No health gate, no session provisioning, ever.
-  if (config.kioskAttach) {
-    return bootKioskViewer(config, bootToken, onPhase, navigate, signal);
-  }
 
   // Sessionless boot (Runtime v2): a project notebook opens with NO sandbox.
   // The document and file tree come straight from the gateway workspace

@@ -70,7 +70,9 @@ export default function NotebookBoot({
   const clientRef = useRef<SignalpilotClient | null>(null);
   const staticDataRef = useRef<NotebookStaticData | null>(null);
   const [ready, setReady] = useState(false);
-  const [phase, setPhase] = useState<string>("health");
+  // Viewer embeds never gate on runtime health. Their first visible phase
+  // must read as document loading, not runtime startup.
+  const [phase, setPhase] = useState<string>(view ? "ready" : "health");
   const [EditorComponent, setEditorComponent] =
     useState<SignalpilotEditorComponent | null>(null);
 

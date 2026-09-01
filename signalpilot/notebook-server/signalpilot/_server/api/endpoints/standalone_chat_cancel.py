@@ -55,9 +55,13 @@ async def cancel(*, request: Request) -> JSONResponse:
     # The conversation-specific notebook bearer authorizes cancellation.
     stopped = stop_agent(f"standalone-{run_id}")
     kernel_stopped = False
-    if analysis_session_id := _ANALYSIS_SESSIONS_BY_RUN.pop(run_id, None):
+    # Close EVERY live kernel of the run, not only the analysis notebook.
+    for session_id in _ANALYSIS_SESSIONS_BY_RUN.pop(run_id, set()):
         try:
-            kernel_stopped = _close_analysis_kernel(request.app, analysis_session_id)
+            kernel_stopped = (
+                _close_analysis_kernel(request.app, session_id)
+                or kernel_stopped
+            )
         except Exception:
-            kernel_stopped = False
+            pass
     return JSONResponse({"stopped": stopped, "kernel_stopped": kernel_stopped})

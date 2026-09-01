@@ -1,12 +1,14 @@
 """Conversation notebook resource.
 
-A chat conversation owns one analysis notebook. This module answers one
-question for the UI in a single call: where is that notebook now, and what
+A chat conversation owns one or more named notebooks. "analysis" is the
+default notebook every conversation starts with. This module answers one
+question for the UI in a single call: where is each notebook now, and what
 is its saved content?
 
-The answer has two parts:
+The answer has two parts per notebook:
 - Attach ids for the live kernel, taken from the conversation's notebook
-  pointer. The pointer is written by the chat worker on each notebook start.
+  rows (or, for legacy conversations, the pointer columns on the
+  conversation row). The chat worker writes both on each notebook start.
 - The newest archived document (source plus outputs snapshot) for
   kernel-free rendering when the kernel is gone.
 
@@ -27,13 +29,17 @@ from typing import Literal
 
 import httpx
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.db.models import GatewayChatConversation, GatewayChatRuntimeArchive
 from gateway.notebooks.session_service import upstream_base_for
 from gateway.standalone_chat.object_storage import chat_object_storage
 from gateway.store import notebook_sessions as ns
+from gateway.store.standalone_chat.notebooks import (
+    DEFAULT_NOTEBOOK_NAME,
+    list_conversation_notebooks,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -58,13 +64,82 @@ class ConversationNotebookDocument(BaseModel):
 
 
 class ConversationNotebookInfo(BaseModel):
-    """Where the conversation's notebook is and what content is saved."""
+    """Where one conversation notebook is and what content is saved."""
 
     status: Literal["live", "ended", "none"]
+    name: str = DEFAULT_NOTEBOOK_NAME
     gateway_session_id: str | None = None
     kernel_session_id: str | None = None
     notebook_path: str | None = None
     document: ConversationNotebookDocument | None = None
+
+
+async def get_conversation_notebooks(
+    db: AsyncSession,
+    *,
+    conversation: GatewayChatConversation,
+    http_client: httpx.AsyncClient,
+) -> list[ConversationNotebookInfo]:
+    """Resolve every notebook of an already-authorized conversation.
+
+    Ordered "analysis" first, then by name. When the child table has no
+    rows, the legacy pointer columns become a single "analysis" entry so
+    every existing conversation keeps working unchanged.
+    """
+    rows = await list_conversation_notebooks(db, conversation_id=conversation.id)
+    if rows:
+        entries: list[tuple[str, str | None, str | None, str | None]] = [
+            (row.name, row.gateway_session_id, row.kernel_session_id, row.notebook_path)
+            for row in rows
+        ]
+    else:
+        entries = [
+            (
+                DEFAULT_NOTEBOOK_NAME,
+                conversation.notebook_session_id,
+                conversation.notebook_kernel_session_id,
+                conversation.notebook_path,
+            )
+        ]
+    # Notebooks of one conversation share one sandbox, so probe each
+    # gateway session at most once.
+    liveness: dict[str, bool] = {}
+    infos: list[ConversationNotebookInfo] = []
+    for name, gateway_session_id, kernel_session_id, notebook_path in entries:
+        live = False
+        if gateway_session_id:
+            if gateway_session_id not in liveness:
+                liveness[gateway_session_id] = await _session_is_live(
+                    db,
+                    http_client,
+                    session_id=gateway_session_id,
+                    org_id=conversation.org_id,
+                )
+            live = liveness[gateway_session_id]
+        document = await _latest_document(
+            db,
+            org_id=conversation.org_id,
+            user_id=conversation.user_id,
+            conversation_id=conversation.id,
+            name=name,
+        )
+        if live:
+            status: Literal["live", "ended", "none"] = "live"
+        elif gateway_session_id or document is not None:
+            status = "ended"
+        else:
+            status = "none"
+        infos.append(
+            ConversationNotebookInfo(
+                status=status,
+                name=name,
+                gateway_session_id=gateway_session_id,
+                kernel_session_id=kernel_session_id,
+                notebook_path=notebook_path,
+                document=document,
+            )
+        )
+    return infos
 
 
 async def get_conversation_notebook(
@@ -73,34 +148,16 @@ async def get_conversation_notebook(
     conversation: GatewayChatConversation,
     http_client: httpx.AsyncClient,
 ) -> ConversationNotebookInfo:
-    """Resolve the notebook resource for an already-authorized conversation."""
-    live = False
-    if conversation.notebook_session_id:
-        live = await _session_is_live(
-            db,
-            http_client,
-            session_id=conversation.notebook_session_id,
-            org_id=conversation.org_id,
-        )
-    document = await _latest_document(
+    """Resolve the default notebook for the existing single-notebook endpoint."""
+    infos = await get_conversation_notebooks(
         db,
-        org_id=conversation.org_id,
-        user_id=conversation.user_id,
-        conversation_id=conversation.id,
+        conversation=conversation,
+        http_client=http_client,
     )
-    if live:
-        status: Literal["live", "ended", "none"] = "live"
-    elif conversation.notebook_session_id or document is not None:
-        status = "ended"
-    else:
-        status = "none"
-    return ConversationNotebookInfo(
-        status=status,
-        gateway_session_id=conversation.notebook_session_id,
-        kernel_session_id=conversation.notebook_kernel_session_id,
-        notebook_path=conversation.notebook_path,
-        document=document,
-    )
+    for info in infos:
+        if info.name == DEFAULT_NOTEBOOK_NAME:
+            return info
+    return infos[0]
 
 
 async def _session_is_live(
@@ -146,8 +203,13 @@ async def _latest_document(
     org_id: str,
     user_id: str,
     conversation_id: str,
+    name: str = DEFAULT_NOTEBOOK_NAME,
 ) -> ConversationNotebookDocument | None:
-    """Load the newest intact archived document for the conversation."""
+    """Load the newest intact archived document for one named notebook."""
+    name_filter = GatewayChatRuntimeArchive.notebook_name == name
+    if name == DEFAULT_NOTEBOOK_NAME:
+        # Legacy archives predate notebook names; NULL means "analysis".
+        name_filter = or_(name_filter, GatewayChatRuntimeArchive.notebook_name.is_(None))
     archives = (
         (
             await db.execute(
@@ -156,6 +218,7 @@ async def _latest_document(
                     GatewayChatRuntimeArchive.conversation_id == conversation_id,
                     GatewayChatRuntimeArchive.org_id == org_id,
                     GatewayChatRuntimeArchive.user_id == user_id,
+                    name_filter,
                 )
                 .order_by(GatewayChatRuntimeArchive.created_at.desc())
                 .limit(_MAX_ARCHIVE_CANDIDATES)

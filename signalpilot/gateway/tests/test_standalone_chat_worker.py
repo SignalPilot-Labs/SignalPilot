@@ -11,7 +11,7 @@ import pytest
 from gateway.standalone_chat import worker, worker_context
 
 
-def test_public_error_message_preserves_root_cause_and_removes_traceback() -> None:
+def test_public_error_message_preserves_upstream_text_verbatim() -> None:
     error = RuntimeError(
         "CLIConnectionError: OAuth token expired\n"
         "stderr: authentication failed\n"
@@ -22,9 +22,7 @@ def test_public_error_message_preserves_root_cause_and_removes_traceback() -> No
 
     message = worker._public_error_message(error)
 
-    assert message == ("CLIConnectionError: OAuth token expired\nstderr: authentication failed")
-    assert "Traceback" not in message
-    assert "/opt/runtime" not in message
+    assert message == str(error)
 
 
 def test_public_error_message_redacts_credentials() -> None:
@@ -32,6 +30,12 @@ def test_public_error_message_redacts_credentials() -> None:
 
     assert message == "Database failed: [REDACTED_CONNECTION]"
     assert "hunter2" not in message
+
+
+def test_public_error_message_is_not_truncated_or_paraphrased() -> None:
+    upstream = "provider error: " + ("x" * 2_000)
+
+    assert worker._public_error_message(RuntimeError(upstream)) == upstream
 
 
 def test_public_full_trace_is_expandable_safe_diagnostic_content() -> None:
@@ -47,6 +51,12 @@ def test_public_full_trace_is_expandable_safe_diagnostic_content() -> None:
             "model": "claude-sonnet-test",
             "auth_mode": "oauth",
             "credential_present": True,
+            "api_error_status": 429,
+            "rate_limit": {
+                "status": "rejected",
+                "resets_at": 1788213000,
+                "raw": {"unknownFutureField": "preserved"},
+            },
             "environment": {
                 "CLAUDE_CONFIG_DIR": "configured",
                 "SECRET_TOKEN": "must-not-pass",
@@ -60,10 +70,16 @@ def test_public_full_trace_is_expandable_safe_diagnostic_content() -> None:
     assert "oauth-secret" not in trace
     assert "very-secret-token" not in trace
     assert "Authorization: Bearer [REDACTED]" in trace
-    assert "/opt/runtime" not in trace
+    assert '/opt/runtime/agent.py' in trace
     assert context["auth_mode"] == "oauth"
     assert context["error_type"] == "CLIConnectionError"
     assert context["credential_present"] is True
+    assert context["api_error_status"] == 429
+    assert context["rate_limit"] == {
+        "status": "rejected",
+        "resets_at": 1788213000,
+        "raw": {"unknownFutureField": "preserved"},
+    }
     assert context["environment"] == {"CLAUDE_CONFIG_DIR": "configured"}
 
 
@@ -162,6 +178,9 @@ async def test_notebook_stream_does_not_hold_a_database_session(monkeypatch: pyt
 
     run = SimpleNamespace(
         id="run-a",
+        org_id="org-a",
+        user_id="user-a",
+        conversation_id="conv-a",
         execution_attempt=1,
         cancellation_requested_at=None,
     )
@@ -293,6 +312,9 @@ async def test_terminal_notebook_validation_error_persists_no_answer_or_artifact
 
     run = SimpleNamespace(
         id="run-dirty",
+        org_id="org-a",
+        user_id="user-a",
+        conversation_id="conv-a",
         execution_attempt=1,
         cancellation_requested_at=None,
     )
@@ -394,6 +416,7 @@ class TestNotebookStartedPayload:
             "gateway_session_id": "gw-sess-1",
             "kernel_session_id": "s_abc123",
             "notebook_path": "/tmp/signalpilot-chat-runs/run-1/analysis.py",
+            "notebook": "analysis",
         }
 
     def test_tolerates_non_json_tool_result(self):
@@ -403,7 +426,11 @@ class TestNotebookStartedPayload:
             tool_result_content="kernel started",
             gateway_session_id="gw-sess-1",
         )
-        assert payload == {"status": "running", "gateway_session_id": "gw-sess-1"}
+        assert payload == {
+            "status": "running",
+            "gateway_session_id": "gw-sess-1",
+            "notebook": "analysis",
+        }
 
     def test_tolerates_missing_everything(self):
         from gateway.standalone_chat.worker import _notebook_started_payload
@@ -412,7 +439,7 @@ class TestNotebookStartedPayload:
             tool_result_content="",
             gateway_session_id=None,
         )
-        assert payload == {"status": "running"}
+        assert payload == {"status": "running", "notebook": "analysis"}
 
     def test_extracts_ids_from_content_block_repr(self):
         """The agent SDK forwards MCP tool results as str(content_blocks) —

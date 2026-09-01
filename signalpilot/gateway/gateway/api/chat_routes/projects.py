@@ -41,7 +41,6 @@ async def bootstrap_chat(store: StoreD, role: OrgRole):
         "forking": feature_flags.forking,
         "size_router": feature_flags.size_router,
         "size_router_shadow": feature_flags.size_router_shadow,
-        "notebook_analysis": feature_flags.notebook_analysis,
         "runtime_results": feature_flags.runtime_results,
         "runtime_artifacts": feature_flags.runtime_artifacts,
         "dataset_refs": feature_flags.dataset_refs,

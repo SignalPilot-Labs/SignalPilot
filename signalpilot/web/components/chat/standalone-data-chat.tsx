@@ -64,6 +64,7 @@ import {
   useStandaloneUiMessages,
 } from "~/components/chat/use-standalone-chat-run";
 import { useStandaloneChatActions } from "~/components/chat/use-standalone-chat-actions";
+import { activeDashboardPreviewLabel } from "~/lib/chat-run-steps";
 
 // Re-exports for existing importers of this module path.
 export { ChatUiContext, useChatUi } from "~/components/chat/chat-ui-context";
@@ -285,6 +286,10 @@ export function StandaloneDataChat({
     }
     return null;
   }, [uiMessages]);
+  const dashboardUpdateLabel = useMemo(
+    () => activeDashboardPreviewLabel(events, currentRun?.id),
+    [currentRun?.id, events],
+  );
   useEffect(() => {
     if (currentRun?.status === "queued" || currentRun?.status === "running") {
       observedActiveRun.current = true;
@@ -652,6 +657,7 @@ export function StandaloneDataChat({
           {conversationId && dashboardSessionId && (
             <ChatDashboardPanel
               sessionId={dashboardSessionId}
+              updateLabel={dashboardUpdateLabel}
               onClose={() => {
                 setDashboardSessionId(null);
                 const params = new URLSearchParams(searchParams.toString());

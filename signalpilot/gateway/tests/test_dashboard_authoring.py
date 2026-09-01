@@ -826,6 +826,159 @@ async def test_create_authoring_session_canonicalizes_model_filter_targets(
 
 
 @pytest.mark.asyncio
+async def test_chat_dashboard_authoring_streams_real_generation_phases(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_definition = _definition_with_filter()
+    progress_events: list[dict] = []
+
+    class PreviewAgent:
+        model = "test-model"
+
+        async def draft(self, **_kwargs) -> DashboardAgentDraft:
+            return DashboardAgentDraft(
+                summary="Created the governed dashboard preview.",
+                definition=model_definition,
+            )
+
+    async def resolve_context(*_args, **_kwargs) -> DashboardSemanticContext:
+        return _orders_context()
+
+    async def active_chat_run(*_args, **_kwargs):
+        return SimpleNamespace(
+            id="chat-run-1",
+            project_id=model_definition.signalPilot.projectId,
+            conversation_id="conversation-1",
+        )
+
+    async def append_event(_db, **kwargs):
+        assert kwargs["run_id"] == "chat-run-1"
+        assert kwargs["event_type"] == "progress"
+        progress_events.append(kwargs["payload"])
+
+    async def authoring_agent(*_args, **_kwargs):
+        return PreviewAgent(), False
+
+    monkeypatch.setattr(dashboard_api.resolver, "resolve", resolve_context)
+    monkeypatch.setattr(dashboard_api, "_request_chat_run", active_chat_run)
+    monkeypatch.setattr(dashboard_api, "_dashboard_authoring_agent", authoring_agent)
+    monkeypatch.setattr(dashboard_api.chat_store, "append_event", append_event)
+    store = SimpleNamespace(
+        session=db_session,
+        user_id="owner-a",
+        _require_org_id=lambda: "org-a",
+    )
+
+    session = await dashboard_api.create_dashboard_authoring_session(
+        DashboardAuthoringRequest(
+            prompt="Create an executive dashboard",
+            project_id=model_definition.signalPilot.projectId,
+            commit_sha=model_definition.signalPilot.commitSha,
+        ),
+        store,
+    )
+
+    assert [event["phase"] for event in progress_events] == [
+        "resolving_context",
+        "drafting",
+        "validating",
+        "ready",
+    ]
+    assert all(event["scope"] == "dashboard_authoring" for event in progress_events)
+    assert progress_events[-1] == {
+        "scope": "dashboard_authoring",
+        "phase": "ready",
+        "label": f"Preview ready with {len(model_definition.charts)} charts",
+        "authoring_session_id": session.id,
+        "draft_revision": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_chat_dashboard_follow_up_streams_phases_and_ready_revision(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    definition = _definition_with_filter()
+    preview = await dashboard_store.create_authoring_session(
+        db_session,
+        org_id="org-a",
+        user_id="owner-a",
+        dashboard_id=None,
+        base_version_id=None,
+        definition=definition,
+        operations=[],
+        prompt="Create a dashboard",
+        summary="Created the first draft.",
+        agent_run_id="agent-run-1",
+        model="test-model",
+        requires_custom_sql_confirmation=False,
+        custom_sql_confirmed=False,
+        conversation_id="conversation-1",
+    )
+    progress_events: list[dict] = []
+
+    class RefiningAgent:
+        model = "test-model"
+
+        async def draft(self, **_kwargs) -> DashboardAgentDraft:
+            return DashboardAgentDraft(
+                summary="Refined the dashboard.",
+                operations=[
+                    RenameDashboard(
+                        operation="rename_dashboard",
+                        name="Refined dashboard",
+                    )
+                ],
+            )
+
+    async def verified_context(*_args, **_kwargs) -> DashboardSemanticContext:
+        return _orders_context()
+
+    async def active_chat_run(*_args, **_kwargs):
+        return SimpleNamespace(
+            id="chat-run-2",
+            project_id=definition.signalPilot.projectId,
+            conversation_id="conversation-1",
+        )
+
+    async def append_event(_db, **kwargs):
+        progress_events.append(kwargs["payload"])
+
+    async def authoring_agent(*_args, **_kwargs):
+        return RefiningAgent(), False
+
+    monkeypatch.setattr(dashboard_api, "_verified_context", verified_context)
+    monkeypatch.setattr(dashboard_api, "_request_chat_run", active_chat_run)
+    monkeypatch.setattr(dashboard_api, "_dashboard_authoring_agent", authoring_agent)
+    monkeypatch.setattr(dashboard_api.chat_store, "append_event", append_event)
+    monkeypatch.setattr(dashboard_api, "validate_dashboard_semantics", lambda *_args: None)
+    store = SimpleNamespace(
+        session=db_session,
+        user_id="owner-a",
+        _require_org_id=lambda: "org-a",
+    )
+
+    updated = await dashboard_api.continue_dashboard_authoring_session(
+        preview.id,
+        DashboardAuthoringMessageRequest(prompt="Refine the dashboard"),
+        store,
+    )
+
+    assert [event["phase"] for event in progress_events] == [
+        "resolving_context",
+        "drafting",
+        "validating",
+        "ready",
+    ]
+    assert updated.draft_revision == 2
+    assert progress_events[-1]["label"] == (
+        f"Draft 2 ready with {len(updated.definition.charts)} charts"
+    )
+
+
+@pytest.mark.asyncio
 async def test_create_authoring_session_force_oauth_never_resolves_org_api_key(
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,

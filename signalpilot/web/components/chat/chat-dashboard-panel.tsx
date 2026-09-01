@@ -1,7 +1,7 @@
 "use client";
 
 import { Check, LayoutDashboard, Loader2, X } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import useSWR from "swr";
 
 import { DashboardRuntimeProvider } from "~/components/dashboard/dashboard-runtime-provider";
@@ -10,13 +10,19 @@ import type { DashboardQueryReceipt } from "~/lib/dashboard/api-data-source";
 import { request } from "~/lib/api";
 import { useToast } from "~/components/ui/toast";
 
+import dashboardStyles from "~/components/dashboard/dashboard-runtime.module.css";
+
 type AppliedDashboard = { dashboard: { id: string }; version: { id: string } };
+
+const DASHBOARD_STYLES_READY_PROPERTY = "--dashboard-runtime-styles-ready";
 
 export function ChatDashboardPanel({
   sessionId,
+  updateLabel,
   onClose,
 }: {
   sessionId: string;
+  updateLabel?: string | null;
   onClose: () => void;
 }) {
   const { toast } = useToast();
@@ -24,18 +30,63 @@ export function ChatDashboardPanel({
     data: session,
     error,
     mutate,
-  } = useSWR(`dashboard-authoring-session:${sessionId}`, () =>
-    request<DashboardAuthoringSession>(
-      `/api/dashboard-authoring/sessions/${sessionId}`,
-    ),
+  } = useSWR(
+    `dashboard-authoring-session:${sessionId}`,
+    () =>
+      request<DashboardAuthoringSession>(
+        `/api/dashboard-authoring/sessions/${sessionId}`,
+      ),
+    {
+      refreshInterval: updateLabel ? 1_000 : 0,
+      revalidateOnFocus: false,
+    },
   );
   const [busy, setBusy] = useState(false);
   const [receipts, setReceipts] = useState<
     Record<string, DashboardQueryReceipt>
   >({});
+  const [syncingRevision, setSyncingRevision] = useState(false);
+  const [runtimeStylesReady, setRuntimeStylesReady] = useState(false);
+  const runtimeStyleProbe = useRef<HTMLDivElement>(null);
+  const wasUpdating = useRef(false);
+  const visibleUpdateLabel =
+    updateLabel ??
+    (syncingRevision ? "Loading the validated dashboard revision" : null);
+  const controlsDisabled = busy || Boolean(visibleUpdateLabel);
+
+  useEffect(() => {
+    if (updateLabel) setSyncingRevision(true);
+    if (wasUpdating.current && !updateLabel) {
+      void mutate().finally(() => setSyncingRevision(false));
+    }
+    wasUpdating.current = Boolean(updateLabel);
+  }, [mutate, updateLabel]);
+
+  useEffect(() => {
+    setReceipts({});
+  }, [session?.draft_revision]);
+
+  useLayoutEffect(() => {
+    if (!session || runtimeStylesReady) return;
+    const checkStyles = () => {
+      const probe = runtimeStyleProbe.current;
+      if (
+        probe &&
+        window
+          .getComputedStyle(probe)
+          .getPropertyValue(DASHBOARD_STYLES_READY_PROPERTY)
+          .trim() === "1"
+      ) {
+        setRuntimeStylesReady(true);
+      }
+    };
+    checkStyles();
+    const interval = window.setInterval(checkStyles, 50);
+    return () => window.clearInterval(interval);
+  }, [runtimeStylesReady, session]);
 
   const confirmSql = async (decision: "confirm" | "decline") => {
-    if (!session) return;
+    if (!session || visibleUpdateLabel) return;
     setBusy(true);
     try {
       await mutate(
@@ -56,7 +107,7 @@ export function ChatDashboardPanel({
   };
 
   const apply = async () => {
-    if (!session) return;
+    if (!session || visibleUpdateLabel) return;
     setBusy(true);
     try {
       const applied = await request<AppliedDashboard>(
@@ -92,7 +143,7 @@ export function ChatDashboardPanel({
   };
 
   const discard = async () => {
-    if (!session) return;
+    if (!session || visibleUpdateLabel) return;
     setBusy(true);
     try {
       await mutate(
@@ -137,7 +188,7 @@ export function ChatDashboardPanel({
             <>
               <button
                 type="button"
-                disabled={busy}
+                disabled={controlsDisabled}
                 onClick={() => void discard()}
                 className="rounded-md px-2.5 py-1.5 text-[11px] font-medium text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] disabled:opacity-40"
               >
@@ -146,7 +197,7 @@ export function ChatDashboardPanel({
               <button
                 type="button"
                 disabled={
-                  busy ||
+                  controlsDisabled ||
                   (session.requires_custom_sql_confirmation &&
                     !session.custom_sql_confirmed)
                 }
@@ -172,20 +223,39 @@ export function ChatDashboardPanel({
           </button>
         </div>
       </div>
+      {visibleUpdateLabel && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="flex flex-none items-center gap-3 border-b border-[var(--color-success)]/20 bg-[var(--color-success)]/5 px-4 py-2.5"
+        >
+          <div className="relative flex h-7 w-7 flex-none items-center justify-center rounded-lg border border-[var(--color-success)]/25 bg-[var(--color-bg-card)]">
+            <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--color-success)]" />
+          </div>
+          <div className="min-w-0">
+            <p className="truncate text-xs font-medium text-[var(--color-text)]">
+              {visibleUpdateLabel}
+            </p>
+            <p className="mt-0.5 text-[10px] text-[var(--color-text-dim)]">
+              Showing the last validated draft until this revision is ready.
+            </p>
+          </div>
+        </div>
+      )}
       {session?.requires_custom_sql_confirmation &&
         !session.custom_sql_confirmed && (
           <div className="flex items-center justify-between gap-3 border-b border-amber-500/20 bg-amber-500/5 px-4 py-2 text-xs text-[var(--color-text-muted)]">
             <span>Custom SQL must be confirmed before it can run.</span>
             <div className="flex gap-2">
               <button
-                disabled={busy}
+                disabled={controlsDisabled}
                 onClick={() => void confirmSql("decline")}
                 className="rounded px-2 py-1 hover:bg-[var(--color-bg-hover)]"
               >
                 Decline
               </button>
               <button
-                disabled={busy}
+                disabled={controlsDisabled}
                 onClick={() => void confirmSql("confirm")}
                 className="rounded bg-[var(--color-text)] px-2 py-1 text-[var(--color-bg)]"
               >
@@ -205,22 +275,39 @@ export function ChatDashboardPanel({
             Dashboard preview is unavailable.
           </div>
         )}
+        {session && !runtimeStylesReady && (
+          <div
+            data-testid="dashboard-preview-style-loading"
+            className="absolute inset-x-0 top-0 z-10 flex min-h-60 items-center justify-center gap-2 text-xs text-[var(--color-text-muted)]"
+          >
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Preparing dashboard canvas…
+          </div>
+        )}
         {session && (
-          <DashboardRuntimeProvider
-            key={`${session.id}:${session.draft_revision}:${session.custom_sql_confirmed}`}
-            dashboardId={session.dashboard_id ?? `draft:${session.id}`}
-            versionId={
-              session.applied_version_id ??
-              session.base_version_id ??
-              `draft:${session.id}`
-            }
-            definition={session.definition}
-            authoringSessionId={
-              session.status === "preview" ? session.id : undefined
-            }
-            onVisibleReceiptsChange={setReceipts}
-            analysisEnabled={false}
-          />
+          <div
+            ref={runtimeStyleProbe}
+            data-testid="dashboard-preview-runtime-stage"
+            className={dashboardStyles.styleReadinessProbe}
+            style={{ visibility: runtimeStylesReady ? "visible" : "hidden" }}
+            aria-hidden={!runtimeStylesReady}
+          >
+            <DashboardRuntimeProvider
+              key={`${session.id}:${session.draft_revision}:${session.custom_sql_confirmed}`}
+              dashboardId={session.dashboard_id ?? `draft:${session.id}`}
+              versionId={
+                session.applied_version_id ??
+                session.base_version_id ??
+                `draft:${session.id}`
+              }
+              definition={session.definition}
+              authoringSessionId={
+                session.status === "preview" ? session.id : undefined
+              }
+              onVisibleReceiptsChange={setReceipts}
+              analysisEnabled={false}
+            />
+          </div>
         )}
       </div>
     </aside>

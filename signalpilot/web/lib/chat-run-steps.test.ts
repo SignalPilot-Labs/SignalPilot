@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  activeDashboardPreviewLabel,
   extractRunPlan,
   extractRuntimeBoot,
   foldRunBlocks,
@@ -110,6 +111,71 @@ describe("foldRunSteps", () => {
     );
     const query = partial.find((step) => step.tool === "query_database");
     expect(query?.status).toBe("running");
+  });
+
+  it("updates one live dashboard step from real authoring phases", () => {
+    const dashboardEvents = [
+      {
+        run_id: "dashboard-run",
+        sequence: 1,
+        type: "tool_started" as const,
+        payload: {
+          tool: "mcp__standalone-chat__create_dashboard_preview",
+          tool_call_id: "dashboard-call",
+          input: { request: "Build a sales dashboard", timezone: "UTC" },
+        },
+        created_at: "2026-09-01T10:00:00Z",
+      },
+      {
+        run_id: "dashboard-run",
+        sequence: 2,
+        type: "progress" as const,
+        payload: {
+          scope: "dashboard_authoring",
+          phase: "drafting",
+          label: "Drafting the dashboard structure and charts",
+        },
+        created_at: "2026-09-01T10:00:01Z",
+      },
+      {
+        run_id: "dashboard-run",
+        sequence: 3,
+        type: "progress" as const,
+        payload: {
+          scope: "dashboard_authoring",
+          phase: "validating",
+          label: "Validating chart fields, filters, and bindings",
+        },
+        created_at: "2026-09-01T10:00:02Z",
+      },
+    ];
+
+    const dashboardSteps = foldRunSteps(dashboardEvents, "dashboard-run");
+    expect(dashboardSteps).toHaveLength(1);
+    expect(dashboardSteps[0]).toMatchObject({
+      category: "dashboard",
+      status: "running",
+      detail: "Validating chart fields, filters, and bindings",
+    });
+    expect(
+      activeDashboardPreviewLabel(dashboardEvents, "dashboard-run"),
+    ).toBe("Validating chart fields, filters, and bindings");
+
+    expect(
+      activeDashboardPreviewLabel(
+        [
+          ...dashboardEvents,
+          {
+            run_id: "dashboard-run",
+            sequence: 4,
+            type: "tool_completed" as const,
+            payload: { tool_call_id: "dashboard-call", error: false },
+            created_at: "2026-09-01T10:00:03Z",
+          },
+        ],
+        "dashboard-run",
+      ),
+    ).toBeNull();
   });
 
   it("groups subagent work under its spawn with an exact tally", () => {

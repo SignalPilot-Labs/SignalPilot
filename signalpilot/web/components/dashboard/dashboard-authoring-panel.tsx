@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { createPortal } from "react-dom";
+import { useRouter } from "next/navigation";
 import { Check, MessageSquare, Sparkles, Wrench, X } from "lucide-react";
 
 import { request } from "~/lib/api";
@@ -9,6 +9,7 @@ import type { DashboardDefinition } from "~/lib/dashboard/contracts";
 import type { DashboardQueryReceipt } from "~/lib/dashboard/api-data-source";
 import { DashboardRuntimeProvider } from "~/components/dashboard/dashboard-runtime-provider";
 import { DashboardSpinner } from "~/components/dashboard/dashboard-loading-state";
+import { useToast } from "~/components/ui/toast";
 
 import styles from "./dashboard-runtime.module.css";
 
@@ -30,8 +31,10 @@ export type DashboardAuthoringEvent = {
 export type DashboardAuthoringSession = {
   id: string;
   thread_id: string;
+  conversation_id: string | null;
   dashboard_id: string | null;
   base_version_id: string | null;
+  applied_version_id: string | null;
   definition: DashboardDefinition;
   operations: Array<Record<string, unknown>>;
   summary: string;
@@ -352,7 +355,7 @@ export function DashboardAuthoringWorkspace({
               busy ||
               Boolean(
                 session?.requires_custom_sql_confirmation &&
-                  !session.custom_sql_confirmed,
+                !session.custom_sql_confirmed,
               )
             }
             rows={3}
@@ -372,7 +375,7 @@ export function DashboardAuthoringWorkspace({
               !prompt.trim() ||
               Boolean(
                 session?.requires_custom_sql_confirmation &&
-                  !session.custom_sql_confirmed,
+                !session.custom_sql_confirmed,
               ) ||
               (!session && !dashboardId && !createContext?.project_id)
             }
@@ -445,11 +448,9 @@ export function DashboardAuthoringWorkspace({
                     method: "POST",
                     body: JSON.stringify({
                       expected_current_version_id: versionId,
-                      visible_complete_result_ids: Object.values(receipts)
-                        .filter(
-                          (receipt) => receipt.completeness === "complete",
-                        )
-                        .map((receipt) => receipt.dashboard_result_id),
+                      visible_complete_result_ids: Object.values(receipts).map(
+                        (receipt) => receipt.dashboard_result_id,
+                      ),
                     }),
                   },
                 )
@@ -466,8 +467,8 @@ export function DashboardAuthoringWorkspace({
           {session ? (
             <DashboardRuntimeProvider
               key={`${session.id}:${session.draft_revision}:${session.custom_sql_confirmed}`}
-              dashboardId={`draft:${session.id}`}
-              versionId={`draft:${session.id}`}
+              dashboardId={session.dashboard_id ?? `draft:${session.id}`}
+              versionId={session.base_version_id ?? `draft:${session.id}`}
               definition={session.definition}
               authoringSessionId={session.id}
               onVisibleReceiptsChange={setReceipts}
@@ -510,63 +511,61 @@ export function DashboardAuthoringPanel({
   intent?: "edit" | "repair";
   repairIssues?: DashboardRepairIssue[];
 }) {
-  const [open, setOpen] = useState(false);
-  const [session, setSession] = useState<DashboardAuthoringSession>();
-
-  useEffect(() => {
-    if (!open || session) return;
-    void request<DashboardAuthoringSession | null>(
-      `/api/dashboards/${dashboardId}/active-authoring-session`,
-    ).then((active) => setSession(active ?? undefined));
-  }, [dashboardId, open, session]);
-
-  if (!open) {
-    return (
-      <button
-        className={`${styles.authoringLauncher} ${
-          intent === "repair" ? styles.repairLauncher : ""
-        }`}
-        type="button"
-        onClick={() => setOpen(true)}
-        aria-label={
-          intent === "repair"
-            ? `Repair ${repairIssues.length} failing chart${repairIssues.length === 1 ? "" : "s"} with AI`
-            : undefined
-        }
-      >
-        {intent === "repair" ? (
-          <>
-            <Wrench size={15} aria-hidden="true" /> Repair
-          </>
-        ) : (
-          <>
-            <Sparkles size={16} aria-hidden="true" /> Edit with AI
-          </>
-        )}
-      </button>
-    );
-  }
-  if (typeof document === "undefined") return null;
-  return createPortal(
-    <div
-      className={styles.authoringOverlay}
-      data-testid="dashboard-authoring-overlay"
+  const router = useRouter();
+  const { toast } = useToast();
+  const [opening, setOpening] = useState(false);
+  void versionId;
+  void baseDefinition;
+  void onApplied;
+  return (
+    <button
+      className={`${styles.authoringLauncher} ${
+        intent === "repair" ? styles.repairLauncher : ""
+      }`}
+      type="button"
+      disabled={opening}
+      onClick={() => {
+        setOpening(true);
+        void request<{
+          conversation_id: string;
+          authoring_session_id: string;
+        }>(`/api/dashboards/${dashboardId}/authoring-chat`, { method: "POST" })
+          .then((target) => {
+            const params = new URLSearchParams({
+              dashboard: target.authoring_session_id,
+            });
+            if (intent === "repair") {
+              params.set("prompt", dashboardRepairPrompt(repairIssues));
+            }
+            router.push(
+              `/chats/${target.conversation_id}?${params.toString()}`,
+            );
+          })
+          .catch((cause) =>
+            toast(
+              cause instanceof Error
+                ? dashboardAuthoringErrorMessage(cause)
+                : "Could not open dashboard editing in Data Chat",
+              "error",
+            ),
+          )
+          .finally(() => setOpening(false));
+      }}
+      aria-label={
+        intent === "repair"
+          ? `Repair ${repairIssues.length} failing chart${repairIssues.length === 1 ? "" : "s"} with AI`
+          : undefined
+      }
     >
-      <DashboardAuthoringWorkspace
-        dashboardId={dashboardId}
-        versionId={versionId}
-        baseDefinition={baseDefinition}
-        session={session}
-        onSession={setSession}
-        onApplied={onApplied}
-        onDiscard={() => setOpen(false)}
-        onClose={() => setOpen(false)}
-        intent={intent}
-        initialPrompt={
-          intent === "repair" ? dashboardRepairPrompt(repairIssues) : undefined
-        }
-      />
-    </div>,
-    document.body,
+      {intent === "repair" ? (
+        <>
+          <Wrench size={15} aria-hidden="true" /> Repair
+        </>
+      ) : (
+        <>
+          <Sparkles size={16} aria-hidden="true" /> Edit with AI
+        </>
+      )}
+    </button>
   );
 }

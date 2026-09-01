@@ -125,6 +125,46 @@ def test_dashboard_chart_reference_is_preloaded_into_existing_chat_runtime(
     assert warm["project"]["commit_sha"] == "a" * 40
 
 
+def test_dashboard_authoring_session_is_preloaded_for_chat_refinement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = {
+        "conversation": SimpleNamespace(branch="main", commit_sha="a" * 40, internal_summary=None),
+        "project": SimpleNamespace(
+            id="project-a",
+            name="pilot",
+            display_name="Pilot",
+            description=None,
+            connection_name="production",
+        ),
+        "messages": [],
+        "artifacts": [],
+        "query_approvals": [],
+        "query_proposals": [],
+        "query_executions": [],
+        "query_results": [],
+        "dashboard_authoring_session": SimpleNamespace(
+            id="session-a",
+            dashboard_id="dashboard-a",
+            definition_json={"name": "Executive dashboard"},
+            draft_revision=3,
+            status="preview",
+        ),
+    }
+    monkeypatch.setattr(worker_context, "project_metadata_context", lambda *_args: {"models": []})
+
+    warm = worker._warm_context(context)
+
+    assert warm["dashboard_authoring"] == {
+        "authoring_session_id": "session-a",
+        "dashboard_id": "dashboard-a",
+        "dashboard_name": "Executive dashboard",
+        "draft_revision": 3,
+        "status": "preview",
+        "instruction": "Refine this dashboard session when the user asks for dashboard changes.",
+    }
+
+
 @pytest.mark.asyncio
 async def test_cancellation_monitor_interrupts_the_active_worker_task(
     monkeypatch: pytest.MonkeyPatch,
@@ -226,6 +266,12 @@ async def test_notebook_stream_does_not_hold_a_database_session(monkeypatch: pyt
             "type": "final",
             "content": "Analysis complete",
             "artifacts": [],
+            "dashboard_preview": {
+                "authoring_session_id": "authoring-session-1",
+                "preview_url": "/dashboards/new?authoring=authoring-session-1",
+                "dashboard_name": "Executive Revenue",
+                "chart_count": 2,
+            },
             "report_action_outcome": {
                 "action": "no_suggestion",
                 "artifact_kind": "report",
@@ -286,6 +332,12 @@ async def test_notebook_stream_does_not_hold_a_database_session(monkeypatch: pyt
         "artifact_filename": "diagnostic.html",
         "reason": "One-off diagnostic.",
         "catalog_scan_complete": True,
+    }
+    assert completion_payloads[0]["dashboard_preview"] == {
+        "authoring_session_id": "authoring-session-1",
+        "preview_url": "/dashboards/new?authoring=authoring-session-1",
+        "dashboard_name": "Executive Revenue",
+        "chart_count": 2,
     }
     assert failed_runs == []
     assert ("cell_executed", {"status": "failed"}) in appended_events

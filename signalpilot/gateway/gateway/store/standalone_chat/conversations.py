@@ -111,6 +111,40 @@ async def create_conversation_with_run(
     return conversation, run
 
 
+async def create_empty_conversation(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    user_id: str,
+    project: GatewayWorkspaceProject,
+    branch: str,
+    commit_sha: str,
+    title: str,
+) -> GatewayChatConversation:
+    """Create a Data Chat thread without inventing a user prompt or starting a run."""
+    now = time.time()
+    conversation = GatewayChatConversation(
+        id=str(uuid.uuid4()),
+        org_id=org_id,
+        user_id=user_id,
+        project_id=project.id,
+        surface="standalone",
+        origin="user",
+        branch=branch,
+        commit_sha=commit_sha,
+        status="active",
+        title=title[:200],
+        message_count=0,
+        total_tokens=0,
+        total_cost_usd=0.0,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(conversation)
+    await db.flush()
+    return conversation
+
+
 async def list_conversations(
     db: AsyncSession,
     *,

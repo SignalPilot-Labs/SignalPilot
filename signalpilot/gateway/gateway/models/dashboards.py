@@ -258,8 +258,10 @@ class DashboardAuthoringEvent(DashboardModel):
 class DashboardAuthoringSessionInfo(DashboardModel):
     id: str
     thread_id: str
+    conversation_id: str | None = None
     dashboard_id: str | None
     base_version_id: str | None
+    applied_version_id: str | None = None
     definition: DashboardDefinition
     operations: list[dict[str, Any]]
     summary: str

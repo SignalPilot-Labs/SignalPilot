@@ -13,6 +13,7 @@ from gateway.db.models import (
     GatewayChatConversation,
     GatewayChatMessage,
     GatewayChatRun,
+    GatewayDashboardAuthoringSession,
     GatewayGovernedQueryExecution,
     GatewayQueryApproval,
     GatewayQueryProposal,
@@ -219,6 +220,18 @@ async def worker_context(db: AsyncSession, *, run: GatewayChatRun) -> dict[str, 
             )
         ).scalars()
     )
+    dashboard_authoring_session = (
+        await db.execute(
+            select(GatewayDashboardAuthoringSession)
+            .where(
+                GatewayDashboardAuthoringSession.org_id == run.org_id,
+                GatewayDashboardAuthoringSession.owner_user_id == run.user_id,
+                GatewayDashboardAuthoringSession.conversation_id == run.conversation_id,
+            )
+            .order_by(GatewayDashboardAuthoringSession.updated_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
     return {
         "conversation": conversation,
         "project": project,
@@ -228,6 +241,7 @@ async def worker_context(db: AsyncSession, *, run: GatewayChatRun) -> dict[str, 
         "query_approvals": approvals,
         "query_executions": executions,
         "query_results": results,
+        "dashboard_authoring_session": dashboard_authoring_session,
     }
 
 

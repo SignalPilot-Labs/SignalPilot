@@ -27,6 +27,7 @@ export type ChatUiContextValue = {
   onApproveReportSuggestion: (
     messageId: string,
   ) => Promise<{ report_id: string }>;
+  onOpenDashboardPreview: (sessionId: string) => void;
 };
 
 export const ChatUiContext = createContext<ChatUiContextValue | null>(null);

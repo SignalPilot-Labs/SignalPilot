@@ -157,6 +157,7 @@ class GatewayDashboardAuthoringSession(GatewayBase):
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     thread_id: Mapped[str] = mapped_column(String, nullable=False, default=lambda: str(uuid.uuid4()))
+    conversation_id: Mapped[str | None] = mapped_column(String)
     dashboard_id: Mapped[str | None] = mapped_column(String)
     base_version_id: Mapped[str | None] = mapped_column(String)
     org_id: Mapped[str] = mapped_column(String, nullable=False)
@@ -189,6 +190,7 @@ class GatewayDashboardAuthoringSession(GatewayBase):
         Index("ix_gw_dashboard_authoring_owner", "org_id", "owner_user_id", "created_at"),
         Index("ix_gw_dashboard_authoring_dashboard", "org_id", "dashboard_id", "created_at"),
         Index("ix_gw_dashboard_authoring_thread", "org_id", "owner_user_id", "thread_id", "created_at"),
+        Index("ix_gw_dashboard_authoring_conversation", "org_id", "owner_user_id", "conversation_id", "updated_at"),
     )
 
 
@@ -486,4 +488,3 @@ class GatewayAnalysisTrail(GatewayBase):
         Index("ix_gw_analysis_trail_project", "org_id", "project_id", "branch"),
         Index("ix_gw_analysis_trail_source_status", "org_id", "source", "status"),
     )
-

@@ -45,6 +45,35 @@ class StandaloneGatewayClient:
             raise ValueError(invalid)
         return value
 
+    async def _post_json(
+        self,
+        path: str,
+        *,
+        payload: dict[str, Any],
+        timeout: float = 30.0,
+        invalid: str,
+        failed: str,
+    ) -> dict[str, Any]:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(
+                f"{self.gateway_url}{path}",
+                json=payload,
+                headers=self._headers,
+            )
+        if getattr(response, "is_error", False):
+            detail = ""
+            try:
+                body = response.json()
+                if isinstance(body, dict):
+                    detail = str(body.get("detail") or "").strip()
+            except (TypeError, ValueError):
+                detail = ""
+            raise ValueError(f"{failed}: {detail}" if detail else failed)
+        value = response.json()
+        if not isinstance(value, dict):
+            raise ValueError(invalid)
+        return value
+
     async def load_result(self, result_id: str) -> dict[str, Any]:
         return await self._get_json(
             f"/api/query/results/{result_id}",
@@ -81,4 +110,40 @@ class StandaloneGatewayClient:
                 "artifact_filename": artifact_filename,
             },
             invalid="Invalid published artifact state",
+        )
+
+    async def create_dashboard_preview(
+        self,
+        *,
+        request: str,
+        project_id: str,
+        branch: str,
+        commit_sha: str,
+        timezone: str,
+        authoring_session_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Create a private governed dashboard draft bound to this chat scope."""
+
+        path = (
+            f"/api/dashboard-authoring/sessions/{authoring_session_id}/messages"
+            if authoring_session_id
+            else "/api/dashboard-authoring/sessions"
+        )
+        payload = (
+            {"prompt": request}
+            if authoring_session_id
+            else {
+                "prompt": request,
+                "project_id": project_id,
+                "branch": branch,
+                "commit_sha": commit_sha,
+                "timezone": timezone,
+            }
+        )
+        return await self._post_json(
+            path,
+            payload=payload,
+            timeout=300.0,
+            invalid="Invalid dashboard authoring preview",
+            failed="Dashboard preview could not be created",
         )

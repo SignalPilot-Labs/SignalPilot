@@ -51,6 +51,8 @@ def build_standalone_chat_mcp_server(
     | None = None,
     published_artifact_checker: Callable[[str, str], Awaitable[dict[str, Any]]]
     | None = None,
+    dashboard_preview_creator: Callable[[str, str, str | None], Awaitable[dict[str, Any]]]
+    | None = None,
     attached_report_id: str | None = None,
 ) -> Any:
     """Build the isolated artifact publication server used by one run."""
@@ -60,6 +62,8 @@ def build_standalone_chat_mcp_server(
 
     server = Server("standalone-chat", version="1.0.0")
     tools = standalone_chat_tools(notebook_enabled=notebook_mcp_app is not None)
+    dashboard_preview_request: tuple[str, str, str | None] | None = None
+    dashboard_preview_result: dict[str, Any] | None = None
 
     @server.list_tools()
     async def list_tools() -> list[Tool]:
@@ -69,7 +73,61 @@ def build_standalone_chat_mcp_server(
     async def call_tool(
         name: str, arguments: dict[str, Any]
     ) -> list[TextContent]:
+        nonlocal dashboard_preview_request, dashboard_preview_result
         try:
+            if name == "create_dashboard_preview":
+                if dashboard_preview_creator is None:
+                    raise ValueError("Dashboard authoring is unavailable")
+                request = str(arguments.get("request") or "").strip()
+                timezone = str(arguments.get("timezone") or "UTC").strip()
+                authoring_session_id = str(arguments.get("authoring_session_id") or "").strip() or None
+                if not request or len(request) > 50_000:
+                    raise ValueError("A dashboard request is required")
+                if not timezone or len(timezone) > 100:
+                    raise ValueError("Invalid dashboard timezone")
+                request_key = (request, timezone, authoring_session_id)
+                if dashboard_preview_result is not None:
+                    if request_key != dashboard_preview_request:
+                        raise ValueError(
+                            "Only one dashboard preview may be created per chat run"
+                        )
+                    return [
+                        TextContent(
+                            type="text",
+                            text=json.dumps(dashboard_preview_result),
+                        )
+                    ]
+                created = await dashboard_preview_creator(request, timezone, authoring_session_id)
+                session_id = str(created.get("id") or "").strip()
+                if not session_id:
+                    raise ValueError("Dashboard authoring returned no preview")
+                definition = created.get("definition")
+                definition = definition if isinstance(definition, dict) else {}
+                charts = definition.get("charts")
+                charts = charts if isinstance(charts, list) else []
+                dashboard_preview_request = request_key
+                dashboard_preview_result = {
+                    "status": "preview_ready",
+                    "authoring_session_id": session_id,
+                    "preview_url": f"/dashboards/new?authoring={session_id}",
+                    "summary": str(created.get("summary") or ""),
+                    "dashboard_name": str(definition.get("name") or "Dashboard preview"),
+                    "chart_count": len(charts),
+                    "chart_titles": [
+                        str(chart.get("title") or "Untitled chart")
+                        for chart in charts[:12]
+                        if isinstance(chart, dict)
+                    ],
+                    "requires_review": True,
+                    "apply_required": True,
+                }
+                collector.dashboard_preview = dashboard_preview_result
+                return [
+                    TextContent(
+                        type="text",
+                        text=json.dumps(dashboard_preview_result),
+                    )
+                ]
             if name == "list_saved_report_catalog":
                 if report_catalog_loader is None:
                     raise ValueError("The saved report catalog is unavailable")

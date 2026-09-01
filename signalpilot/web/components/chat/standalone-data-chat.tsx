@@ -6,6 +6,7 @@
 
 import {
   Bot,
+  LayoutDashboard,
   Loader2,
   NotebookPen,
   PanelLeft,
@@ -13,7 +14,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import useSWR from "swr";
 import {
   getSavedChatReport,
@@ -30,6 +31,7 @@ import {
   type OptimisticUserMessage,
 } from "~/lib/standalone-chat-state";
 import { projectSettingsHref } from "~/lib/project-settings-route";
+import { ChatDashboardPanel } from "~/components/chat/chat-dashboard-panel";
 import { ArtifactsPanel } from "~/components/chat/artifacts-panel";
 import { useConversationArtifacts } from "~/components/chat/use-conversation-notebook";
 import { pickDefaultNotebook } from "~/lib/chat-live-notebook";
@@ -61,6 +63,7 @@ import {
   useStandaloneUiMessages,
 } from "~/components/chat/use-standalone-chat-run";
 import { useStandaloneChatActions } from "~/components/chat/use-standalone-chat-actions";
+import { activeDashboardPreviewLabel } from "~/lib/chat-run-steps";
 
 // Re-exports for existing importers of this module path.
 export { ChatUiContext, useChatUi } from "~/components/chat/chat-ui-context";
@@ -115,6 +118,7 @@ export function StandaloneDataChat({
   );
   const requestedProject = searchParams.get("project");
   const requestedReportId = searchParams.get("report");
+  const requestedPrompt = searchParams.get("prompt");
   const [selectedReport, setSelectedReport] =
     useState<ChatReportMention | null>(null);
   const attachedReportReference = selectedReport
@@ -129,6 +133,7 @@ export function StandaloneDataChat({
   const [perQueryBudgetUsd, setPerQueryBudgetUsd] = useState(0.25);
   const [chatBudgetUsd, setChatBudgetUsd] = useState(1);
   const [draft, setDraft] = useChatDraft(conversationId);
+  const promptInitialized = useRef(false);
   const [isConversationRailOpen, setIsConversationRailOpen] =
     useState(!embedded);
   const [pendingSubmission, setPendingSubmission] =
@@ -138,6 +143,12 @@ export function StandaloneDataChat({
     string | null
   >(null);
   const selectedInitialized = useRef(false);
+
+  useEffect(() => {
+    if (!requestedPrompt || promptInitialized.current) return;
+    setDraft(requestedPrompt);
+    promptInitialized.current = true;
+  }, [requestedPrompt, setDraft]);
 
   useEffect(() => {
     if (!bootstrap || selectedInitialized.current) return;
@@ -210,6 +221,32 @@ export function StandaloneDataChat({
     defaultNotebook?.status,
     currentRun?.id,
   );
+  const [dashboardSessionId, setDashboardSessionId] = useState<string | null>(
+    searchParams.get("dashboard"),
+  );
+  const autoOpenedDashboard = useRef<string | null>(null);
+  const observedActiveRun = useRef(false);
+  useEffect(() => {
+    observedActiveRun.current = false;
+    autoOpenedDashboard.current = null;
+  }, [conversationId]);
+  const openDashboardPreview = useCallback(
+    (sessionId: string) => {
+      setDashboardSessionId(sessionId);
+      setNotebookPanelOpen(false);
+      const params = new URLSearchParams(searchParams.toString());
+      params.set("dashboard", sessionId);
+      router.replace(`${window.location.pathname}?${params.toString()}`);
+    },
+    [router, searchParams, setNotebookPanelOpen],
+  );
+  useEffect(() => {
+    const requestedSession = searchParams.get("dashboard");
+    if (requestedSession && requestedSession !== dashboardSessionId) {
+      setDashboardSessionId(requestedSession);
+      setNotebookPanelOpen(false);
+    }
+  }, [dashboardSessionId, searchParams, setNotebookPanelOpen]);
   const conversationLoading = Boolean(
     conversationId && !detail && !detailError && detailLoading,
   );
@@ -237,6 +274,34 @@ export function StandaloneDataChat({
     pendingSubmission,
     setPendingSubmission,
   });
+  const latestDashboardSessionId = useMemo(() => {
+    for (let index = uiMessages.length - 1; index >= 0; index -= 1) {
+      const preview = uiMessages[index]?.metadata?.dashboard_preview;
+      if (preview && typeof preview === "object") {
+        const sessionId = (preview as Record<string, unknown>)
+          .authoring_session_id;
+        if (typeof sessionId === "string" && sessionId) return sessionId;
+      }
+    }
+    return null;
+  }, [uiMessages]);
+  const dashboardUpdateLabel = useMemo(
+    () => activeDashboardPreviewLabel(events, currentRun?.id),
+    [currentRun?.id, events],
+  );
+  useEffect(() => {
+    if (currentRun?.status === "queued" || currentRun?.status === "running") {
+      observedActiveRun.current = true;
+    }
+    if (
+      latestDashboardSessionId &&
+      observedActiveRun.current &&
+      autoOpenedDashboard.current !== latestDashboardSessionId
+    ) {
+      autoOpenedDashboard.current = latestDashboardSessionId;
+      openDashboardPreview(latestDashboardSessionId);
+    }
+  }, [currentRun?.status, latestDashboardSessionId, openDashboardPreview]);
 
   const { viewportRef, shouldStickToBottomRef, onViewportScroll } =
     useChatAutoScroll(conversationId, uiMessages);
@@ -323,7 +388,9 @@ export function StandaloneDataChat({
     return <ChatUnavailableScreen />;
   }
   if (detailError) {
-    return <ConversationNotFoundScreen onNewChat={() => router.push("/chats")} />;
+    return (
+      <ConversationNotFoundScreen onNewChat={() => router.push("/chats")} />
+    );
   }
 
   const isEmptyNewChat = empty && !conversationId;
@@ -362,6 +429,7 @@ export function StandaloneDataChat({
         onStop,
         onRetry,
         onApproveReportSuggestion,
+        onOpenDashboardPreview: openDashboardPreview,
       }}
     >
       <div
@@ -369,7 +437,9 @@ export function StandaloneDataChat({
           embedded
             ? "h-full min-w-0 overflow-hidden"
             : `h-screen overflow-hidden p-4 ${
-                notebookPanelOpen ? "min-w-[1360px]" : "min-w-[960px]"
+                notebookPanelOpen || dashboardSessionId
+                  ? "min-w-[1360px]"
+                  : "min-w-[960px]"
               }`
         }
       >
@@ -495,7 +565,9 @@ export function StandaloneDataChat({
                     </p>
                   </div>
                   {/* The input is the focal point in the empty state. */}
-                  {!conversationId && <div className="-mx-6">{composerNode}</div>}
+                  {!conversationId && (
+                    <div className="-mx-6">{composerNode}</div>
+                  )}
                   {unreadyMessage ? (
                     <ReadinessNotice
                       message={unreadyMessage}
@@ -531,16 +603,16 @@ export function StandaloneDataChat({
                 </div>
               )}
               {!isEmptyNewChat && (
-              <div className="sticky bottom-0 bg-gradient-to-t from-[var(--color-bg)] via-[var(--color-bg)] to-transparent pt-3">
-                {approvalEvent && (
-                  <QueryApprovalCard
-                    event={approvalEvent}
-                    onDecision={onQueryDecision}
-                  />
-                )}
-                {composerNode}
-              </div>
-            )}
+                <div className="sticky bottom-0 bg-gradient-to-t from-[var(--color-bg)] via-[var(--color-bg)] to-transparent pt-3">
+                  {approvalEvent && (
+                    <QueryApprovalCard
+                      event={approvalEvent}
+                      onDecision={onQueryDecision}
+                    />
+                  )}
+                  {composerNode}
+                </div>
+              )}
             </div>
             {conversationId &&
               (artifactsLoading ||
@@ -555,7 +627,15 @@ export function StandaloneDataChat({
                 aria-label="Open the artifacts panel"
                 title="Open the artifacts panel"
                 data-testid="live-notebook-toggle"
-                onClick={() => setNotebookPanelOpen(true)}
+                onClick={() => {
+                  setDashboardSessionId(null);
+                  const params = new URLSearchParams(searchParams.toString());
+                  params.delete("dashboard");
+                  router.replace(
+                    `${window.location.pathname}?${params.toString()}`,
+                  );
+                  setNotebookPanelOpen(true);
+                }}
                 className="absolute right-16 top-4 z-20 flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] text-[var(--color-text-muted)] shadow-lg shadow-black/20 hover:border-[var(--color-border-hover)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
               >
                 {artifactsLoading ? (
@@ -568,6 +648,20 @@ export function StandaloneDataChat({
                 )}
               </button>
             )}
+            {conversationId &&
+              latestDashboardSessionId &&
+              !dashboardSessionId && (
+                <button
+                  type="button"
+                  aria-label="Open the dashboard preview"
+                  title="Open the dashboard preview"
+                  data-testid="chat-dashboard-toggle"
+                  onClick={() => openDashboardPreview(latestDashboardSessionId)}
+                  className="absolute right-28 top-4 z-20 flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] text-[var(--color-text-muted)] shadow-lg shadow-black/20 hover:border-[var(--color-border-hover)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
+                >
+                  <LayoutDashboard className="h-4 w-4" />
+                </button>
+              )}
           </main>
           {conversationId && notebookPanelOpen && (
             <ArtifactsPanel
@@ -577,6 +671,20 @@ export function StandaloneDataChat({
               executions={sqlTraceExecutions}
               loading={artifactsLoading}
               onClose={() => setNotebookPanelOpen(false)}
+            />
+          )}
+          {conversationId && dashboardSessionId && (
+            <ChatDashboardPanel
+              sessionId={dashboardSessionId}
+              updateLabel={dashboardUpdateLabel}
+              onClose={() => {
+                setDashboardSessionId(null);
+                const params = new URLSearchParams(searchParams.toString());
+                params.delete("dashboard");
+                router.replace(
+                  `${window.location.pathname}${params.size ? `?${params.toString()}` : ""}`,
+                );
+              }}
             />
           )}
         </div>

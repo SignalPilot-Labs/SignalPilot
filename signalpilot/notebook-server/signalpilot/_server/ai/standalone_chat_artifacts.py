@@ -9,6 +9,7 @@ from typing import Any
 @dataclass
 class StandaloneArtifactCollector:
     artifacts: list[dict[str, Any]] = field(default_factory=list)
+    dashboard_preview: dict[str, Any] | None = None
     report_proposal: dict[str, Any] | None = None
     report_action_outcome: dict[str, Any] | None = None
     report_catalog_revision: str | None = None

@@ -42,6 +42,12 @@ services:
       - -c
       - |
         export SP_API_KEY=$$(cat /shared/local_api_key 2>/dev/null || echo '')
+        if [ ! -s /gateway-secrets/notebook_jwt_secret ]; then
+          umask 077
+          python -c 'import secrets; print(secrets.token_urlsafe(48))' > /gateway-secrets/notebook_jwt_secret.tmp
+          mv /gateway-secrets/notebook_jwt_secret.tmp /gateway-secrets/notebook_jwt_secret
+        fi
+        export SP_SESSION_JWT_SECRET=$$(cat /gateway-secrets/notebook_jwt_secret)
         /opt/sp-notebook/.venv/bin/python -m signalpilot._server.local_token /notebook-token/token
         exec /opt/sp-notebook/.venv/bin/python /usr/local/bin/dev-watch-notebook.py \
           --watch /opt/sp-notebook/signalpilot \

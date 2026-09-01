@@ -128,6 +128,80 @@ async def test_publication_failures_are_mcp_tool_errors():
 
 
 @pytest.mark.asyncio
+async def test_dashboard_preview_tool_creates_one_review_only_preview():
+    calls: list[tuple[str, str]] = []
+
+    async def create_preview(
+        request: str, timezone: str, authoring_session_id: str | None
+    ) -> dict[str, Any]:
+        assert authoring_session_id is None
+        calls.append((request, timezone))
+        return {
+            "id": "authoring-session-1",
+            "summary": "Created a governed revenue dashboard.",
+            "definition": {
+                "name": "Executive Revenue",
+                "charts": [
+                    {"title": "Total Revenue"},
+                    {"title": "Revenue Trend"},
+                ],
+            },
+        }
+
+    collector = StandaloneArtifactCollector()
+    server = build_standalone_chat_mcp_server(
+        collector,
+        dashboard_preview_creator=create_preview,
+    )["instance"]
+    listed = await server.request_handlers[ListToolsRequest](ListToolsRequest())
+    assert "create_dashboard_preview" in {
+        tool.name for tool in listed.root.tools
+    }
+
+    request = CallToolRequest(
+        params=CallToolRequestParams(
+            name="create_dashboard_preview",
+            arguments={
+                "request": "Create an executive revenue dashboard",
+                "timezone": "America/New_York",
+            },
+        )
+    )
+    created = await server.request_handlers[CallToolRequest](request)
+    repeated = await server.request_handlers[CallToolRequest](request)
+
+    assert created.root.isError is False
+    assert repeated.root.isError is False
+    assert calls == [
+        ("Create an executive revenue dashboard", "America/New_York")
+    ]
+    payload = json.loads(created.root.content[0].text)
+    assert payload == {
+        "status": "preview_ready",
+        "authoring_session_id": "authoring-session-1",
+        "preview_url": "/dashboards/new?authoring=authoring-session-1",
+        "summary": "Created a governed revenue dashboard.",
+        "dashboard_name": "Executive Revenue",
+        "chart_count": 2,
+        "chart_titles": ["Total Revenue", "Revenue Trend"],
+        "requires_review": True,
+        "apply_required": True,
+    }
+    assert collector.dashboard_preview == payload
+
+    conflicting = await server.request_handlers[CallToolRequest](
+        CallToolRequest(
+            params=CallToolRequestParams(
+                name="create_dashboard_preview",
+                arguments={"request": "Create a different dashboard"},
+            )
+        )
+    )
+    assert conflicting.root.isError is True
+    assert "Only one dashboard preview" in conflicting.root.content[0].text
+
+
+@pytest.mark.asyncio
 async def test_report_tools_require_a_complete_catalog_scan_and_one_valid_proposal():
     collector = StandaloneArtifactCollector(
         artifacts=[
@@ -741,6 +815,8 @@ def test_agent_contract_includes_default_signalpilot_mcp_tools():
     assert "publish_report" in _prompt_flat
     assert "GitHub Flavored Markdown" in _prompt_flat
     assert "HTML tags such as `<details>` do not render" in _prompt_flat
+    assert "call `create_dashboard_preview` exactly once" in _prompt_flat
+    assert "user must review and Apply" in _prompt_flat
     assert {
         "mcp__signalpilot__get_knowledge",
         "mcp__signalpilot__propose_knowledge",
@@ -748,6 +824,7 @@ def test_agent_contract_includes_default_signalpilot_mcp_tools():
         "mcp__signalpilot__notion_create_page",
         "mcp__signalpilot__sandbox_exec",
         "mcp__signalpilot__dbt_execute",
+        "mcp__standalone-chat__create_dashboard_preview",
     } <= set(STANDALONE_ALLOWED_TOOLS)
     assert all(
         "github" not in tool.lower() for tool in STANDALONE_ALLOWED_TOOLS

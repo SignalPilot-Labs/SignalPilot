@@ -194,6 +194,7 @@ export function ArtifactsPanel({
   notebooks,
   files,
   executions,
+  loading = false,
   onClose,
   liveViewOverride,
   fileViewOverride,
@@ -202,6 +203,8 @@ export function ArtifactsPanel({
   notebooks: ConversationNotebook[];
   files: ConversationFileInfo[];
   executions: SqlTraceExecution[];
+  /** True while the first resource calls are still in flight. */
+  loading?: boolean;
   onClose: () => void;
   /** Test-only: rendered instead of the notebook view (the fixture harness has no gateway). */
   liveViewOverride?: ReactNode;
@@ -225,6 +228,11 @@ export function ArtifactsPanel({
     pickDefaultNotebook(showableNotebooks);
   const live = activeNotebook?.status === "live";
   const showNotebook = activeNotebook !== null;
+  const firstLoad =
+    loading &&
+    !showNotebook &&
+    files.length === 0 &&
+    executions.length === 0;
   // null means "auto": follow the default tab until the user picks one.
   const [selectedTab, setSelectedTab] = useState<ArtifactsTab | null>(null);
   const activeTab =
@@ -316,6 +324,20 @@ export function ArtifactsPanel({
         />
       </div>
       <div className="relative min-h-0 flex-1" data-testid="live-notebook-body">
+        {/* First-load state: nothing has answered yet, so no tab body can be
+            trusted. Never shows once any content exists. */}
+        {firstLoad ? (
+          <div
+            data-testid="artifacts-panel-loading"
+            className="flex h-full flex-col items-center justify-center gap-3"
+          >
+            <Loader2 className="h-5 w-5 animate-spin text-[var(--color-text-dim)]" />
+            <p className="text-xs uppercase tracking-wider text-[var(--color-text-dim)]">
+              Loading artifacts...
+            </p>
+          </div>
+        ) : (
+          <>
         {/* The notebook body stays MOUNTED across tab switches. Unmounting
             would drop the kiosk websocket and re-boot the viewer on every
             return to the tab. Inactive tabs hide with display:none. */}
@@ -402,6 +424,8 @@ export function ArtifactsPanel({
           <div className="h-full overflow-y-auto p-3">
             <SqlTracePanel executions={executions} />
           </div>
+        )}
+          </>
         )}
       </div>
     </aside>

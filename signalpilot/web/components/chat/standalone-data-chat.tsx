@@ -4,7 +4,14 @@
 // previews, hooks, and rail parts live in sibling modules. This file
 // re-exports the moved names so existing importers do not change.
 
-import { Bot, NotebookPen, PanelLeft, Share2, Sparkles } from "lucide-react";
+import {
+  Bot,
+  Loader2,
+  NotebookPen,
+  PanelLeft,
+  Share2,
+  Sparkles,
+} from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import useSWR from "swr";
@@ -24,20 +31,9 @@ import {
 } from "~/lib/standalone-chat-state";
 import { projectSettingsHref } from "~/lib/project-settings-route";
 import { ArtifactsPanel } from "~/components/chat/artifacts-panel";
-import { useConversationNotebooks } from "~/components/chat/use-conversation-notebook";
-import {
-  useConversationFiles,
-  useConversationSqlTrace,
-} from "~/components/chat/use-conversation-files";
-import {
-  notebookRefreshRevision,
-  pickDefaultNotebook,
-} from "~/lib/chat-live-notebook";
-import {
-  filesRefreshRevision,
-  hasArtifactsContent,
-  sqlTraceRefreshRevision,
-} from "~/lib/chat-artifacts";
+import { useConversationArtifacts } from "~/components/chat/use-conversation-notebook";
+import { pickDefaultNotebook } from "~/lib/chat-live-notebook";
+import { hasArtifactsContent } from "~/lib/chat-artifacts";
 import { ChatUiContext } from "~/components/chat/chat-ui-context";
 import { ChatMessage } from "~/components/chat/chat-message";
 import {
@@ -199,33 +195,16 @@ export function StandaloneDataChat({
   const currentRun = detail?.current_run ?? null;
   const events = detail?.run_events ?? [];
 
-  // Notebook panel. The gateway's conversation notebook resource is the
-  // single source of truth; notebook-related events only trigger a refetch.
-  const notebookRefreshRev = useMemo(
-    () => notebookRefreshRevision(events),
-    [events],
-  );
-  const conversationNotebooks = useConversationNotebooks(
-    conversationId ?? null,
-    notebookRefreshRev,
-  );
+  // Artifacts panel resources. The gateway is the single source of truth;
+  // events only trigger refetches. `loading` drives the first-paint loader.
+  const {
+    notebooks: conversationNotebooks,
+    files: conversationFiles,
+    executions: sqlTraceExecutions,
+    loading: artifactsLoading,
+  } = useConversationArtifacts(conversationId ?? null, events);
   // Panel-open and auto-open follow the DEFAULT (analysis) notebook.
   const defaultNotebook = pickDefaultNotebook(conversationNotebooks);
-  // File manifest and SQL trace for the artifacts panel. Same contract as
-  // the notebook: gateway resources, events only trigger refetches.
-  const filesRefreshRev = useMemo(() => filesRefreshRevision(events), [events]);
-  const sqlTraceRefreshRev = useMemo(
-    () => sqlTraceRefreshRevision(events),
-    [events],
-  );
-  const conversationFiles = useConversationFiles(
-    conversationId ?? null,
-    filesRefreshRev,
-  );
-  const sqlTraceExecutions = useConversationSqlTrace(
-    conversationId ?? null,
-    sqlTraceRefreshRev,
-  );
   const [notebookPanelOpen, setNotebookPanelOpen] = useNotebookPanelState(
     conversationId,
     defaultNotebook?.status,
@@ -564,11 +543,12 @@ export function StandaloneDataChat({
             )}
             </div>
             {conversationId &&
-              hasArtifactsContent(
-                conversationNotebooks,
-                conversationFiles,
-                sqlTraceExecutions,
-              ) &&
+              (artifactsLoading ||
+                hasArtifactsContent(
+                  conversationNotebooks,
+                  conversationFiles,
+                  sqlTraceExecutions,
+                )) &&
               !notebookPanelOpen && (
               <button
                 type="button"
@@ -578,7 +558,14 @@ export function StandaloneDataChat({
                 onClick={() => setNotebookPanelOpen(true)}
                 className="absolute right-16 top-4 z-20 flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] text-[var(--color-text-muted)] shadow-lg shadow-black/20 hover:border-[var(--color-border-hover)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
               >
-                <NotebookPen className="h-4 w-4" />
+                {artifactsLoading ? (
+                  <Loader2
+                    data-testid="artifacts-toggle-loading"
+                    className="h-4 w-4 animate-spin"
+                  />
+                ) : (
+                  <NotebookPen className="h-4 w-4" />
+                )}
               </button>
             )}
           </main>
@@ -588,6 +575,7 @@ export function StandaloneDataChat({
               notebooks={conversationNotebooks}
               files={conversationFiles}
               executions={sqlTraceExecutions}
+              loading={artifactsLoading}
               onClose={() => setNotebookPanelOpen(false)}
             />
           )}

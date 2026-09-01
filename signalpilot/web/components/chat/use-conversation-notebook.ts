@@ -1,12 +1,25 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   getConversationNotebook,
   getConversationNotebooks,
+  type ConversationFileInfo,
   type ConversationNotebook,
+  type SqlTraceExecution,
+  type StandaloneChatEvent,
 } from "~/lib/api";
-import { useConversationResource } from "~/components/chat/use-conversation-files";
+import {
+  useConversationFiles,
+  useConversationResource,
+  useConversationSqlTrace,
+  type ConversationResource,
+} from "~/components/chat/use-conversation-files";
+import {
+  filesRefreshRevision,
+  sqlTraceRefreshRevision,
+} from "~/lib/chat-artifacts";
+import { notebookRefreshRevision } from "~/lib/chat-live-notebook";
 
 /** Delay before a refetch so bursts of events cause one request. */
 const REFETCH_DEBOUNCE_MS = 400;
@@ -75,12 +88,13 @@ const fetchNotebooks = (conversationId: string) =>
  * Fetch ALL of the conversation's notebooks and keep them current. Same
  * contract as the singular hook: the gateway decides everything, events
  * only trigger refetches, and `override` skips fetching for fixtures.
+ * Returns the list plus whether the first fetch has resolved.
  */
 export function useConversationNotebooks(
   conversationId: string | null,
   refreshRevision: number,
   override?: ConversationNotebook[] | null,
-): ConversationNotebook[] {
+): ConversationResource<ConversationNotebook[]> {
   return useConversationResource(
     conversationId,
     refreshRevision,
@@ -88,4 +102,38 @@ export function useConversationNotebooks(
     NO_NOTEBOOKS,
     override,
   );
+}
+
+/** Everything the artifacts panel renders, plus a first-load flag. */
+export type ConversationArtifacts = {
+  notebooks: ConversationNotebook[];
+  files: ConversationFileInfo[];
+  executions: SqlTraceExecution[];
+  /** True until every resource has answered once for this conversation. */
+  loading: boolean;
+};
+
+/**
+ * Fetch all three artifacts-panel resources for one conversation. Events
+ * only trigger refetches; each resource has its own refresh revision.
+ */
+export function useConversationArtifacts(
+  conversationId: string | null,
+  events: StandaloneChatEvent[],
+): ConversationArtifacts {
+  const notebookRev = useMemo(() => notebookRefreshRevision(events), [events]);
+  const filesRev = useMemo(() => filesRefreshRevision(events), [events]);
+  const sqlRev = useMemo(() => sqlTraceRefreshRevision(events), [events]);
+  const notebooks = useConversationNotebooks(conversationId, notebookRev);
+  const files = useConversationFiles(conversationId, filesRev);
+  const sqlTrace = useConversationSqlTrace(conversationId, sqlRev);
+  return {
+    notebooks: notebooks.data,
+    files: files.data,
+    executions: sqlTrace.data,
+    loading: Boolean(
+      conversationId &&
+        !(notebooks.loaded && files.loaded && sqlTrace.loaded),
+    ),
+  };
 }

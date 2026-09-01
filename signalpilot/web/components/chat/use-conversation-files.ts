@@ -11,13 +11,21 @@ import {
 /** Delay before a refetch so bursts of events cause one request. */
 const REFETCH_DEBOUNCE_MS = 400;
 
+/** A conversation resource plus whether its first fetch has resolved. */
+export type ConversationResource<T> = {
+  data: T;
+  /** False only before the first response for the current conversation. */
+  loaded: boolean;
+};
+
 /**
  * Fetch a conversation-level resource and keep it current.
  *
  * The gateway decides everything; run events only trigger refetches. The
  * first fetch for a conversation runs at once. Event-driven refetches
  * debounce so a burst of events causes one request. Transient fetch
- * failures keep the last known value.
+ * failures keep the last known value and still count as loaded, so the
+ * UI never spins forever on a flaky call.
  *
  * Test override: pass `override` to skip fetching entirely. The fixture
  * harness has no gateway.
@@ -28,13 +36,15 @@ export function useConversationResource<T>(
   fetchResource: (conversationId: string) => Promise<T>,
   emptyValue: T,
   override?: T | null,
-): T {
+): ConversationResource<T> {
   const [value, setValue] = useState<T>(emptyValue);
+  const [loaded, setLoaded] = useState(false);
   const latestRequestRef = useRef(0);
   const fetchedConversationRef = useRef<string | null>(null);
 
   useEffect(() => {
     setValue(emptyValue);
+    setLoaded(false);
     // The empty value is a stable constant per hook; reset on id change only.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId]);
@@ -51,10 +61,14 @@ export function useConversationResource<T>(
           .then((result) => {
             if (!cancelled && latestRequestRef.current === requestId) {
               setValue(result);
+              setLoaded(true);
             }
           })
           .catch(() => {
-            /* Keep the last known resource on transient fetch failures. */
+            // Keep the last known resource on transient fetch failures.
+            if (!cancelled && latestRequestRef.current === requestId) {
+              setLoaded(true);
+            }
           });
       },
       isFirstFetch ? 0 : REFETCH_DEBOUNCE_MS,
@@ -67,7 +81,10 @@ export function useConversationResource<T>(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId, refreshRevision, override]);
 
-  return override !== undefined ? (override ?? emptyValue) : value;
+  if (override !== undefined) {
+    return { data: override ?? emptyValue, loaded: true };
+  }
+  return { data: value, loaded };
 }
 
 const NO_FILES: ConversationFileInfo[] = [];
@@ -84,7 +101,7 @@ export function useConversationFiles(
   conversationId: string | null,
   refreshRevision: number,
   override?: ConversationFileInfo[] | null,
-): ConversationFileInfo[] {
+): ConversationResource<ConversationFileInfo[]> {
   return useConversationResource(
     conversationId,
     refreshRevision,
@@ -99,7 +116,7 @@ export function useConversationSqlTrace(
   conversationId: string | null,
   refreshRevision: number,
   override?: SqlTraceExecution[] | null,
-): SqlTraceExecution[] {
+): ConversationResource<SqlTraceExecution[]> {
   return useConversationResource(
     conversationId,
     refreshRevision,

@@ -27,7 +27,10 @@ export default function ChatNotebookEmbed() {
     () => searchParams.get("conversation") || "",
   );
   const [notebookName] = useState(() => searchParams.get("notebook") || "");
-  const notebooks = useConversationNotebooks(conversationId || null, 0);
+  const { data: notebooks } = useConversationNotebooks(
+    conversationId || null,
+    0,
+  );
   // Select by name; fall back to the default (analysis else first).
   const notebook = notebookName
     ? (notebooks.find((entry) => entry.name === notebookName) ??

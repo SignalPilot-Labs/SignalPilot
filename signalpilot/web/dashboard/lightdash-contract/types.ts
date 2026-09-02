@@ -18,6 +18,7 @@ export type DashboardTileDefinition = {
     hideTitle?: boolean;
     chartName?: string | null;
     chartSlug: string;
+    sectionTitle?: string;
   };
   chartId: string;
 };

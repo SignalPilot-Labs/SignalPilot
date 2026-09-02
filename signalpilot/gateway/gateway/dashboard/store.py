@@ -12,19 +12,29 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.dashboard.cache import dashboard_query_cache_key
 from gateway.dashboard.confidence import dashboard_confidence_counts
-from gateway.dashboard.domain import DashboardDefinition, dashboard_content_hash, normalize_dashboard_definition
+from gateway.dashboard.domain import (
+    ChartDefinition,
+    DashboardDefinition,
+    dashboard_content_hash,
+    normalize_dashboard_definition,
+)
 from gateway.db.models import (
     GatewayDashboard,
     GatewayDashboardAuthoringSession,
+    GatewayDashboardChartDraft,
     GatewayDashboardResult,
     GatewayDashboardVersion,
     GatewayStructuredQueryResult,
 )
 from gateway.models.dashboards import (
     DashboardAuthoringSessionInfo,
+    DashboardChartDraftInfo,
+    DashboardChartIntent,
     DashboardDetail,
     DashboardListItem,
+    DashboardPlan,
     DashboardRuntimeFilter,
+    DashboardSemanticContext,
     DashboardVersionInfo,
 )
 
@@ -266,7 +276,8 @@ def _version_info(row: GatewayDashboardVersion) -> DashboardVersionInfo:
 
 
 def _authoring_info(row: GatewayDashboardAuthoringSession) -> DashboardAuthoringSessionInfo:
-    definition = DashboardDefinition.model_validate(row.definition_json)
+    definition = DashboardDefinition.model_validate(row.definition_json) if row.definition_json else None
+    plan = DashboardPlan.model_validate(row.plan_json) if row.plan_json else None
     return DashboardAuthoringSessionInfo(
         id=row.id,
         thread_id=row.thread_id,
@@ -275,6 +286,27 @@ def _authoring_info(row: GatewayDashboardAuthoringSession) -> DashboardAuthoring
         base_version_id=row.base_version_id,
         applied_version_id=row.applied_version_id,
         definition=definition,
+        plan=plan,
+        expected_chart_count=row.expected_chart_count,
+        chart_drafts=[
+            DashboardChartDraftInfo(
+                chart_id=draft.chart_id,
+                ordinal=draft.ordinal,
+                intent=DashboardChartIntent.model_validate(draft.intent_json),
+                status=draft.status,
+                attempt_count=draft.attempt_count,
+                definition=(
+                    None
+                    if draft.definition_json is None
+                    else ChartDefinition.model_validate(draft.definition_json)
+                ),
+                safe_error=draft.safe_error,
+                model_usage=dict(draft.model_usage_json or {}),
+                created_at=draft.created_at,
+                updated_at=draft.updated_at or draft.created_at,
+            )
+            for draft in row.chart_drafts
+        ],
         operations=list(row.operations_json or []),
         summary=row.summary,
         agent_run_id=row.agent_run_id,
@@ -694,6 +726,265 @@ async def create_authoring_session(
     await db.commit()
     await db.refresh(row)
     return _authoring_info(row)
+
+
+async def create_progressive_authoring_session(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    user_id: str,
+    dashboard_id: str | None,
+    base_version_id: str | None,
+    context: DashboardSemanticContext,
+    plan: DashboardPlan,
+    prompt: str,
+    model: str,
+    conversation_id: str | None,
+) -> DashboardAuthoringSessionInfo:
+    """Persist a private build only after its shared plan validates."""
+    now = datetime.now(UTC)
+    session_id = str(uuid.uuid4())
+    events: list[dict] = []
+    events.append(_authoring_event(events, kind="user", message=prompt))
+    events.append(
+        _authoring_event(
+            events,
+            kind="progress",
+            status="success",
+            message="Dashboard plan ready",
+            metadata={"phase": "plan_ready", "session_id": session_id, "draft_revision": 1},
+        )
+    )
+    row = GatewayDashboardAuthoringSession(
+        id=session_id,
+        thread_id=str(uuid.uuid4()),
+        conversation_id=conversation_id,
+        dashboard_id=dashboard_id,
+        base_version_id=base_version_id,
+        org_id=org_id,
+        owner_user_id=user_id,
+        project_id=context.project_id,
+        connection_name=context.connection_name,
+        commit_sha=context.commit_sha,
+        semantic_fingerprint=context.semantic_fingerprint,
+        prompt=prompt,
+        definition_json=None,
+        plan_json=plan.model_dump(mode="json", by_alias=True, exclude_none=True),
+        expected_chart_count=sum(intent.required for intent in plan.intents),
+        operations_json=[],
+        events_json=events,
+        agent_runs_json=[],
+        confirmations_json=[],
+        pending_custom_sql_chart_ids_json=[],
+        draft_revision=1,
+        summary="Building the governed dashboard preview.",
+        agent_run_id=str(uuid.uuid4()),
+        model=model,
+        status="building",
+        requires_custom_sql_confirmation=False,
+        custom_sql_confirmed=False,
+        updated_at=now,
+    )
+    row.chart_drafts = [
+        GatewayDashboardChartDraft(
+            id=str(uuid.uuid4()),
+            session_id=session_id,
+            chart_id=intent.chart_id,
+            ordinal=intent.order,
+            intent_json=intent.model_dump(mode="json", exclude_none=True),
+            status="pending",
+            attempt_count=0,
+            model_usage_json={},
+            created_at=now,
+            updated_at=now,
+        )
+        for intent in plan.intents
+    ]
+    db.add(row)
+    await db.commit()
+    await db.refresh(row, ["chart_drafts"])
+    return _authoring_info(row)
+
+
+async def update_progressive_chart(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    user_id: str,
+    session_id: str,
+    chart_id: str,
+    status: str,
+    attempt_count: int,
+    definition: ChartDefinition | None = None,
+    partial_definition: DashboardDefinition | None = None,
+    safe_error: str | None = None,
+    model_usage: dict | None = None,
+    phase: str,
+    safe_label: str,
+    run_provenance: dict | None = None,
+) -> DashboardAuthoringSessionInfo:
+    session = await get_authoring_session(db, org_id=org_id, user_id=user_id, session_id=session_id)
+    if session is None:
+        raise DashboardNotFoundError
+    if session.status not in {"building", "partial_failed"}:
+        raise DashboardValidationError("Dashboard build is no longer active")
+    draft = next((item for item in session.chart_drafts if item.chart_id == chart_id), None)
+    if draft is None:
+        raise DashboardValidationError("Dashboard chart draft not found")
+    if draft.status == "ready" and status != "ready":
+        raise DashboardValidationError("A validated chart draft cannot be regenerated")
+    now = datetime.now(UTC)
+    draft.status = status
+    draft.attempt_count = attempt_count
+    if definition is not None:
+        draft.definition_json = definition.model_dump(mode="json", by_alias=True, exclude_none=True)
+    if safe_error is not None or status != "failed":
+        draft.safe_error = safe_error
+    if model_usage is not None:
+        draft.model_usage_json = model_usage
+    draft.updated_at = now
+    if partial_definition is not None:
+        session.definition_json = normalize_dashboard_definition(partial_definition)
+    session.draft_revision += 1
+    session.updated_at = now
+    events = list(session.events_json or [])
+    event_status = "error" if status == "failed" else "pending" if status == "running" else "success"
+    events.append(
+        _authoring_event(
+            events,
+            kind="progress",
+            status=event_status,
+            message=safe_label,
+            metadata={
+                "phase": phase,
+                "session_id": session.id,
+                "chart_id": chart_id,
+                "status": status,
+                "attempt": attempt_count,
+                "draft_revision": session.draft_revision,
+            },
+        )
+    )
+    session.events_json = events
+    if run_provenance:
+        runs = list(session.agent_runs_json or [])
+        runs.append(dict(run_provenance))
+        session.agent_runs_json = runs
+    await db.commit()
+    await db.refresh(session, ["chart_drafts"])
+    return _authoring_info(session)
+
+
+async def finalize_progressive_authoring_session(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    user_id: str,
+    session_id: str,
+    definition: DashboardDefinition | None,
+    status: str,
+    summary: str,
+    phase: str,
+    run_provenance: dict | None = None,
+) -> DashboardAuthoringSessionInfo:
+    session = await get_authoring_session(db, org_id=org_id, user_id=user_id, session_id=session_id)
+    if session is None:
+        raise DashboardNotFoundError
+    if status == "preview" and definition is None:
+        raise DashboardValidationError("A ready preview requires a complete dashboard definition")
+    if definition is not None:
+        session.definition_json = normalize_dashboard_definition(definition)
+    session.status = status
+    session.summary = summary
+    session.draft_revision += 1
+    session.updated_at = datetime.now(UTC)
+    events = list(session.events_json or [])
+    events.append(
+        _authoring_event(
+            events,
+            kind="progress",
+            status="success" if status == "preview" else "error",
+            message=summary,
+            metadata={
+                "phase": phase,
+                "session_id": session.id,
+                "status": status,
+                "draft_revision": session.draft_revision,
+            },
+        )
+    )
+    session.events_json = events
+    if run_provenance:
+        session.agent_runs_json = [*(session.agent_runs_json or []), dict(run_provenance)]
+    await db.commit()
+    await db.refresh(session, ["chart_drafts"])
+    return _authoring_info(session)
+
+
+async def append_progressive_session_progress(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    user_id: str,
+    session_id: str,
+    phase: str,
+    safe_label: str,
+    attempt: int = 0,
+) -> DashboardAuthoringSessionInfo:
+    session = await get_authoring_session(db, org_id=org_id, user_id=user_id, session_id=session_id)
+    if session is None:
+        raise DashboardNotFoundError
+    session.draft_revision += 1
+    session.updated_at = datetime.now(UTC)
+    events = list(session.events_json or [])
+    events.append(
+        _authoring_event(
+            events,
+            kind="progress",
+            status="pending",
+            message=safe_label,
+            metadata={
+                "phase": phase,
+                "session_id": session.id,
+                "status": session.status,
+                "attempt": attempt,
+                "draft_revision": session.draft_revision,
+            },
+        )
+    )
+    session.events_json = events
+    await db.commit()
+    await db.refresh(session, ["chart_drafts"])
+    return _authoring_info(session)
+
+
+async def reset_failed_progressive_charts(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    user_id: str,
+    session_id: str,
+) -> DashboardAuthoringSessionInfo:
+    session = await get_authoring_session(db, org_id=org_id, user_id=user_id, session_id=session_id)
+    if session is None:
+        raise DashboardNotFoundError
+    if session.status != "partial_failed":
+        raise DashboardValidationError("Only a partial dashboard build can retry failed charts")
+    failed = [draft for draft in session.chart_drafts if draft.status == "failed"]
+    if not failed:
+        raise DashboardValidationError("Dashboard build has no failed charts")
+    for draft in failed:
+        draft.status = "pending"
+        draft.attempt_count = 0
+        draft.safe_error = None
+        draft.model_usage_json = {}
+        draft.updated_at = datetime.now(UTC)
+    session.status = "building"
+    session.draft_revision += 1
+    session.updated_at = datetime.now(UTC)
+    await db.commit()
+    await db.refresh(session, ["chart_drafts"])
+    return _authoring_info(session)
 
 
 async def update_authoring_session_draft(

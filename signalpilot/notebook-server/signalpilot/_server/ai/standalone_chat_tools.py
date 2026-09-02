@@ -105,19 +105,45 @@ def build_standalone_chat_mcp_server(
                 definition = definition if isinstance(definition, dict) else {}
                 charts = definition.get("charts")
                 charts = charts if isinstance(charts, list) else []
+                plan = created.get("plan")
+                plan = plan if isinstance(plan, dict) else {}
+                chart_drafts = created.get("chart_drafts")
+                chart_drafts = chart_drafts if isinstance(chart_drafts, list) else []
+                failed_charts = [
+                    {
+                        "label": str(
+                            ((draft.get("intent") or {}).get("label"))
+                            or draft.get("chart_id")
+                            or "Chart"
+                        ),
+                        "error": str(draft.get("safe_error") or "Chart generation failed"),
+                    }
+                    for draft in chart_drafts
+                    if isinstance(draft, dict) and draft.get("status") == "failed"
+                ]
+                created_status = str(created.get("status") or "preview")
                 dashboard_preview_request = request_key
                 dashboard_preview_result = {
-                    "status": "preview_ready",
+                    "status": (
+                        "partial_failed"
+                        if created_status == "partial_failed"
+                        else "preview_ready"
+                    ),
                     "authoring_session_id": session_id,
                     "preview_url": f"/dashboards/new?authoring={session_id}",
                     "summary": str(created.get("summary") or ""),
-                    "dashboard_name": str(definition.get("name") or "Dashboard preview"),
+                    "dashboard_name": str(
+                        definition.get("name")
+                        or plan.get("name")
+                        or "Dashboard preview"
+                    ),
                     "chart_count": len(charts),
                     "chart_titles": [
                         str(chart.get("title") or "Untitled chart")
                         for chart in charts[:12]
                         if isinstance(chart, dict)
                     ],
+                    **({"failed_charts": failed_charts} if failed_charts else {}),
                     "requires_review": True,
                     "apply_required": True,
                 }

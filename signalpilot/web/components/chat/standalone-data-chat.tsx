@@ -63,7 +63,7 @@ import {
   useStandaloneUiMessages,
 } from "~/components/chat/use-standalone-chat-run";
 import { useStandaloneChatActions } from "~/components/chat/use-standalone-chat-actions";
-import { activeDashboardPreviewLabel } from "~/lib/chat-run-steps";
+import { activeDashboardAuthoringProgress } from "~/lib/chat-run-steps";
 
 // Re-exports for existing importers of this module path.
 export { ChatUiContext, useChatUi } from "~/components/chat/chat-ui-context";
@@ -274,7 +274,7 @@ export function StandaloneDataChat({
     pendingSubmission,
     setPendingSubmission,
   });
-  const latestDashboardSessionId = useMemo(() => {
+  const messageDashboardSessionId = useMemo(() => {
     for (let index = uiMessages.length - 1; index >= 0; index -= 1) {
       const preview = uiMessages[index]?.metadata?.dashboard_preview;
       if (preview && typeof preview === "object") {
@@ -285,10 +285,16 @@ export function StandaloneDataChat({
     }
     return null;
   }, [uiMessages]);
-  const dashboardUpdateLabel = useMemo(
-    () => activeDashboardPreviewLabel(events, currentRun?.id),
+  const dashboardProgress = useMemo(
+    () => activeDashboardAuthoringProgress(events, currentRun?.id),
     [currentRun?.id, events],
   );
+  const latestDashboardSessionId =
+    messageDashboardSessionId ?? dashboardProgress?.sessionId ?? null;
+  const dashboardUpdateLabel =
+    dashboardProgress?.phase === "ready"
+      ? null
+      : (dashboardProgress?.label ?? null);
   useEffect(() => {
     if (currentRun?.status === "queued" || currentRun?.status === "running") {
       observedActiveRun.current = true;
@@ -677,6 +683,8 @@ export function StandaloneDataChat({
             <ChatDashboardPanel
               sessionId={dashboardSessionId}
               updateLabel={dashboardUpdateLabel}
+              updateRevision={dashboardProgress?.draftRevision ?? 0}
+              queriesEnabled={currentRun?.status !== "cancelled"}
               onClose={() => {
                 setDashboardSessionId(null);
                 const params = new URLSearchParams(searchParams.toString());

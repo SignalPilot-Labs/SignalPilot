@@ -1,6 +1,7 @@
 "use client";
 
-import { Check, LayoutDashboard, Loader2, X } from "lucide-react";
+import { ArrowUpRight, Check, LayoutDashboard, Loader2, X } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import useSWR from "swr";
 
@@ -19,10 +20,14 @@ const DASHBOARD_STYLES_READY_PROPERTY = "--dashboard-runtime-styles-ready";
 export function ChatDashboardPanel({
   sessionId,
   updateLabel,
+  updateRevision = 0,
+  queriesEnabled = true,
   onClose,
 }: {
   sessionId: string;
   updateLabel?: string | null;
+  updateRevision?: number;
+  queriesEnabled?: boolean;
   onClose: () => void;
 }) {
   const { toast } = useToast();
@@ -36,10 +41,7 @@ export function ChatDashboardPanel({
       request<DashboardAuthoringSession>(
         `/api/dashboard-authoring/sessions/${sessionId}`,
       ),
-    {
-      refreshInterval: updateLabel ? 1_000 : 0,
-      revalidateOnFocus: false,
-    },
+    { revalidateOnFocus: false },
   );
   const [busy, setBusy] = useState(false);
   const [receipts, setReceipts] = useState<
@@ -49,6 +51,7 @@ export function ChatDashboardPanel({
   const [runtimeStylesReady, setRuntimeStylesReady] = useState(false);
   const runtimeStyleProbe = useRef<HTMLDivElement>(null);
   const wasUpdating = useRef(false);
+  const observedRevision = useRef(0);
   const visibleUpdateLabel =
     updateLabel ??
     (syncingRevision ? "Loading the validated dashboard revision" : null);
@@ -61,6 +64,12 @@ export function ChatDashboardPanel({
     }
     wasUpdating.current = Boolean(updateLabel);
   }, [mutate, updateLabel]);
+
+  useEffect(() => {
+    if (!updateRevision || updateRevision <= observedRevision.current) return;
+    observedRevision.current = updateRevision;
+    void mutate();
+  }, [mutate, updateRevision]);
 
   useEffect(() => {
     setReceipts({});
@@ -164,6 +173,65 @@ export function ChatDashboardPanel({
     }
   };
 
+  const retryFailed = async () => {
+    if (!session || busy) return;
+    setBusy(true);
+    try {
+      await mutate(
+        request<DashboardAuthoringSession>(
+          `/api/dashboard-authoring/sessions/${session.id}/retry-failed`,
+          { method: "POST" },
+        ),
+        { revalidate: false },
+      );
+    } catch (cause) {
+      toast(
+        cause instanceof Error
+          ? cause.message
+          : "Could not retry failed charts",
+        "error",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const chartDrafts = session?.chart_drafts ?? [];
+  const requiredChartIds = new Set(
+    session?.plan?.intents
+      .filter((intent) => intent.required !== false)
+      .map((intent) => intent.chart_id) ?? [],
+  );
+  const persistedReadyCount = chartDrafts.filter(
+    (draft) =>
+      draft.status === "ready" &&
+      (!requiredChartIds.size || requiredChartIds.has(draft.chart_id)),
+  ).length;
+  const failedCount = chartDrafts.filter(
+    (draft) => draft.status === "failed",
+  ).length;
+  const expectedCount =
+    session?.expected_chart_count && session.expected_chart_count > 0
+      ? session.expected_chart_count
+      : (session?.definition?.charts.length ?? 0);
+  const readyCount = chartDrafts.length
+    ? persistedReadyCount
+    : (session?.definition?.charts.length ?? 0);
+  const completeVisibleResult =
+    session?.status === "preview" &&
+    Boolean(session.definition) &&
+    readyCount === expectedCount &&
+    Object.keys(receipts).length === session?.definition?.charts.length;
+  const pendingIntents =
+    session?.plan?.intents
+      .filter(
+        (intent) =>
+          chartDrafts.find((draft) => draft.chart_id === intent.chart_id)
+            ?.status !== "ready" &&
+          !(session?.status === "preview" && intent.required === false),
+      )
+      .sort((left, right) => left.order - right.order) ?? [];
+
   return (
     <aside
       data-testid="chat-dashboard-panel"
@@ -173,13 +241,18 @@ export function ChatDashboardPanel({
         <div className="flex min-w-0 items-center gap-2">
           <LayoutDashboard className="h-3.5 w-3.5 flex-none text-[var(--color-success)]" />
           <span className="truncate text-xs font-medium text-[var(--color-text)]">
-            {session?.definition.name ?? "Dashboard preview"}
+            {session?.definition?.name ??
+              session?.plan?.name ??
+              "Dashboard preview"}
           </span>
           {session && (
             <span className="flex-none rounded-full bg-[var(--color-bg-card)] px-2 py-0.5 text-[10px] uppercase tracking-wider text-[var(--color-text-dim)]">
-              {session.status === "preview"
-                ? `Draft ${session.draft_revision}`
-                : "Saved"}
+              {session.status === "building" ||
+              session.status === "partial_failed"
+                ? `${readyCount}/${expectedCount} ready`
+                : session.status === "preview"
+                  ? `Draft ${session.draft_revision}`
+                  : "Saved"}
             </span>
           )}
         </div>
@@ -198,6 +271,7 @@ export function ChatDashboardPanel({
                 type="button"
                 disabled={
                   controlsDisabled ||
+                  !completeVisibleResult ||
                   (session.requires_custom_sql_confirmation &&
                     !session.custom_sql_confirmed)
                 }
@@ -212,6 +286,31 @@ export function ChatDashboardPanel({
                 Apply
               </button>
             </>
+          )}
+          {session?.status === "partial_failed" && (
+            <button
+              type="button"
+              disabled={busy || failedCount === 0}
+              onClick={() => void retryFailed()}
+              title={chartDrafts
+                .filter((draft) => draft.status === "failed")
+                .map((draft) => draft.safe_error)
+                .filter(Boolean)
+                .join("\n")}
+              className="inline-flex items-center gap-1.5 rounded-md bg-[var(--color-text)] px-2.5 py-1.5 text-[11px] font-medium text-[var(--color-bg)] disabled:opacity-40"
+            >
+              {busy && <Loader2 className="h-3 w-3 animate-spin" />}
+              Retry failed charts
+            </button>
+          )}
+          {session?.status !== "preview" && session?.dashboard_id && (
+            <Link
+              href={`/dashboards/${encodeURIComponent(session.dashboard_id)}`}
+              className="inline-flex items-center gap-1.5 rounded-md bg-[var(--color-text)] px-2.5 py-1.5 text-[11px] font-medium text-[var(--color-bg)]"
+            >
+              Go to dashboard
+              <ArrowUpRight className="h-3 w-3" />
+            </Link>
           )}
           <button
             type="button"
@@ -292,21 +391,69 @@ export function ChatDashboardPanel({
             style={{ visibility: runtimeStylesReady ? "visible" : "hidden" }}
             aria-hidden={!runtimeStylesReady}
           >
-            <DashboardRuntimeProvider
-              key={`${session.id}:${session.draft_revision}:${session.custom_sql_confirmed}`}
-              dashboardId={session.dashboard_id ?? `draft:${session.id}`}
-              versionId={
-                session.applied_version_id ??
-                session.base_version_id ??
-                `draft:${session.id}`
-              }
-              definition={session.definition}
-              authoringSessionId={
-                session.status === "preview" ? session.id : undefined
-              }
-              onVisibleReceiptsChange={setReceipts}
-              analysisEnabled={false}
-            />
+            {session.definition && (
+              <DashboardRuntimeProvider
+                key={`${session.id}:${session.custom_sql_confirmed}`}
+                dashboardId={session.dashboard_id ?? `draft:${session.id}`}
+                versionId={
+                  session.applied_version_id ??
+                  session.base_version_id ??
+                  `draft:${session.id}`
+                }
+                definition={session.definition}
+                authoringSessionId={
+                  ["building", "partial_failed", "preview"].includes(
+                    session.status,
+                  )
+                    ? session.id
+                    : undefined
+                }
+                onVisibleReceiptsChange={setReceipts}
+                analysisEnabled={false}
+                queriesEnabled={queriesEnabled}
+              />
+            )}
+            {pendingIntents.length > 0 && (
+              <div
+                data-testid="dashboard-progressive-skeletons"
+                className="grid grid-cols-12 gap-3 px-4 pb-6"
+              >
+                {pendingIntents.map((intent) => {
+                  const draft = chartDrafts.find(
+                    (item) => item.chart_id === intent.chart_id,
+                  );
+                  const failed = draft?.status === "failed";
+                  return (
+                    <div
+                      key={intent.tile_id}
+                      data-testid={`dashboard-chart-placeholder-${intent.chart_id}`}
+                      data-status={draft?.status ?? "pending"}
+                      title={
+                        failed ? (draft?.safe_error ?? undefined) : undefined
+                      }
+                      className={`flex min-h-40 flex-col items-center justify-center rounded-xl border px-4 text-center ${
+                        failed
+                          ? "border-red-500/30 bg-red-500/5 text-red-300"
+                          : "border-[var(--color-border)] bg-[var(--color-bg-card)] text-[var(--color-text-dim)]"
+                      }`}
+                      style={{
+                        gridColumn: `span ${Math.max(1, Math.min(12, Math.ceil(intent.layout.w / 3)))}`,
+                      }}
+                    >
+                      {!failed && (
+                        <Loader2 className="mb-2 h-4 w-4 animate-spin" />
+                      )}
+                      <strong className="text-xs text-[var(--color-text)]">
+                        {intent.label}
+                      </strong>
+                      <span className="mt-1 text-[10px]">
+                        {failed ? draft?.safe_error : "Building governed chart"}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
       </div>

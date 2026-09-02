@@ -41,6 +41,10 @@ import {
   type UiMessage,
 } from "~/components/chat/chat-ui-context";
 import { ArtifactPreview } from "~/components/chat/chat-artifact-preview";
+import {
+  DashboardPreviewCard,
+  messageDashboardPreview,
+} from "~/components/chat/chat-dashboard-preview-card";
 import { ChatArtifactCards } from "~/components/chat/chat-artifact-card";
 import {
   deriveArtifactCards,
@@ -210,7 +214,8 @@ function AssistantMessage({
     [events, runId],
   );
   const steps = useMemo(
-    () => blocks.flatMap((block) => (block.kind === "steps" ? block.steps : [])),
+    () =>
+      blocks.flatMap((block) => (block.kind === "steps" ? block.steps : [])),
     [blocks],
   );
   const blocksHaveText = blocks.some((block) => block.kind === "text");
@@ -248,6 +253,9 @@ function AssistantMessage({
     message.metadata.runtime_archive_available === true;
   const reportSuggestion = successful
     ? messageReportSuggestion(message.metadata)
+    : null;
+  const dashboardPreview = successful
+    ? messageDashboardPreview(message.metadata)
     : null;
   return (
     <article
@@ -315,6 +323,9 @@ function AssistantMessage({
               messageId={message.id}
               suggestion={reportSuggestion}
             />
+          )}
+          {dashboardPreview && (
+            <DashboardPreviewCard preview={dashboardPreview} />
           )}
           {runStatus === "cancelled" && (
             <p className="mt-3 text-xs text-[var(--color-text-dim)]">
@@ -481,11 +492,7 @@ function AssistantMessageReplay({
   const replayMessage = useMemo<UiMessage>(
     () => ({
       ...message,
-      content: runStreamedText
-        ? ""
-        : replay.finished
-          ? message.content
-          : "",
+      content: runStreamedText ? "" : replay.finished ? message.content : "",
       runId,
       runStatus: replay.finished
         ? (message.runStatus ?? "completed")
@@ -518,6 +525,7 @@ function AssistantMessageReplay({
           onStop,
           onRetry,
           onApproveReportSuggestion,
+          onOpenDashboardPreview: () => undefined,
         }}
       >
         <AssistantMessage message={replayMessage} replayMode />
@@ -532,9 +540,7 @@ function ReplayableAssistantMessage({ message }: { message: UiMessage }) {
   const runId = messageRunId(message);
   const canReplay =
     Boolean(runId) &&
-    events.some(
-      (event) => event.run_id === runId && event.type !== "status",
-    );
+    events.some((event) => event.run_id === runId && event.type !== "status");
   if (replaying && runId) {
     return (
       <AssistantMessageReplay

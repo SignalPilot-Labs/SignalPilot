@@ -12,6 +12,17 @@
 
 services:
   gateway:
+    environment:
+      # Local development databases (including host.docker.internal) are
+      # intentionally reachable only in the loopback-bound dev stack.
+      SP_ALLOW_PRIVATE_CONNECTIONS: "true"
+      # Match the staging Data Chat runtime while retaining local endpoints,
+      # storage, and credentials.
+      SP_CHAT_AGENT_MODEL: "claude-opus-5"
+      SP_AGENT_EFFORT: "medium"
+      SP_FEATURE_CHAT_SIZE_ROUTER: "shadow"
+      SP_FEATURE_CHAT_ORG_SHARING: "true"
+      SP_FEATURE_CHAT_FORKING: "true"
     env_file:
       - path: ./.slack.local.env
         required: false
@@ -24,6 +35,12 @@ services:
       sh -c "/app/.venv/bin/python -m gateway.dev_local_api_key /shared/local_api_key && exec /app/.venv/bin/python /usr/local/bin/dev-watch-notebook.py --watch /app/gateway --interval 1 -- /app/.venv/bin/uvicorn gateway.main:app --host 0.0.0.0 --port 3300"
 
   notebook:
+    # Use the same immutable sandbox image definition as staging. The base
+    # compose file's notebook-server/Dockerfile is intentionally lightweight
+    # and does not include the deployed SignalPilot plugin or full adapter set.
+    build:
+      context: .
+      dockerfile: Dockerfile.notebook
     env_file:
       - path: ./.slack.local.env
         required: false
@@ -34,6 +51,8 @@ services:
       # server. Let distinct kernel session IDs coexist so shareability can be
       # tested without one tab taking over another.
       SP_ALLOW_CONCURRENT_EDIT_SESSIONS: "true"
+      SP_AGENT_EFFORT: "medium"
+      SIGNALPILOT_PLUGIN_VERSION: "deployed"
     volumes:
       - ./signalpilot/notebook-server/signalpilot:/opt/sp-notebook/signalpilot:cached
       - ./scripts/dev-watch-notebook.py:/usr/local/bin/dev-watch-notebook.py:ro
@@ -42,6 +61,12 @@ services:
       - -c
       - |
         export SP_API_KEY=$$(cat /shared/local_api_key 2>/dev/null || echo '')
+        if [ ! -s /gateway-secrets/notebook_jwt_secret ]; then
+          umask 077
+          python -c 'import secrets; print(secrets.token_urlsafe(48))' > /gateway-secrets/notebook_jwt_secret.tmp
+          mv /gateway-secrets/notebook_jwt_secret.tmp /gateway-secrets/notebook_jwt_secret
+        fi
+        export SP_SESSION_JWT_SECRET=$$(cat /gateway-secrets/notebook_jwt_secret)
         /opt/sp-notebook/.venv/bin/python -m signalpilot._server.local_token /notebook-token/token
         exec /opt/sp-notebook/.venv/bin/python /usr/local/bin/dev-watch-notebook.py \
           --watch /opt/sp-notebook/signalpilot \
@@ -114,6 +139,14 @@ services:
              esac;
              rm -rf .next/dev;
              exec npm run dev -- --hostname 0.0.0.0 "$$bundler_flag"'
+
+  gateway-chat-worker:
+    environment:
+      SP_CHAT_AGENT_MODEL: "claude-opus-5"
+      SP_AGENT_EFFORT: "medium"
+      SP_FEATURE_CHAT_SIZE_ROUTER: "shadow"
+      SP_FEATURE_CHAT_ORG_SHARING: "true"
+      SP_FEATURE_CHAT_FORKING: "true"
 
 volumes:
   signalpilot-web-node-modules:

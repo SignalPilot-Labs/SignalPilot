@@ -24,11 +24,12 @@ KNOWN_BACKENDS = ("", "vercel", "direct")
 
 
 def chat_force_oauth_token() -> bool:
-    """Whether standalone chat must use the gateway's Claude OAuth token.
+    """Whether interactive AI product paths must use the gateway's Claude OAuth token.
 
-    Force mode is deliberately separate from normal credential precedence. A
-    user chat fails closed when the token is missing, and its notebook process
-    is launched without the organization's Anthropic API key.
+    Force mode is deliberately separate from normal credential precedence.
+    Data Chat and governed dashboard authoring fail closed when the token is
+    missing, and chat notebooks launch without the organization's Anthropic API
+    key. Automated improvement runs remain separately credentialed.
     """
     return os.getenv("SP_CHAT_FORCE_OAUTH_TOKEN", "").strip().lower() in {
         "1",

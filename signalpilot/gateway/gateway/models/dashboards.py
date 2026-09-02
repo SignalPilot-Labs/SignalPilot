@@ -5,9 +5,16 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from gateway.dashboard.domain import DashboardDefinition, FilterOperator, FilterSettings, Scalar
+from gateway.dashboard.domain import (
+    ChartDefinition,
+    DashboardDefinition,
+    DashboardFilterRule,
+    FilterOperator,
+    FilterSettings,
+    Scalar,
+)
 
 
 class DashboardModel(BaseModel):
@@ -245,6 +252,75 @@ class DashboardAuthoringMessageRequest(DashboardModel):
     prompt: str = Field(min_length=1, max_length=50_000)
 
 
+class DashboardProvisionalLayout(DashboardModel):
+    x: int = Field(ge=0, le=35)
+    y: int = Field(ge=0)
+    w: int = Field(ge=1, le=36)
+    h: int = Field(ge=1)
+
+
+class DashboardChartIntent(DashboardModel):
+    chart_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$")
+    tile_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$")
+    label: str = Field(min_length=1, max_length=120)
+    question: str = Field(min_length=1, max_length=120)
+    description: str = Field(min_length=1, max_length=1000)
+    required_concepts: list[str] = Field(min_length=1, max_length=20)
+    explore_name: str = Field(min_length=1, max_length=200)
+    dimensions: list[str] = Field(default_factory=list, max_length=20)
+    metrics: list[str] = Field(min_length=1, max_length=20)
+    section: str = Field(min_length=1, max_length=120)
+    order: int = Field(ge=0)
+    layout: DashboardProvisionalLayout
+    visualization: Literal["kpi", "table", "bar", "line", "area"]
+    shared_filter_ids: list[str] = Field(default_factory=list, max_length=20)
+    required: bool = True
+
+
+class DashboardPlan(DashboardModel):
+    name: str = Field(min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=2000)
+    timezone: str = Field(default="UTC", min_length=1, max_length=100)
+    intents: list[DashboardChartIntent] = Field(min_length=1, max_length=30)
+    filters: list[DashboardFilterRule] = Field(default_factory=list, max_length=20)
+
+    @model_validator(mode="after")
+    def validate_stable_ids_and_layout(self) -> DashboardPlan:
+        chart_ids = [intent.chart_id for intent in self.intents]
+        tile_ids = [intent.tile_id for intent in self.intents]
+        orders = [intent.order for intent in self.intents]
+        filter_ids = [rule.id for rule in self.filters]
+        if len(chart_ids) != len(set(chart_ids)):
+            raise ValueError("Dashboard plan chart IDs must be unique")
+        if len(tile_ids) != len(set(tile_ids)):
+            raise ValueError("Dashboard plan tile IDs must be unique")
+        if len(orders) != len(set(orders)):
+            raise ValueError("Dashboard plan chart order must be unique")
+        if len(filter_ids) != len(set(filter_ids)):
+            raise ValueError("Dashboard plan filter IDs must be unique")
+        known_filters = set(filter_ids)
+        for intent in self.intents:
+            if intent.layout.x + intent.layout.w > 36:
+                raise ValueError(f"Dashboard plan tile exceeds the grid: {intent.tile_id}")
+            unknown = set(intent.shared_filter_ids) - known_filters
+            if unknown:
+                raise ValueError(f"Dashboard plan references an unknown shared filter: {sorted(unknown)[0]}")
+        return self
+
+
+class DashboardChartDraftInfo(DashboardModel):
+    chart_id: str
+    ordinal: int
+    intent: DashboardChartIntent
+    status: Literal["pending", "running", "ready", "failed"]
+    attempt_count: int = Field(ge=0, le=2)
+    definition: ChartDefinition | None = None
+    safe_error: str | None = None
+    model_usage: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+    updated_at: datetime
+
+
 class DashboardAuthoringEvent(DashboardModel):
     id: str
     sequence: int
@@ -258,9 +334,14 @@ class DashboardAuthoringEvent(DashboardModel):
 class DashboardAuthoringSessionInfo(DashboardModel):
     id: str
     thread_id: str
+    conversation_id: str | None = None
     dashboard_id: str | None
     base_version_id: str | None
-    definition: DashboardDefinition
+    applied_version_id: str | None = None
+    definition: DashboardDefinition | None
+    plan: DashboardPlan | None = None
+    expected_chart_count: int = 0
+    chart_drafts: list[DashboardChartDraftInfo] = Field(default_factory=list)
     operations: list[dict[str, Any]]
     summary: str
     agent_run_id: str

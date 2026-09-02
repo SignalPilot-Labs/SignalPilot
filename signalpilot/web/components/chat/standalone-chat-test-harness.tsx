@@ -312,6 +312,7 @@ export function StandaloneChatTestHarness() {
               onApproveReportSuggestion: async () => ({
                 report_id: "test-harness-report",
               }),
+              onOpenDashboardPreview: () => undefined,
             }}
           >
             <div className="py-6" data-testid="standalone-chat-messages">

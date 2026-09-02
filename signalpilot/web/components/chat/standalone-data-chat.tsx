@@ -4,9 +4,9 @@
 // previews, hooks, and rail parts live in sibling modules. This file
 // re-exports the moved names so existing importers do not change.
 
-import { Bot, Loader2, NotebookPen, PanelLeft, Share2 } from "lucide-react";
+import { Bot, PanelLeft, Share2 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import useSWR from "swr";
 import {
   getSavedChatReport,
@@ -23,7 +23,6 @@ import {
   type OptimisticUserMessage,
 } from "~/lib/standalone-chat-state";
 import { projectSettingsHref } from "~/lib/project-settings-route";
-import { ArtifactsPanel } from "~/components/chat/artifacts-panel";
 import { useConversationArtifacts } from "~/components/chat/use-conversation-notebook";
 import { pickDefaultNotebook } from "~/lib/chat-live-notebook";
 import { hasArtifactsContent } from "~/lib/chat-artifacts";
@@ -34,6 +33,7 @@ import {
   isStreamingStatus,
 } from "~/components/chat/standalone-chat-helpers";
 import {
+  AttachedReportBanner,
   ChatBootstrapSpinner,
   ChatUnavailableScreen,
   ConversationMessagesSkeleton,
@@ -42,6 +42,7 @@ import {
   QueryApprovalCard,
   ReadinessNotice,
   StarterQuestions,
+  StarterQuestionsSkeleton,
 } from "~/components/chat/chat-conversation-parts";
 import { ChatComposerPanel } from "~/components/chat/chat-composer-panel";
 import {
@@ -54,14 +55,16 @@ import {
   useStandaloneUiMessages,
 } from "~/components/chat/use-standalone-chat-run";
 import { useStandaloneChatActions } from "~/components/chat/use-standalone-chat-actions";
-import { useOpenArtifact } from "~/components/chat/use-open-artifact";
 import { ChatEmptyHero } from "~/components/chat/chat-empty-hero";
 import {
   composerDisabledReason,
   readinessNotice,
 } from "~/components/chat/standalone-chat-derivations";
-import { ChatSettingsPanel } from "~/components/chat/chat-settings-panel";
-import { useChatSettingsPanel } from "~/components/chat/use-chat-settings-panel";
+import {
+  ChatPanelToggles,
+  ChatRightPanels,
+} from "~/components/chat/standalone-chat-panels";
+import { useChatRightSlot } from "~/components/chat/use-chat-right-slot";
 import { ConnectorsProvider } from "~/components/connectors/connectors-context";
 
 // Re-exports for existing importers of this module path.
@@ -117,6 +120,7 @@ export function StandaloneDataChat({
   );
   const requestedProject = searchParams.get("project");
   const requestedReportId = searchParams.get("report");
+  const requestedPrompt = searchParams.get("prompt");
   const [selectedReport, setSelectedReport] =
     useState<ChatReportMention | null>(null);
   const attachedReportReference = selectedReport
@@ -131,6 +135,7 @@ export function StandaloneDataChat({
   const [perQueryBudgetUsd, setPerQueryBudgetUsd] = useState(0.25);
   const [chatBudgetUsd, setChatBudgetUsd] = useState(1);
   const [draft, setDraft] = useChatDraft(conversationId);
+  const promptInitialized = useRef(false);
   const [isConversationRailOpen, setIsConversationRailOpen] =
     useState(!embedded);
   const [pendingSubmission, setPendingSubmission] =
@@ -140,6 +145,12 @@ export function StandaloneDataChat({
     string | null
   >(null);
   const selectedInitialized = useRef(false);
+
+  useEffect(() => {
+    if (!requestedPrompt || promptInitialized.current) return;
+    setDraft(requestedPrompt);
+    promptInitialized.current = true;
+  }, [requestedPrompt, setDraft]);
 
   useEffect(() => {
     if (!bootstrap || selectedInitialized.current) return;
@@ -212,15 +223,6 @@ export function StandaloneDataChat({
     defaultNotebook?.status,
     currentRun?.id,
   );
-  // Inline artifact cards open the panel focused on their file.
-  const { openFileRequest, openArtifact } = useOpenArtifact(() =>
-    setNotebookPanelOpen(true),
-  );
-  // Chat settings share the right-hand slot with the artifacts panel.
-  const settingsPanel = useChatSettingsPanel(
-    notebookPanelOpen,
-    setNotebookPanelOpen,
-  );
   const conversationLoading = Boolean(
     conversationId && !detail && !detailError && detailLoading,
   );
@@ -247,6 +249,21 @@ export function StandaloneDataChat({
     isSubmitting,
     pendingSubmission,
     setPendingSubmission,
+  });
+  // Right-hand slot: artifacts, chat settings, or dashboard — one at a time.
+  const {
+    dashboard: dashboardPanel,
+    settings: settingsPanel,
+    openArtifacts: openArtifactsPanel,
+    openFileRequest,
+    openArtifact,
+  } = useChatRightSlot({
+    conversationId,
+    uiMessages,
+    events,
+    currentRun,
+    artifactsOpen: notebookPanelOpen,
+    setArtifactsOpen: setNotebookPanelOpen,
   });
 
   const { viewportRef, shouldStickToBottomRef, onViewportScroll } =
@@ -318,7 +335,9 @@ export function StandaloneDataChat({
     return <ChatUnavailableScreen />;
   }
   if (detailError) {
-    return <ConversationNotFoundScreen onNewChat={() => router.push("/chats")} />;
+    return (
+      <ConversationNotFoundScreen onNewChat={() => router.push("/chats")} />
+    );
   }
 
   const isEmptyNewChat = empty && !conversationId;
@@ -370,6 +389,7 @@ export function StandaloneDataChat({
         onStop,
         onRetry,
         onApproveReportSuggestion,
+        onOpenDashboardPreview: dashboardPanel.open,
       }}
     >
       <div
@@ -377,10 +397,10 @@ export function StandaloneDataChat({
           embedded
             ? "h-full min-w-0 overflow-hidden"
             : `h-screen overflow-hidden p-4 ${
-                notebookPanelOpen && !settingsPanel.open
-                  ? "min-w-[1360px]"
-                  : settingsPanel.open
-                    ? "min-w-[1180px]"
+                settingsPanel.open
+                  ? "min-w-[1180px]"
+                  : notebookPanelOpen || dashboardPanel.sessionId
+                    ? "min-w-[1360px]"
                     : "min-w-[960px]"
               }`
         }
@@ -462,27 +482,17 @@ export function StandaloneDataChat({
               </div>
             )}
             {selectedReport && (
-              <div className="flex-none px-6 pt-4">
-                <div className="mx-auto flex max-w-3xl items-center justify-between gap-3 rounded-xl border border-[var(--color-success)]/25 bg-[var(--color-bg-card)] px-4 py-3 text-xs text-[var(--color-text-muted)]">
-                  <span>
-                    @{selectedReport.title} is attached to your next message.
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSelectedReport(null);
-                      router.replace(
-                        conversationId
-                          ? `/chats/${conversationId}`
-                          : `/chats?project=${encodeURIComponent(selectedProjectId || "")}`,
-                      );
-                    }}
-                    className="text-[var(--color-text-dim)] hover:text-[var(--color-text)]"
-                  >
-                    Remove
-                  </button>
-                </div>
-              </div>
+              <AttachedReportBanner
+                title={selectedReport.title}
+                onRemove={() => {
+                  setSelectedReport(null);
+                  router.replace(
+                    conversationId
+                      ? `/chats/${conversationId}`
+                      : `/chats?project=${encodeURIComponent(selectedProjectId || "")}`,
+                  );
+                }}
+              />
             )}
             <div
               ref={viewportRef}
@@ -514,14 +524,7 @@ export function StandaloneDataChat({
                       onSelect={setDraft}
                     />
                   ) : (
-                    <div className="grid grid-cols-2 gap-3">
-                      {[0, 1, 2, 3].map((index) => (
-                        <div
-                          key={index}
-                          className="h-24 animate-pulse rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-card)]"
-                        />
-                      ))}
-                    </div>
+                    <StarterQuestionsSkeleton />
                   )}
                 </div>
               ) : (
@@ -535,62 +538,60 @@ export function StandaloneDataChat({
                 </div>
               )}
               {!isEmptyNewChat && (
-              <div className="sticky bottom-0 bg-gradient-to-t from-[var(--color-bg)] via-[var(--color-bg)] to-transparent pt-3">
-                {approvalEvent && (
-                  <QueryApprovalCard
-                    event={approvalEvent}
-                    onDecision={onQueryDecision}
-                  />
-                )}
-                {composerNode}
-              </div>
-            )}
+                <div className="sticky bottom-0 bg-gradient-to-t from-[var(--color-bg)] via-[var(--color-bg)] to-transparent pt-3">
+                  {approvalEvent && (
+                    <QueryApprovalCard
+                      event={approvalEvent}
+                      onDecision={onQueryDecision}
+                    />
+                  )}
+                  {composerNode}
+                </div>
+              )}
             </div>
-            {conversationId &&
-              (artifactsLoading ||
-                hasArtifactsContent(
+            {conversationId && (
+              <ChatPanelToggles
+                artifactsAvailable={hasArtifactsContent(
                   conversationNotebooks,
                   conversationFiles,
                   sqlTraceExecutions,
-                )) &&
-              !notebookPanelOpen && (
-              <button
-                type="button"
-                aria-label="Open the artifacts panel"
-                title="Open the artifacts panel"
-                data-testid="live-notebook-toggle"
-                onClick={() => setNotebookPanelOpen(true)}
-                className="absolute right-16 top-4 z-20 flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] text-[var(--color-text-muted)] shadow-lg shadow-black/20 hover:border-[var(--color-border-hover)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
-              >
-                {artifactsLoading ? (
-                  <Loader2
-                    data-testid="artifacts-toggle-loading"
-                    className="h-4 w-4 animate-spin"
-                  />
-                ) : (
-                  <NotebookPen className="h-4 w-4" />
                 )}
-              </button>
+                artifactsLoading={artifactsLoading}
+                artifactsOpen={notebookPanelOpen}
+                onOpenArtifacts={openArtifactsPanel}
+                dashboardSessionId={dashboardPanel.latestSessionId}
+                dashboardOpen={Boolean(dashboardPanel.sessionId)}
+                onOpenDashboard={dashboardPanel.open}
+              />
             )}
           </main>
-          {conversationId && notebookPanelOpen && !settingsPanel.open && (
-            <ArtifactsPanel
-              conversationId={conversationId}
-              notebooks={conversationNotebooks}
-              files={conversationFiles}
-              executions={sqlTraceExecutions}
-              loading={artifactsLoading}
-              openFileRequest={openFileRequest}
-              onClose={() => setNotebookPanelOpen(false)}
+          {settingsPanel.open || conversationId ? (
+            <ChatRightPanels
+              conversationId={conversationId ?? ""}
+              artifacts={{
+                open: Boolean(conversationId) && notebookPanelOpen,
+                notebooks: conversationNotebooks,
+                files: conversationFiles,
+                executions: sqlTraceExecutions,
+                loading: artifactsLoading,
+                openFileRequest,
+                onClose: () => setNotebookPanelOpen(false),
+              }}
+              settings={{
+                open: settingsPanel.open,
+                connectorsEnabled,
+                budgets: budgetSettings,
+                onClose: settingsPanel.closePanel,
+              }}
+              dashboard={{
+                sessionId: conversationId ? dashboardPanel.sessionId : null,
+                updateLabel: dashboardPanel.updateLabel,
+                updateRevision: dashboardPanel.updateRevision,
+                queriesEnabled: currentRun?.status !== "cancelled",
+                onClose: dashboardPanel.close,
+              }}
             />
-          )}
-          {settingsPanel.open && (
-            <ChatSettingsPanel
-              onClose={settingsPanel.closePanel}
-              connectorsEnabled={connectorsEnabled}
-              budgets={budgetSettings}
-            />
-          )}
+          ) : null}
         </div>
       </div>
     </ChatUiContext.Provider>

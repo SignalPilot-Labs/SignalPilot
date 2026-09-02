@@ -270,6 +270,8 @@ def build_final_payload(
         final_payload["usage"] = agent_usage
     if collector.report_proposal is not None:
         final_payload["report_proposal"] = collector.report_proposal
+    if collector.dashboard_preview is not None:
+        final_payload["dashboard_preview"] = collector.dashboard_preview
     if collector.report_action_outcome is not None:
         final_payload["report_action_outcome"] = (
             collector.report_action_outcome

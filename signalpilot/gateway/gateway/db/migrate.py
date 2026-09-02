@@ -44,3 +44,29 @@ def stamp_head(database_url: str) -> None:
     """
     command.stamp(build_alembic_config(database_url), "head")
     logger.info("Gateway schema stamped at Alembic head")
+
+
+def upgrade_to_head_tolerating_newer(database_url: str) -> None:
+    """Upgrade to head, but tolerate a database stamped with a revision this
+    build does not know.
+
+    A shared database can be migrated ahead of a deployment by newer code
+    (another environment, or a developer branch booted against the same
+    database). Migrations are additive and backward-compatible by policy, so
+    running against an unknown-newer schema is safe; crashing at boot would
+    take the environment down with no benefit. Any genuinely incompatible
+    schema change surfaces later as a loud query error instead.
+    """
+    from alembic.util.exc import CommandError
+
+    try:
+        upgrade_to_head(database_url)
+    except CommandError as exc:
+        if "Can't locate revision" not in str(exc):
+            raise
+        logger.warning(
+            "Database schema revision is not known to this build (%s). "
+            "Assuming a newer deployment migrated the schema; continuing "
+            "without running migrations.",
+            exc,
+        )

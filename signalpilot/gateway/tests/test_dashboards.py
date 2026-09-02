@@ -111,6 +111,25 @@ def _authorities():
     )
 
 
+def test_approved_metric_number_format_is_canonicalized_for_dashboard_rendering() -> None:
+    metrics = parse_approved_metrics(
+        {
+            "dashboard_metrics": [
+                {
+                    "model": "orders",
+                    "column": "quantity",
+                    "aggregation": "sum",
+                    "label": "Orders",
+                    "format": "number",
+                    "approved": True,
+                }
+            ]
+        }
+    )
+
+    assert metrics[0]["format"] == "decimal"
+
+
 def _fixture_definition() -> DashboardDefinition:
     fixture = json.loads(FIXTURE.read_text())
     return DashboardDefinition.model_validate(

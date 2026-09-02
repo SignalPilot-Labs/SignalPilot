@@ -191,7 +191,7 @@ def _is_local_url(url: str) -> bool:
         "localhost",
         "127.0.0.1",
         "::1",
-        "0.0.0.0",
+        "0.0.0.0",  # nosec B104 - URL hostname comparison, not a socket bind
         "gateway",
     }
 

@@ -15,6 +15,7 @@ from gateway.dashboard.domain import (
     DashboardFieldTarget,
     DashboardFilterRule,
     DashboardTileDefinition,
+    FilterSettings,
     SemanticChartQuery,
 )
 from gateway.models.dashboards import DashboardSemanticContext
@@ -282,6 +283,52 @@ def validate_dashboard_semantics(definition: DashboardDefinition, context: Dashb
                 raise ValueError(f"Unknown dashboard filter target: {target.tableName}.{target.fieldId}")
 
 
+def canonicalize_dashboard_explore_names(
+    definition: DashboardDefinition,
+    context: DashboardSemanticContext,
+) -> DashboardDefinition:
+    """Recover an unknown explore only when exact field IDs identify one explore.
+
+    Agent drafts occasionally use a placeholder such as ``<UNKNOWN>`` for
+    ``exploreName`` while still copying every governed dimension, metric, and
+    drill field exactly. Those exact IDs are sufficient to recover the explore
+    without guessing. Ambiguous or invented field sets remain unchanged so the
+    semantic validator still rejects them.
+    """
+    dimensions_by_explore = {
+        explore.name: {field.field_id for field in explore.dimensions} for explore in context.explores
+    }
+    metrics_by_explore = {explore.name: {metric.field_id for metric in explore.metrics} for explore in context.explores}
+    known_explores = set(dimensions_by_explore)
+    changed = False
+    charts: list[ChartDefinition] = []
+    for chart in definition.charts:
+        query = chart.query
+        if not isinstance(query, SemanticChartQuery) or query.exploreName in known_explores:
+            charts.append(chart)
+            continue
+        dimension_ids = {
+            *query.dimensions,
+            *(chart.signalPilot.drillDimensions or []),
+            *(chart.signalPilot.tableGroups or []),
+        }
+        metric_ids = set(query.metrics)
+        if not dimension_ids and not metric_ids:
+            charts.append(chart)
+            continue
+        candidates = [
+            explore_name
+            for explore_name in known_explores
+            if dimension_ids <= dimensions_by_explore[explore_name] and metric_ids <= metrics_by_explore[explore_name]
+        ]
+        if len(candidates) != 1:
+            charts.append(chart)
+            continue
+        changed = True
+        charts.append(chart.model_copy(update={"query": query.model_copy(update={"exploreName": candidates[0]})}))
+    return definition.model_copy(update={"charts": charts}) if changed else definition
+
+
 class DashboardTimeSeriesWindowError(ValueError):
     """A line or area chart cannot prove a complete bounded initial view."""
 
@@ -313,6 +360,37 @@ def _has_bounded_default(rule: DashboardFilterRule) -> bool:
         and rule.settings is not None
         and rule.settings.unitOfTime is not None
     )
+
+
+def canonicalize_dashboard_time_series_defaults(
+    definition: DashboardDefinition,
+    context: DashboardSemanticContext,
+) -> DashboardDefinition:
+    """Give an existing governed date filter a safe bounded default."""
+
+    logical_types = {
+        (explore.name, field.field_id): field.logical_type
+        for explore in context.explores
+        for field in explore.dimensions
+    }
+    changed = False
+    dimensions: list[DashboardFilterRule] = []
+    for rule in definition.filters.dimensions:
+        logical_type = logical_types.get((rule.target.tableName, rule.target.fieldId))
+        if logical_type in {"date", "timestamp"} and not _has_bounded_default(rule):
+            changed = True
+            rule = rule.model_copy(
+                update={
+                    "operator": "inThePast",
+                    "values": [30],
+                    "settings": FilterSettings(unitOfTime="days"),
+                }
+            )
+        dimensions.append(rule)
+    if not changed:
+        return definition
+    filters = definition.filters.model_copy(update={"dimensions": dimensions})
+    return definition.model_copy(update={"filters": filters})
 
 
 def validate_time_series_default_windows(
@@ -384,9 +462,14 @@ def canonicalize_dashboard_filter_targets(
     unchanged so semantic validation still rejects them.
     """
     aliases_by_explore: dict[str, dict[str, str | None]] = {}
+    explore_by_field_id: dict[str, str | None] = {}
     for explore in context.explores:
         aliases: dict[str, str | None] = {}
         for field in explore.dimensions:
+            if field.field_id in explore_by_field_id and explore_by_field_id[field.field_id] != explore.name:
+                explore_by_field_id[field.field_id] = None
+            else:
+                explore_by_field_id[field.field_id] = explore.name
             if field.column in aliases and aliases[field.column] != field.field_id:
                 aliases[field.column] = None
             else:
@@ -396,10 +479,18 @@ def canonicalize_dashboard_filter_targets(
     def canonicalize(target: DashboardFieldTarget) -> DashboardFieldTarget:
         if target.isSqlColumn:
             return target
-        canonical_field_id = aliases_by_explore.get(target.tableName, {}).get(target.fieldId)
-        if canonical_field_id is None or canonical_field_id == target.fieldId:
+        table_name = target.tableName
+        if table_name not in aliases_by_explore:
+            table_name = explore_by_field_id.get(target.fieldId) or table_name
+        canonical_field_id = aliases_by_explore.get(table_name, {}).get(target.fieldId)
+        updates = {}
+        if table_name != target.tableName:
+            updates["tableName"] = table_name
+        if canonical_field_id is not None and canonical_field_id != target.fieldId:
+            updates["fieldId"] = canonical_field_id
+        if not updates:
             return target
-        return target.model_copy(update={"fieldId": canonical_field_id})
+        return target.model_copy(update=updates)
 
     changed = False
     dimensions: list[DashboardFilterRule] = []

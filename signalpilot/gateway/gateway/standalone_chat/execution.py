@@ -78,6 +78,23 @@ def _notebook_auth_headers(session_token: str | None = None) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+def _runtime_auth_headers(runtime: NotebookRuntime) -> dict[str, str]:
+    """Use the shared container token for local direct-mode sessions.
+
+    Direct mode multiplexes many logical session rows onto one notebook
+    process, so their generated per-session tokens cannot authenticate to that
+    shared process. Sandbox runtimes still use their isolated session token.
+    """
+    direct_url = os.getenv("SP_NOTEBOOK_DIRECT_URL", "").rstrip("/")
+    runtime_url = runtime.internal_base_url.rstrip("/")
+    session_token = (
+        None
+        if direct_url and runtime_url == direct_url
+        else runtime.access_token
+    )
+    return _notebook_auth_headers(session_token)
+
+
 def _bearer_fingerprint(headers: dict[str, str]) -> str:
     """Return a non-reversible request correlation value for auth diagnostics."""
     authorization = headers.get("Authorization", "")
@@ -269,7 +286,7 @@ async def prepare_execution(
         "X-Gateway-Branch-Id": branch,
         "X-Gateway-Connection-Name": connection_name,
         "X-Gateway-Commit-Sha": commit_sha,
-        **_notebook_auth_headers(runtime.access_token),
+        **_runtime_auth_headers(runtime),
     }
     return PreparedExecution(
         url=_join_base_path(runtime.internal_base_url, "/api/standalone-chat/execute"),

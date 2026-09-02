@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  activeDashboardAuthoringProgress,
+  activeDashboardPreviewLabel,
   extractRunPlan,
   extractRuntimeBoot,
   foldRunBlocks,
@@ -132,6 +134,99 @@ describe("foldRunSteps", () => {
     );
     const query = partial.find((step) => step.tool === "query_database");
     expect(query?.status).toBe("running");
+  });
+
+  it("updates one live dashboard step from real authoring phases", () => {
+    const dashboardEvents = [
+      {
+        run_id: "dashboard-run",
+        sequence: 1,
+        type: "tool_started" as const,
+        payload: {
+          tool: "mcp__standalone-chat__create_dashboard_preview",
+          tool_call_id: "dashboard-call",
+          input: { request: "Build a sales dashboard", timezone: "UTC" },
+        },
+        created_at: "2026-09-01T10:00:00Z",
+      },
+      {
+        run_id: "dashboard-run",
+        sequence: 2,
+        type: "progress" as const,
+        payload: {
+          scope: "dashboard_authoring",
+          phase: "drafting",
+          label: "Drafting the dashboard structure and charts",
+        },
+        created_at: "2026-09-01T10:00:01Z",
+      },
+      {
+        run_id: "dashboard-run",
+        sequence: 3,
+        type: "progress" as const,
+        payload: {
+          scope: "dashboard_authoring",
+          phase: "validating",
+          label: "Validating chart fields, filters, and bindings",
+        },
+        created_at: "2026-09-01T10:00:02Z",
+      },
+    ];
+
+    const dashboardSteps = foldRunSteps(dashboardEvents, "dashboard-run");
+    expect(dashboardSteps).toHaveLength(1);
+    expect(dashboardSteps[0]).toMatchObject({
+      category: "dashboard",
+      status: "running",
+      detail: "Validating chart fields, filters, and bindings",
+    });
+    expect(
+      activeDashboardPreviewLabel(dashboardEvents, "dashboard-run"),
+    ).toBe("Validating chart fields, filters, and bindings");
+
+    expect(
+      activeDashboardPreviewLabel(
+        [
+          ...dashboardEvents,
+          {
+            run_id: "dashboard-run",
+            sequence: 4,
+            type: "tool_completed" as const,
+            payload: { tool_call_id: "dashboard-call", error: false },
+            created_at: "2026-09-01T10:00:03Z",
+          },
+        ],
+        "dashboard-run",
+      ),
+    ).toBeNull();
+  });
+
+  it("exposes the plan-ready session and revision for event-driven preview refresh", () => {
+    const progress = activeDashboardAuthoringProgress(
+      [
+        {
+          run_id: "dashboard-run",
+          sequence: 1,
+          type: "progress" as const,
+          payload: {
+            scope: "dashboard_authoring",
+            phase: "plan_ready",
+            label: "Plan ready with 9 charts",
+            authoring_session_id: "session-progressive",
+            draft_revision: 4,
+          },
+          created_at: "2026-09-01T10:00:00Z",
+        },
+      ],
+      "dashboard-run",
+    );
+
+    expect(progress).toEqual({
+      label: "Plan ready with 9 charts",
+      phase: "plan_ready",
+      sessionId: "session-progressive",
+      draftRevision: 4,
+    });
   });
 
   it("normalizes governed-tool wording in persisted chat events", () => {

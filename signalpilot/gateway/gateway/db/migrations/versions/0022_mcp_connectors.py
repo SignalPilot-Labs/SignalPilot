@@ -5,8 +5,8 @@ Five tables: the connector record (org or personal scope), per-member state
 OAuth states, the per-org policy for personal connectors, and the proxy's
 tool-call audit log. Secret material lives only in ``*_enc`` columns.
 
-Revision ID: 0020
-Revises: 0019
+Revision ID: 0022
+Revises: 0021
 """
 
 from __future__ import annotations
@@ -14,8 +14,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0020"
-down_revision = "0019"
+revision = "0022"
+down_revision = "0021"
 branch_labels = None
 depends_on = None
 

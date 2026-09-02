@@ -6,8 +6,8 @@ resets them). ``gateway_mcp_member_state.account_label`` is the best-effort
 display identity of the signed-in account, taken from the provider's
 ``id_token``; it carries no authority and is cleared on sign-out.
 
-Revision ID: 0021
-Revises: 0020
+Revision ID: 0023
+Revises: 0022
 """
 
 from __future__ import annotations
@@ -15,8 +15,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0021"
-down_revision = "0020"
+revision = "0023"
+down_revision = "0022"
 branch_labels = None
 depends_on = None
 

@@ -276,6 +276,12 @@ services:
       - -c
       - |
         export SP_API_KEY=$$(cat /shared/local_api_key 2>/dev/null || echo '')
+        if [ ! -s /gateway-secrets/notebook_jwt_secret ]; then
+          umask 077
+          python -c 'import secrets; print(secrets.token_urlsafe(48))' > /gateway-secrets/notebook_jwt_secret.tmp
+          mv /gateway-secrets/notebook_jwt_secret.tmp /gateway-secrets/notebook_jwt_secret
+        fi
+        export SP_SESSION_JWT_SECRET=$$(cat /gateway-secrets/notebook_jwt_secret)
         python -m signalpilot._server.local_token /notebook-token/token
         exec python -m signalpilot edit \
           --host 0.0.0.0 --port 2718 --headless \
@@ -301,6 +307,7 @@ services:
     volumes:
       - signalpilot-workspace:/workspace
       - signalpilot-shared:/shared:ro
+      - signalpilot-gateway-secrets:/gateway-secrets
       # The notebook writes this volume. The gateway mounts it as read-only.
       # Both containers use user identifier 10001.
       # This separate volume prevents notebook write access to the gateway local_api_key.

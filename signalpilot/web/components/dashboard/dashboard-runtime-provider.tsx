@@ -99,6 +99,7 @@ export function DashboardRuntimeProvider({
   attentionAction,
   lifecycleNotice,
   onFailuresChange,
+  queriesEnabled = true,
 }: {
   dashboardId: string;
   versionId: string;
@@ -119,6 +120,7 @@ export function DashboardRuntimeProvider({
   attentionAction?: ReactNode;
   lifecycleNotice?: ReactNode;
   onFailuresChange?: (failures: Record<string, DashboardFailure>) => void;
+  queriesEnabled?: boolean;
 }) {
   const [runtimeState, setRuntimeState] = useState(() =>
     typeof window === "undefined"
@@ -182,11 +184,51 @@ export function DashboardRuntimeProvider({
 
   useEffect(() => {
     if (previousDefinition.current === definition) return;
+    const previous = previousDefinition.current;
+    const unchangedCharts = new Set(
+      definition.charts
+        .filter((chart) => {
+          const old = previous.charts.find(
+            (candidate) => candidate.id === chart.id,
+          );
+          return (
+            old &&
+            JSON.stringify(old.query) === JSON.stringify(chart.query) &&
+            JSON.stringify(old.visualization) ===
+              JSON.stringify(chart.visualization) &&
+            JSON.stringify(old.signalPilot) === JSON.stringify(chart.signalPilot)
+          );
+        })
+        .map((chart) => chart.id),
+    );
+    const sameFilters =
+      JSON.stringify(previous.filters) === JSON.stringify(definition.filters);
     previousDefinition.current = definition;
     setRuntimeState(initialDashboardRuntimeState(definition));
-    setResults({});
-    setFailures({});
-    setReceipts({});
+    setResults((current) =>
+      Object.fromEntries(
+        Object.entries(current).filter(([chartId]) =>
+          unchangedCharts.has(chartId),
+        ),
+      ),
+    );
+    setFailures((current) =>
+      Object.fromEntries(
+        Object.entries(current).filter(([chartId]) =>
+          unchangedCharts.has(chartId),
+        ),
+      ),
+    );
+    setReceipts((current) =>
+      sameFilters
+        ? Object.fromEntries(
+            Object.entries(current).filter(([chartId]) =>
+              unchangedCharts.has(chartId),
+            ),
+          )
+        : {},
+    );
+    setLoading({});
     setSelectedMarks({});
     setDetailsChartId(undefined);
   }, [definition]);
@@ -263,6 +305,7 @@ export function DashboardRuntimeProvider({
   }, [definition, runtimeState]);
 
   useEffect(() => {
+    if (!queriesEnabled) return;
     const controller = new AbortController();
     let pendingTiles = 0;
     const invalidateCache = refreshGeneration > handledRefresh.current;
@@ -336,6 +379,7 @@ export function DashboardRuntimeProvider({
     definition.tiles,
     refreshGeneration,
     runtimeState,
+    queriesEnabled,
   ]);
 
   useEffect(() => {
@@ -533,7 +577,7 @@ export function DashboardRuntimeProvider({
           onReset={reset}
         />
         <div className={styles.grid}>
-          {layoutTiles.map((tile) => {
+          {layoutTiles.map((tile, tileIndex) => {
             const chart = definition.charts.find(
               (item) => item.id === tile.chartId,
             );
@@ -574,148 +618,162 @@ export function DashboardRuntimeProvider({
             }).length;
             const canExpand =
               chart.visualization.type === "table" && hierarchy.length > 1;
+            const sectionTitle = tile.properties.sectionTitle;
+            const previousSection =
+              tileIndex > 0
+                ? layoutTiles[tileIndex - 1]?.properties.sectionTitle
+                : undefined;
             return (
-              <div
-                className={styles.tileButton}
-                key={tile.uuid}
-                style={
-                  {
-                    gridColumn: `span ${normalizedTileSpan(tile, rowTiles)}`,
-                    "--dashboard-tile-height": compactRow ? "260px" : "380px",
-                  } as CSSProperties
-                }
-              >
-                <DashboardRenderBoundary
-                  resetKey={`${chart.id}:${result?.executionId ?? "empty"}`}
-                  onFailure={(fingerprint) =>
-                    recordTileRenderFailure(chart.id, fingerprint)
+              <div key={tile.uuid} style={{ display: "contents" }}>
+                {sectionTitle && sectionTitle !== previousSection ? (
+                  <h2
+                    className="mb-1 mt-3 text-sm font-semibold text-[var(--color-text)]"
+                    style={{ gridColumn: "1 / -1" }}
+                  >
+                    {sectionTitle}
+                  </h2>
+                ) : null}
+                <div
+                  className={styles.tileButton}
+                  style={
+                    {
+                      gridColumn: `span ${normalizedTileSpan(tile, rowTiles)}`,
+                      "--dashboard-tile-height": compactRow ? "260px" : "380px",
+                    } as CSSProperties
                   }
                 >
-                  <DashboardChartTile
-                    chart={chartForAvailableResult(chart, result)}
-                    result={result}
-                    failure={failures[chart.id]}
-                    loading={loading[chart.id]}
-                    onRetry={refreshDashboard}
-                    unaffectedFilters={unaffectedFilters}
-                    onMarkSelect={(mark) =>
-                      setSelectedMarks((current) => ({
-                        ...current,
-                        [chart.id]: mark,
-                      }))
+                  <DashboardRenderBoundary
+                    resetKey={`${chart.id}:${result?.executionId ?? "empty"}`}
+                    onFailure={(fingerprint) =>
+                      recordTileRenderFailure(chart.id, fingerprint)
                     }
-                    selectionLabel={
-                      isRuntimeScalar(selectedValue)
-                        ? formatDashboardValue(
-                            selectedValue,
-                            result?.columns.find(
-                              (column) => column.name === activeDimension,
-                            ),
-                            result,
-                          )
-                        : undefined
-                    }
-                    onFilter={
-                      chart.signalPilot.crossFilter && savedFilter
-                        ? () => {
-                            if (!isRuntimeScalar(selectedValue)) return;
-                            const nextFilters = toggleCrossFilter(
-                              runtimeState.filters,
-                              savedFilter,
+                  >
+                    <DashboardChartTile
+                      chart={chartForAvailableResult(chart, result)}
+                      result={result}
+                      failure={failures[chart.id]}
+                      loading={loading[chart.id]}
+                      onRetry={refreshDashboard}
+                      unaffectedFilters={unaffectedFilters}
+                      onMarkSelect={(mark) =>
+                        setSelectedMarks((current) => ({
+                          ...current,
+                          [chart.id]: mark,
+                        }))
+                      }
+                      selectionLabel={
+                        isRuntimeScalar(selectedValue)
+                          ? formatDashboardValue(
                               selectedValue,
-                              false,
-                            );
-                            setRuntimeState((current) => ({
-                              ...current,
-                              filters: nextFilters,
-                            }));
-                            if (
-                              !markRemainsSelected(
-                                nextFilters,
-                                savedFilter.id,
-                                selectedMark,
-                                activeDimension,
-                              )
-                            ) {
-                              setSelectedMarks((current) => {
-                                const next = { ...current };
-                                delete next[chart.id];
-                                return next;
-                              });
-                            }
-                          }
-                        : undefined
-                    }
-                    canFilter={isRuntimeScalar(selectedValue)}
-                    onDrill={
-                      supportsButtonDrill
-                        ? () => {
-                            if (!isRuntimeScalar(selectedValue)) return;
-                            setRuntimeState((current) => ({
-                              ...current,
-                              drills: {
-                                ...current.drills,
-                                [chart.id]: [
-                                  ...(current.drills[chart.id] ?? []),
-                                  {
-                                    fieldId: activeDimension,
-                                    value: selectedValue,
-                                  },
-                                ],
-                              },
-                            }));
-                          }
-                        : undefined
-                    }
-                    canDrill={
-                      isRuntimeScalar(selectedValue) &&
-                      drillPath.length < hierarchy.length - 1
-                    }
-                    drillBreadcrumb={drillPath.map((step) => ({
-                      label: fieldLabel(step.fieldId),
-                      value: String(step.value),
-                    }))}
-                    onDrillTo={(depth) =>
-                      setRuntimeState((current) => ({
-                        ...current,
-                        drills: {
-                          ...current.drills,
-                          [chart.id]: drillPath.slice(0, depth),
-                        },
-                      }))
-                    }
-                    onExpandRow={
-                      canExpand
-                        ? async (row) => {
-                            const value = row[hierarchy[0]];
-                            if (!isRuntimeScalar(value))
-                              throw new Error(
-                                "Expandable group value is unavailable",
+                              result?.columns.find(
+                                (column) => column.name === activeDimension,
+                              ),
+                              result,
+                            )
+                          : undefined
+                      }
+                      onFilter={
+                        chart.signalPilot.crossFilter && savedFilter
+                          ? () => {
+                              if (!isRuntimeScalar(selectedValue)) return;
+                              const nextFilters = toggleCrossFilter(
+                                runtimeState.filters,
+                                savedFilter,
+                                selectedValue,
+                                false,
                               );
-                            return dataSource.loadTile(
-                              tile,
-                              chart,
-                              {
-                                filters: [],
-                                drillPath: [],
-                                dashboardFilters: runtimeState.filters,
-                                dashboardDrillPath: [
-                                  { fieldId: hierarchy[0], value },
-                                ],
-                              },
-                              new AbortController().signal,
-                            );
-                          }
-                        : undefined
-                    }
-                    onAnalyze={
-                      analysisEnabled && result && receipts[chart.id]
-                        ? () => setAnalysisChartId(chart.id)
-                        : undefined
-                    }
-                    onDetails={() => setDetailsChartId(chart.id)}
-                  />
-                </DashboardRenderBoundary>
+                              setRuntimeState((current) => ({
+                                ...current,
+                                filters: nextFilters,
+                              }));
+                              if (
+                                !markRemainsSelected(
+                                  nextFilters,
+                                  savedFilter.id,
+                                  selectedMark,
+                                  activeDimension,
+                                )
+                              ) {
+                                setSelectedMarks((current) => {
+                                  const next = { ...current };
+                                  delete next[chart.id];
+                                  return next;
+                                });
+                              }
+                            }
+                          : undefined
+                      }
+                      canFilter={isRuntimeScalar(selectedValue)}
+                      onDrill={
+                        supportsButtonDrill
+                          ? () => {
+                              if (!isRuntimeScalar(selectedValue)) return;
+                              setRuntimeState((current) => ({
+                                ...current,
+                                drills: {
+                                  ...current.drills,
+                                  [chart.id]: [
+                                    ...(current.drills[chart.id] ?? []),
+                                    {
+                                      fieldId: activeDimension,
+                                      value: selectedValue,
+                                    },
+                                  ],
+                                },
+                              }));
+                            }
+                          : undefined
+                      }
+                      canDrill={
+                        isRuntimeScalar(selectedValue) &&
+                        drillPath.length < hierarchy.length - 1
+                      }
+                      drillBreadcrumb={drillPath.map((step) => ({
+                        label: fieldLabel(step.fieldId),
+                        value: String(step.value),
+                      }))}
+                      onDrillTo={(depth) =>
+                        setRuntimeState((current) => ({
+                          ...current,
+                          drills: {
+                            ...current.drills,
+                            [chart.id]: drillPath.slice(0, depth),
+                          },
+                        }))
+                      }
+                      onExpandRow={
+                        canExpand
+                          ? async (row) => {
+                              const value = row[hierarchy[0]];
+                              if (!isRuntimeScalar(value))
+                                throw new Error(
+                                  "Expandable group value is unavailable",
+                                );
+                              return dataSource.loadTile(
+                                tile,
+                                chart,
+                                {
+                                  filters: [],
+                                  drillPath: [],
+                                  dashboardFilters: runtimeState.filters,
+                                  dashboardDrillPath: [
+                                    { fieldId: hierarchy[0], value },
+                                  ],
+                                },
+                                new AbortController().signal,
+                              );
+                            }
+                          : undefined
+                      }
+                      onAnalyze={
+                        analysisEnabled && result && receipts[chart.id]
+                          ? () => setAnalysisChartId(chart.id)
+                          : undefined
+                      }
+                      onDetails={() => setDetailsChartId(chart.id)}
+                    />
+                  </DashboardRenderBoundary>
+                </div>
               </div>
             );
           })}

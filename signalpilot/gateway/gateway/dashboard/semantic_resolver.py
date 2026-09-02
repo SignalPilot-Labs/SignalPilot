@@ -27,8 +27,13 @@ from gateway.models.dashboards import (
 )
 from gateway.store import Store
 from gateway.verification import compare_columns
+from gateway.workspace_store.dbt_detect import resolve_dbt_project_dir
+from gateway.workspace_store.objects import workspace_object_storage
+
+from .project_snapshot import hydrate_github_mirror, materialize_workspace_snapshot
 
 SUPPORTED_AGGREGATIONS = {"sum", "count", "count_distinct", "average", "min", "max"}
+SUPPORTED_METRIC_FORMATS = {"integer", "decimal", "compact", "percentage"}
 
 
 class DashboardSemanticError(ValueError):
@@ -68,13 +73,23 @@ def parse_approved_metrics(settings: dict | None) -> list[dict[str, Any]]:
         aggregation = str(raw["aggregation"]).lower()
         if aggregation not in SUPPORTED_AGGREGATIONS:
             raise DashboardSemanticError(f"Unsupported approved metric aggregation: {aggregation}")
+        metric_format = str(raw["format"]) if raw.get("format") else None
+        if metric_format == "number":
+            metric_format = "decimal"
+        if metric_format and metric_format not in SUPPORTED_METRIC_FORMATS:
+            if not (
+                metric_format.startswith("currency:")
+                and len(metric_format) == 12
+                and metric_format[9:].isupper()
+            ):
+                raise DashboardSemanticError(f"Unsupported approved metric format: {metric_format}")
         parsed.append(
             {
                 "model": str(raw["model"]),
                 "column": str(raw["column"]),
                 "aggregation": aggregation,
                 "label": str(raw["label"]),
-                "format": str(raw["format"]) if raw.get("format") else None,
+                "format": metric_format,
                 "field_id": str(raw.get("field_id") or f"{raw['model']}.{raw['column']}"),
                 "approval_source": str(raw.get("approval_source") or "project_settings"),
             }
@@ -232,7 +247,24 @@ def resolve_from_authorities(
     )
 
 
-def _scan_commit(project_id: str, commit_sha: str) -> ProjectMap:
+def _scan_materialized_project(checkout_path: Path, settings: dict | None) -> ProjectMap:
+    """Scan the manifest-resolved dbt root inside one materialized workspace."""
+    files = [
+        path.relative_to(checkout_path).as_posix()
+        for path in checkout_path.rglob("*")
+        if path.is_file()
+    ]
+    dbt_project_dir = resolve_dbt_project_dir(settings, files)
+    if dbt_project_dir is None:
+        raise DashboardSemanticError("The pinned project contains no dbt_project.yml")
+    resolved = checkout_path / dbt_project_dir if dbt_project_dir else checkout_path
+    project_map = scan_project(resolved)
+    if not project_map.models and not project_map.sources:
+        raise DashboardSemanticError("The pinned dbt project contains no models or sources")
+    return project_map
+
+
+def _scan_commit(project_id: str, commit_sha: str, settings: dict | None = None) -> ProjectMap:
     """Materialize one immutable bare-repo commit into a temporary scanner root."""
     if len(commit_sha) != 40 or any(ch not in "0123456789abcdef" for ch in commit_sha.lower()):
         raise DashboardSemanticError("A full immutable commit SHA is required")
@@ -252,7 +284,42 @@ def _scan_commit(project_id: str, commit_sha: str) -> ProjectMap:
             raise DashboardSemanticError("The pinned project commit is unavailable")
         with tarfile.open(archive_path) as archive:
             archive.extractall(checkout_path, filter="data")
-        return scan_project(checkout_path)
+        return _scan_materialized_project(checkout_path, settings)
+
+
+async def _scan_pinned_project(
+    store: Store,
+    *,
+    org_id: str,
+    project_id: str,
+    commit_sha: str,
+    settings: dict | None = None,
+) -> ProjectMap:
+    """Scan a durable workspace snapshot, with git commits kept for compatibility."""
+    with tempfile.TemporaryDirectory(prefix="sp-dashboard-workspace-") as temp_dir:
+        checkout_path = Path(temp_dir) / "project"
+        if await materialize_workspace_snapshot(
+            store.session,
+            workspace_object_storage(),
+            org_id=org_id,
+            project_id=project_id,
+            snapshot_ref=commit_sha,
+            destination=checkout_path,
+        ):
+            return _scan_materialized_project(checkout_path, settings)
+    try:
+        return _scan_commit(project_id, commit_sha, settings)
+    except DashboardSemanticError as original:
+        # Older dashboard versions store a real Git commit rather than a
+        # workspace snapshot reference. Rehydrate the replaceable GitHub
+        # mirror lazily so those versions survive gateway replacement too.
+        if await hydrate_github_mirror(
+            store.session,
+            org_id=org_id,
+            project_id=project_id,
+        ):
+            return _scan_commit(project_id, commit_sha, settings)
+        raise original
 
 
 class DashboardSemanticResolver:
@@ -306,10 +373,16 @@ class DashboardSemanticResolver:
             )
             and not any(fnmatch.fnmatch(str(value.get("schema") or "").lower(), item.lower()) for item in excludes)
         }
-        project_map = _scan_commit(project_id, commit_sha)
+        project_map = await _scan_pinned_project(
+            store,
+            org_id=org_id,
+            project_id=project_id,
+            commit_sha=commit_sha,
+            settings=project.settings,
+        )
         from gateway.api.schema._semantic_store import _load_semantic_model
 
-        return resolve_from_authorities(
+        context = resolve_from_authorities(
             project_id=project.id,
             commit_sha=commit_sha,
             connection_name=connection_name,
@@ -318,3 +391,8 @@ class DashboardSemanticResolver:
             semantic_model=_load_semantic_model(connection_name),
             approved_metrics=parse_approved_metrics(project.settings),
         )
+        if not context.explores:
+            raise DashboardSemanticError(
+                "The pinned dbt project has no governed explores for this connection"
+            )
+        return context

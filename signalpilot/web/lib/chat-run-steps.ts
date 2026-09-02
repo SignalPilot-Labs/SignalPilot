@@ -18,6 +18,7 @@ export type RunStepCategory =
   | "web"
   | "source"
   | "artifact"
+  | "dashboard"
   | "dbt"
   | "plan"
   | "approval"
@@ -131,6 +132,7 @@ export function normalizeToolName(raw: string): {
 }
 
 function categorizeTool(tool: string): RunStepCategory {
+  if (tool === "create_dashboard_preview") return "dashboard";
   if (SQL_TOOLS.has(tool)) return "sql";
   if (PYTHON_TOOLS.has(tool)) return "python";
   if (NOTEBOOK_TOOLS.has(tool)) return "notebook";
@@ -166,6 +168,7 @@ function humanizeTool(tool: string): string {
     publish_table: "Published a table",
     publish_chart: "Published a chart",
     publish_report: "Published a report",
+    create_dashboard_preview: "Creating dashboard preview",
     Bash: "Ran a command",
     Write: "Generated a file",
     Edit: "Edited a file",
@@ -444,6 +447,15 @@ export function foldRunSteps(
     if (event.type === "progress") {
       const label = text(event.payload.label);
       if (!label) continue;
+      if (text(event.payload.scope) === "dashboard_authoring") {
+        const dashboardStep = [...open]
+          .reverse()
+          .find((step) => step.tool === "create_dashboard_preview");
+        if (dashboardStep) {
+          dashboardStep.detail = label;
+          continue;
+        }
+      }
       steps.push({
         key,
         sequence: event.sequence,
@@ -609,6 +621,59 @@ export function foldRunSteps(
     }
   }
   return steps;
+}
+
+/** Current real server-side phase for a running dashboard preview tool. */
+export type DashboardAuthoringProgress = {
+  label: string;
+  phase: string;
+  sessionId: string | null;
+  draftRevision: number;
+};
+
+export function activeDashboardAuthoringProgress(
+  events: StandaloneChatEvent[],
+  runId: string | undefined,
+): DashboardAuthoringProgress | null {
+  if (!runId) return null;
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (
+      event.run_id !== runId ||
+      event.type !== "progress" ||
+      event.payload.scope !== "dashboard_authoring"
+    ) {
+      continue;
+    }
+    const label = event.payload.label;
+    if (typeof label !== "string" || !label) return null;
+    const phase = event.payload.phase;
+    const sessionId = event.payload.authoring_session_id;
+    const draftRevision = event.payload.draft_revision;
+    return {
+      label,
+      phase: typeof phase === "string" ? phase : "",
+      sessionId: typeof sessionId === "string" && sessionId ? sessionId : null,
+      draftRevision: typeof draftRevision === "number" ? draftRevision : 0,
+    };
+  }
+  return null;
+}
+
+export function activeDashboardPreviewLabel(
+  events: StandaloneChatEvent[],
+  runId: string | undefined,
+): string | null {
+  if (!runId) return null;
+  const active = [...foldRunSteps(events, runId)]
+    .reverse()
+    .find(
+      (step) =>
+        step.tool === "create_dashboard_preview" && step.status === "running",
+    );
+  return (
+    active?.detail ?? (active ? "Preparing governed dashboard preview" : null)
+  );
 }
 
 export type RunBlock =

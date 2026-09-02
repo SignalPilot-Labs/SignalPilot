@@ -6,6 +6,15 @@ import fiveComponents from "~/dashboard/lightdash-contract/fixtures/five-compone
 import { fromLightdashFixture } from "~/dashboard/lightdash-contract";
 import styles from "~/components/dashboard/dashboard-runtime.module.css";
 
+const { requestMock, routerPush } = vi.hoisted(() => ({
+  requestMock: vi.fn(),
+  routerPush: vi.fn(),
+}));
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: routerPush }),
+}));
+
 vi.mock("~/components/dashboard/dashboard-runtime-provider", () => ({
   DashboardRuntimeProvider: ({
     definition,
@@ -22,12 +31,13 @@ vi.mock("~/components/dashboard/dashboard-runtime-provider", () => ({
 }));
 
 vi.mock("~/lib/api", () => ({
-  request: vi.fn(() => new Promise(() => undefined)),
+  request: requestMock,
 }));
 
 import {
   DashboardAuthoringPanel,
   DashboardAuthoringWorkspace,
+  dashboardAuthoringErrorMessage,
   dashboardRepairPrompt,
   type DashboardAuthoringSession,
 } from "~/components/dashboard/dashboard-authoring-panel";
@@ -37,6 +47,8 @@ describe("DashboardAuthoringWorkspace", () => {
   let root: Root;
 
   beforeEach(() => {
+    requestMock.mockReset();
+    routerPush.mockReset();
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
@@ -52,8 +64,10 @@ describe("DashboardAuthoringWorkspace", () => {
     const session: DashboardAuthoringSession = {
       id: "session-1",
       thread_id: "thread-1",
+      conversation_id: null,
       dashboard_id: "dashboard-1",
       base_version_id: "version-1",
+      applied_version_id: null,
       definition,
       operations: [],
       summary: "Updated one chart.",
@@ -121,7 +135,7 @@ describe("DashboardAuthoringWorkspace", () => {
     );
   });
 
-  it("mounts the edit overlay at the document root", async () => {
+  it("opens the dashboard preview in its Data Chat thread", async () => {
     const definition = fromLightdashFixture(fiveComponents);
     await act(async () => {
       root.render(
@@ -134,16 +148,20 @@ describe("DashboardAuthoringWorkspace", () => {
       );
     });
     const launcher = container.querySelector("button");
+    requestMock.mockResolvedValueOnce({
+      conversation_id: "conversation-1",
+      authoring_session_id: "session-1",
+    });
     await act(async () => {
       launcher?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
-    const overlay = document.querySelector(
-      "[data-testid='dashboard-authoring-overlay']",
+    expect(requestMock).toHaveBeenCalledWith(
+      "/api/dashboards/dashboard-1/authoring-chat",
+      { method: "POST" },
     );
-    expect(overlay?.parentElement).toBe(document.body);
-    expect(
-      overlay?.querySelector("#dashboard-authoring-prompt"),
-    ).not.toBeNull();
+    expect(routerPush).toHaveBeenCalledWith(
+      "/chats/conversation-1?dashboard=session-1",
+    );
   });
 
   it("opens repair authoring with every chart error ready to submit", async () => {
@@ -176,20 +194,42 @@ describe("DashboardAuthoringWorkspace", () => {
       "Repair 2 failing charts with AI",
     );
 
+    requestMock.mockResolvedValueOnce({
+      conversation_id: "conversation-1",
+      authoring_session_id: "session-1",
+    });
     await act(async () => launcher?.click());
 
-    const overlay = document.querySelector(
-      "[data-testid='dashboard-authoring-overlay']",
+    const destination = routerPush.mock.calls[0]?.[0] as string;
+    expect(destination).toContain("/chats/conversation-1?dashboard=session-1");
+    const prompt = new URL(
+      destination,
+      "http://signalpilot.local",
+    ).searchParams.get("prompt");
+    expect(prompt).toBe(dashboardRepairPrompt(repairIssues));
+    expect(prompt).toContain("Revenue Trend");
+    expect(prompt).toContain("Gross Profit Trend");
+  });
+});
+
+describe("dashboardAuthoringErrorMessage", () => {
+  it("shows a safe API detail without the raw response envelope", () => {
+    expect(
+      dashboardAuthoringErrorMessage(
+        new Error(
+          '502: {"detail":"Dashboard authoring could not complete because Anthropic rejected the request."}',
+        ),
+      ),
+    ).toBe(
+      "Dashboard authoring could not complete because Anthropic rejected the request.",
     );
-    const textarea = overlay?.querySelector<HTMLTextAreaElement>(
-      "#dashboard-authoring-prompt",
-    );
-    expect(textarea?.value).toBe(dashboardRepairPrompt(repairIssues));
-    expect(textarea?.value).toContain("Revenue Trend");
-    expect(textarea?.value).toContain("Gross Profit Trend");
-    expect(overlay?.textContent).toContain("Create repair preview");
-    expect(overlay?.textContent).toContain(
-      "the saved dashboard changes only after Apply",
-    );
+  });
+
+  it("does not expose an unstructured server response", () => {
+    expect(
+      dashboardAuthoringErrorMessage(
+        new Error("500: provider response contained internal details"),
+      ),
+    ).toBe("The dashboard draft could not be updated. Please try again.");
   });
 });

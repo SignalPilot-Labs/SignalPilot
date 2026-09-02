@@ -37,6 +37,7 @@ from signalpilot._server.api.endpoints.standalone_chat_finalize import (
 )
 from signalpilot._server.api.endpoints.standalone_chat_gateway import (
     StandaloneGatewayClient,
+    gateway_api_base_url,
 )
 from signalpilot._server.api.endpoints.standalone_chat_prompt import (
     STANDALONE_ALLOWED_TOOLS,
@@ -145,17 +146,13 @@ async def execute(*, request: Request) -> StreamingResponse:
     )
     scoped_token = authorization.gateway_token
     runtime_redactions = (scoped_token, *connector_secret_values(connectors))
-    gateway_api_url = str(
-        os.getenv("SP_GATEWAY_INTERNAL_URL")
-        or os.getenv("SP_GATEWAY_URL")
-        or "http://gateway:3300"
-    ).rstrip("/").removesuffix("/mcp")
-
+    gateway_api_url = gateway_api_base_url()
     gateway = StandaloneGatewayClient(
         gateway_url=gateway_api_url,
         token=scoped_token,
         run_id=run_id,
     )
+    create_dashboard_preview = gateway.dashboard_creator(body, scope)
 
     auth_config_override = _runtime_auth_override(body)
     agent_model = str(
@@ -341,6 +338,7 @@ async def execute(*, request: Request) -> StreamingResponse:
                     report_catalog_loader=gateway.load_report_catalog,
                     report_context_loader=gateway.load_report_context,
                     published_artifact_checker=gateway.check_published_artifact,
+                    dashboard_preview_creator=create_dashboard_preview,
                     attached_report_id=str(
                         (
                             (body.get("warm_context") or {}).get(

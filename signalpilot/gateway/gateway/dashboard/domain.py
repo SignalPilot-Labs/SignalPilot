@@ -225,6 +225,7 @@ class DashboardTileProperties(ContractModel):
     hideTitle: bool | None = None
     chartName: str | None = None
     chartSlug: str = Field(min_length=1)
+    sectionTitle: str | None = Field(default=None, min_length=1, max_length=120)
 
 
 class DashboardTileDefinition(ContractModel):

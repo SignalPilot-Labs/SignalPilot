@@ -128,52 +128,94 @@ async def test_publication_failures_are_mcp_tool_errors():
 
 
 @pytest.mark.asyncio
-async def test_dashboard_preview_tool_creates_one_review_only_preview():
-    calls: list[tuple[str, str]] = []
+async def test_dashboard_authoring_tools_publish_only_the_final_review_preview():
+    calls: list[tuple[str, dict[str, Any]]] = []
 
-    async def create_preview(
-        request: str, timezone: str, authoring_session_id: str | None
+    async def authoring_tool(
+        name: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        assert authoring_session_id is None
-        calls.append((request, timezone))
+        calls.append((name, arguments))
+        if name == "upsert_dashboard_chart":
+            return {
+                "status": "ready",
+                "authoring_session_id": "authoring-session-1",
+                "ready_count": 1,
+                "expected_count": 2,
+            }
         return {
-            "id": "authoring-session-1",
-            "summary": "Created a governed revenue dashboard.",
-            "definition": {
-                "name": "Executive Revenue",
-                "charts": [
-                    {"title": "Total Revenue"},
-                    {"title": "Revenue Trend"},
-                ],
+            "status": "preview_ready",
+            "authoring_session_id": "authoring-session-1",
+            "session": {
+                "summary": "Created a governed revenue dashboard.",
+                "definition": {
+                    "name": "Executive Revenue",
+                    "charts": [
+                        {"title": "Total Revenue"},
+                        {"title": "Revenue Trend"},
+                    ],
+                },
             },
         }
 
     collector = StandaloneArtifactCollector()
     server = build_standalone_chat_mcp_server(
         collector,
-        dashboard_preview_creator=create_preview,
+        dashboard_authoring_handler=authoring_tool,
     )["instance"]
-    listed = await server.request_handlers[ListToolsRequest](ListToolsRequest())
-    assert "create_dashboard_preview" in {
-        tool.name for tool in listed.root.tools
-    }
+    listed = await server.request_handlers[ListToolsRequest](
+        ListToolsRequest()
+    )
+    assert {
+        "begin_dashboard_authoring",
+        "set_dashboard_plan",
+        "upsert_dashboard_chart",
+        "apply_dashboard_operations",
+        "create_dashboard_preview",
+    } <= {tool.name for tool in listed.root.tools}
 
-    request = CallToolRequest(
-        params=CallToolRequestParams(
-            name="create_dashboard_preview",
-            arguments={
-                "request": "Create an executive revenue dashboard",
-                "timezone": "America/New_York",
-            },
+    chart_result = await server.request_handlers[CallToolRequest](
+        CallToolRequest(
+            params=CallToolRequestParams(
+                name="upsert_dashboard_chart",
+                arguments={
+                    "authoring_session_id": "authoring-session-1",
+                    "authoring_contract_version": "2026-09-02.1",
+                    "plan_revision": 1,
+                    "chart_id": "revenue-trend",
+                    "chart": {
+                        "id": "revenue-trend",
+                        "title": "Revenue Trend",
+                        "question": "How is revenue trending?",
+                        "description": "Approved revenue trend.",
+                        "query": {},
+                        "visualization": {},
+                        "signalPilot": {},
+                    },
+                },
+            )
         )
     )
-    created = await server.request_handlers[CallToolRequest](request)
-    repeated = await server.request_handlers[CallToolRequest](request)
+    assert chart_result.root.isError is False
+    assert collector.dashboard_preview is None
+
+    created = await server.request_handlers[CallToolRequest](
+        CallToolRequest(
+            params=CallToolRequestParams(
+                name="create_dashboard_preview",
+                arguments={
+                    "authoring_session_id": "authoring-session-1",
+                    "authoring_contract_version": "2026-09-02.1",
+                    "plan_revision": 1,
+                    "expected_draft_revision": 2,
+                },
+            )
+        )
+    )
 
     assert created.root.isError is False
-    assert repeated.root.isError is False
-    assert calls == [
-        ("Create an executive revenue dashboard", "America/New_York")
+    assert [name for name, _arguments in calls] == [
+        "upsert_dashboard_chart",
+        "create_dashboard_preview",
     ]
     payload = json.loads(created.root.content[0].text)
     assert payload == {
@@ -187,17 +229,6 @@ async def test_dashboard_preview_tool_creates_one_review_only_preview():
         "apply_required": True,
     }
     assert collector.dashboard_preview == payload
-
-    conflicting = await server.request_handlers[CallToolRequest](
-        CallToolRequest(
-            params=CallToolRequestParams(
-                name="create_dashboard_preview",
-                arguments={"request": "Create a different dashboard"},
-            )
-        )
-    )
-    assert conflicting.root.isError is True
-    assert "Only one dashboard preview" in conflicting.root.content[0].text
 
 
 @pytest.mark.asyncio
@@ -801,7 +832,10 @@ def test_agent_contract_includes_default_signalpilot_mcp_tools():
     # The prompt file wraps lines; compare against whitespace-collapsed text.
     _prompt_flat = " ".join(STANDALONE_SYSTEM_PROMPT.split())
     assert "Answer data questions with evidence" in _prompt_flat
-    assert "first tool call for any analytics request is the `Skill` tool" in _prompt_flat
+    assert (
+        "first tool call for any analytics request is the `Skill` tool"
+        in _prompt_flat
+    )
     assert "`signalpilot-dbt:dbt-workflow`" in _prompt_flat
     assert "SP_CHAT_SCRATCH_DIRECTORY" in _prompt_flat
     assert "analytics-steps.md" in _prompt_flat
@@ -814,7 +848,12 @@ def test_agent_contract_includes_default_signalpilot_mcp_tools():
     assert "publish_report" in _prompt_flat
     assert "GitHub Flavored Markdown" in _prompt_flat
     assert "HTML tags such as `<details>` do not render" in _prompt_flat
-    assert "call `create_dashboard_preview` exactly once" in _prompt_flat
+    assert "`Skill(signalpilot-dbt:dashboard-authoring)`" in _prompt_flat
+    assert "Never use the `Agent` tool" in _prompt_flat
+    assert (
+        "Call `create_dashboard_preview` only after every required chart"
+        in _prompt_flat
+    )
     assert "user must review and Apply" in _prompt_flat
     assert {
         "mcp__signalpilot__get_knowledge",
@@ -823,6 +862,10 @@ def test_agent_contract_includes_default_signalpilot_mcp_tools():
         "mcp__signalpilot__notion_create_page",
         "mcp__signalpilot__sandbox_exec",
         "mcp__signalpilot__dbt_execute",
+        "mcp__standalone-chat__begin_dashboard_authoring",
+        "mcp__standalone-chat__set_dashboard_plan",
+        "mcp__standalone-chat__upsert_dashboard_chart",
+        "mcp__standalone-chat__apply_dashboard_operations",
         "mcp__standalone-chat__create_dashboard_preview",
     } <= set(STANDALONE_ALLOWED_TOOLS)
     assert all(
@@ -865,8 +908,13 @@ def test_notebook_workflow_is_always_enabled():
         connection_name="warehouse",
     )
     assert "`signalpilot-dbt:dbt-workflow`" in execution_prompt
-    assert "mcp__standalone-chat__start_analysis_notebook" in STANDALONE_ALLOWED_TOOLS
-    assert any("signalpilot-notebook" in tool for tool in STANDALONE_ALLOWED_TOOLS)
+    assert (
+        "mcp__standalone-chat__start_analysis_notebook"
+        in STANDALONE_ALLOWED_TOOLS
+    )
+    assert any(
+        "signalpilot-notebook" in tool for tool in STANDALONE_ALLOWED_TOOLS
+    )
 
 
 def test_runtime_publication_sdk_is_exposed_from_top_level_package():

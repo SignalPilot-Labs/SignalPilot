@@ -8,6 +8,9 @@ from starlette.responses import JSONResponse, PlainTextResponse
 
 from signalpilot import _loggers
 from signalpilot._dependencies.dependencies import DependencyManager
+from signalpilot._server.ai.dashboard_authoring_readiness import (
+    dashboard_authoring_readiness,
+)
 from signalpilot._server.api.deps import AppState
 from signalpilot._server.router import APIRouter
 from signalpilot._utils.health import (
@@ -30,6 +33,12 @@ router = APIRouter()
 
 def health_check(request: Request) -> JSONResponse:
     del request  # Unused
+    ready, reason = dashboard_authoring_readiness()
+    if not ready:
+        return JSONResponse(
+            {"status": "not_ready", "reason": reason},
+            status_code=503,
+        )
     return JSONResponse({"status": "healthy"})
 
 

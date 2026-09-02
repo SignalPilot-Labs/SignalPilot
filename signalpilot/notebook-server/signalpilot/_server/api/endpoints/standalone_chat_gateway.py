@@ -114,38 +114,36 @@ class StandaloneGatewayClient:
             invalid="Invalid published artifact state",
         )
 
-    async def create_dashboard_preview(
+    async def dashboard_authoring_tool(
         self,
-        *,
-        request: str,
-        project_id: str,
-        branch: str,
-        commit_sha: str,
-        timezone: str,
-        authoring_session_id: str | None = None,
+        tool: str,
+        arguments: dict[str, Any],
     ) -> dict[str, Any]:
-        """Create a private governed dashboard draft bound to this chat scope."""
+        """Execute one model-free authoring mutation through the run-scoped gateway token."""
 
-        path = (
-            f"/api/dashboard-authoring/sessions/{authoring_session_id}/messages"
-            if authoring_session_id
-            else "/api/dashboard-authoring/sessions"
-        )
-        payload = (
-            {"prompt": request}
-            if authoring_session_id
-            else {
-                "prompt": request,
-                "project_id": project_id,
-                "branch": branch,
-                "commit_sha": commit_sha,
-                "timezone": timezone,
-            }
-        )
+        payload = dict(arguments)
+        session_id = str(payload.pop("authoring_session_id", "") or "")
+        if tool == "begin_dashboard_authoring":
+            path = "/api/dashboard-authoring/begin"
+            if session_id:
+                payload["authoring_session_id"] = session_id
+        elif tool == "set_dashboard_plan":
+            path = f"/api/dashboard-authoring/sessions/{session_id}/plan"
+        elif tool == "upsert_dashboard_chart":
+            chart_id = str(payload.pop("chart_id", "") or "")
+            path = f"/api/dashboard-authoring/sessions/{session_id}/charts/{chart_id}"
+        elif tool == "apply_dashboard_operations":
+            path = f"/api/dashboard-authoring/sessions/{session_id}/operations"
+        elif tool == "create_dashboard_preview":
+            path = f"/api/dashboard-authoring/sessions/{session_id}/finalize"
+        else:
+            raise ValueError("Unknown dashboard authoring tool")
+        if tool != "begin_dashboard_authoring" and not session_id:
+            raise ValueError("Dashboard authoring session is required")
         return await self._post_json(
             path,
             payload=payload,
             timeout=DASHBOARD_AUTHORING_TIMEOUT_SECONDS,
-            invalid="Invalid dashboard authoring preview",
-            failed="Dashboard preview could not be created",
+            invalid="Invalid dashboard authoring result",
+            failed="Dashboard authoring tool failed",
         )

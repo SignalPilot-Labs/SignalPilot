@@ -2,6 +2,8 @@
 
 from mcp.types import Tool
 
+DASHBOARD_AUTHORING_CONTRACT_VERSION = "2026-09-02.1"
+
 
 def standalone_chat_tools(*, notebook_enabled: bool) -> list[Tool]:
     common_properties = {
@@ -52,11 +54,10 @@ def standalone_chat_tools(*, notebook_enabled: bool) -> list[Tool]:
             },
         ),
         Tool(
-            name="create_dashboard_preview",
+            name="begin_dashboard_authoring",
             description=(
-                "Create a private governed SignalPilot dashboard preview from the user's complete dashboard request. "
-                "The project, branch, connection, and commit are fixed by the chat run. The user must review and "
-                "explicitly Apply the returned preview; this tool never saves a dashboard automatically."
+                "Begin or resume a private dashboard draft using the frozen Data Chat scope. Returns the bounded "
+                "governed semantic projection, stable IDs, revisions, limits, and exact authoring contract version."
             ),
             inputSchema={
                 "type": "object",
@@ -78,6 +79,154 @@ def standalone_chat_tools(*, notebook_enabled: bool) -> list[Tool]:
                     },
                 },
                 "required": ["request"],
+                "additionalProperties": False,
+            },
+        ),
+        Tool(
+            name="set_dashboard_plan",
+            description="Validate and atomically persist one typed dashboard plan before chart drafting.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "authoring_session_id": {"type": "string"},
+                    "authoring_contract_version": {
+                        "const": DASHBOARD_AUTHORING_CONTRACT_VERSION
+                    },
+                    "expected_plan_revision": {
+                        "type": "integer",
+                        "minimum": 0,
+                    },
+                    "plan": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "description": {"type": ["string", "null"]},
+                            "timezone": {"type": "string"},
+                            "filters": {
+                                "type": "array",
+                                "items": {"type": "object"},
+                            },
+                            "intents": {
+                                "type": "array",
+                                "minItems": 1,
+                                "maxItems": 30,
+                                "items": {"type": "object"},
+                            },
+                        },
+                        "required": ["name", "timezone", "intents"],
+                    },
+                },
+                "required": [
+                    "authoring_session_id",
+                    "authoring_contract_version",
+                    "expected_plan_revision",
+                    "plan",
+                ],
+                "additionalProperties": False,
+            },
+        ),
+        Tool(
+            name="upsert_dashboard_chart",
+            description=(
+                "Validate and persist exactly one complete chart for an accepted plan intent. A rejected chart returns "
+                "safe structured issues and allowed semantic alternatives; retry that chart at most once."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "authoring_session_id": {"type": "string"},
+                    "authoring_contract_version": {
+                        "const": DASHBOARD_AUTHORING_CONTRACT_VERSION
+                    },
+                    "plan_revision": {"type": "integer", "minimum": 1},
+                    "chart_id": {"type": "string"},
+                    "chart": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string"},
+                            "title": {"type": "string"},
+                            "question": {"type": "string"},
+                            "description": {"type": "string"},
+                            "query": {"type": "object"},
+                            "visualization": {"type": "object"},
+                            "signalPilot": {"type": "object"},
+                        },
+                        "required": [
+                            "id",
+                            "title",
+                            "question",
+                            "description",
+                            "query",
+                            "visualization",
+                            "signalPilot",
+                        ],
+                    },
+                },
+                "required": [
+                    "authoring_session_id",
+                    "authoring_contract_version",
+                    "plan_revision",
+                    "chart_id",
+                    "chart",
+                ],
+                "additionalProperties": False,
+            },
+        ),
+        Tool(
+            name="apply_dashboard_operations",
+            description="Apply one bounded batch of stable-ID operations to the current validated unsaved draft.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "authoring_session_id": {"type": "string"},
+                    "authoring_contract_version": {
+                        "const": DASHBOARD_AUTHORING_CONTRACT_VERSION
+                    },
+                    "expected_draft_revision": {
+                        "type": "integer",
+                        "minimum": 1,
+                    },
+                    "operations": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 30,
+                        "items": {"type": "object"},
+                    },
+                },
+                "required": [
+                    "authoring_session_id",
+                    "authoring_contract_version",
+                    "expected_draft_revision",
+                    "operations",
+                ],
+                "additionalProperties": False,
+            },
+        ),
+        Tool(
+            name="create_dashboard_preview",
+            description=(
+                "Deterministically finalize the complete validated private dashboard preview. Makes no model call and "
+                "never applies, shares, publishes, or deploys a dashboard."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "authoring_session_id": {"type": "string"},
+                    "authoring_contract_version": {
+                        "const": DASHBOARD_AUTHORING_CONTRACT_VERSION
+                    },
+                    "plan_revision": {"type": "integer", "minimum": 0},
+                    "expected_draft_revision": {
+                        "type": "integer",
+                        "minimum": 1,
+                    },
+                },
+                "required": [
+                    "authoring_session_id",
+                    "authoring_contract_version",
+                    "plan_revision",
+                    "expected_draft_revision",
+                ],
                 "additionalProperties": False,
             },
         ),

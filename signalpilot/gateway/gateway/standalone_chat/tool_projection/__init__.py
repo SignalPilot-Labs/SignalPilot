@@ -33,16 +33,7 @@ logger = logging.getLogger(__name__)
 _SCHEMA_TEXT_TOOLS = frozenset(
     {"schema_overview", "get_date_boundaries", "find_join_path", "get_relationships", "schema_link"}
 )
-_ARTIFACT_TOOLS = frozenset(
-    {
-        "publish_table",
-        "publish_chart",
-        "publish_report",
-        "create_dashboard_preview",
-        "start_analysis_notebook",
-        "propose_report_action",
-    }
-)
+_ARTIFACT_TOOLS = frozenset({"create_dashboard_preview", "start_analysis_notebook"})
 _LIST_TABLE_TOOLS = frozenset({"list_tables", "list_all_tables"})
 _SCHEMA_TOOLS = frozenset({"describe_table", "get_table_schema"})
 

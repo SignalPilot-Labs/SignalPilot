@@ -54,6 +54,23 @@ export const SUMMARY_MD_FILE = `# Q3 regional summary
 - AMER stayed steady (+3.1% to $9.20M, 57% of total)
 `;
 
+/** Runtime-captured artifacts: files the notebook cell saved under
+ * `artifacts/` and the sandbox pushed at the tool boundary (no Write tool
+ * call). Referenced inline by the final answer. */
+export const FIXTURE_PNG_FILE_PATH = "artifacts/revenue_by_month.png";
+export const FIXTURE_REVENUE_CSV_FILE_PATH = "artifacts/revenue_by_month.csv";
+
+/** A real 32x20 PNG (a dark bar chart) so the inline figure decodes. */
+export const REVENUE_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAACAAAAAUCAIAAABj86gYAAAAQElEQVR42mMQERGjKWIYtQCXufOKgWioWQA3dEhZgNXQQW8BQUMHpQUkGUqsBWQbOqAWUMVQultAdUNHLSCJDQDviCPis4sfCwAAAABJRU5ErkJggg==";
+export const REVENUE_PNG_BYTE_SIZE = 121;
+
+export const REVENUE_CSV_FILE = `month,revenue,orders
+2025-07,5204100,4102
+2025-08,5318800,4188
+2025-09,5612400,4377
+`;
+
 /** Millisecond offsets shared by the events and the simulated manifest. */
 const REPORT_WRITE_AT = 12_100;
 const REPORT_MIRRORED_AT = 13_000;
@@ -61,6 +78,10 @@ const CHART_MIRRORED_AT = 13_600;
 const CSV_MIRRORED_AT = 14_050;
 const SUMMARY_WRITE_AT = 15_150;
 const SUMMARY_MIRRORED_AT = 15_460;
+const RUN_CELLS_AT = 15_700;
+const RUN_CELLS_TOOL_CALL_ID = "t10b";
+const PNG_CAPTURED_AT = 20_600;
+const CSV_CAPTURED_AT = 20_700;
 
 /** The export-file segment of the scripted run: three Write chains, each
  * mirrored by a content-free files_changed event. Slots between the Bash
@@ -175,13 +196,122 @@ export function lateArtifactFileEvents(runId: string): FixtureEvent[] {
   ];
 }
 
+/** The notebook cell run that saves the chart and the CSV under
+ * `artifacts/`. Slots between the closing TodoWrite (15.65s) and the legacy
+ * publish steps (16.0s). */
+export function runCellsEvents(runId: string): FixtureEvent[] {
+  return [
+    {
+      at: RUN_CELLS_AT,
+      run_id: runId,
+      sequence: 0,
+      type: "tool_started",
+      payload: {
+        tool: "mcp__standalone-chat__run_cells",
+        input: {
+          cells: [
+            {
+              source:
+                'fig, ax = plt.subplots()\nmonthly.plot.bar(x="month", y="revenue", ax=ax)\nax.set_title("Revenue by month, Q3 2025")\nfig.savefig(sp.artifact_path("revenue_by_month.png"))\nmonthly.to_csv(sp.artifact_path("revenue_by_month.csv"), index=False)',
+            },
+          ],
+        },
+      },
+    },
+    {
+      at: 15_950,
+      run_id: runId,
+      sequence: 0,
+      type: "tool_completed",
+      payload: {
+        tool_call_id: RUN_CELLS_TOOL_CALL_ID,
+        summary: "Executed 1 cell.",
+        error: false,
+      },
+    },
+  ];
+}
+
+function runtimeFileDescriptor(
+  id: string,
+  path: string,
+  kind: ConversationFileInfo["kind"],
+  byteSize: number,
+) {
+  return {
+    file_id: id,
+    path,
+    filename: path.split("/").pop() ?? path,
+    kind,
+    byte_size: byteSize,
+    content_hash: `${id}-hash-1`,
+    deleted: false,
+  };
+}
+
+/** The sandbox capture announcing the two runtime artifacts: one
+ * `files_changed` per file, in the rich payload shape, anchored to the
+ * run_cells tool call. They land after the answer references them, which
+ * opens the pending-figure window (20.0s to 20.6s) the e2e specs cover. */
+export function runtimeFilesChangedEvents(runId: string): FixtureEvent[] {
+  return [
+    {
+      at: PNG_CAPTURED_AT,
+      run_id: runId,
+      sequence: 0,
+      type: "files_changed",
+      payload: {
+        changed: 1,
+        files: [
+          runtimeFileDescriptor(
+            "file-fixture-revenue-png",
+            FIXTURE_PNG_FILE_PATH,
+            "image",
+            REVENUE_PNG_BYTE_SIZE,
+          ),
+        ],
+        tool_call_id: RUN_CELLS_TOOL_CALL_ID,
+        origin: "runtime",
+      },
+    },
+    {
+      at: CSV_CAPTURED_AT,
+      run_id: runId,
+      sequence: 0,
+      type: "files_changed",
+      payload: {
+        changed: 1,
+        files: [
+          runtimeFileDescriptor(
+            "file-fixture-revenue-csv",
+            FIXTURE_REVENUE_CSV_FILE_PATH,
+            "data",
+            REVENUE_CSV_FILE.length,
+          ),
+        ],
+        tool_call_id: RUN_CELLS_TOOL_CALL_ID,
+        origin: "runtime",
+      },
+    },
+  ];
+}
+
+/** True once a files_changed event named the path, in either payload shape:
+ * the legacy content-free `changed: [path]` or the runtime `files: [{path}]`. */
 function mirrored(events: StandaloneChatEvent[], path: string): boolean {
-  return events.some(
-    (event) =>
-      event.type === "files_changed" &&
+  return events.some((event) => {
+    if (event.type !== "files_changed") return false;
+    if (
       Array.isArray(event.payload.changed) &&
-      (event.payload.changed as unknown[]).includes(path),
-  );
+      (event.payload.changed as unknown[]).includes(path)
+    ) {
+      return true;
+    }
+    const files = Array.isArray(event.payload.files)
+      ? (event.payload.files as Array<{ path?: unknown }>)
+      : [];
+    return files.some((file) => file.path === path);
+  });
 }
 
 /**
@@ -201,6 +331,7 @@ export function fixtureArtifactFiles(
     mime: string;
     size: number;
     at: number;
+    origin: string;
   }> = [
     {
       id: "file-fixture-report",
@@ -209,6 +340,7 @@ export function fixtureArtifactFiles(
       mime: "text/html",
       size: REPORT_HTML_FILE.length,
       at: REPORT_MIRRORED_AT,
+      origin: "mirror",
     },
     {
       id: "file-fixture-chart",
@@ -217,6 +349,7 @@ export function fixtureArtifactFiles(
       mime: "image/svg+xml",
       size: CHART_SVG_FILE.length,
       at: CHART_MIRRORED_AT,
+      origin: "mirror",
     },
     {
       id: "file-fixture-csv",
@@ -225,6 +358,7 @@ export function fixtureArtifactFiles(
       mime: "text/csv",
       size: CSV_FILE.length,
       at: CSV_MIRRORED_AT,
+      origin: "mirror",
     },
     {
       id: "file-fixture-summary",
@@ -233,6 +367,25 @@ export function fixtureArtifactFiles(
       mime: "text/markdown",
       size: SUMMARY_MD_FILE.length,
       at: SUMMARY_MIRRORED_AT,
+      origin: "mirror",
+    },
+    {
+      id: "file-fixture-revenue-png",
+      path: FIXTURE_PNG_FILE_PATH,
+      kind: "image",
+      mime: "image/png",
+      size: REVENUE_PNG_BYTE_SIZE,
+      at: PNG_CAPTURED_AT,
+      origin: "runtime",
+    },
+    {
+      id: "file-fixture-revenue-csv",
+      path: FIXTURE_REVENUE_CSV_FILE_PATH,
+      kind: "data",
+      mime: "text/csv",
+      size: REVENUE_CSV_FILE.length,
+      at: CSV_CAPTURED_AT,
+      origin: "runtime",
     },
   ];
   return entries
@@ -246,7 +399,7 @@ export function fixtureArtifactFiles(
       byte_size: entry.size,
       content_hash: `${entry.id}-hash-1`,
       origin_run_id: runId,
-      origin: "mirror",
+      origin: entry.origin,
       status: "active",
       created_at: createdAt(entry.at),
       updated_at: createdAt(entry.at),

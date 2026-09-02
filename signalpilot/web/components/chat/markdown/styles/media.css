@@ -228,3 +228,238 @@
   margin-block: 0;
   margin-inline: auto;
 }
+
+/* ------------------------------------------------------- inline figures */
+
+/* A conversation file the agent referenced with `![caption](artifacts/x.png)`.
+   Block even inside a paragraph, centred, capped at the column, and framed
+   like every other media block so a chart sits level with the SQL above it. */
+.chat-markdown .chat-md-figure {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  margin: var(--md-gap) auto;
+}
+.chat-markdown .chat-md-figure-frame {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  border: 1px solid var(--md-rule);
+  border-radius: var(--md-radius);
+  background: var(--md-surface-raised);
+}
+.chat-markdown .chat-md-figure-button {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: zoom-in;
+}
+.chat-markdown .chat-md-figure-button:active {
+  transform: none;
+}
+.chat-markdown .chat-md-figure-img {
+  display: block;
+  max-width: 100%;
+  max-height: 520px;
+  height: auto;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  animation: chat-md-figure-in 220ms ease-out;
+}
+.chat-markdown .chat-md-figcaption {
+  margin: 0.5rem auto 0;
+  max-width: 60ch;
+  text-align: center;
+  color: var(--color-text-muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+/* Actions sit in a slim footer strip under the image, never over it: an
+   overlay would cover a small chart and steal its click. They stay quiet
+   until the figure is hovered or focused within. */
+.chat-markdown .chat-md-figure-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.25rem;
+  padding: 0.25rem 0.4rem;
+  border-top: 1px solid var(--md-rule);
+  background: var(--md-surface);
+}
+.chat-markdown .chat-md-figure-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  height: 24px;
+  padding: 0 0.5rem;
+  border: 1px solid transparent;
+  border-radius: var(--md-radius-sm);
+  background: transparent;
+  color: var(--color-text-dim);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  line-height: 1;
+  transition: color 120ms ease, background-color 120ms ease;
+}
+.chat-markdown .chat-md-figure-frame:hover .chat-md-figure-action,
+.chat-markdown .chat-md-figure-frame:focus-within .chat-md-figure-action {
+  color: var(--color-text-muted);
+}
+.chat-markdown .chat-md-figure-action:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text);
+}
+.chat-markdown .chat-md-figure-action-icon {
+  width: 12px;
+  height: 12px;
+}
+
+@keyframes chat-md-figure-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* ------------------------------------------------ figure placeholder */
+
+/* A reference the manifest has not confirmed yet: a 16:10 shimmer with the
+   file name, so the transcript does not jump when the image lands. */
+.chat-markdown .chat-md-figure-pending {
+  position: relative;
+  display: block;
+  width: min(560px, 100%);
+  aspect-ratio: 16 / 10;
+  margin: var(--md-gap) auto;
+  overflow: hidden;
+  border: 1px solid var(--md-rule);
+  border-radius: var(--md-radius);
+  background: var(--md-surface);
+}
+.chat-markdown .chat-md-figure-shimmer {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    100deg,
+    transparent 30%,
+    var(--color-bg-hover) 50%,
+    transparent 70%
+  );
+  background-size: 250% 100%;
+  animation: chat-md-figure-shimmer 1.8s ease-in-out infinite;
+}
+.chat-markdown .chat-md-figure-pending-name {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  color: var(--color-text-dim);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+@keyframes chat-md-figure-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -50% 0;
+  }
+}
+
+/* ------------------------------------------------------------ file chips */
+
+/* A linked conversation file: inline-block so it sits inside a sentence. */
+.chat-markdown .chat-md-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  max-width: 100%;
+  height: 28px;
+  margin: 0.1rem 0;
+  padding: 0 0.6rem 0 0.5rem;
+  border: 1px solid var(--md-rule);
+  border-radius: 999px;
+  background: var(--md-surface-raised);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 1;
+  vertical-align: middle;
+  text-decoration: none;
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+.chat-markdown button.chat-md-chip {
+  cursor: pointer;
+}
+.chat-markdown button.chat-md-chip:hover {
+  border-color: var(--md-rule-strong);
+  background: var(--color-bg-hover);
+}
+.chat-markdown .chat-md-chip-icon {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  color: var(--color-text-dim);
+}
+.chat-markdown .chat-md-chip-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+.chat-markdown .chat-md-chip-meta {
+  flex: none;
+  color: var(--color-text-dim);
+  font-size: 11px;
+}
+.chat-markdown .chat-md-chip-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex: none;
+  padding-left: 0.45rem;
+  border-left: 1px solid var(--md-rule);
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+.chat-markdown .chat-md-chip-action-icon {
+  width: 11px;
+  height: 11px;
+}
+.chat-markdown .chat-md-chip-shimmer {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--md-rule) 0, var(--color-bg-hover) 50%, var(--md-rule) 100%);
+  background-size: 200% 100%;
+  animation: chat-md-figure-shimmer 1.6s ease-in-out infinite;
+}
+.chat-markdown .chat-md-chip-pending .chat-md-chip-name {
+  color: var(--color-text-muted);
+}
+.chat-markdown .chat-md-chip-missing {
+  border-color: rgba(255, 170, 0, 0.24);
+  color: var(--color-text-muted);
+}
+.chat-markdown .chat-md-chip-missing .chat-md-chip-icon {
+  color: var(--color-warning);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-markdown .chat-md-figure-shimmer,
+  .chat-markdown .chat-md-chip-shimmer {
+    animation: none;
+    opacity: 0.55;
+  }
+  .chat-markdown .chat-md-figure-img {
+    animation: none;
+  }
+}

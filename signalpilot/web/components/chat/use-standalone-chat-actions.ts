@@ -1,7 +1,7 @@
 "use client";
 
 // Imperative actions for the standalone data chat: submit, stop, retry,
-// report approval, conversation load/select, and rail management.
+// conversation load/select, and rail management.
 
 import { useRouter } from "next/navigation";
 import {
@@ -14,7 +14,6 @@ import {
 import { useSWRConfig } from "swr";
 import {
   archiveStandaloneConversation,
-  approveChatReportSuggestion,
   cancelStandaloneRun,
   clarifyStandaloneRun,
   createStandaloneConversation,
@@ -328,20 +327,6 @@ export function useStandaloneChatActions({
     },
     [mutateDetail, mutateHistory, toast],
   );
-  const onApproveReportSuggestion = useCallback(
-    async (messageId: string) => {
-      const result = await approveChatReportSuggestion(messageId);
-      await mutateDetail();
-      await mutateCache(
-        (key) =>
-          typeof key === "string" &&
-          (key.startsWith("chat-report-library:") ||
-            key.startsWith("saved-chat-report:")),
-      );
-      return { report_id: result.report_id };
-    },
-    [mutateCache, mutateDetail],
-  );
 
   const loadConversation = useCallback(
     (id: string): Promise<StandaloneConversationDetail> => {
@@ -468,7 +453,6 @@ export function useStandaloneChatActions({
     submitText,
     onStop,
     onRetry,
-    onApproveReportSuggestion,
     loadConversation,
     prefetchConversation,
     selectConversation,

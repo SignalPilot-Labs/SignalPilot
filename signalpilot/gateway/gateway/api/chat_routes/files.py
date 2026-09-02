@@ -1,13 +1,14 @@
-"""Conversation file manifest, file content, and SQL trace routes."""
+"""Conversation file manifest, file content, shared files, and SQL trace routes."""
 
 from __future__ import annotations
 
 import asyncio
 import hashlib
 import re
+from typing import Annotated
 from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, Header, HTTPException, Response
 
 from gateway.db.models import GatewayChatFile
 from gateway.security.scope_guard import RequireScope
@@ -16,13 +17,17 @@ from gateway.standalone_chat.sql_trace import list_sql_trace
 from gateway.store import standalone_chat as chat_store
 
 from ..deps import StoreD
-from .artifacts import _ARCHIVE_CSP, _sanitize_runtime_archive_html
 from .common import owned_conversation_or_404 as _owned_conversation_or_404
 from .common import require_enabled as _require_enabled
+from .common import require_enterprise_feature as _require_enterprise_feature
+from .runtime_archives import _ARCHIVE_CSP, _sanitize_runtime_archive_html
 
 router = APIRouter()
 
 _MAX_FILE_BYTES = 100 * 1024 * 1024
+
+# The browser may cache the bytes but must revalidate with the ETag.
+_CACHE_CONTROL = "private, max-age=0, must-revalidate"
 
 # Types that execute script when a browser opens them as a document.
 _FORCED_DOWNLOAD_MIMES = {
@@ -31,6 +36,8 @@ _FORCED_DOWNLOAD_MIMES = {
     "application/xml",
     "text/xml",
 }
+
+IfNoneMatchD = Annotated[str | None, Header(alias="If-None-Match")]
 
 
 def _file_info(row: GatewayChatFile) -> dict:
@@ -48,6 +55,70 @@ def _file_info(row: GatewayChatFile) -> dict:
         "created_at": row.created_at,
         "updated_at": row.updated_at,
     }
+
+
+def _etag(row: GatewayChatFile) -> str:
+    return f'"{row.content_hash}"'
+
+
+def _etag_matches(header: str | None, etag: str) -> bool:
+    """True when the If-None-Match header names this ETag or is a wildcard."""
+    if not header:
+        return False
+    for candidate in header.split(","):
+        value = candidate.strip()
+        if value == "*":
+            return True
+        if value.startswith("W/"):
+            value = value[2:]
+        if value == etag:
+            return True
+    return False
+
+
+async def _file_content_response(
+    row: GatewayChatFile,
+    *,
+    download: int,
+    if_none_match: str | None,
+) -> Response:
+    """Return hash-verified file bytes. HTML is sanitized and CSP-pinned."""
+    etag = _etag(row)
+    base_headers = {
+        "Cache-Control": _CACHE_CONTROL,
+        "ETag": etag,
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "no-referrer",
+    }
+    if _etag_matches(if_none_match, etag):
+        return Response(status_code=304, headers=base_headers)
+    content = await chat_object_storage().get_bytes(row.object_key, max_bytes=_MAX_FILE_BYTES)
+    # Hash off the event loop. Files can reach 100 MB.
+    digest = await asyncio.to_thread(lambda: hashlib.sha256(content).hexdigest())
+    if digest != row.content_hash:
+        raise HTTPException(status_code=500, detail="File failed integrity validation")
+    headers = dict(base_headers)
+    if row.kind == "html":
+        content = _sanitize_runtime_archive_html(content.decode("utf-8", errors="replace")).encode("utf-8")
+        headers["Content-Security-Policy"] = _ARCHIVE_CSP
+    # SVG and XML can carry scripts when opened as a document. The viewer
+    # renders them through inert img/blob elements, so force a download for
+    # any direct fetch of these types.
+    if (row.mime_type or "").split(";", 1)[0].strip().lower() in _FORCED_DOWNLOAD_MIMES:
+        download = 1
+    if download:
+        # Keep the header well formed for any filename the agent chose.
+        # ASCII fallback plus RFC 5987 encoding for everything else.
+        ascii_name = re.sub(r'[^\x20-\x7e]|["\\\\]', "_", row.filename) or "file"
+        encoded_name = quote(row.filename, safe="")
+        headers["Content-Disposition"] = (
+            f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{encoded_name}'
+        )
+    return Response(
+        content=content,
+        media_type=row.mime_type or "application/octet-stream",
+        headers=headers,
+    )
 
 
 @router.get(
@@ -76,8 +147,9 @@ async def get_conversation_file_content(
     file_id: str,
     store: StoreD,
     download: int = 0,
+    if_none_match: IfNoneMatchD = None,
 ):
-    """Return hash-verified file bytes. HTML is sanitized and CSP-pinned."""
+    """Return hash-verified file bytes. Honor If-None-Match with a 304."""
     _require_enabled()
     await _owned_conversation_or_404(store, conversation_id)
     row = await chat_store.get_conversation_file(
@@ -89,37 +161,47 @@ async def get_conversation_file_content(
     )
     if row is None:
         raise HTTPException(status_code=404, detail="File not found")
-    content = await chat_object_storage().get_bytes(row.object_key, max_bytes=_MAX_FILE_BYTES)
-    # Hash off the event loop. Files can reach 100 MB.
-    digest = await asyncio.to_thread(lambda: hashlib.sha256(content).hexdigest())
-    if digest != row.content_hash:
-        raise HTTPException(status_code=500, detail="File failed integrity validation")
-    headers = {
-        "Cache-Control": "private, no-store",
-        "X-Content-Type-Options": "nosniff",
-        "Referrer-Policy": "no-referrer",
-    }
-    if row.kind == "html":
-        content = _sanitize_runtime_archive_html(content.decode("utf-8", errors="replace")).encode("utf-8")
-        headers["Content-Security-Policy"] = _ARCHIVE_CSP
-    # SVG and XML can carry scripts when opened as a document. The viewer
-    # renders them through inert img/blob elements, so force a download for
-    # any direct fetch of these types.
-    if (row.mime_type or "").split(";", 1)[0].strip().lower() in _FORCED_DOWNLOAD_MIMES:
-        download = 1
-    if download:
-        # Keep the header well formed for any filename the agent chose.
-        # ASCII fallback plus RFC 5987 encoding for everything else.
-        ascii_name = re.sub(r'[^\x20-\x7e]|["\\\\]', "_", row.filename) or "file"
-        encoded_name = quote(row.filename, safe="")
-        headers["Content-Disposition"] = (
-            f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{encoded_name}'
-        )
-    return Response(
-        content=content,
-        media_type=row.mime_type or "application/octet-stream",
-        headers=headers,
+    return await _file_content_response(row, download=download, if_none_match=if_none_match)
+
+
+@router.get("/shared/{token}/files", dependencies=[RequireScope("read")])
+async def list_shared_conversation_files(token: str, store: StoreD):
+    """Return the share-safe file manifest for an active share grant."""
+    _require_enabled()
+    _require_enterprise_feature("organization_sharing")
+    rows = await chat_store.list_shared_files(
+        store.session,
+        org_id=store._require_org_id(),
+        token=token,
     )
+    if rows is None:
+        raise HTTPException(status_code=404, detail="Shared conversation not found")
+    return {"files": [_file_info(row) for row in rows]}
+
+
+@router.get(
+    "/shared/{token}/files/{file_id}/content",
+    dependencies=[RequireScope("read")],
+)
+async def get_shared_conversation_file_content(
+    token: str,
+    file_id: str,
+    store: StoreD,
+    download: int = 0,
+    if_none_match: IfNoneMatchD = None,
+):
+    """Return hash-verified bytes of one share-safe file."""
+    _require_enabled()
+    _require_enterprise_feature("organization_sharing")
+    row = await chat_store.get_shared_file(
+        store.session,
+        org_id=store._require_org_id(),
+        token=token,
+        file_id=file_id,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="File not found")
+    return await _file_content_response(row, download=download, if_none_match=if_none_match)
 
 
 @router.get(

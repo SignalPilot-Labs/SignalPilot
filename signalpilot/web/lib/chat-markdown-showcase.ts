@@ -255,6 +255,19 @@ so a \\$1,000 refund on a \\$26,000 base moves it by 3.8 points. Inline math
 uses double dollars too: $$r = 0.038$$ — single \\$ signs stay currency.
 `,
   },
+  {
+    id: "media",
+    title: "Images & files",
+    markdown: `A chart the agent saved under \`artifacts/\` is embedded with a plain
+image reference. In a conversation it resolves to the saved file and renders
+as a captioned figure; here, with no conversation, it stays an ordinary image.
+
+![Revenue by month, Q3 2025](artifacts/revenue_by_month.png)
+
+A data file is linked the same way: [Download revenue_by_month.csv](artifacts/revenue_by_month.csv).
+Raw HTML works too: <img src="artifacts/revenue_by_month.png" alt="Revenue by month">.
+`,
+  },
 ];
 
 export const SHOWCASE_MARKDOWN = SHOWCASE_SECTIONS.map(

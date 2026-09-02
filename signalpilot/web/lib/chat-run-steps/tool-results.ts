@@ -49,7 +49,6 @@ const KIND_BY_TOOL: Record<string, ToolResultKind> = {
   dbt_execute: "dbt_run", refresh_mart: "dbt_run",
   sandbox_exec: "terminal", Bash: "terminal",
   get_knowledge: "knowledge", search_knowledge: "knowledge", read_knowledge: "knowledge",
-  publish_table: "artifact", publish_chart: "artifact", publish_report: "artifact",
   create_dashboard_preview: "artifact", start_analysis_notebook: "artifact",
   inspect_dbt: "json", run_cells: "json", edit_notebook: "json",
   get_lightweight_cell_map: "json", get_notebook_errors: "json",

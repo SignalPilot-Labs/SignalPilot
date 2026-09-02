@@ -354,8 +354,8 @@ describe("foldRunBlocks", () => {
     expect(chain1.steps.at(-2)?.tool).toBe("query_database");
     expect(narration.text).toContain("analysis runtime");
     // notebook → write → bash → 3 export writes → edit → md write → todo →
-    // 2 publishes
-    expect(chain2.steps).toHaveLength(11);
+    // run_cells
+    expect(chain2.steps).toHaveLength(10);
     expect(chain2.steps[0]?.tool).toBe("start_analysis_notebook");
     expect(answer.text).toContain("EMEA drove the growth");
     // Follow-up verification chain: list_tables → explore_columns →
@@ -461,10 +461,9 @@ describe("summarizeRunSteps", () => {
   it("counts queries, code runs, files and errors", () => {
     const summary = summarizeRunSteps(foldRunSteps(allEvents, FIXTURE_RUN_ID));
     expect(summary.queries).toBe(2); // validate_sql + query_database
-    expect(summary.codeRuns).toBe(1); // Bash
-    // 5 Writes (py + html + svg + csv + md) + Edit + publish_table +
-    // publish_chart
-    expect(summary.files).toBe(8);
+    expect(summary.codeRuns).toBe(2); // Bash + run_cells
+    // 5 Writes (py + html + svg + csv + md) + Edit
+    expect(summary.files).toBe(6);
     expect(summary.errors).toBe(1);
     expect(summary.running).toBe(false);
   });
@@ -500,7 +499,7 @@ describe("extractRunPlan", () => {
     expect(plan).not.toBeNull();
     expect(plan!.completed).toBe(3);
     expect(plan!.items[3].status).toBe("in_progress");
-    expect(plan!.currentLabel).toBe("Publish a table and comparison chart");
+    expect(plan!.currentLabel).toBe("Save the chart and the underlying rows");
   });
 
   it("ignores TodoWrites published inside subagents", () => {

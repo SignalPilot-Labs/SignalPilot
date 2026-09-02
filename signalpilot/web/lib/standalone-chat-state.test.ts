@@ -34,7 +34,6 @@ function detailFixture(): StandaloneConversationDetail {
       reserved_spend_usd: 0,
     },
     messages: [],
-    artifacts: [],
     current_run: null,
     run_events: [],
   };

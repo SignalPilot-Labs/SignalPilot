@@ -107,3 +107,42 @@ def worker_poll_seconds() -> float:
     except ValueError:
         return 1.0
     return min(10.0, max(0.1, value))
+
+
+def _bounded_int_env(name: str, default: int, *, minimum: int, maximum: int) -> int:
+    raw = os.getenv(name, "").strip()
+    try:
+        value = int(raw) if raw else default
+    except ValueError:
+        return default
+    return min(maximum, max(minimum, value))
+
+
+def chat_file_max_bytes() -> int:
+    """Largest single runtime file the gateway accepts. Default 25 MB."""
+    return _bounded_int_env(
+        "SP_CHAT_FILE_MAX_BYTES",
+        25 * 1024 * 1024,
+        minimum=1024,
+        maximum=1024 * 1024 * 1024,
+    )
+
+
+def conversation_file_quota_bytes() -> int:
+    """Total active file bytes allowed per conversation. Default 250 MB."""
+    return _bounded_int_env(
+        "SP_CHAT_CONVERSATION_FILE_QUOTA_BYTES",
+        250 * 1024 * 1024,
+        minimum=1024,
+        maximum=100 * 1024 * 1024 * 1024,
+    )
+
+
+def conversation_file_quota_count() -> int:
+    """Active file rows allowed per conversation. Default 500."""
+    return _bounded_int_env(
+        "SP_CHAT_CONVERSATION_FILE_QUOTA_COUNT",
+        500,
+        minimum=1,
+        maximum=100_000,
+    )

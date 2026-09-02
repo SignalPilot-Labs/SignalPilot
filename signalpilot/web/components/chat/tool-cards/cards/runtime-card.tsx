@@ -10,19 +10,16 @@ import { registerToolCard, type ToolCardContext, type ToolCardSummary } from "..
 import { iconForKind } from "../registry-tools";
 
 /**
- * Artifact card: `publish_table` / `publish_chart` / `publish_report`,
- * `start_analysis_notebook` and `create_dashboard_preview`. Deliberately
- * thin: the filename, the kind, any follow-up the tool asked for, and an
- * "Open" button when the conversation's file manifest carries the file.
- * Dashboard previews keep the existing `DashboardPreviewDetails` body.
+ * Runtime artifact card: `start_analysis_notebook` and
+ * `create_dashboard_preview`. Deliberately thin: the notebook name, the
+ * kind, any follow-up the tool asked for, and an "Open" button when the
+ * conversation's file manifest carries the file. Dashboard previews keep
+ * the existing `DashboardPreviewDetails` body.
  */
 
 type ArtifactKind = ArtifactResult["artifactKind"];
 
 const KIND_BY_TOOL: Record<string, ArtifactKind> = {
-  publish_table: "table",
-  publish_chart: "chart",
-  publish_report: "report",
   start_analysis_notebook: "notebook",
   create_dashboard_preview: "dashboard",
 };
@@ -55,27 +52,22 @@ export function artifactName(step: RunStep): string | null {
 }
 
 /**
- * Notebook and dashboard steps carry a kind-specific title; publish steps
- * keep the humanized step title ("Published a chart") so transcript copy
- * stays stable, falling back to the kind only when the step has none.
+ * Notebook and dashboard steps carry a kind-specific title; any other
+ * artifact step keeps the humanized step title so transcript copy stays
+ * stable, falling back to a plain label only when the step has none.
  */
-function titleFor(step: RunStep, kind: ArtifactKind | null, published: boolean): string {
+function titleFor(step: RunStep, kind: ArtifactKind | null): string {
   if (kind === "notebook") return "Notebook started";
   if (kind === "dashboard") return "Dashboard preview";
-  if (step.title) return step.title;
-  if (!kind) return "Artifact";
-  return published ? `Published ${kind}` : `Publishing ${kind}`;
+  return step.title || "Artifact";
 }
 
 export function summarizeArtifact(step: RunStep): ToolCardSummary {
-  const result = artifactResult(step);
   const kind = artifactKindForStep(step);
-  const failed = step.status === "failed";
-  const published = result ? result.published : step.status === "succeeded";
   return {
-    title: titleFor(step, kind, published || step.status === "running"),
+    title: titleFor(step, kind),
     stat: artifactName(step),
-    ok: !failed && (result ? result.published || kind === "notebook" || kind === "dashboard" : true),
+    ok: step.status !== "failed",
   };
 }
 
@@ -90,7 +82,7 @@ function NameLine({ step, running }: { step: RunStep; running: boolean }) {
       </span>
       {kind && (
         <span
-          data-testid="chat-publish-kind"
+          data-testid="chat-runtime-kind"
           className="flex-none rounded-md border border-[var(--color-border)] bg-[var(--color-bg-card)] px-1.5 py-px text-[10px] text-[var(--color-text-muted)]"
         >
           {kind}
@@ -100,16 +92,16 @@ function NameLine({ step, running }: { step: RunStep; running: boolean }) {
   );
 }
 
-export function PublishRunning({ step }: ToolCardContext) {
+export function RuntimeRunning({ step }: ToolCardContext) {
   if (artifactKindForStep(step) === "dashboard") {
     return (
-      <div data-testid="chat-publish-card">
+      <div data-testid="chat-runtime-card">
         <StepBody step={step} />
       </div>
     );
   }
   return (
-    <div data-testid="chat-publish-card">
+    <div data-testid="chat-runtime-card">
       <NameLine step={step} running />
     </div>
   );
@@ -126,7 +118,7 @@ function OpenRow({ step, openArtifact }: { step: RunStep; openArtifact: (id: str
     <div className="border-t border-[var(--color-border)] px-3.5 py-2">
       <button
         type="button"
-        data-testid="chat-publish-open"
+        data-testid="chat-runtime-open"
         onClick={() => openArtifact(file.id)}
         className="inline-flex items-center gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-card)] px-2 py-1 text-[11px] text-[var(--color-text)] hover:border-[var(--color-success)]/40 hover:bg-[var(--color-bg-hover)]"
       >
@@ -137,12 +129,12 @@ function OpenRow({ step, openArtifact }: { step: RunStep; openArtifact: (id: str
   );
 }
 
-export function PublishExpanded({ step, openArtifact }: ToolCardContext) {
+export function RuntimeExpanded({ step, openArtifact }: ToolCardContext) {
   const result = artifactResult(step);
   const kind = artifactKindForStep(step);
   if (kind === "dashboard") {
     return (
-      <div data-testid="chat-publish-card">
+      <div data-testid="chat-runtime-card">
         {step.category === "dashboard" ? <StepBody step={step} /> : <DashboardPreviewDetails step={step} />}
       </div>
     );
@@ -150,14 +142,14 @@ export function PublishExpanded({ step, openArtifact }: ToolCardContext) {
   const note = result?.nextRequiredAction?.trim();
   const status = result?.status?.trim();
   return (
-    <div data-testid="chat-publish-card">
+    <div data-testid="chat-runtime-card">
       <NameLine step={step} running={false} />
       {(note || status) && (
         <div className="border-t border-[var(--color-border)] px-3.5 py-2 text-[11px] leading-4 text-[var(--color-text-muted)]">
           {status && (
             <span className="mr-2 font-mono text-[10px] text-[var(--color-text-dim)]">{status}</span>
           )}
-          {note && <span data-testid="chat-publish-next">{note}</span>}
+          {note && <span data-testid="chat-runtime-next">{note}</span>}
         </div>
       )}
       <OpenRow step={step} openArtifact={openArtifact} />
@@ -170,6 +162,6 @@ registerToolCard({
   Icon: iconForKind("artifact"),
   accent: "artifact",
   summarize: summarizeArtifact,
-  Running: PublishRunning,
-  Expanded: PublishExpanded,
+  Running: RuntimeRunning,
+  Expanded: RuntimeExpanded,
 });

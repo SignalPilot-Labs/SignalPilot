@@ -77,7 +77,7 @@ async def _run_stream(
     async def stream_execution(*_args: Any, **_kwargs: Any):
         for event in events:
             yield event
-        yield {"type": "final", "content": "done", "artifacts": []}
+        yield {"type": "final", "content": "done"}
 
     async def prepare_execution(*_args: Any, **_kwargs: Any) -> object:
         return SimpleNamespace(session_id="gw-sess-1")
@@ -101,11 +101,9 @@ async def _run_stream(
     monkeypatch.setattr(worker, "stream_execution", stream_execution)
     monkeypatch.setattr(worker, "_warm_context", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(worker, "_append", append_event)
-    monkeypatch.setattr(worker, "_persist_artifacts", noop)
     monkeypatch.setattr(worker, "_lease_renewer", wait_until_stopped)
     monkeypatch.setattr(worker, "_cancellation_monitor", wait_until_stopped)
     monkeypatch.setattr(worker, "cleanup_finished_execution", noop)
-    monkeypatch.setattr(worker.worker_files, "mirror_file_tool", noop)
 
     await worker._execute_claimed_run("run-a", "worker-a")
     return appended

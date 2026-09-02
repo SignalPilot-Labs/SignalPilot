@@ -130,7 +130,7 @@ export type ToolResult =
     }
   | {
       kind: "artifact";
-      artifact_kind: "table" | "chart" | "report" | "dashboard" | "notebook";
+      artifact_kind: "dashboard" | "notebook";
       published: boolean;
       filename?: string;
       artifact_index?: number;

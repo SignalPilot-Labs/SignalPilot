@@ -301,29 +301,6 @@ async def test_promotion_appends_a_version_for_a_case_insensitive_title_match(
         artifact_id=first.id,
         title="Revenue 2026",
     )
-    saved_detail = await chat_store.get_conversation_detail(
-        db_session,
-        org_id="org-a",
-        user_id="user-a",
-        conversation_id=first.conversation_id,
-    )
-    assert saved_detail is not None
-    first_info = next(item for item in saved_detail.artifacts if item.id == first.id)
-    assert first_info.report_action == "open"
-
-    detail = await chat_store.get_conversation_detail(
-        db_session,
-        org_id="org-a",
-        user_id="user-a",
-        conversation_id=second.conversation_id,
-    )
-    assert detail is not None
-    second_info = next(item for item in detail.artifacts if item.id == second.id)
-    assert second_info.report_action == "update"
-    assert second_info.saved_report_id == report.id
-    assert second_info.saved_report_version_id == version_one.id
-    assert second_info.saved_report_title == "Revenue 2026"
-
     status, matching_report, version_two = await chat_reports.promote_artifact(
         db_session,
         org_id="org-a",
@@ -391,19 +368,6 @@ async def test_promoting_a_refresh_artifact_updates_the_originating_report(
         base_version_id=version_one.id,
         artifact=refreshed,
     )
-
-    detail = await chat_store.get_conversation_detail(
-        db_session,
-        org_id="org-a",
-        user_id="user-a",
-        conversation_id=refreshed.conversation_id,
-    )
-    assert detail is not None
-    refreshed_info = next(item for item in detail.artifacts if item.id == refreshed.id)
-    assert refreshed_info.report_action == "update"
-    assert refreshed_info.saved_report_id == report.id
-    assert refreshed_info.saved_report_version_id == version_one.id
-    assert refreshed_info.saved_report_title == "Revenue 2026"
 
     status, updated_report, version_two = await chat_reports.promote_artifact(
         db_session,
@@ -1057,44 +1021,6 @@ async def test_object_backed_report_version_download_keeps_exact_bytes(
     assert downloadable is not None
     assert await chat_reports.artifact_download_bytes(downloadable) == content
     assert report.current_version_id == version.id
-
-
-@pytest.mark.asyncio
-async def test_artifact_persistence_records_server_owned_report_lineage(
-    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    await _seed_project(db_session)
-    seeded = await _artifact(db_session, artifact_id="artifact-lineage-seed")
-    run = await db_session.get(GatewayChatRun, seeded.run_id)
-    assert run is not None
-    observed_schema = {
-        "analytics.revenue": {
-            "columns": [{"name": "amount", "type": "numeric", "nullable": False, "primary_key": False}]
-        }
-    }
-    monkeypatch.setattr(chat_store.schema_cache, "get", lambda _connection: observed_schema)
-
-    artifact = await chat_store.persist_artifact(
-        db_session,
-        run=run,
-        payload={
-            "kind": "table",
-            "filename": "lineage.csv",
-            "mime_type": "text/csv",
-            "snapshot": {
-                "columns": [{"name": "amount"}],
-                "rows": [{"amount": 10}],
-            },
-            "provenance": {
-                "commit_sha": "agent-controlled",
-                "schema_fingerprint": "agent-controlled",
-            },
-        },
-    )
-
-    assert artifact.provenance_json is not None
-    assert artifact.provenance_json["commit_sha"] == "a" * 40
-    assert artifact.provenance_json["schema_fingerprint"] == _schema_fingerprint(observed_schema)
 
 
 @pytest.mark.parametrize(

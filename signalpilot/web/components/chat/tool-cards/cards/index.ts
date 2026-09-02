@@ -8,7 +8,7 @@ import "./validation-card";
 import "./dbt-run-card";
 import "./terminal-card";
 import "./knowledge-card";
-import "./publish-card";
+import "./runtime-card";
 import "./table-card";
 import "./table-list-card";
 import "./schema-card";

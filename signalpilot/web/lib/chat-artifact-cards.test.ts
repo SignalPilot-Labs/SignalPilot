@@ -9,7 +9,7 @@ import {
   pathsMatch,
   primaryActionLabel,
   relativeTimeLabel,
-  suppressCoveredCards,
+  suppressReferencedCards,
 } from "./chat-artifact-cards";
 
 const RUN = "run-1";
@@ -257,35 +257,6 @@ describe("deriveArtifactCards", () => {
   });
 });
 
-describe("suppressCoveredCards", () => {
-  const cards = deriveArtifactCards(
-    [],
-    [file("exports/q3_revenue.csv"), file("exports/q3_chart.svg")],
-    RUN,
-    false,
-  );
-
-  it("drops a card whose file a published preview already covers", () => {
-    const kept = suppressCoveredCards(cards, ["q3_revenue.csv"]);
-    expect(kept.map((card) => card.filename)).toEqual(["q3_chart.svg"]);
-  });
-
-  it("matches by full path too", () => {
-    const kept = suppressCoveredCards(cards, ["exports/q3_chart.svg"]);
-    expect(kept.map((card) => card.filename)).toEqual(["q3_revenue.csv"]);
-  });
-
-  it("does not treat a different extension as coverage", () => {
-    // The legacy chart artifact is a .vl.json — it does not cover the .svg.
-    const kept = suppressCoveredCards(cards, ["q3_chart.vl.json"]);
-    expect(kept).toHaveLength(2);
-  });
-
-  it("passes through untouched when nothing is covered", () => {
-    expect(suppressCoveredCards(cards, [])).toBe(cards);
-  });
-});
-
 describe("helpers", () => {
   it("pathsMatch handles exact, absolute-suffix, and non-matches", () => {
     expect(pathsMatch("a/b.csv", "a/b.csv")).toBe(true);
@@ -363,5 +334,145 @@ describe("helpers", () => {
     expect(relativeTimeLabel("2026-01-15T15:00:00.000Z", base)).toBe("3h ago");
     expect(relativeTimeLabel("2026-01-13T18:00:00.000Z", base)).toBe("2d ago");
     expect(relativeTimeLabel("not a date", base)).toBe("");
+  });
+});
+
+describe("files_changed touch source", () => {
+  function filesChanged(
+    paths: string[],
+    options: { sequence?: number; deleted?: boolean; toolCallId?: string } = {},
+  ): StandaloneChatEvent {
+    sequenceCounter += 1;
+    return {
+      run_id: RUN,
+      sequence: options.sequence ?? sequenceCounter,
+      type: "files_changed",
+      payload: {
+        changed: paths.length,
+        files: paths.map((path) => ({
+          file_id: `id-${path}`,
+          path,
+          filename: path.split("/").pop() ?? path,
+          kind: guessKindFromPath(path),
+          byte_size: 10,
+          content_hash: "h",
+          deleted: options.deleted ?? false,
+        })),
+        tool_call_id: options.toolCallId ?? "t1",
+        origin: "runtime",
+      },
+      created_at: "2026-01-15T17:30:20.000Z",
+    } as StandaloneChatEvent;
+  }
+
+  it("anchors a card at the files_changed sequence when no Write step exists", () => {
+    const cards = deriveArtifactCards(
+      [filesChanged(["artifacts/revenue.png"], { sequence: 40 })],
+      [file("artifacts/revenue.png")],
+      RUN,
+      true,
+    );
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({
+      state: "ready",
+      path: "artifacts/revenue.png",
+      kind: "image",
+      sequence: 40,
+      writeCount: 1,
+    });
+  });
+
+  it("renders a pending card for a captured file the manifest has not listed yet", () => {
+    const cards = deriveArtifactCards(
+      [filesChanged(["artifacts/revenue.png"])],
+      [],
+      RUN,
+      true,
+    );
+    expect(cards[0].state).toBe("pending");
+  });
+
+  it("ignores deleted entries and the legacy content-free payload", () => {
+    const legacy = {
+      run_id: RUN,
+      sequence: 3,
+      type: "files_changed",
+      payload: { changed: ["artifacts/old.png"], deleted: [] },
+      created_at: "2026-01-15T17:30:20.000Z",
+    } as StandaloneChatEvent;
+    const cards = deriveArtifactCards(
+      [legacy, filesChanged(["artifacts/gone.png"], { deleted: true })],
+      [],
+      RUN,
+      true,
+    );
+    expect(cards).toEqual([]);
+  });
+
+  it("counts a Write and its capture event as one touch group", () => {
+    const cards = deriveArtifactCards(
+      [
+        writeEvent("exports/report.html", { sequence: 5 }),
+        filesChanged(["exports/report.html"], { sequence: 7 }),
+      ],
+      [file("exports/report.html")],
+      RUN,
+      true,
+    );
+    expect(cards).toHaveLength(1);
+    expect(cards[0].sequence).toBe(5);
+    expect(cards[0].writeCount).toBe(2);
+  });
+
+  it("no longer treats NotebookEdit as a write", () => {
+    const cards = deriveArtifactCards(
+      [writeEvent("analysis.py", { tool: "NotebookEdit" })],
+      [],
+      RUN,
+      true,
+    );
+    expect(cards).toEqual([]);
+  });
+});
+
+describe("suppressReferencedCards", () => {
+  const ready = (path: string) =>
+    deriveArtifactCards([writeEvent(path)], [file(path)], RUN, true)[0];
+  const pending = (path: string) =>
+    deriveArtifactCards([writeEvent(path)], [], RUN, true)[0];
+
+  it("drops cards the message body references inline", () => {
+    const cards = [
+      ready("artifacts/revenue.png"),
+      ready("artifacts/rows.csv"),
+      ready("exports/report.html"),
+    ];
+    const kept = suppressReferencedCards(
+      cards,
+      "![Revenue](artifacts/revenue.png)\n\n[rows](rows.csv)",
+    );
+    expect(kept.map((card) => card.path)).toEqual(["exports/report.html"]);
+  });
+
+  it("keeps every card when nothing is referenced", () => {
+    const cards = [ready("artifacts/revenue.png")];
+    expect(suppressReferencedCards(cards, "plain text")).toBe(cards);
+    expect(suppressReferencedCards(cards, "")).toBe(cards);
+  });
+
+  it("matches pending cards on their path", () => {
+    const cards = [pending("artifacts/revenue.png"), pending("exports/x.md")];
+    const kept = suppressReferencedCards(
+      cards,
+      "![Revenue](/tmp/signalpilot-chat-runs/run-1/artifacts/revenue.png)",
+    );
+    expect(kept.map((card) => card.path)).toEqual(["exports/x.md"]);
+  });
+
+  it("ignores external references", () => {
+    const cards = [ready("artifacts/revenue.png")];
+    expect(
+      suppressReferencedCards(cards, "![x](https://cdn/revenue.png)"),
+    ).toHaveLength(1);
   });
 });

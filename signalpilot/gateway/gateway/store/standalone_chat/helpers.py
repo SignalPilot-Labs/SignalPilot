@@ -5,13 +5,12 @@ from __future__ import annotations
 import time
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal
+from typing import Any
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.db.models import (
-    GatewayChatArtifact,
     GatewayChatConversation,
     GatewayChatMessage,
     GatewayChatRun,
@@ -19,10 +18,8 @@ from gateway.db.models import (
     GatewayRuntimeDataset,
 )
 from gateway.models.standalone_chat import (
-    ChatArtifactInfo,
     ChatRunEventInfo,
     ChatRunInfo,
-    SharedChatArtifactInfo,
     StandaloneMessageInfo,
 )
 from gateway.standalone_chat.domain import redact_public_payload
@@ -149,70 +146,6 @@ def _event_info(row: GatewayChatRunEvent) -> ChatRunEventInfo:
         payload=row.payload_json,
         created_at=row.created_at,
     )
-
-
-def _artifact_info(
-    row: GatewayChatArtifact,
-    *,
-    saved_report_id: str | None = None,
-    saved_report_version_id: str | None = None,
-    saved_report_title: str | None = None,
-    report_action: Literal["create", "update", "open"] = "create",
-) -> ChatArtifactInfo:
-    formats = {
-        "table": ["csv"],
-        "chart": ["png", "csv"],
-        "report": ["html"],
-    }[row.kind]
-    return ChatArtifactInfo(
-        id=row.id,
-        run_id=row.run_id,
-        assistant_message_id=row.assistant_message_id,
-        kind=row.kind,
-        filename=row.filename,
-        mime_type=row.mime_type,
-        snapshot=row.snapshot_json,
-        provenance=row.provenance_json,
-        freshness_at=row.freshness_at,
-        assumptions=[str(value) for value in row.assumptions or []],
-        exclusions=[str(value) for value in row.exclusions or []],
-        caveats=[str(value) for value in row.caveats or []],
-        parent_artifact_id=row.parent_artifact_id,
-        saved_report_id=saved_report_id,
-        saved_report_version_id=saved_report_version_id,
-        saved_report_title=saved_report_title,
-        report_action=report_action,
-        created_at=row.created_at,
-        download_formats=formats,
-    )
-
-
-def _shared_artifact_info(row: GatewayChatArtifact) -> SharedChatArtifactInfo:
-    formats = {
-        "table": ["csv"],
-        "chart": ["png", "csv"],
-        "report": ["html"],
-    }[row.kind]
-    return SharedChatArtifactInfo(
-        id=row.id,
-        assistant_message_id=row.assistant_message_id,
-        kind=row.kind,
-        filename=row.filename,
-        mime_type=row.mime_type,
-        snapshot=row.snapshot_json,
-        freshness_at=row.freshness_at,
-        assumptions=[str(value) for value in row.assumptions or []],
-        exclusions=[str(value) for value in row.exclusions or []],
-        caveats=[str(value) for value in row.caveats or []],
-        created_at=row.created_at,
-        download_formats=formats,
-    )
-
-
-def _bounded_artifact_notes(value: Any) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    return [str(item)[:500] for item in value[:100]]
 
 
 async def _append_status_message(

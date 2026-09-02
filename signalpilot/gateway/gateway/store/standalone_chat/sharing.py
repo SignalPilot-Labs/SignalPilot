@@ -8,12 +8,12 @@ import time
 import uuid
 from typing import Any
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.db.models import (
-    GatewayChatArtifact,
     GatewayChatConversation,
+    GatewayChatFile,
     GatewayChatMessage,
     GatewayChatRun,
     GatewayChatShareGrant,
@@ -25,12 +25,18 @@ from gateway.models.standalone_chat import (
     SharedConversationInfo,
     SharedMessageInfo,
 )
-from gateway.standalone_chat.domain import NONTERMINAL_RUN_STATUSES, TERMINAL_RUN_STATUSES
-from gateway.standalone_chat.object_storage import conversation_prefix, runtime_object_key
+from gateway.standalone_chat.domain import NONTERMINAL_RUN_STATUSES
+from gateway.standalone_chat.object_storage import (
+    conversation_file_key,
+    conversation_prefix,
+)
+from gateway.store.standalone_chat.files import (
+    get_shared_conversation_file,
+    list_shared_conversation_files,
+)
 from gateway.store.standalone_chat.helpers import (
     _now,
     _owned_conversation_row,
-    _shared_artifact_info,
 )
 
 
@@ -185,27 +191,6 @@ async def get_shared_conversation(
             )
         ).scalars()
     )
-    artifacts = list(
-        (
-            await db.execute(
-                select(GatewayChatArtifact)
-                .outerjoin(
-                    GatewayChatRun,
-                    GatewayChatRun.id == GatewayChatArtifact.run_id,
-                )
-                .where(
-                    GatewayChatArtifact.conversation_id == conversation.id,
-                    GatewayChatArtifact.org_id == org_id,
-                    GatewayChatArtifact.user_id == conversation.user_id,
-                    or_(
-                        GatewayChatRun.id.is_(None),
-                        GatewayChatRun.status.in_(TERMINAL_RUN_STATUSES),
-                    ),
-                )
-                .order_by(GatewayChatArtifact.created_at)
-            )
-        ).scalars()
-    )
     return SharedConversationDetail(
         conversation=SharedConversationInfo(
             title=conversation.title or "New chat",
@@ -223,38 +208,47 @@ async def get_shared_conversation(
             )
             for row in messages
         ],
-        artifacts=[_shared_artifact_info(row) for row in artifacts],
         shared_at=grant.created_at,
     )
 
 
-async def get_shared_artifact(
+async def list_shared_files(
     db: AsyncSession,
     *,
     org_id: str,
     token: str,
-    artifact_id: str,
-) -> GatewayChatArtifact | None:
+) -> list[GatewayChatFile] | None:
+    """Return share-safe files for the grant. None when the grant is not active."""
     shared = await _shared_grant_row(db, org_id=org_id, token=token)
     if shared is None:
         return None
     _, conversation = shared
-    return (
-        await db.execute(
-            select(GatewayChatArtifact)
-            .outerjoin(GatewayChatRun, GatewayChatRun.id == GatewayChatArtifact.run_id)
-            .where(
-                GatewayChatArtifact.id == artifact_id,
-                GatewayChatArtifact.conversation_id == conversation.id,
-                GatewayChatArtifact.org_id == org_id,
-                GatewayChatArtifact.user_id == conversation.user_id,
-                or_(
-                    GatewayChatRun.id.is_(None),
-                    GatewayChatRun.status.in_(TERMINAL_RUN_STATUSES),
-                ),
-            )
-        )
-    ).scalar_one_or_none()
+    return await list_shared_conversation_files(
+        db,
+        org_id=org_id,
+        owner_user_id=conversation.user_id,
+        conversation_id=conversation.id,
+    )
+
+
+async def get_shared_file(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    token: str,
+    file_id: str,
+) -> GatewayChatFile | None:
+    shared = await _shared_grant_row(db, org_id=org_id, token=token)
+    if shared is None:
+        return None
+    _, conversation = shared
+    return await get_shared_conversation_file(
+        db,
+        org_id=org_id,
+        owner_user_id=conversation.user_id,
+        conversation_id=conversation.id,
+        file_id=file_id,
+    )
 
 
 async def fork_shared_conversation(
@@ -296,20 +290,6 @@ async def fork_shared_conversation(
             )
         ).scalars()
     )
-    artifacts = list(
-        (
-            await db.execute(
-                select(GatewayChatArtifact)
-                .where(
-                    GatewayChatArtifact.conversation_id == source.id,
-                    GatewayChatArtifact.org_id == org_id,
-                    GatewayChatArtifact.user_id == source.user_id,
-                )
-                .order_by(GatewayChatArtifact.created_at)
-            )
-        ).scalars()
-    )
-
     now = time.time()
     fork = GatewayChatConversation(
         id=str(uuid.uuid4()),
@@ -352,83 +332,56 @@ async def fork_shared_conversation(
             )
         )
 
-    artifact_ids = {row.id: str(uuid.uuid4()) for row in artifacts}
-    copied_run_ids: dict[str, str] = {}
+    files = list(
+        (
+            await db.execute(
+                select(GatewayChatFile)
+                .where(
+                    GatewayChatFile.conversation_id == source.id,
+                    GatewayChatFile.org_id == org_id,
+                    GatewayChatFile.user_id == source.user_id,
+                    GatewayChatFile.status == "active",
+                )
+                .order_by(GatewayChatFile.created_at)
+            )
+        ).scalars()
+    )
+
     storage = _object_storage()
     try:
-        for row in artifacts:
-            copied_run_id = copied_run_ids.setdefault(row.run_id, str(uuid.uuid4()))
-            copied_artifact_id = artifact_ids[row.id]
-            object_key = None
-            source_object_key = None
-            byte_size = row.byte_size
-            content_hash = row.content_hash
-            if row.storage_kind == "object":
-                if not row.object_key:
-                    raise RuntimeError("Shared artifact object is unavailable")
-                object_key = runtime_object_key(
-                    org_id=org_id,
-                    conversation_id=fork.id,
-                    run_id=copied_run_id,
-                    category="forked-artifacts",
-                    object_id=copied_artifact_id,
-                    filename=row.filename,
-                )
-                copied = await storage.copy(
-                    source_key=row.object_key,
-                    destination_key=object_key,
-                )
-                byte_size = copied.byte_size
-                content_hash = copied.content_hash or row.content_hash
-                if row.source_object_key:
-                    source_filename = f"{row.filename.rsplit('.', 1)[0]}.csv"
-                    source_object_key = runtime_object_key(
-                        org_id=org_id,
-                        conversation_id=fork.id,
-                        run_id=copied_run_id,
-                        category="forked-artifact-sources",
-                        object_id=copied_artifact_id,
-                        filename=source_filename,
-                    )
-                    await storage.copy(
-                        source_key=row.source_object_key,
-                        destination_key=source_object_key,
-                    )
+        # Copy each conversation file under the fork prefix. The hash stays
+        # the same. Only the key and the owner change.
+        for row in files:
+            copied_file_id = str(uuid.uuid4())
+            object_key = conversation_file_key(
+                org_id=org_id,
+                conversation_id=fork.id,
+                file_id=copied_file_id,
+                filename=row.filename,
+            )
+            copied = await storage.copy(source_key=row.object_key, destination_key=object_key)
             db.add(
-                GatewayChatArtifact(
-                    id=copied_artifact_id,
+                GatewayChatFile(
+                    id=copied_file_id,
                     org_id=org_id,
                     user_id=user_id,
                     conversation_id=fork.id,
-                    run_id=copied_run_id,
-                    assistant_message_id=message_ids.get(row.assistant_message_id or ""),
-                    kind=row.kind,
+                    path=row.path,
                     filename=row.filename,
+                    kind=row.kind,
                     mime_type=row.mime_type,
-                    snapshot_json=row.snapshot_json,
-                    binary_data=row.binary_data,
-                    storage_kind=row.storage_kind,
+                    byte_size=copied.byte_size or row.byte_size,
+                    content_hash=copied.content_hash or row.content_hash,
                     object_key=object_key,
-                    source_object_key=source_object_key,
-                    byte_size=byte_size,
-                    content_hash=content_hash,
-                    provenance_json={
-                        **dict(row.provenance_json or {}),
-                        "forked_from_artifact_id": row.id,
-                        "forked_from_conversation_id": source.id,
-                    },
-                    freshness_at=row.freshness_at,
-                    assumptions=list(row.assumptions or []),
-                    exclusions=list(row.exclusions or []),
-                    caveats=list(row.caveats or []),
-                    parent_artifact_id=artifact_ids.get(row.parent_artifact_id or ""),
-                    created_at=row.created_at,
+                    origin_run_id=None,
+                    origin="fork",
+                    status="active",
                 )
             )
         await db.commit()
     except Exception:
         await db.rollback()
-        if any(row.storage_kind == "object" for row in artifacts):
+        if files:
             try:
                 await storage.delete_prefix(conversation_prefix(org_id, fork.id))
             except Exception:

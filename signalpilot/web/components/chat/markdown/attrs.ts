@@ -6,6 +6,13 @@ export function str(value: unknown, fallback = ""): string {
   return fallback;
 }
 
+/** Drops the hast `node` Streamdown passes to overrides, leaving DOM props. */
+export function domProps<T extends { node?: unknown }>(props: T): Omit<T, "node"> {
+  const copy: T = { ...props };
+  delete (copy as { node?: unknown }).node;
+  return copy;
+}
+
 /** Flattens a React subtree back to its text, for code and diagram sources. */
 export function childText(children: ReactNode): string {
   let out = "";

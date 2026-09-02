@@ -9,7 +9,7 @@
 
 import { AlertCircle, ArrowDownToLine } from "lucide-react";
 import { memo, useEffect, useRef, useState } from "react";
-import { downloadConversationFile, getConversationFileObjectUrl } from "~/lib/api";
+import { downloadConversationFile } from "~/lib/api";
 import {
   cardKindLabel,
   middleTruncate,
@@ -20,6 +20,7 @@ import {
 import { formatByteSize } from "~/lib/chat-artifacts";
 import { kindIcon } from "~/components/chat/artifacts-panel";
 import { useChatUi } from "~/components/chat/chat-ui-context";
+import { useFileObjectUrl } from "~/components/chat/use-file-object-url";
 import { useToast } from "~/components/ui/toast";
 
 /** Full cards rendered before the block collapses to compact rows. */
@@ -70,11 +71,12 @@ function useDownload(conversationId: string | null) {
 }
 
 /**
- * Inline thumbnail for image cards. Fetches through the authenticated
- * helper (plain <a href> cannot carry auth); refetches when the content
- * hash changes so an updated chart never shows stale pixels. The fixture
- * harness has no gateway, so it injects `getFileObjectUrl` via the chat UI
- * context — the thumbnail path stays verifiable at /chats/test.
+ * Inline thumbnail for image cards. Fetches through the shared object-URL
+ * cache (plain <a href> cannot carry auth), so the inline figure, the panel
+ * viewer and this thumbnail share one fetch per file version; a new
+ * content hash refetches so an updated chart never shows stale pixels. The
+ * fixture harness has no gateway, so it injects `getFileObjectUrl` via the
+ * chat UI context — the thumbnail path stays verifiable at /chats/test.
  */
 function ImageThumb({
   conversationId,
@@ -85,34 +87,15 @@ function ImageThumb({
   card: ArtifactCardModel;
   onOpen: (fileId: string) => void;
 }) {
-  const { getFileObjectUrl } = useChatUi();
-  const [url, setUrl] = useState<string | null>(null);
+  const { url, error } = useFileObjectUrl(card.file, conversationId);
   const fileId = card.file?.id;
-  const contentHash = card.file?.content_hash;
   useEffect(() => {
-    if (!fileId) return;
-    let active = true;
-    let objectUrl: string | null = null;
-    const fetchUrl = getFileObjectUrl
-      ? getFileObjectUrl(fileId)
-      : getConversationFileObjectUrl(conversationId, fileId);
-    void fetchUrl
-      .then((value) => {
-        objectUrl = value;
-        if (active) setUrl(value);
-        else URL.revokeObjectURL(value);
-      })
-      .catch((error: unknown) => {
-        // Deliberate downgrade to the icon-only card — but never silently:
-        // a broken thumbnail path in production must stay observable.
-        console.warn("chat-artifact-card: thumbnail fetch failed", card.path, error);
-        if (active) setUrl(null);
-      });
-    return () => {
-      active = false;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [conversationId, fileId, contentHash, getFileObjectUrl, card.path]);
+    // Deliberate downgrade to the icon-only card — but never silently:
+    // a broken thumbnail path in production must stay observable.
+    if (error) {
+      console.warn("chat-artifact-card: thumbnail fetch failed", card.path, error);
+    }
+  }, [error, card.path]);
   if (!url || !fileId) return null;
   return (
     <button

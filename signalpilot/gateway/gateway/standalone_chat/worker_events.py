@@ -171,38 +171,6 @@ async def _steering_monitor(
             pass
 
 
-async def _persist_artifacts(
-    *,
-    run_id: str,
-    worker_id: str,
-    artifacts: list[dict[str, Any]],
-) -> None:
-    factory = _worker().get_session_factory()
-    for artifact_payload in artifacts:
-        normalized = {
-            **artifact_payload,
-            "snapshot": artifact_payload.get("snapshot") or artifact_payload.get("payload"),
-        }
-        async with factory() as db:
-            run = await _worker().chat_store.get_worker_run(
-                db, run_id=run_id, worker_id=worker_id
-            )
-            if run is None or run.cancellation_requested_at:
-                return
-            artifact = await _worker().chat_store.persist_artifact(
-                db, run=run, payload=normalized
-            )
-        await _worker()._append(
-            run_id,
-            "artifact_created",
-            {
-                "artifact_id": artifact.id,
-                "kind": artifact.kind,
-                "filename": artifact.filename,
-            },
-        )
-
-
 async def _update_summary(run_id: str) -> None:
     factory = _worker().get_session_factory()
     async with factory() as db:
@@ -211,18 +179,8 @@ async def _update_summary(run_id: str) -> None:
             return
         context = await _worker().chat_store.worker_context(db, run=run)
     messages = _message_context(context)
-    artifact_refs = [
-        {
-            "id": artifact.id,
-            "kind": artifact.kind,
-            "filename": artifact.filename,
-            "provenance": artifact.provenance_json,
-        }
-        for artifact in context["artifacts"]
-    ]
     selection = select_context_for_summary(
         messages,
-        artifact_refs=artifact_refs,
         usable_context_chars=400_000,
     )
     if selection is None:

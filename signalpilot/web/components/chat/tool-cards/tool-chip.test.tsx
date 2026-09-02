@@ -150,7 +150,7 @@ describe("ToolChipStrip", () => {
     // Nine distinct kinds so nothing merges.
     const tools = [
       "query_database", "list_tables", "describe_table", "explore_columns",
-      "validate_sql", "dbt_execute", "sandbox_exec", "search_knowledge", "publish_table",
+      "validate_sql", "dbt_execute", "sandbox_exec", "search_knowledge", "start_analysis_notebook",
     ];
     const steps = tools.map((tool, i) => step(`s${i}`, tool, { title: `Tool ${i}` }));
     await act(async () => {

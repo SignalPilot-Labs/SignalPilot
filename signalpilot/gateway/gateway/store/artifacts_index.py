@@ -1,31 +1,28 @@
-"""Unified artifact index — a read model over existing artifact provenance rows.
+"""Unified artifact index. A read model over eval artifact provenance rows.
 
-Artifacts are produced in two places today, with two disjoint surfaces:
+Eval artifacts live as blobs in the evals object store under
+``evals/<org>/runs/<run>/artifacts/<task>/<file>``. The database does not
+keep one row per artifact, but the capture pipeline records the stored
+filenames and byte sizes on the task row
+(:class:`~gateway.db.models.GatewayEvalRunTask` ``capture_result``.
+``stored`` lists the filenames actually uploaded, ``tables[*].file`` and
+``tables[*].file_bytes`` carry per-file sizes). This module derives the
+eval listing from those rows alone. It never calls S3.
 
-- **Chat artifacts** live as rows in ``gateway_chat_artifacts``
-  (:class:`~gateway.db.models.GatewayChatArtifact`), one row per published
-  artifact, downloadable via ``/api/chat/artifacts/{id}/download``.
-- **Eval artifacts** live as *blobs* in the evals object store under
-  ``evals/<org>/runs/<run>/artifacts/<task>/<file>``. The database does not
-  keep one row per artifact, but the capture pipeline records the stored
-  filenames and byte sizes on the task row
-  (:class:`~gateway.db.models.GatewayEvalRunTask` ``capture_result`` —
-  ``stored`` lists the filenames actually uploaded, ``tables[*].file`` /
-  ``tables[*].file_bytes`` carry per-file sizes). This module derives the
-  eval listing from those rows alone — it never calls S3.
+Chat artifacts are conversation files now (``gateway_chat_files``). They are
+served by the chat file routes and are not part of this index. The legacy
+``gateway_chat_artifacts`` table only backs the saved-reports library.
 
-**Notebook artifacts do not exist yet.** Workspace revisions (the S3-backed
+Notebook artifacts do not exist yet. Workspace revisions (the S3-backed
 project filesystem) are versioned source files, not artifacts, so they are
-deliberately not surfaced here. When Notebook Runtime v2 grows a real
-artifact-producing surface, it gets a third branch in :func:`list_artifacts`;
-until then ``kind="notebook"`` simply yields nothing rather than inventing a
-table.
+not surfaced here. When Notebook Runtime v2 grows a real artifact-producing
+surface, it gets a branch in :func:`list_artifacts`. Until then
+``kind="notebook"`` yields nothing.
 
 Retention interaction: eval retention (:mod:`gateway.evals.retention`) prunes
-*blobs* by prefix and flips ``GatewayEvalRun.artifacts_pruned`` — it never
+blobs by prefix and flips ``GatewayEvalRun.artifacts_pruned``. It never
 deletes the task rows inside the artifact window, so pruned runs still list
-here with ``available: False``. Chat artifacts are row-owned (inline bytes or
-an object key on the row), so a row present means the record lists.
+here with ``available: False``.
 
 This module is read-only: no new tables, no writes.
 """
@@ -40,13 +37,11 @@ from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.models import (
-    GatewayChatArtifact,
-    GatewayChatRun,
     GatewayEvalRun,
     GatewayEvalRunTask,
 )
 
-KINDS = ("chat", "eval", "notebook")
+KINDS = ("eval", "notebook")
 
 _EPOCH = datetime.min.replace(tzinfo=UTC)
 
@@ -56,7 +51,7 @@ class ArtifactRecord:
     """One unified artifact entry, whatever produced it."""
 
     id: str
-    kind: str  # "chat" | "eval" ("notebook" reserved — see module docstring)
+    kind: str  # "eval" ("notebook" reserved, see module docstring)
     name: str
     content_type: str
     byte_size: int | None
@@ -94,62 +89,6 @@ def _as_utc(value: Any) -> datetime | None:
 def _iso(value: Any) -> str | None:
     normalized = _as_utc(value)
     return normalized.isoformat() if normalized is not None else None
-
-
-async def _chat_records(
-    session: AsyncSession,
-    *,
-    org_id: str,
-    project_id: str | None,
-    run_id: str | None,
-) -> list[tuple[datetime, ArtifactRecord]]:
-    stmt = (
-        select(GatewayChatArtifact, GatewayChatRun)
-        .join(
-            GatewayChatRun,
-            and_(
-                GatewayChatRun.id == GatewayChatArtifact.run_id,
-                GatewayChatRun.org_id == org_id,
-            ),
-            isouter=True,
-        )
-        .where(GatewayChatArtifact.org_id == org_id)
-    )
-    if run_id is not None:
-        stmt = stmt.where(GatewayChatArtifact.run_id == run_id)
-    if project_id is not None:
-        stmt = stmt.where(GatewayChatRun.project_id == project_id)
-
-    out: list[tuple[datetime, ArtifactRecord]] = []
-    for artifact, run in (await session.execute(stmt)).all():
-        provenance: dict[str, str] = {
-            "conversation_id": artifact.conversation_id,
-            "run_id": artifact.run_id,
-        }
-        if run is not None:
-            provenance["project_id"] = run.project_id
-            if run.execution_session_id:
-                provenance["session_id"] = run.execution_session_id
-        # A chat artifact row always carries a renderable snapshot; only an
-        # object-storage artifact whose key is missing is undownloadable.
-        available = not (artifact.storage_kind == "object" and not artifact.object_key)
-        out.append(
-            (
-                _as_utc(artifact.created_at) or _EPOCH,
-                ArtifactRecord(
-                    id=artifact.id,
-                    kind="chat",
-                    name=artifact.filename,
-                    content_type=artifact.mime_type,
-                    byte_size=artifact.byte_size,
-                    created_at=_iso(artifact.created_at),
-                    available=available,
-                    provenance=provenance,
-                    download={"route": f"/api/chat/artifacts/{artifact.id}/download"},
-                ),
-            )
-        )
-    return out
 
 
 async def _eval_records(
@@ -237,13 +176,7 @@ async def list_artifacts(
         raise ValueError(f"unknown artifact kind {kind!r}; expected one of {KINDS}")
 
     dated: list[tuple[datetime, ArtifactRecord]] = []
-    if kind in (None, "chat"):
-        dated.extend(
-            await _chat_records(
-                session, org_id=org_id, project_id=project_id, run_id=run_id
-            )
-        )
-    # Eval runs carry no workspace project — a project filter excludes them.
+    # Eval runs carry no workspace project. A project filter excludes them.
     if kind in (None, "eval") and project_id is None:
         dated.extend(await _eval_records(session, org_id=org_id, run_id=run_id))
     # kind == "notebook": nothing exists yet (see module docstring).

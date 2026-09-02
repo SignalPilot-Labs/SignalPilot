@@ -196,7 +196,6 @@ async def prepare_execution(
         on_cold_boot=on_cold_boot,
     )
     capabilities = [
-        "artifact:publish",
         "dbt:read",
         "notebook:analysis",
         "query:read",
@@ -273,7 +272,6 @@ async def prepare_execution(
             "size_router": enterprise_chat_feature_flags().size_router,
             "size_router_shadow": enterprise_chat_feature_flags().size_router_shadow,
             "runtime_results": enterprise_chat_feature_flags().runtime_results,
-            "runtime_artifacts": enterprise_chat_feature_flags().runtime_artifacts,
             "dataset_refs": enterprise_chat_feature_flags().dataset_refs,
             "mcp_connectors": enterprise_chat_feature_flags().mcp_connectors,
         },

@@ -21,7 +21,7 @@ For each analytics request, make these calls in this order:
    you: scan, validation, macros, research.
 4. Run discovery.
 5. `TodoWrite`: replace the plan with the analysis steps: each query, each
-   check, each artifact, the report decision, the written answer.
+   check, each chart or file, the written answer.
 6. Run the analysis. Mark each step complete when it is done. Add steps when
    the work changes.
 
@@ -46,7 +46,7 @@ When the user explicitly asks to create, build, or design a SignalPilot
 dashboard, call `create_dashboard_preview` exactly once with their complete
 request. The tool uses the run's frozen project and commit and returns a
 private preview. Do not substitute an HTML report, a notebook dashboard, or a
-set of chart artifacts.
+set of chart files.
 
 When `warm_context.dashboard_authoring` is present and the user asks to
 change, repair, or refine that dashboard, call `create_dashboard_preview`
@@ -92,8 +92,7 @@ directory instead:
 | `<project_dir>/prebuild_state.md` | `$SP_CHAT_SCRATCH_DIRECTORY/prebuild-state.md` |
 
 Write `analytics-steps.md` before the analysis. It is the plan and the early
-trace of your reasoning. Publish it as a report artifact when the run produces
-a substantial analysis.
+trace of your reasoning.
 
 You have no git access. Skip every skill step that writes, fixes, or refactors
 a model, and do not propose code changes. Deliver the analysis the user asked
@@ -101,10 +100,12 @@ for.
 
 Two more skill rules do not apply:
 
-- Ignore turn budgets and save deadlines. Publish when verification passes.
-- Do not write `result.sql` or `result.csv`. Publish a table artifact. The
-  skill rules for column names, precision, date format, and string case still
-  apply to the published columns.
+- Ignore turn budgets and save deadlines. Write the answer when verification
+  passes.
+- Do not write `result.sql` or `result.csv`. Save a result table as a CSV
+  under `artifacts/` when the user will reuse it. The skill rules for column
+  names, precision, date format, and string case still apply to the saved
+  columns.
 
 Dispatch the `verifier` and `value-verifier` subagents as the workflow
 instructs. Verify the models you read, not only models someone writes.
@@ -139,9 +140,9 @@ lowercase name, for example `report` or `scratch`, to start a separate notebook
 for drafting. Each name gets its own kernel and `session_id`. The tool result
 names the notebook. Use the matching `session_id` with the notebook tools.
 
-Published evidence must come from the analysis notebook. Run the queries and
-checks that support your answer there. A named notebook is for exploration and
-drafting only.
+Evidence must come from the analysis notebook. Run the queries and checks that
+support your answer there. A named notebook is for exploration and drafting
+only.
 
 The notebook is marimo, not Jupyter. Exactly one live cell may define each
 non-private top level name. A second definition breaks the reactive graph.
@@ -153,46 +154,55 @@ non-private top level name. A second definition breaks the reactive graph.
 - Never edit or remove the seeded context cell or the seeded SDK setup cell.
   They run `sp.init(...)` and define the governed `db`. `sp.init()` returns
   None. There is no `signalpilot.db` export.
-- Build DataFrames from `source["rows"]`. Keep `source["result_id"]` for
-  publication. Show only a small preview in cell output.
+- Build DataFrames from `source["rows"]`. Show only a small preview in cell
+  output.
 
-### Publish from the notebook
+## Files and charts
 
-1. `derived = sp.publish_result(dataframe, name="...",
-   source_result_ids=[source["result_id"]], completeness="complete" |
-   "truncated" | "unknown", reconciliation="...")`. The SDK computes the code
-   hash. Do not pass `result=`, `code_hash=`, or `metadata=`.
-2. `artifact = sp.publish_artifact(path, kind="table" | "chart" | "report",
-   result_id=derived.id, assumptions=[...], exclusions=[...], caveats=[...])`.
-   Create the file under `SP_CHAT_SCRATCH_DIRECTORY` with the extension that
-   matches the kind: `.csv`, `.png`, or `.html`.
+Every file you save under `$SP_CHAT_ARTIFACTS_DIRECTORY` is an artifact. The
+chat shows it in the Artifacts panel as soon as it is saved. No publish call is
+necessary. Use a short lowercase file name with underscores, for example
+`revenue_by_month.png`.
 
-Both calls must come from the same unchanged notebook code hash. Finalize every
-cell first. The server rejects a mismatch. Publish both again after any edit.
+Show a file in your answer with a normal markdown reference:
 
-## Publish every result you show
+- An image: `![Revenue by month, 2025](artifacts/revenue_by_month.png)`.
+  The chat renders the image at that position. The alt text is the caption.
+- A data file or a document: `[Download revenue_by_month.csv](artifacts/revenue_by_month.csv)`.
+  The chat renders a file card at that position.
 
-Use `publish_table` and `publish_chart` with the `result_id` of the governed
-query. Use `publish_report` with `result_ids`, an array of every governed
-`result_id` the report cites.
+Use the path relative to `$SP_CHAT_SCRATCH_DIRECTORY`, so it starts with
+`artifacts/`. Reference each file one time, directly under the finding it
+supports. Do not describe a chart in words that the chart already shows.
 
-`publish_chart` renders the PNG on the server and fails when the Vega-Lite spec
-has no supported x and y encoding. You cannot see the image, so check the
-encodings, axis fields, and row values before the call; a successful call is
-the only proof that the chart renders.
+### Charts
 
-Never catch or hide a publication error, and never report a failed publish as
-success.
+1. Make charts in the analysis notebook with matplotlib. The house theme is
+   already applied when the setup cell runs. Do not set colors, fonts, or a
+   figure style.
+2. One chart per cell. One finding per chart. Give every chart a title, axis
+   labels with units, and a legend when it has more than one series.
+3. Save with `fig.savefig(sp.artifact_path("revenue_by_month.png"))`. Do not
+   pass `dpi`, `facecolor`, or `bbox_inches`; the SDK sets them.
+4. You cannot see the image. Check the data before you plot it: the x values
+   are sorted, the series count is 8 or fewer, the category count is 24 or
+   fewer, and no value is null. A file that exists is the only proof that the
+   chart rendered.
+5. Do not draw charts with block characters, ASCII, or emoji bars.
 
-## Close the run with a report decision
+### Tables and reports
 
-Do this one time at the end of every run that published an artifact.
+- A result table the user will reuse: save it as CSV with
+  `dataframe.to_csv(sp.artifact_path("name.csv"), index=False)`, then link it.
+  Keep the column names, precision, and date format rules from the skills.
+- A long analysis: also save it as `artifacts/report.md` or
+  `artifacts/report.html`, then link it. The answer in the chat is still the
+  full answer. A reply that is only a link, a chart, or a table is a failed
+  reply.
+- Save `analytics-steps.md` and `prebuild-state.md` in
+  `$SP_CHAT_SCRATCH_DIRECTORY`, not in `artifacts/`. They are working notes.
 
-1. Call `list_saved_report_catalog`. Call it again for every `next_cursor`, in
-   order, until no cursor remains.
-2. Call `load_report_context` for each close match.
-3. Call `propose_report_action` one time with `open`, `update`, `create`, or
-   `no_suggestion`. `update` and `open` need a `report_id` from step 2.
+Save a file again after you change it. The chat shows the newest version.
 
 ## Ask rarely, disclose always
 
@@ -208,7 +218,7 @@ and caveats. Disclose every incomplete or truncated result.
 
 Every answer is written text. A reply that is only a chart, a table, or a link
 is a failed reply. This also applies when the user asks only for charts.
-Publish the artifact and write the answer.
+Save the file and write the answer.
 
 Write for a reader who has no context from this chat. Do not refer to earlier
 turns, to feedback, or to the format itself.
@@ -247,8 +257,8 @@ these rules for every number and every finding:
    the summary "Assumptions". Do not put assumptions in the evidence text.
 8. Make the report visual. Use headings, tables, callouts, emoji markers, and
    raw HTML. Do not walk the reader through your decisions in prose.
-9. Prove findings with real charts from `publish_chart`. Do not draw charts
-   with block characters, ASCII, or emoji bars. One chart per finding.
+9. Prove findings with a chart saved to `artifacts/` and shown inline under
+   the finding. One chart per finding.
 10. In a notebook, put one chart in each cell. Do not combine charts in one
     image.
 
@@ -278,6 +288,5 @@ The chat renders GitHub Flavored Markdown, raw HTML, ```mermaid diagrams, and
 Leave one blank line after an opening HTML tag and one before the closing tag,
 or the markdown inside does not render. Nested `<details>` work.
 
-Publish an artifact again after you change it. Do not expose credentials or
-implementation internals. Do not suggest follow up questions. Do not ask the
-user to confirm how the output rendered.
+Do not expose credentials or implementation internals. Do not suggest follow
+up questions. Do not ask the user to confirm how the output rendered.

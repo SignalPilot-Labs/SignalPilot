@@ -54,13 +54,12 @@ describe("Data Chat dashboard artifact card", () => {
         <ChatUiContext.Provider
           value={{
             events: [],
-            artifacts: [],
             conversationId: null,
             files: [],
+            runningRunId: null,
             openArtifact: () => undefined,
             onStop: async () => undefined,
             onRetry: async () => undefined,
-            onApproveReportSuggestion: async () => ({ report_id: "report-1" }),
             onOpenDashboardPreview,
           }}
         >
@@ -106,13 +105,12 @@ describe("Data Chat live state", () => {
         <ChatUiContext.Provider
           value={{
             events,
-            artifacts: [],
             conversationId: null,
             files: [],
+            runningRunId: null,
             openArtifact: () => undefined,
             onStop: async () => undefined,
             onRetry: async () => undefined,
-            onApproveReportSuggestion: async () => ({ report_id: "r" }),
             onOpenDashboardPreview: () => undefined,
           }}
         >

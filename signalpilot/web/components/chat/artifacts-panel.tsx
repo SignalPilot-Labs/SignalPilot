@@ -143,7 +143,11 @@ function FilesTab({
 
   if (selected) {
     return (
-      <div className="flex h-full flex-col overflow-y-auto p-3">
+      <div
+        data-testid="artifacts-file-view"
+        data-file-id={selected.id}
+        className="flex h-full flex-col overflow-y-auto p-3"
+      >
         <button
           type="button"
           data-testid="artifacts-file-back"

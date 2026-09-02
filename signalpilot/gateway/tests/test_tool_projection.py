@@ -304,13 +304,6 @@ class TestOpsTools:
         assert empty.summary == "0 docs" and empty.result["total"] == 0
 
     def test_artifacts(self) -> None:
-        published = project_tool_result(
-            "mcp__signalpilot-notebook__publish_table",
-            json.dumps({"published": True, "artifact_index": 0, "kind": "table", "filename": "revenue.csv"}),
-        )
-        assert published.summary == "Published revenue.csv"
-        assert published.result["artifact_kind"] == "table" and published.result["artifact_index"] == 0
-
         notebook = project_tool_result(
             "mcp__signalpilot-notebook__start_analysis_notebook",
             json.dumps({"session_id": "s_1", "status": "started", "notebook_path": "/w/analysis.py", "notebook": "analysis"}),

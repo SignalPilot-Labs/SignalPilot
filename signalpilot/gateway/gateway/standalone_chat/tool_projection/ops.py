@@ -39,7 +39,6 @@ _BASH_EXIT_RE = re.compile(r"^Exit code (\d+)\s*\n?")
 _SEARCH_HIT_RE = re.compile(r"^\s*id=(\S+) scope=(\S+) category=(\S+) title=(.*)$")
 _SNIPPET_RE = re.compile(r"^\s*snippet: (.*)$")
 _DOC_HEADER_RE = re.compile(r"^\[([^:\]]+):([^\]]*)\]\[([^\]]+)\]$")
-_ARTIFACT_KINDS = {"table", "chart", "report", "dashboard", "notebook"}
 
 
 def _section(text: str, name: str, *others: str) -> str:
@@ -242,21 +241,8 @@ def project_artifact(content: str, tool_input: dict[str, Any] | None, *, tool: s
         charts = parsed.get("chart_count")
         name = str(parsed.get("dashboard_name") or "Dashboard preview")
         summary = f"{name} · {charts} chart{'s' if charts != 1 else ''}" if isinstance(charts, int) else name
-    elif tool.endswith("propose_report_action"):
-        result["artifact_kind"] = "report"
-        action = str(parsed.get("action") or "no_suggestion")
-        result["status"] = action
-        summary = f"Report action · {action.replace('_', ' ')}"
     else:
-        kind = str(parsed.get("kind") or tool.rsplit("_", 1)[-1])
-        result["artifact_kind"] = kind if kind in _ARTIFACT_KINDS else "report"
-        if parsed.get("filename"):
-            result["filename"] = str(parsed["filename"])
-        if isinstance(parsed.get("artifact_index"), int):
-            result["artifact_index"] = parsed["artifact_index"]
-        if parsed.get("next_required_action"):
-            result["next_required_action"] = str(parsed["next_required_action"])[:300]
-        summary = f"Published {result.get('filename') or result['artifact_kind']}"
+        return text_result(text, summary=summary_text(text, "Artifact"))
     return build(result, summary=summary, text=text)
 
 

@@ -12,10 +12,9 @@ import { expect, test, type Page } from "@playwright/test";
  * - 13 700ms  Write exports/q3_revenue_by_region.csv (mirrored 14 050ms)
  * - 14 300ms  Edit q3_growth.py → its card gains the Updated badge
  * - 15 150ms  Write exports/q3_summary.md (mirrored 15 460ms) → 5th file
- * - 16 700ms  legacy TABLE preview (q3_revenue_by_region.csv) publishes →
- *             the CSV card is suppressed (the preview covers that file)
- * - 18 000ms  legacy REPORT preview (q3_regional_review.html) publishes →
- *             the HTML card is suppressed too
+ * - 20 600ms  files_changed captures artifacts/revenue_by_month.png and
+ * - 20 700ms  artifacts/revenue_by_month.csv; the answer references both
+ *             inline (figure + chip), so neither gets a card
  * Collapse rule: compact rows appear only when ≥2 cards overflow the
  * 3-full-card budget (4 files → 4 full cards; 5 files → 3 + 2 rows).
  */
@@ -122,8 +121,7 @@ test.describe("inline artifact cards (fixture harness)", () => {
   test("five files collapse to three full cards plus two compact rows", async ({
     page,
   }) => {
-    // 15.6s: the markdown summary (5th file) is mirrored; the legacy
-    // previews have not published yet.
+    // 15.6s: the markdown summary (5th file) is mirrored.
     await page.goto(at(15_600));
     await waitForHydration(page);
     const cards = page.getByTestId("chat-artifact-card");
@@ -140,29 +138,29 @@ test.describe("inline artifact cards (fixture harness)", () => {
     await expect(rows.nth(1)).toContainText("q3_summary.md");
   });
 
-  test("end state: covered files defer to the legacy previews; the rest stay full cards", async ({
+  test("end state: inline-referenced files get no card; the rest keep theirs", async ({
     page,
   }) => {
     await page.goto(at(24_800));
     await waitForHydration(page);
     const cards = page.getByTestId("chat-artifact-card");
-    // The published table (csv) and report (html) previews cover those
-    // files — no duplicate cards with different verbs above them.
+    // The five export files keep their cards (3 full + 2 compact rows); the
+    // two runtime files the answer references inline (figure + chip) get
+    // none — no duplicate surfaces with different verbs.
     await expect(cards).toHaveCount(3);
     await expect(cards.nth(0)).toContainText("q3_growth.py");
-    await expect(cards.nth(1)).toContainText("q3_growth_by_region.svg");
-    await expect(cards.nth(2)).toContainText("q3_summary.md");
-    await expect(page.getByTestId("chat-artifact-card-row")).toHaveCount(0);
+    await expect(cards.nth(1)).toContainText("q3_regional_review.html");
+    await expect(cards.nth(2)).toContainText("q3_growth_by_region.svg");
+    const rows = page.getByTestId("chat-artifact-card-row");
+    await expect(rows).toHaveCount(2);
+    await expect(rows.nth(0)).toContainText("q3_revenue_by_region.csv");
+    await expect(rows.nth(1)).toContainText("q3_summary.md");
     await expect(
       page.getByTestId("chat-artifact-cards"),
-    ).not.toContainText("q3_regional_review.html");
+    ).not.toContainText("revenue_by_month.png");
     await expect(
       page.getByTestId("chat-artifact-cards"),
-    ).not.toContainText("q3_revenue_by_region.csv");
-    // The legacy previews still carry the covered files.
-    await expect(
-      page.getByText("q3_revenue_by_region.csv").first(),
-    ).toBeVisible();
+    ).not.toContainText("revenue_by_month.csv");
     // The Edit at 14.3s updated the script in place — same card, badged
     // once (the meta line shows only the time, no second "Updated").
     await expect(
@@ -212,7 +210,7 @@ test.describe("inline artifact cards (fixture harness)", () => {
     await waitForHydration(page);
     await expect(page.getByTestId("live-notebook-panel")).toHaveCount(0);
     await page
-      .getByTestId("chat-artifact-card")
+      .getByTestId("chat-artifact-card-row")
       .filter({ hasText: "q3_summary.md" })
       .getByTestId("chat-artifact-card-primary")
       .click();

@@ -1,11 +1,6 @@
 // Chat traces and the standalone data chat.
 
-import {
-  GATEWAY_URL,
-  downloadChatArtifact,
-  getAuthHeaders,
-  request,
-} from "./client";
+import { GATEWAY_URL, getAuthHeaders, request } from "./client";
 
 // The following functions support chat traces on the /chats page.
 export type ChatTraceThread = {
@@ -148,28 +143,6 @@ export type StandaloneChatEvent = {
   created_at: string;
 };
 
-export type StandaloneChatArtifact = {
-  id: string;
-  run_id: string;
-  assistant_message_id: string | null;
-  kind: "table" | "chart" | "report";
-  filename: string;
-  mime_type: string;
-  snapshot: Record<string, unknown>;
-  provenance: Record<string, unknown> | null;
-  freshness_at: string | null;
-  assumptions: string[];
-  exclusions: string[];
-  caveats: string[];
-  parent_artifact_id: string | null;
-  saved_report_id?: string | null;
-  saved_report_version_id?: string | null;
-  saved_report_title?: string | null;
-  report_action?: "create" | "update" | "open";
-  created_at: string;
-  download_formats: string[];
-};
-
 export type StandaloneChatMessage = {
   id: string;
   role: "user" | "assistant";
@@ -203,15 +176,9 @@ export type StandaloneConversation = {
 export type StandaloneConversationDetail = {
   conversation: StandaloneConversation;
   messages: StandaloneChatMessage[];
-  artifacts: StandaloneChatArtifact[];
   current_run: StandaloneChatRun | null;
   run_events: StandaloneChatEvent[];
 };
-
-export type SharedChatArtifact = Omit<
-  StandaloneChatArtifact,
-  "run_id" | "provenance" | "parent_artifact_id"
->;
 
 export type SharedConversationDetail = {
   conversation: {
@@ -223,7 +190,6 @@ export type SharedConversationDetail = {
     origin?: string;
   };
   messages: Array<Omit<StandaloneChatMessage, "metadata">>;
-  artifacts: SharedChatArtifact[];
   shared_at: string;
 };
 
@@ -432,32 +398,6 @@ export async function streamStandaloneRunEvents(
   }
 }
 
-export async function downloadStandaloneArtifact(
-  artifactId: string,
-  format: string,
-  filename: string,
-): Promise<void> {
-  return downloadChatArtifact(
-    `/api/chat/artifacts/${encodeURIComponent(artifactId)}/download?format=${encodeURIComponent(format)}`,
-    format,
-    filename,
-  );
-}
-
-export async function getStandaloneArtifactObjectUrl(
-  artifactId: string,
-  format: string,
-): Promise<string> {
-  const headers = await getAuthHeaders();
-  const response = await fetch(
-    `${GATEWAY_URL}/api/chat/artifacts/${encodeURIComponent(artifactId)}/download?format=${encodeURIComponent(format)}`,
-    { headers },
-  );
-  if (!response.ok)
-    throw new Error(`Artifact preview failed (${response.status})`);
-  return URL.createObjectURL(await response.blob());
-}
-
 export async function getSavedReportVersionObjectUrl(
   versionId: string,
   format: string,
@@ -532,19 +472,6 @@ export async function openStandaloneNotebookArchive(
   frame.src = url;
   document.body.appendChild(frame);
   window.setTimeout(() => URL.revokeObjectURL(url), 5 * 60_000);
-}
-
-export async function downloadSharedStandaloneArtifact(
-  token: string,
-  artifactId: string,
-  format: string,
-  filename: string,
-): Promise<void> {
-  return downloadChatArtifact(
-    `/api/chat/shared/${encodeURIComponent(token)}/artifacts/${encodeURIComponent(artifactId)}/download?format=${encodeURIComponent(format)}`,
-    format,
-    filename,
-  );
 }
 
 // Wire types for the tool result carried on `tool_completed.payload`.

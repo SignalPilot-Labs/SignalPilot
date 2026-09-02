@@ -3,14 +3,21 @@ import type {
   ConversationFileKind,
   StandaloneChatEvent,
 } from "~/lib/api";
+import {
+  collectFileRefs,
+  pathMatchesRef,
+  resolveFileRef,
+  fileRefBasename,
+} from "~/lib/chat-file-refs";
 
 /**
  * Derives the inline artifact cards for one chat run.
  *
  * Cards are computed client-side from two sources the page already has:
- * the run's event stream (Write/Edit tool calls anchor a card's position)
- * and the gateway's conversation file manifest (the single source of truth
- * for what actually exists). No new gateway event type is involved.
+ * the run's event stream (Write/Edit tool calls and `files_changed`
+ * payloads anchor a card's position) and the gateway's conversation file
+ * manifest (the single source of truth for what actually exists). No new
+ * gateway event type is involved.
  *
  * Pure and synchronous so it can be unit tested and replayed on the
  * fixture page.
@@ -43,8 +50,10 @@ export type ArtifactCardModel = {
   lastTouchedAt: string;
 };
 
-/** Tools whose calls create or change files the worker mirrors. */
-const WRITE_TOOLS = new Set(["Write", "NotebookEdit"]);
+/** Tools whose calls create or change files the sandbox captures.
+ * NotebookEdit is out: it edits the top-level notebook sources the capture
+ * ignores, so its card would stay pending forever. */
+const WRITE_TOOLS = new Set(["Write"]);
 const EDIT_TOOLS = new Set(["Edit", "MultiEdit"]);
 
 const text = (value: unknown): string | null =>
@@ -99,39 +108,71 @@ type PathTouch = {
   lastAt: string;
 };
 
+/** Paths a tool_started event touches: one for Write/Edit tools. */
+function toolTouchPaths(event: StandaloneChatEvent): string[] {
+  const tool = text(event.payload.tool);
+  if (!tool || (!WRITE_TOOLS.has(tool) && !EDIT_TOOLS.has(tool))) return [];
+  const input =
+    typeof event.payload.input === "object" && event.payload.input !== null
+      ? (event.payload.input as Record<string, unknown>)
+      : null;
+  const path =
+    text(input?.file_path) ?? text(input?.notebook_path) ?? text(input?.path);
+  return path ? [path] : [];
+}
+
+/** Paths a `files_changed` event touches: every non-deleted entry of its
+ * `files[]` payload (the runtime capture shape). The legacy content-free
+ * shape (`changed: [...]`) carries no anchor and contributes nothing. */
+function filesChangedTouchPaths(event: StandaloneChatEvent): string[] {
+  const files = event.payload.files;
+  if (!Array.isArray(files)) return [];
+  const paths: string[] = [];
+  for (const entry of files) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const record = entry as Record<string, unknown>;
+    if (record.deleted === true) continue;
+    const path = text(record.path);
+    if (path) paths.push(path);
+  }
+  return paths;
+}
+
 function collectTouches(
   events: StandaloneChatEvent[],
   runId: string,
 ): PathTouch[] {
   const byPath = new Map<string, PathTouch>();
   const sorted = events
-    .filter((event) => event.run_id === runId && event.type === "tool_started")
+    .filter(
+      (event) =>
+        event.run_id === runId &&
+        (event.type === "tool_started" || event.type === "files_changed"),
+    )
     .sort((a, b) => a.sequence - b.sequence);
   for (const event of sorted) {
-    const tool = text(event.payload.tool);
-    if (!tool || (!WRITE_TOOLS.has(tool) && !EDIT_TOOLS.has(tool))) continue;
-    const input =
-      typeof event.payload.input === "object" && event.payload.input !== null
-        ? (event.payload.input as Record<string, unknown>)
-        : null;
-    const path =
-      text(input?.file_path) ?? text(input?.notebook_path) ?? text(input?.path);
-    if (!path || !isMirroredPath(path)) continue;
-    const touches = [...byPath.values()];
-    // Exact match first; the suffix rule only bridges absolute↔relative.
-    const existing =
-      touches.find((touch) => touch.path === path) ??
-      touches.find((touch) => pathsMatch(touch.path, path));
-    if (existing) {
-      existing.count += 1;
-      existing.lastAt = event.created_at;
-    } else {
-      byPath.set(path, {
-        path,
-        firstSequence: event.sequence,
-        count: 1,
-        lastAt: event.created_at,
-      });
+    const paths =
+      event.type === "files_changed"
+        ? filesChangedTouchPaths(event)
+        : toolTouchPaths(event);
+    for (const path of paths) {
+      if (!isMirroredPath(path)) continue;
+      const touches = [...byPath.values()];
+      // Exact match first; the suffix rule only bridges absolute↔relative.
+      const existing =
+        touches.find((touch) => touch.path === path) ??
+        touches.find((touch) => pathsMatch(touch.path, path));
+      if (existing) {
+        existing.count += 1;
+        existing.lastAt = event.created_at;
+      } else {
+        byPath.set(path, {
+          path,
+          firstSequence: event.sequence,
+          count: 1,
+          lastAt: event.created_at,
+        });
+      }
     }
   }
   return [...byPath.values()];
@@ -211,15 +252,33 @@ export function deriveArtifactCards(
  * Matches by exact filename or full path; `q3_growth_by_region.vl.json`
  * does not cover `q3_growth_by_region.svg`.
  */
-export function suppressCoveredCards(
+/**
+ * Drop cards for files the message body references inline. The inline
+ * figure or chip is the richer surface, so the card would say the same
+ * thing twice (say-it-once rule). A ready card is matched through the
+ * manifest resolver; a pending card matches on its path alone.
+ */
+export function suppressReferencedCards(
   cards: ArtifactCardModel[],
-  coveredFilenames: readonly string[],
+  markdown: string,
 ): ArtifactCardModel[] {
-  if (coveredFilenames.length === 0) return cards;
-  const covered = new Set(coveredFilenames.filter(Boolean));
-  return cards.filter(
-    (card) => !covered.has(card.filename) && !covered.has(card.path),
-  );
+  if (cards.length === 0 || !markdown) return cards;
+  const refs = collectFileRefs(markdown);
+  if (refs.length === 0) return cards;
+  const files = cards.flatMap((card) => (card.file ? [card.file] : []));
+  const referencedIds = new Set<string>();
+  for (const ref of refs) {
+    const file = resolveFileRef(ref, files);
+    if (file) referencedIds.add(file.id);
+  }
+  return cards.filter((card) => {
+    if (card.file) return !referencedIds.has(card.file.id);
+    return !refs.some(
+      (ref) =>
+        pathMatchesRef(card.path, ref) ||
+        card.filename === fileRefBasename(ref),
+    );
+  });
 }
 
 /** Plain-English type label. Never repeats what the extension already says

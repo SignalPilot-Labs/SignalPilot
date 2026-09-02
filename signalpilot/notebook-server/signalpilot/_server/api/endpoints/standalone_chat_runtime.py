@@ -224,6 +224,7 @@ def _():
     import signalpilot as sp
     runtime_context = {context}
     os.environ["SP_CHAT_SCRATCH_DIRECTORY"] = {str(scratch)!r}
+    os.environ["SP_CHAT_ARTIFACTS_DIRECTORY"] = {str(scratch / "artifacts")!r}
     os.environ["SP_CHAT_NOTEBOOK_PATH"] = {str(notebook_path)!r}
     return Path, runtime_context, sp
 

@@ -17,7 +17,9 @@ import "./styles/code.css";
 import "./styles/media.css";
 // Typing caret rules (`data-caret`), shared with the live indicator.
 import "../chat-live.css";
+import { FILE_REF_ORIGIN } from "~/lib/chat-file-refs";
 import { MarkdownCode, MarkdownPre } from "./code-block";
+import { MarkdownImage } from "./image";
 import { MarkdownLink } from "./link";
 
 /**
@@ -51,6 +53,10 @@ type SanitizeSchema = {
  * to the allowlist. Rebuilding the chain (rather than passing `allowedTags`)
  * keeps markdown inside an HTML block parsed as markdown, which is how GitHub
  * renders a `<details>` body.
+ *
+ * The harden step gets a `defaultOrigin` so a bare relative target such as
+ * `artifacts/x.png` (a conversation file reference) is kept instead of
+ * blocked; the image and link overrides resolve it against the manifest.
  */
 const REHYPE_PLUGINS: NonNullable<StreamdownProps["rehypePlugins"]> = (() => {
   const [sanitizePlugin, schema] = defaultRehypePlugins.sanitize as [
@@ -62,15 +68,20 @@ const REHYPE_PLUGINS: NonNullable<StreamdownProps["rehypePlugins"]> = (() => {
     tagNames: [...(schema.tagNames ?? []), ...Object.keys(EXTRA_TAGS)],
     attributes: { ...schema.attributes, ...EXTRA_TAGS },
   };
+  const [hardenPlugin, hardenOptions] = defaultRehypePlugins.harden as [
+    unknown,
+    Record<string, unknown>,
+  ];
   return [
     defaultRehypePlugins.raw,
     [sanitizePlugin, extended],
-    defaultRehypePlugins.harden,
+    [hardenPlugin, { ...hardenOptions, defaultOrigin: FILE_REF_ORIGIN }],
   ] as NonNullable<StreamdownProps["rehypePlugins"]>;
 })();
 
 const COMPONENTS = {
   a: MarkdownLink,
+  img: MarkdownImage,
   code: MarkdownCode,
   pre: MarkdownPre,
 } as StreamdownProps["components"];

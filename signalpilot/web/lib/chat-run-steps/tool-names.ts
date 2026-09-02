@@ -18,11 +18,6 @@ const FILE_WRITE_TOOLS = new Set(["Write", "NotebookEdit"]);
 const FILE_EDIT_TOOLS = new Set(["Edit", "MultiEdit"]);
 const FILE_READ_TOOLS = new Set(["Read", "Glob", "Grep", "LS"]);
 const WEB_TOOLS = new Set(["WebFetch", "WebSearch"]);
-const ARTIFACT_TOOLS = new Set([
-  "publish_table",
-  "publish_chart",
-  "publish_report",
-]);
 
 /** Tool names that spawn a subagent whose work is grouped under the spawn. */
 export const SUBAGENT_SPAWN_TOOLS = new Set(["Agent", "Task"]);
@@ -53,7 +48,6 @@ export function categorizeTool(tool: string): RunStepCategory {
   if (FILE_READ_TOOLS.has(tool)) return "file-read";
   if (tool === "TodoWrite") return "todo";
   if (WEB_TOOLS.has(tool)) return "web";
-  if (ARTIFACT_TOOLS.has(tool)) return "artifact";
   if (tool === "inspect_dbt" || tool.startsWith("dbt_")) return "dbt";
   if (/schema|table|column|relationship|metric|model|source|lineage/.test(tool)) {
     return "source";
@@ -76,9 +70,6 @@ export function humanizeTool(tool: string): string {
     sandbox_exec: "Ran a command in the sandbox",
     sandbox_write_file: "Wrote a file in the sandbox",
     sandbox_read_file: "Read a file in the sandbox",
-    publish_table: "Published a table",
-    publish_chart: "Published a chart",
-    publish_report: "Published a report",
     create_dashboard_preview: "Creating dashboard preview",
     Bash: "Ran a command",
     Write: "Generated a file",

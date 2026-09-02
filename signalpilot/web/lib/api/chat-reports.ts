@@ -1,6 +1,6 @@
 // Data Chat artifact library and saved reports.
 
-import { downloadChatArtifact, request } from "./client";
+import { GATEWAY_URL, downloadChatArtifact, getAuthHeaders, request } from "./client";
 
 // Data Chat artifact library and immutable saved reports.
 export type ChatReportFreshness = "fresh" | "changes_detected" | "unknown";
@@ -254,4 +254,33 @@ export async function downloadSavedReportVersion(
     format,
     filename,
   );
+}
+
+// Legacy artifact rows the report library still lists (D5). The chat page
+// no longer publishes artifacts; these helpers exist only for that library.
+
+export async function downloadStandaloneArtifact(
+  artifactId: string,
+  format: string,
+  filename: string,
+): Promise<void> {
+  return downloadChatArtifact(
+    `/api/chat/artifacts/${encodeURIComponent(artifactId)}/download?format=${encodeURIComponent(format)}`,
+    format,
+    filename,
+  );
+}
+
+export async function getStandaloneArtifactObjectUrl(
+  artifactId: string,
+  format: string,
+): Promise<string> {
+  const headers = await getAuthHeaders();
+  const response = await fetch(
+    `${GATEWAY_URL}/api/chat/artifacts/${encodeURIComponent(artifactId)}/download?format=${encodeURIComponent(format)}`,
+    { headers },
+  );
+  if (!response.ok)
+    throw new Error(`Artifact preview failed (${response.status})`);
+  return URL.createObjectURL(await response.blob());
 }

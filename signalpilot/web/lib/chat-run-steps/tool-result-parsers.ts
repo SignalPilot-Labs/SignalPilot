@@ -244,11 +244,7 @@ export function parseKnowledge(r: Record<string, unknown>): Omit<KnowledgeResult
 export function parseArtifact(r: Record<string, unknown>): Omit<ArtifactResult, keyof ToolResultBase> {
   return {
     kind: "artifact",
-    artifactKind: oneOf(
-      r.artifact_kind,
-      ["table", "chart", "report", "dashboard", "notebook"],
-      "report",
-    ),
+    artifactKind: oneOf(r.artifact_kind, ["dashboard", "notebook"], "notebook"),
     published: bool(r.published),
     filename: text(r.filename),
     artifactIndex: num(r.artifact_index),

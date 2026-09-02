@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import base64
-import io
 import json
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
@@ -15,7 +13,6 @@ from mcp.types import (
     ListToolsRequest,
     TextContent,
 )
-from PIL import Image
 from starlette.exceptions import HTTPException
 
 if TYPE_CHECKING:
@@ -29,17 +26,9 @@ from signalpilot._server.ai.chat_runtime_output import (
     notebook_server_headers,
 )
 from signalpilot._server.ai.claude_agent import _apply_auth_config
-from signalpilot._server.ai.standalone_chat_chart_theme import (
-    CHART_BACKGROUND,
-    CHART_COLORS,
-    MAX_CHART_CATEGORIES,
-    MAX_CHART_SERIES,
-    prepare_signalpilot_chart,
-)
 from signalpilot._server.ai.standalone_chat_tools import (
     StandaloneArtifactCollector,
     StandaloneNotebookLifecycle,
-    _render_chart_png,
     build_standalone_chat_mcp_server,
 )
 from signalpilot._server.api.endpoints.standalone_chat import (
@@ -108,23 +97,35 @@ def test_internal_notebook_http_headers_include_both_auth_tokens():
 
 
 @pytest.mark.asyncio
-async def test_publication_failures_are_mcp_tool_errors():
+async def test_publish_tools_are_gone_and_unknown_tools_are_errors():
     config = build_standalone_chat_mcp_server(StandaloneArtifactCollector())
     server = config["instance"]
-    response = await server.request_handlers[CallToolRequest](
-        CallToolRequest(
-            params=CallToolRequestParams(
-                name="publish_table",
-                arguments={"filename": "revenue.csv", "result_id": "missing"},
+    listed = await server.request_handlers[ListToolsRequest](
+        ListToolsRequest()
+    )
+    names = {tool.name for tool in listed.root.tools}
+    assert names == {"inspect_dbt", "create_dashboard_preview"}
+    assert not any(name.startswith("publish_") for name in names)
+    assert not any("report" in name for name in names)
+
+    for retired in (
+        "publish_table",
+        "publish_chart",
+        "publish_report",
+        "list_saved_report_catalog",
+        "load_report_context",
+        "propose_report_action",
+    ):
+        response = await server.request_handlers[CallToolRequest](
+            CallToolRequest(
+                params=CallToolRequestParams(
+                    name=retired,
+                    arguments={"filename": "revenue.csv"},
+                )
             )
         )
-    )
-
-    assert response.root.isError is True
-    assert (
-        "governed structured result ID is required"
-        in response.root.content[0].text
-    )
+        assert response.root.isError is True
+        assert "Unknown tool" in response.root.content[0].text
 
 
 @pytest.mark.asyncio
@@ -316,141 +317,6 @@ def test_runtime_auth_is_request_scoped_and_validated():
     assert merged["ANTHROPIC_AUTH_TOKEN"] == ""
 
 
-def test_chart_renderer_produces_a_real_png():
-    encoded = _render_chart_png(
-        {
-            "mark": "bar",
-            "encoding": {
-                "x": {"field": "month"},
-                "y": {"field": "revenue"},
-            },
-        },
-        [{"month": "Jan", "revenue": 10}, {"month": "Feb", "revenue": 14}],
-    )
-    assert encoded is not None
-    assert base64.b64decode(encoded).startswith(b"\x89PNG\r\n\x1a\n")
-
-
-@pytest.mark.parametrize("mark", ["bar", "line", "point"])
-def test_chart_renderer_uses_the_canonical_dark_theme_for_supported_marks(
-    mark,
-):
-    encoded = _render_chart_png(
-        {
-            "title": {"text": f"{mark.title()} chart", "color": "#000000"},
-            "background": "#000000",
-            "mark": {"type": mark, "color": "#000000"},
-            "encoding": {
-                "x": {"field": "month", "type": "nominal"},
-                "y": {"field": "revenue", "type": "quantitative"},
-                "color": {
-                    "field": "region",
-                    "type": "nominal",
-                    "scale": {"range": ["#000000"]},
-                },
-            },
-        },
-        [
-            {
-                "month": "January with a long label",
-                "revenue": -2_000_000,
-                "region": "North",
-            },
-            {
-                "month": "February with a long label",
-                "revenue": None,
-                "region": "North",
-            },
-            {
-                "month": "March with a long label",
-                "revenue": 3_500_000_000,
-                "region": "North",
-            },
-            {
-                "month": "January with a long label",
-                "revenue": 1_200_000,
-                "region": "South",
-            },
-            {
-                "month": "February with a long label",
-                "revenue": 2_400_000,
-                "region": "South",
-            },
-            {
-                "month": "March with a long label",
-                "revenue": 2_900_000,
-                "region": "South",
-            },
-        ],
-    )
-    assert encoded is not None
-    image = Image.open(io.BytesIO(base64.b64decode(encoded))).convert("RGB")
-    colors = {
-        color
-        for _, color in image.getcolors(maxcolors=image.width * image.height)
-        or []
-    }
-    assert tuple(bytes.fromhex(CHART_BACKGROUND.removeprefix("#"))) in colors
-    assert tuple(bytes.fromhex(CHART_COLORS[0].removeprefix("#"))) in colors
-    assert tuple(bytes.fromhex(CHART_COLORS[1].removeprefix("#"))) in colors
-
-
-def test_agent_chart_styles_cannot_override_theme_or_density_limits():
-    rows = [
-        {
-            "category": f"Category {category}",
-            "value": category,
-            "series": f"Series {series}",
-        }
-        for category in range(MAX_CHART_CATEGORIES + 1)
-        for series in range(MAX_CHART_SERIES + 1)
-    ]
-    spec, display_rows, display = prepare_signalpilot_chart(
-        {
-            "background": "#000000",
-            "mark": {"type": "bar", "color": "#000000"},
-            "config": {"axis": {"labelColor": "#000000"}},
-            "encoding": {
-                "x": {"field": "category", "type": "nominal"},
-                "y": {"field": "value", "type": "quantitative"},
-                "color": {
-                    "field": "series",
-                    "type": "nominal",
-                    "scale": {"range": ["#000000"]},
-                },
-            },
-        },
-        rows,
-    )
-
-    assert spec["background"] == CHART_BACKGROUND
-    assert spec["config"]["range"]["category"] == list(CHART_COLORS)
-    assert "#000000" not in str(spec)
-    assert len(display_rows) == MAX_CHART_CATEGORIES * MAX_CHART_SERIES
-    assert display["limited"] is True
-
-
-def test_horizontal_bar_renderer_handles_long_categories_and_negative_values():
-    encoded = _render_chart_png(
-        {
-            "title": "Net revenue by account segment",
-            "mark": "bar",
-            "encoding": {
-                "x": {"field": "revenue", "type": "quantitative"},
-                "y": {"field": "segment", "type": "nominal"},
-            },
-        },
-        [
-            {"segment": "Large enterprise accounts", "revenue": 3_500_000_000},
-            {"segment": "Recently refunded accounts", "revenue": -900_000_000},
-            {"segment": "Accounts without measurements", "revenue": None},
-        ],
-    )
-    assert encoded is not None
-    image = Image.open(io.BytesIO(base64.b64decode(encoded)))
-    assert image.size == (1_200, 750)
-
-
 def test_agent_contract_includes_default_signalpilot_mcp_tools():
     # The prompt file wraps lines; compare against whitespace-collapsed text.
     _prompt_flat = " ".join(STANDALONE_SYSTEM_PROMPT.split())
@@ -461,12 +327,27 @@ def test_agent_contract_includes_default_signalpilot_mcp_tools():
     assert "SP_CHAT_SCRATCH_DIRECTORY" in _prompt_flat
     assert "analytics-steps.md" in _prompt_flat
     assert "prebuild-state.md" in _prompt_flat
-    assert "list_saved_report_catalog" in _prompt_flat
-    assert "load_report_context" in _prompt_flat
-    assert "propose_report_action" in _prompt_flat
-    assert "publish_table" in _prompt_flat
-    assert "publish_chart" in _prompt_flat
-    assert "publish_report" in _prompt_flat
+    # The filesystem is the artifact API. No publish or report tools.
+    assert "## Files and charts" in STANDALONE_SYSTEM_PROMPT
+    assert "SP_CHAT_ARTIFACTS_DIRECTORY" in _prompt_flat
+    assert "sp.artifact_path(" in _prompt_flat
+    assert "![Revenue by month, 2025](artifacts/revenue_by_month.png)" in (
+        _prompt_flat
+    )
+    assert "Prove findings with a chart saved to `artifacts/`" in _prompt_flat
+    for retired in (
+        "list_saved_report_catalog",
+        "load_report_context",
+        "propose_report_action",
+        "publish_table",
+        "publish_chart",
+        "publish_report",
+        "publish_artifact",
+        "publish_result",
+        "report decision",
+        "result_id",
+    ):
+        assert retired not in _prompt_flat, retired
     assert "GitHub Flavored Markdown" in _prompt_flat
     assert "raw HTML" in _prompt_flat
     assert "blank line after an opening HTML tag" in _prompt_flat
@@ -486,6 +367,10 @@ def test_agent_contract_includes_default_signalpilot_mcp_tools():
     } <= set(STANDALONE_ALLOWED_TOOLS)
     assert all(
         "github" not in tool.lower() for tool in STANDALONE_ALLOWED_TOOLS
+    )
+    assert not any(
+        "publish_" in tool or "_report_" in tool or "report_action" in tool
+        for tool in STANDALONE_ALLOWED_TOOLS
     )
     assert all(
         forbidden not in STANDALONE_ALLOWED_TOOLS
@@ -538,5 +423,6 @@ def test_runtime_publication_sdk_is_exposed_from_top_level_package():
         Path(__file__).parents[3] / "signalpilot" / "__init__.py"
     ).read_text(encoding="utf-8")
     assert '"publish_result"' in package_source
-    assert '"publish_artifact"' in package_source
+    assert '"artifact_path"' in package_source
     assert '"open_dataset"' in package_source
+    assert "publish_artifact" not in package_source

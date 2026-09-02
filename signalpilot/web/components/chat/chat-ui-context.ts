@@ -6,7 +6,6 @@
 import { createContext, useContext } from "react";
 import type {
   ConversationFileInfo,
-  StandaloneChatArtifact,
   StandaloneChatEvent,
   StandaloneChatMessage,
   StandaloneChatRunStatus,
@@ -22,11 +21,16 @@ export type UiMessage = StandaloneChatMessage & {
 
 export type ChatUiContextValue = {
   events: StandaloneChatEvent[];
-  artifacts: StandaloneChatArtifact[];
   /** The conversation the messages belong to; null on the empty new-chat page. */
   conversationId: string | null;
   /** The gateway's conversation file manifest (drives inline artifact cards). */
   files: ConversationFileInfo[];
+  /**
+   * The run currently streaming, or null. An inline file reference that
+   * does not resolve yet renders as pending while this is set and as
+   * missing once it is null.
+   */
+  runningRunId: string | null;
   /** Open the artifacts panel focused on one file. */
   openArtifact: (fileId: string) => void;
   /**
@@ -36,6 +40,13 @@ export type ChatUiContextValue = {
    * to the authenticated API helper.
    */
   getFileObjectUrl?: (fileId: string) => Promise<string>;
+  /**
+   * Override for downloading a file's bytes. The shared read-only page
+   * injects it (its files live behind the share-token routes); owner pages
+   * omit it and the inline figure and chip download through the
+   * conversation route.
+   */
+  downloadFile?: (fileId: string, filename: string) => Promise<void>;
   /**
    * Override for paging the full rows of a governed query result. The
    * fixture harness injects a deterministic generator; live pages omit it
@@ -59,9 +70,6 @@ export type ChatUiContextValue = {
   openChatSettings?: () => void;
   onStop: (runId: string) => Promise<void>;
   onRetry: (runId: string) => Promise<void>;
-  onApproveReportSuggestion: (
-    messageId: string,
-  ) => Promise<{ report_id: string }>;
   onOpenDashboardPreview: (sessionId: string) => void;
 };
 

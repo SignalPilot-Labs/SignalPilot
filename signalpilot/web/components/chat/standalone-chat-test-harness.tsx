@@ -22,7 +22,6 @@ import {
   FIXTURE_RUN_ID,
   FIXTURE_TOTAL_MS,
   FIXTURE_USER_PROMPT,
-  fixtureArtifacts,
   fixtureAssembledText,
   fixtureConversationFiles,
   fixtureConversationNotebooks,
@@ -173,13 +172,6 @@ export function StandaloneChatTestHarness() {
       setNotebookPanelOpen(false);
     }
   }, [defaultNotebook]);
-  const artifacts = useMemo(
-    () =>
-      fixtureArtifacts
-        .filter((artifact) => artifact.at <= elapsed)
-        .map(({ at, ...artifact }) => artifact),
-    [elapsed],
-  );
   const status = fixtureRunStatus(elapsed);
   const messages = useMemo<UiMessage[]>(
     () => [
@@ -316,9 +308,12 @@ export function StandaloneChatTestHarness() {
           <ChatUiContext.Provider
             value={{
               events,
-              artifacts,
               conversationId: "conversation-fixture-1",
               files: conversationFiles,
+              runningRunId:
+                status === "queued" || status === "running"
+                  ? FIXTURE_RUN_ID
+                  : null,
               openArtifact,
               getFileObjectUrl,
               getToolResultRows,
@@ -328,9 +323,6 @@ export function StandaloneChatTestHarness() {
               openChatSettings: settingsPanel.openPanel,
               onStop: async () => undefined,
               onRetry: async () => undefined,
-              onApproveReportSuggestion: async () => ({
-                report_id: "test-harness-report",
-              }),
               onOpenDashboardPreview: () => undefined,
             }}
           >

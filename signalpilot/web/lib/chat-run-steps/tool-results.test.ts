@@ -124,13 +124,13 @@ describe("parseToolResult", () => {
       {
         tool_call_id: "t11",
         error: false,
-        summary: "Published q3_revenue_by_region.csv",
-        result: { kind: "artifact", artifact_kind: "table", published: true, filename: "q3.csv", artifact_index: 0 },
+        summary: "Started the analysis notebook",
+        result: { kind: "artifact", artifact_kind: "notebook", published: false, notebook: "analysis", session_id: "gw-1" },
       },
-      "publish_table",
+      "start_analysis_notebook",
       false,
     );
-    expect(result).toMatchObject({ kind: "artifact", artifactKind: "table", published: true, filename: "q3.csv", artifactIndex: 0 });
+    expect(result).toMatchObject({ kind: "artifact", artifactKind: "notebook", published: false, notebook: "analysis", sessionId: "gw-1" });
   });
 
   it("passes a json value through untouched", () => {
@@ -239,8 +239,9 @@ describe("toolResultKindForTool", () => {
     expect(toolResultKindForTool("dbt_execute")).toBe("dbt_run");
     expect(toolResultKindForTool("Bash")).toBe("terminal");
     expect(toolResultKindForTool("search_knowledge")).toBe("knowledge");
-    expect(toolResultKindForTool("publish_chart")).toBe("artifact");
+    expect(toolResultKindForTool("create_dashboard_preview")).toBe("artifact");
     expect(toolResultKindForTool("start_analysis_notebook")).toBe("artifact");
+    expect(toolResultKindForTool("publish_chart")).toBeNull();
     expect(toolResultKindForTool("run_cells")).toBe("json");
     expect(toolResultKindForTool("TodoWrite")).toBeNull();
     expect(toolResultKindForTool("Read")).toBeNull();

@@ -177,7 +177,7 @@ export type KnowledgeResult = ToolResultBase & {
 
 export type ArtifactResult = ToolResultBase & {
   kind: "artifact";
-  artifactKind: "table" | "chart" | "report" | "dashboard" | "notebook";
+  artifactKind: "dashboard" | "notebook";
   published: boolean;
   filename: string | null;
   artifactIndex: number | null;

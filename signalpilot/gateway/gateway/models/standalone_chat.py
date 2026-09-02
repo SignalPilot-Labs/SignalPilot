@@ -56,8 +56,6 @@ ChatEventType = Literal[
     "files_changed",
     "files_archived",
 ]
-ArtifactKind = Literal["table", "chart", "report"]
-
 
 class StrictChatRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -207,28 +205,6 @@ class ChatRunEventInfo(BaseModel):
     created_at: datetime
 
 
-class ChatArtifactInfo(BaseModel):
-    id: str
-    run_id: str
-    assistant_message_id: str | None = None
-    kind: ArtifactKind
-    filename: str
-    mime_type: str
-    snapshot: dict[str, Any]
-    provenance: dict[str, Any] | None = None
-    freshness_at: datetime | None = None
-    assumptions: list[str] = Field(default_factory=list)
-    exclusions: list[str] = Field(default_factory=list)
-    caveats: list[str] = Field(default_factory=list)
-    parent_artifact_id: str | None = None
-    saved_report_id: str | None = None
-    saved_report_version_id: str | None = None
-    saved_report_title: str | None = None
-    report_action: Literal["create", "update", "open"] = "create"
-    created_at: datetime
-    download_formats: list[str]
-
-
 class StandaloneConversationInfo(BaseModel):
     id: str
     project_id: str
@@ -252,7 +228,6 @@ class StandaloneConversationInfo(BaseModel):
 class StandaloneConversationDetail(BaseModel):
     conversation: StandaloneConversationInfo
     messages: list[StandaloneMessageInfo]
-    artifacts: list[ChatArtifactInfo]
     current_run: ChatRunInfo | None = None
     run_events: list[ChatRunEventInfo] = Field(default_factory=list)
 
@@ -277,25 +252,9 @@ class SharedMessageInfo(BaseModel):
     created_at: float
 
 
-class SharedChatArtifactInfo(BaseModel):
-    id: str
-    assistant_message_id: str | None = None
-    kind: ArtifactKind
-    filename: str
-    mime_type: str
-    snapshot: dict[str, Any]
-    freshness_at: datetime | None = None
-    assumptions: list[str] = Field(default_factory=list)
-    exclusions: list[str] = Field(default_factory=list)
-    caveats: list[str] = Field(default_factory=list)
-    created_at: datetime
-    download_formats: list[str]
-
-
 class SharedConversationDetail(BaseModel):
     conversation: SharedConversationInfo
     messages: list[SharedMessageInfo]
-    artifacts: list[SharedChatArtifactInfo]
     shared_at: datetime
 
 

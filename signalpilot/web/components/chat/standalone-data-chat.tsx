@@ -70,8 +70,6 @@ import { useChatBudgetSettings } from "~/components/chat/use-chat-budget-setting
 export { ChatUiContext, useChatUi } from "~/components/chat/chat-ui-context";
 export type { UiMessage } from "~/components/chat/chat-ui-context";
 export { ChatMessage } from "~/components/chat/chat-message";
-export { ArtifactPreview } from "~/components/chat/chat-artifact-preview";
-export type { ArtifactPreviewData } from "~/components/chat/chat-artifact-preview";
 
 export function StandaloneDataChat({
   conversationId,
@@ -278,7 +276,6 @@ export function StandaloneDataChat({
     submitText,
     onStop,
     onRetry,
-    onApproveReportSuggestion,
     prefetchConversation,
     selectConversation,
     renameConversation,
@@ -379,14 +376,13 @@ export function StandaloneDataChat({
     <ChatUiContext.Provider
       value={{
         events,
-        artifacts: detail?.artifacts ?? [],
         conversationId: conversationId ?? null,
         files: conversationFiles,
+        runningRunId: runIsStreaming && currentRun ? currentRun.id : null,
         openArtifact,
         openChatSettings: settingsPanel.openPanel,
         onStop,
         onRetry,
-        onApproveReportSuggestion,
         onOpenDashboardPreview: dashboardPanel.open,
       }}
     >
@@ -536,7 +532,7 @@ export function StandaloneDataChat({
                 </div>
               )}
               {!isEmptyNewChat && (
-                <div className="sticky bottom-0 bg-gradient-to-t from-[var(--color-bg)] via-[var(--color-bg)] to-transparent pt-3">
+                <div className="sticky bottom-0 isolate z-30 bg-gradient-to-t from-[var(--color-bg)] via-[var(--color-bg)] to-transparent pt-3">
                   {approvalEvent && (
                     <QueryApprovalCard
                       event={approvalEvent}

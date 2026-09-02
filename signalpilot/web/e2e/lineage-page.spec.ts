@@ -62,8 +62,8 @@ test("dbt map renders schema window, canvas, and inspector", async ({ page }) =>
   // Schema window lists schemas with model rows.
   await expect(page.getByText("schemas", { exact: true })).toBeVisible();
 
-  // Provenance + auto-update affordances.
-  await expect(page.getByText(/compiled .* ago|compiling on sandbox/)).toBeVisible();
+  // Provenance ("main · rev 4 · parsed 2h ago") + auto-update affordances.
+  await expect(page.getByText(/parsed .* ago|compiling on sandbox|last compile failed/)).toBeVisible();
   await expect(page.getByText(/auto · push/)).toBeVisible();
 
   // Legend shows fixed-order layers with counts.

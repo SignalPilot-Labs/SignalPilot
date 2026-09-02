@@ -1,0 +1,18 @@
+version: 2
+
+sources:
+  - name: stonecraft
+    schema: main
+    tables:
+      - name: slab_types
+        description: "Slab product catalog — type codes, dimensions, category"
+      - name: raw_materials
+        description: "Raw material costs and suppliers"
+      - name: bills_of_materials
+        description: "Material recipe per slab type — qty of each material per unit"
+      - name: production_runs
+        description: "Production batch records — labor, energy, waste per run"
+      - name: sales_orders
+        description: "Customer sales orders — includes internal test orders"
+      - name: competitor_prices
+        description: "Competitor pricing from April 2026 trade show"

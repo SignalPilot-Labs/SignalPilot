@@ -1,0 +1,6 @@
+demo_stonecraft:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: ~/demo_stonecraft.duckdb

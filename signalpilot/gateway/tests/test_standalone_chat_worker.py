@@ -20,7 +20,7 @@ def test_dashboard_tool_completion_exposes_only_safe_native_progress() -> None:
 
     assert completion == {
         "dashboard_authoring": {
-            "label": "Dashboard chart validated (2 of 3)",
+            "label": "Building dashboard (2 of 3 charts)",
             "phase": "upsert_dashboard_chart",
             "authoring_session_id": "session-a",
             "draft_revision": 4,

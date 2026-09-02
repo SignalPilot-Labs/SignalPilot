@@ -115,11 +115,7 @@ const ARTIFACT_TOOLS = new Set([
   "publish_chart",
   "publish_report",
 ]);
-const DASHBOARD_AUTHORING_TOOLS = new Set([
-  "begin_dashboard_authoring",
-  "set_dashboard_plan",
-  "upsert_dashboard_chart",
-  "apply_dashboard_operations",
+const DASHBOARD_PREVIEW_TOOLS = new Set([
   "create_dashboard_preview",
 ]);
 
@@ -139,7 +135,7 @@ export function normalizeToolName(raw: string): {
 }
 
 function categorizeTool(tool: string): RunStepCategory {
-  if (DASHBOARD_AUTHORING_TOOLS.has(tool)) return "dashboard";
+  if (DASHBOARD_PREVIEW_TOOLS.has(tool)) return "dashboard";
   if (SQL_TOOLS.has(tool)) return "sql";
   if (PYTHON_TOOLS.has(tool)) return "python";
   if (NOTEBOOK_TOOLS.has(tool)) return "notebook";

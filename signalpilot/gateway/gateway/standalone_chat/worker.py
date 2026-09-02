@@ -96,14 +96,14 @@ def _dashboard_authoring_completion(tool_name: str, content: str) -> dict[str, A
     ready = count("ready_count")
     expected = count("expected_count")
     labels = {
-        "begin_dashboard_authoring": "Dashboard fields resolved",
-        "set_dashboard_plan": f"Dashboard plan validated for {expected} charts",
+        "begin_dashboard_authoring": "Preparing dashboard",
+        "set_dashboard_plan": f"Building {expected} dashboard charts",
         "upsert_dashboard_chart": (
-            f"Dashboard chart validated ({ready} of {expected})"
+            f"Building dashboard ({ready} of {expected} charts)"
             if status == "ready"
-            else "Dashboard chart needs correction"
+            else "Refining dashboard chart"
         ),
-        "apply_dashboard_operations": "Dashboard refinements validated",
+        "apply_dashboard_operations": "Updating dashboard",
         "create_dashboard_preview": "Dashboard preview ready",
     }
     return {

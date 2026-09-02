@@ -36,6 +36,9 @@ from signalpilot._server.ai.standalone_chat_chart_theme import (
     MAX_CHART_SERIES,
     prepare_signalpilot_chart,
 )
+from signalpilot._server.ai.standalone_chat_tool_schemas import (
+    standalone_chat_tools as standalone_chat_tool_definitions,
+)
 from signalpilot._server.ai.standalone_chat_tools import (
     StandaloneArtifactCollector,
     StandaloneNotebookLifecycle,
@@ -173,6 +176,55 @@ async def test_dashboard_authoring_tools_publish_only_the_final_review_preview()
         "create_dashboard_preview",
     } <= {tool.name for tool in listed.root.tools}
 
+    plan_result = await server.request_handlers[CallToolRequest](
+        CallToolRequest(
+            params=CallToolRequestParams(
+                name="set_dashboard_plan",
+                arguments={
+                    "authoring_session_id": "authoring-session-1",
+                    "authoring_contract_version": "2026-09-02.1",
+                    "expected_plan_revision": 0,
+                    "plan": {
+                        "name": "Executive Revenue",
+                        "timezone": "UTC",
+                        "filters": [
+                            {
+                                "id": "date-window",
+                                "operator": "inThePast",
+                                "values": [90],
+                                "target": {
+                                    "tableName": "orders",
+                                    "fieldId": "orders.order_date",
+                                },
+                                "settings": {"unitOfTime": "days"},
+                            }
+                        ],
+                        "intents": [
+                            {
+                                "chart_id": "revenue-trend",
+                                "tile_id": "revenue-trend-tile",
+                                "label": "Revenue trend",
+                                "question": "How is revenue trending?",
+                                "description": "Approved revenue trend.",
+                                "required_concepts": ["revenue"],
+                                "explore_name": "orders",
+                                "dimensions": ["orders.order_date"],
+                                "metrics": ["orders.revenue"],
+                                "section": "Revenue",
+                                "order": 0,
+                                "layout": {"x": 0, "y": 0, "w": 12, "h": 6},
+                                "visualization": "line",
+                                "shared_filter_ids": ["date-window"],
+                                "required": True,
+                            }
+                        ],
+                    },
+                },
+            )
+        )
+    )
+    assert plan_result.root.isError is False
+
     chart_result = await server.request_handlers[CallToolRequest](
         CallToolRequest(
             params=CallToolRequestParams(
@@ -187,9 +239,36 @@ async def test_dashboard_authoring_tools_publish_only_the_final_review_preview()
                         "title": "Revenue Trend",
                         "question": "How is revenue trending?",
                         "description": "Approved revenue trend.",
-                        "query": {},
-                        "visualization": {},
-                        "signalPilot": {},
+                        "query": {
+                            "kind": "semantic",
+                            "exploreName": "orders",
+                            "dimensions": ["orders.order_date"],
+                            "metrics": ["orders.revenue"],
+                            "filters": {},
+                            "sorts": [
+                                {
+                                    "fieldId": "orders.order_date",
+                                    "descending": False,
+                                }
+                            ],
+                            "limit": 500,
+                            "projectId": "project-1",
+                            "commitSha": "a" * 40,
+                        },
+                        "visualization": {
+                            "type": "cartesian",
+                            "config": {
+                                "seriesType": "line",
+                                "layout": {
+                                    "xField": "orders.order_date",
+                                    "yField": ["orders.revenue"],
+                                },
+                            },
+                        },
+                        "signalPilot": {
+                            "crossFilter": False,
+                            "provenanceRef": "revenue-trend",
+                        },
                     },
                 },
             )
@@ -214,6 +293,7 @@ async def test_dashboard_authoring_tools_publish_only_the_final_review_preview()
 
     assert created.root.isError is False
     assert [name for name, _arguments in calls] == [
+        "set_dashboard_plan",
         "upsert_dashboard_chart",
         "create_dashboard_preview",
     ]
@@ -229,6 +309,77 @@ async def test_dashboard_authoring_tools_publish_only_the_final_review_preview()
         "apply_required": True,
     }
     assert collector.dashboard_preview == payload
+
+
+def test_dashboard_authoring_tool_schemas_expose_the_complete_nested_contract():
+    tools = {
+        tool.name: tool
+        for tool in standalone_chat_tool_definitions(notebook_enabled=True)
+    }
+
+    plan = tools["set_dashboard_plan"].inputSchema["properties"]["plan"]
+    intent = plan["properties"]["intents"]["items"]
+    dashboard_filter = plan["properties"]["filters"]["items"]
+    assert {
+        "label",
+        "description",
+        "required_concepts",
+        "explore_name",
+        "metrics",
+        "layout",
+        "visualization",
+    } <= set(intent["required"])
+    assert intent["properties"]["visualization"]["enum"] == [
+        "kpi",
+        "table",
+        "bar",
+        "line",
+        "area",
+    ]
+    assert dashboard_filter["required"] == ["id", "operator", "target"]
+    assert dashboard_filter["properties"]["operator"]["enum"] == [
+        "equals",
+        "isNull",
+        "notNull",
+        "inBetween",
+        "inThePast",
+        "inTheCurrent",
+        "inPeriodToDate",
+    ]
+
+    chart = tools["upsert_dashboard_chart"].inputSchema["properties"]["chart"]
+    semantic_query = chart["properties"]["query"]["oneOf"][0]
+    assert {
+        "exploreName",
+        "dimensions",
+        "metrics",
+        "filters",
+        "sorts",
+        "limit",
+        "projectId",
+        "commitSha",
+    } <= set(semantic_query["required"])
+    sort = semantic_query["properties"]["sorts"]["items"]
+    assert sort["required"] == ["fieldId", "descending"]
+
+    visualizations = chart["properties"]["visualization"]["oneOf"]
+    assert [
+        item["properties"]["type"]["const"] for item in visualizations
+    ] == [
+        "big_number",
+        "table",
+        "cartesian",
+    ]
+    assert visualizations[0]["properties"]["config"]["required"] == ["field"]
+    assert visualizations[1]["properties"]["config"]["required"] == ["columns"]
+    assert visualizations[2]["properties"]["config"]["required"] == [
+        "seriesType",
+        "layout",
+    ]
+    assert chart["properties"]["signalPilot"]["required"] == [
+        "crossFilter",
+        "provenanceRef",
+    ]
 
 
 @pytest.mark.asyncio

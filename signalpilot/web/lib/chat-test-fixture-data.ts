@@ -1,4 +1,8 @@
 import type { StandaloneChatEvent } from "~/lib/api";
+import {
+  artifactFileEvents,
+  lateArtifactFileEvents,
+} from "./chat-test-fixture-artifact-files";
 
 /**
  * Raw fixture data for /chats/test: the scripted event timeline and the
@@ -415,6 +419,9 @@ const RAW_EVENTS: FixtureEvent[] = [
     type: "tool_completed",
     payload: { tool_call_id: "t7", summary: "The tool completed.", error: false },
   },
+  // Export files (HTML report, SVG chart, CSV) — the inline artifact card
+  // variants. Defined in chat-test-fixture-artifact-files.ts.
+  ...artifactFileEvents(FIXTURE_RUN_ID),
   {
     at: 14_300,
     run_id: FIXTURE_RUN_ID,
@@ -436,6 +443,8 @@ const RAW_EVENTS: FixtureEvent[] = [
     type: "tool_completed",
     payload: { tool_call_id: "t9", summary: "The tool completed.", error: false },
   },
+  // Fifth file (markdown summary) — exercises the ≥2-overflow collapse.
+  ...lateArtifactFileEvents(FIXTURE_RUN_ID),
   {
     at: 15_500,
     run_id: FIXTURE_RUN_ID,

@@ -8,6 +8,8 @@ import { expect, test } from "@playwright/test";
  * -  7 400ms  governed query completes → one SQL trace execution
  * -  8 720ms  notebook_started → notebook resource goes live
  * -  9 200ms  Write tool → one conversation file (analysis/q3_growth.py)
+ * - 12 100ms+ export writes → report.html, chart.svg, csv land by 14 050ms;
+ *             a markdown summary follows at 15 460ms (five files total)
  * - 20 800ms  archive_completed → second ("forecast") notebook lands
  *
  * The harness stubs both inner viewers (notebook + file) so the specs cover
@@ -58,7 +60,7 @@ test.describe("artifacts panel (fixture harness)", () => {
     await expect(page.getByTestId("live-notebook-panel")).toBeVisible();
     // All three tabs are present; Files and Queries carry count chips.
     await expect(page.getByTestId("artifacts-tab-notebook")).toBeVisible();
-    await expect(page.getByTestId("artifacts-tab-files")).toContainText("1");
+    await expect(page.getByTestId("artifacts-tab-files")).toContainText("5");
     await expect(page.getByTestId("artifacts-tab-queries")).toContainText("1");
     // The notebook has content, so its tab is active by default.
     await expect(page.getByTestId("live-notebook-inline")).toBeVisible();
@@ -72,14 +74,15 @@ test.describe("artifacts panel (fixture harness)", () => {
     await waitForHydration(page);
     await page.getByTestId("live-notebook-toggle").click();
     await page.getByTestId("artifacts-tab-files").click();
-    const row = page.getByTestId("artifacts-file-row");
+    const rows = page.getByTestId("artifacts-file-row");
+    await expect(rows).toHaveCount(5);
+    const row = rows.filter({ hasText: "q3_growth.py" });
     await expect(row).toHaveCount(1);
-    await expect(row).toContainText("q3_growth.py");
     await row.click();
     // The harness stubs the file viewer; a back affordance returns to the list.
     await expect(page.getByTestId("chat-file-stub")).toBeVisible();
     await page.getByTestId("artifacts-file-back").click();
-    await expect(page.getByTestId("artifacts-file-row")).toBeVisible();
+    await expect(page.getByTestId("artifacts-file-row")).toHaveCount(5);
   });
 
   test("multiple notebooks render a chip strip that switches the view", async ({

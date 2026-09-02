@@ -1,0 +1,330 @@
+/* Owner: containers agent. Disclosures, blockquotes, tables, rules, figures.
+ *
+ * Everything here is a *container for evidence*: a disclosure the reader opens,
+ * a data table they scan, a quoted definition they cite. The chrome is a
+ * hairline and a tone shift — never a grid, never a decoration. */
+
+.chat-markdown {
+  /* One hit height for every interactive row in this sheet. */
+  --md-row: 34px;
+  /* Row-hover wash: lighter than a surface change, so a 3-row table does not
+     flash a whole band when the pointer crosses it. */
+  --md-wash: rgba(255, 255, 255, 0.035);
+}
+
+/* ---------------------------------------------------------------- details --
+ * The disclosure is the workhorse: "Assumptions and exclusions", "Full SQL",
+ * lineage. It must read as a control that opens a document, not as a card.
+ *
+ * The body inset is the *details' own padding*, with the summary bled back out
+ * to the edges by a negative margin. That is what makes the inset survive any
+ * nesting depth — a table wrapper, a list, a code frame, anything — where the
+ * old `details > *:not(summary)` margin only reached direct children. */
+.chat-markdown details {
+  border: 1px solid var(--md-rule);
+  border-radius: var(--md-radius);
+  background: var(--md-surface);
+  /* base.css owns the gap above; nothing may add one below. */
+  margin-bottom: 0;
+  padding: 0 var(--md-pad-x);
+  /* Clips the summary hover wash to the rounded corner. */
+  overflow: hidden;
+}
+.chat-markdown details[open] {
+  padding-bottom: 0.85rem;
+}
+
+.chat-markdown details > summary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  /* Bleed to the card edge so the whole row is the hit target. */
+  margin: 0 calc(-1 * var(--md-pad-x));
+  min-height: var(--md-row);
+  padding: 0.35rem var(--md-pad-x);
+  cursor: pointer;
+  list-style: none;
+  color: var(--color-text-muted);
+  font-size: 0.9em;
+  font-weight: 500;
+  line-height: 1.45;
+  user-select: none;
+  transition:
+    background-color 0.12s ease,
+    color 0.12s ease;
+}
+.chat-markdown details > summary::-webkit-details-marker { display: none; }
+.chat-markdown details > summary::marker { content: ""; }
+
+.chat-markdown details > summary:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text);
+}
+.chat-markdown details > summary:focus-visible {
+  outline: 1px solid var(--color-border-active);
+  outline-offset: -2px;
+  background: var(--color-bg-hover);
+  color: var(--color-text);
+}
+
+/* Custom marker, kept as a glyph so it stays legible at any zoom. */
+.chat-markdown details > summary::before {
+  content: "\25B8";
+  flex: none;
+  width: 0.75em;
+  color: var(--color-text-dim);
+  font-size: 0.95em;
+  line-height: 1;
+  transition:
+    transform 0.12s ease,
+    color 0.12s ease;
+}
+.chat-markdown details > summary:hover::before,
+.chat-markdown details[open] > summary::before {
+  color: var(--color-text-muted);
+}
+.chat-markdown details[open] > summary::before {
+  transform: rotate(90deg);
+}
+.chat-markdown details[open] > summary {
+  margin-bottom: 0.75rem;
+  border-bottom: 1px solid var(--md-rule);
+  color: var(--color-text);
+}
+
+/* Body rhythm. The horizontal inset is the padding above; these only decide
+   the vertical gaps, and reach one level down for markdown Streamdown wraps. */
+.chat-markdown details > :not(summary) {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+.chat-markdown details > :not(summary) + :not(summary),
+.chat-markdown details > * + [data-streamdown="table-wrapper"] {
+  margin-top: var(--md-gap);
+}
+
+/* Rhythm for a run of disclosures. Closed neighbours merge into one accordion
+   stack — shared hairline, outer corners only — because a column of floating
+   cards with a full paragraph gap between them is noise. An open disclosure is
+   a document, so it keeps its own card and its own gap on both sides. */
+.chat-markdown details:not([open]) + details:not([open]) {
+  margin-top: -1px;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+.chat-markdown details:not([open]):has(+ details:not([open])) {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+/* ----------------------------------------------------------------- tables --
+ * Streamdown ships its own shell: a wrapper, an icon row (copy / download /
+ * fullscreen), and a scroller around the table. Rather than fight it, the
+ * wrapper becomes the shared frame and the icon row becomes its header band. */
+.chat-markdown [data-streamdown="table-wrapper"] {
+  margin: 0;
+  border: 1px solid var(--md-rule);
+  border-radius: var(--md-radius);
+  background: var(--md-surface);
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
+}
+/* base.css owns top-level rhythm via `> * + *`; the reset above out-specifies
+   it, so the gap is restored here at the same weight. */
+.chat-markdown > * + [data-streamdown="table-wrapper"] {
+  margin-top: var(--md-gap);
+}
+
+/* Header band: 30px, raised, hairline under, controls right and quiet. */
+.chat-markdown
+  [data-streamdown="table-wrapper"]
+  > div:first-child:not(:has(table)) {
+  gap: 0.1rem;
+  min-height: 30px;
+  border-bottom: 1px solid var(--md-rule);
+  background: var(--md-surface-raised);
+  padding: 0 0.4rem;
+}
+.chat-markdown [data-streamdown="table-wrapper"] button {
+  border-radius: 6px;
+  color: var(--color-text-dim);
+  opacity: 0.6;
+  transition:
+    opacity 0.12s ease,
+    color 0.12s ease,
+    background-color 0.12s ease;
+}
+.chat-markdown [data-streamdown="table-wrapper"]:hover button {
+  opacity: 1;
+}
+.chat-markdown [data-streamdown="table-wrapper"] button:hover,
+.chat-markdown [data-streamdown="table-wrapper"] button:focus-visible {
+  background: var(--color-bg-hover);
+  color: var(--color-text);
+  opacity: 1;
+}
+
+/* Scroller: the frame already draws the edge, so this must not draw a second. */
+.chat-markdown [data-streamdown="table-wrapper"] > div:has(> table) {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  overflow-x: auto;
+  overflow-y: hidden;
+  /* The scrollbar is the only affordance that the frame has more to the
+     right, so keep it visible — thin, and in the hairline colour. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border-hover) transparent;
+}
+
+.chat-markdown table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.833em;
+  line-height: 1.5;
+  /* Digits line up column-wise; this is a data table, not prose. */
+  font-variant-numeric: tabular-nums;
+}
+.chat-markdown th,
+.chat-markdown td {
+  /* No grid. Separation comes from the row hairlines below. */
+  border: 0;
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  vertical-align: top;
+  /* A cell is a value, not a paragraph: it never breaks mid-token or wraps a
+     date onto two lines. When the columns stop fitting, the frame scrolls. */
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+/* Cells breathe against the frame edge rather than touching it. */
+.chat-markdown tr > :first-child { padding-left: var(--md-pad-x); }
+.chat-markdown tr > :last-child { padding-right: var(--md-pad-x); }
+
+.chat-markdown thead th {
+  border-bottom: 1px solid var(--md-rule-strong);
+  background: transparent;
+  color: var(--color-text-dim);
+  /* `em` compounds off the table's 0.833em, so this is ~10.5px at 15px base. */
+  font-size: 0.84em;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  line-height: 1.6;
+  text-transform: uppercase;
+  vertical-align: bottom;
+  white-space: nowrap;
+}
+/* Grouped headers (rowspan / colspan) need their own hairline to read. */
+.chat-markdown thead tr + tr > * {
+  border-top: 1px solid var(--md-rule);
+}
+.chat-markdown th[rowspan] {
+  vertical-align: middle;
+}
+
+.chat-markdown tbody td,
+.chat-markdown tbody th {
+  color: var(--color-text-muted);
+}
+.chat-markdown tbody tr + tr > * {
+  border-top: 1px solid var(--md-rule);
+}
+.chat-markdown tbody tr {
+  transition: background-color 0.12s ease;
+}
+.chat-markdown tbody tr:hover {
+  background: var(--md-wash);
+}
+/* The first column is the row's identity; keep it at full body weight. */
+.chat-markdown tbody tr > :first-child {
+  color: var(--color-text);
+}
+/* GFM alignment arrives as an inline style; hand-written HTML uses the
+   attribute. Honour both. */
+.chat-markdown th[align="right"],
+.chat-markdown td[align="right"] { text-align: right; }
+.chat-markdown th[align="center"],
+.chat-markdown td[align="center"] { text-align: center; }
+
+/* A caption is a caption: a quiet label above the data, not a table row. */
+.chat-markdown caption {
+  caption-side: top;
+  padding: 0.55rem var(--md-pad-x) 0.5rem;
+  color: var(--color-text-dim);
+  font-size: 0.88em;
+  letter-spacing: 0.04em;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+/* ------------------------------------------------- quotes, rules, figures --
+ * Two shapes the agent actually writes: a cited definition, and a pull-out
+ * note. Both get the same accent rule and a whisper of fill, so a quote reads
+ * as lifted out of the answer without becoming another card. */
+.chat-markdown blockquote {
+  /* base.css owns the gap above; only the trailing one is cleared. */
+  margin-bottom: 0;
+  border-left: 2px solid var(--color-border-active);
+  border-radius: 0 var(--md-radius-sm) var(--md-radius-sm) 0;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.035),
+    rgba(255, 255, 255, 0) 65%
+  );
+  padding: 0.6rem 0.9rem 0.6rem 1rem;
+  color: var(--color-text-muted);
+  /* Streamdown italicises quotes; at this size it costs more than it says. */
+  font-style: normal;
+}
+.chat-markdown blockquote > :first-child { margin-top: 0; }
+.chat-markdown blockquote > :last-child { margin-bottom: 0; }
+
+.chat-markdown hr {
+  margin: var(--md-gap-loose) 0;
+  border: 0;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--md-rule-strong) 8%,
+    var(--md-rule-strong) 92%,
+    transparent
+  );
+}
+
+.chat-markdown figure {
+  /* The UA default is `1em 40px`; the indent has to go, the gap above is
+     base.css's to set. */
+  margin-inline: 0;
+  margin-bottom: 0;
+}
+/* A quote with an attribution is one object: the figure carries the treatment
+   and the inner blockquote goes plain, so the accent rule is not drawn twice. */
+.chat-markdown figure:has(> blockquote) {
+  border-left: 2px solid var(--color-border-active);
+  border-radius: 0 var(--md-radius-sm) var(--md-radius-sm) 0;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.035),
+    rgba(255, 255, 255, 0) 65%
+  );
+  padding: 0.65rem 0.9rem 0.6rem 1rem;
+}
+.chat-markdown figure > blockquote {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  padding: 0;
+  color: var(--color-text);
+}
+.chat-markdown figcaption {
+  margin-top: 0.45rem;
+  color: var(--color-text-dim);
+  font-size: 0.767em;
+  line-height: 1.5;
+}
+.chat-markdown figure:has(> blockquote) > figcaption::before {
+  content: "\2014\00a0";
+}

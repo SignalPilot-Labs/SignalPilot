@@ -11,8 +11,7 @@ import {
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { ChatMarkdown } from "~/components/chat/chat-markdown";
 import useSWR from "swr";
 import { ArtifactPreview } from "~/components/chat/standalone-data-chat";
 import { useToast } from "~/components/ui/toast";
@@ -267,11 +266,7 @@ export function SharedStandaloneDataChat({ token }: { token: string }) {
                       <Sparkles className="h-3.5 w-3.5 text-[var(--color-text-muted)]" />
                     </div>
                     <div className="min-w-0 flex-1">
-                      <div className="chat-markdown">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                          {message.content}
-                        </ReactMarkdown>
-                      </div>
+                      <ChatMarkdown markdown={message.content} />
                       <div className="mt-5 space-y-4">
                         {data.artifacts
                           .filter(

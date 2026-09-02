@@ -45,8 +45,10 @@ const ChatNotebookView = dynamic(
 
 type ArtifactsTab = "notebook" | "files" | "queries";
 
-function kindIcon(kind: string) {
-  const className = "h-3.5 w-3.5 flex-none text-[var(--color-text-dim)]";
+export function kindIcon(
+  kind: string,
+  className = "h-3.5 w-3.5 flex-none text-[var(--color-text-dim)]",
+) {
   switch (kind) {
     case "markdown":
       return <FileText className={className} />;
@@ -114,13 +116,17 @@ function TabButton({
 function FilesTab({
   conversationId,
   files,
+  selectedFileId,
+  onSelectFile,
   fileViewOverride,
 }: {
   conversationId: string;
   files: ConversationFileInfo[];
+  /** Controlled by the panel; null means "show the list". */
+  selectedFileId: string | null;
+  onSelectFile: (fileId: string | null) => void;
   fileViewOverride?: ReactNode;
 }) {
-  const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
   const selected = files.find((file) => file.id === selectedFileId) ?? null;
 
   if (files.length === 0) {
@@ -141,7 +147,7 @@ function FilesTab({
         <button
           type="button"
           data-testid="artifacts-file-back"
-          onClick={() => setSelectedFileId(null)}
+          onClick={() => onSelectFile(null)}
           className="mb-2 inline-flex w-fit items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-[var(--color-text-dim)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
         >
           <ArrowLeft className="h-3 w-3" />
@@ -161,7 +167,7 @@ function FilesTab({
           <button
             type="button"
             data-testid="artifacts-file-row"
-            onClick={() => setSelectedFileId(file.id)}
+            onClick={() => onSelectFile(file.id)}
             className="flex w-full items-center gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] px-3 py-2 text-left text-xs text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]"
           >
             {kindIcon(file.kind)}
@@ -196,6 +202,7 @@ export function ArtifactsPanel({
   executions,
   loading = false,
   onClose,
+  openFileRequest,
   liveViewOverride,
   fileViewOverride,
 }: {
@@ -206,6 +213,9 @@ export function ArtifactsPanel({
   /** True while the first resource calls are still in flight. */
   loading?: boolean;
   onClose: () => void;
+  /** External "open this file" request (from an inline artifact card).
+   * A new nonce re-applies the request even for the same file. */
+  openFileRequest?: { fileId: string; nonce: number } | null;
   /** Test-only: rendered instead of the notebook view (the fixture harness has no gateway). */
   liveViewOverride?: ReactNode;
   /** Test-only: rendered instead of the file viewer (the fixture harness has no gateway). */
@@ -235,6 +245,16 @@ export function ArtifactsPanel({
     executions.length === 0;
   // null means "auto": follow the default tab until the user picks one.
   const [selectedTab, setSelectedTab] = useState<ArtifactsTab | null>(null);
+  // null means "show the list" — lifted so an inline card can select a file.
+  const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
+  useEffect(() => {
+    setSelectedFileId(null);
+  }, [conversationId]);
+  useEffect(() => {
+    if (!openFileRequest) return;
+    setSelectedTab("files");
+    setSelectedFileId(openFileRequest.fileId);
+  }, [openFileRequest]);
   const activeTab =
     selectedTab ??
     (showNotebook ? "notebook" : files.length > 0 ? "files" : "queries");
@@ -417,6 +437,8 @@ export function ArtifactsPanel({
           <FilesTab
             conversationId={conversationId}
             files={files}
+            selectedFileId={selectedFileId}
+            onSelectFile={setSelectedFileId}
             fileViewOverride={fileViewOverride}
           />
         )}

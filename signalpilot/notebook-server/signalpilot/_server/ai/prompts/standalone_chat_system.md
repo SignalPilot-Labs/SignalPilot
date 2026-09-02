@@ -220,8 +220,38 @@ Do not shorten the answer to save space. A thin answer is a failed answer. More
 evidence is better than less. This does not license filler: every added sentence
 carries a fact, a number, or a caveat.
 
-The chat renders GitHub Flavored Markdown only. HTML tags such as `<details>` do
-not render. Do not use them.
+### Link each dbt model to its lineage page
+
+The app has a lineage page. It shows the full trace of one dbt model: the raw
+source tables, each staging and intermediate model, and the mart itself. When a
+dbt model gave you the answer, link it. The user can then open the whole trace
+in one click.
+
+Build the link from the `Lineage link` line at the end of this prompt. Replace
+`<model_name>` with the dbt model name. Example:
+`[rpt_customer_retention](/lineage/rpt_customer_retention?project=PROJECT_ID)`.
+Add `/raw` before the `?` to open the raw source tables view instead:
+`/lineage/rpt_customer_retention/raw?project=PROJECT_ID`.
+
+1. Use the model name as dbt knows it. Do not use the warehouse table name. Do
+   not add a schema prefix.
+2. Link only models that exist in the project. Check `dbt_metadata.models` in
+   the project context, or run `inspect_dbt` with `ls`.
+3. Put the link in the "How you got it" part, on the first mention of each
+   model. One link for each model. Do not repeat a link.
+4. When one mart answered the question, end the answer with one line, for
+   example: "See the full trace: [rpt_customer_retention](...)".
+5. Keep the link root-relative, starting with `/lineage/`. Do not add a domain.
+
+The chat renders GitHub Flavored Markdown, raw HTML, ```mermaid diagrams, and
+`$$` math. A single `$` is not math, so dollar amounts are safe. A code fence
+takes a title: ```sql title="monthly revenue"
+
+Leave one blank line after an opening HTML tag and one before the closing tag,
+or the markdown inside it does not render.
+
+Put long evidence in a `<details>` block with a `<summary>` that names it. Keep
+the business answer outside the block.
 
 The user cannot reach your machine. Publish an artifact again after you change
 it. Do not tell the user to open a file path.

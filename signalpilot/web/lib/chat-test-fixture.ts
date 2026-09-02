@@ -15,7 +15,15 @@ import {
   FIXTURE_WRITTEN_FILE_PATH,
   PYTHON_FILE,
   fixtureEvents,
+  type FixtureEvent,
 } from "./chat-test-fixture-data";
+import {
+  CHART_SVG_FILE,
+  CSV_FILE,
+  REPORT_HTML_FILE,
+  SUMMARY_MD_FILE,
+  fixtureArtifactFiles,
+} from "./chat-test-fixture-artifact-files";
 
 /**
  * Deterministic fixture for /chats/test: a scripted agent run replayed on a
@@ -107,14 +115,26 @@ export function fixtureConversationNotebook(
 export function fixtureConversationFiles(
   events: StandaloneChatEvent[],
 ): ConversationFileInfo[] {
-  const written = events.some(
-    (event) => event.type === "tool_started" && event.payload.tool === "Write",
+  // Export files (HTML report, SVG chart, CSV) land later in the replay,
+  // each gated on its files_changed mirror event.
+  const exportFiles = fixtureArtifactFiles(
+    events,
+    FIXTURE_RUN_ID,
+    fixtureEventCreatedAt,
   );
-  if (!written) return [];
+  const written = events.some(
+    (event) =>
+      event.type === "tool_started" &&
+      event.payload.tool === "Write" &&
+      (event.payload.input as { file_path?: string } | undefined)?.file_path ===
+        FIXTURE_WRITTEN_FILE_PATH,
+  );
+  if (!written) return exportFiles;
   const edited = events.some(
     (event) => event.type === "tool_started" && event.payload.tool === "Edit",
   );
   return [
+    ...exportFiles,
     {
       id: "file-fixture-1",
       path: FIXTURE_WRITTEN_FILE_PATH,
@@ -302,11 +322,43 @@ export function fixtureEventCreatedAt(at: number): string {
   return new Date(BASE_EPOCH + at).toISOString();
 }
 
+/** The frozen wall clock (epoch ms) at a replay offset — injected into the
+ * chat UI context so relative timestamps stay honest on frozen frames. */
+export function fixtureNowMs(at: number): number {
+  return BASE_EPOCH + at;
+}
+
+/**
+ * Literal contents of the fixture's mirrored files, by manifest id. The
+ * harness turns these into object URLs so content-dependent UI (the image
+ * card thumbnail) renders for real at /chats/test.
+ */
+export function fixtureFileContent(
+  fileId: string,
+): { body: string; mime: string } | null {
+  switch (fileId) {
+    case "file-fixture-1":
+      return { body: PYTHON_FILE, mime: "text/x-python" };
+    case "file-fixture-report":
+      return { body: REPORT_HTML_FILE, mime: "text/html" };
+    case "file-fixture-chart":
+      return { body: CHART_SVG_FILE, mime: "image/svg+xml" };
+    case "file-fixture-csv":
+      return { body: CSV_FILE, mime: "text/csv" };
+    case "file-fixture-summary":
+      return { body: SUMMARY_MD_FILE, mime: "text/markdown" };
+    default:
+      return null;
+  }
+}
+
 export function materializeFixtureEvents(
   upToMs: number,
+  extra: FixtureEvent[] = [],
 ): StandaloneChatEvent[] {
-  return fixtureEvents
+  return [...fixtureEvents, ...extra]
     .filter((event) => event.at <= upToMs)
+    .sort((a, b) => a.at - b.at)
     .map(({ at, ...event }) => ({
       ...event,
       created_at: fixtureEventCreatedAt(at),

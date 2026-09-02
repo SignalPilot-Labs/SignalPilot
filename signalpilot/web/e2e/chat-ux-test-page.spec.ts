@@ -57,8 +57,10 @@ test.describe("chat UX test harness", () => {
     // The second chain is live with rich cards.
     await expect(groups.nth(1)).toContainText("Generated a file");
     await expect(groups.nth(1)).toContainText("analysis/q3_growth.py");
-    await expect(groups.nth(1)).toContainText("Ran Python calculation");
-    await expect(groups.nth(1)).toContainText('q3 = {"EMEA"');
+    await expect(groups.nth(1)).toContainText("Ran a command");
+    await expect(groups.nth(1)).toContainText(
+      "python analysis/q3_growth.py --check",
+    );
   });
 
   test("collapses both chains to summaries and shows artifacts when complete", async ({
@@ -72,7 +74,7 @@ test.describe("chat UX test harness", () => {
       "Worked through 9 steps · 2 queries · 1 error",
     );
     await expect(groups.nth(1)).toContainText(
-      "Worked through 8 steps · 2 code runs · 4 files",
+      "Worked through 11 steps · 1 code run · 8 files",
     );
     await expect(page.getByText("EMEA drove the growth")).toBeVisible();
     await expect(

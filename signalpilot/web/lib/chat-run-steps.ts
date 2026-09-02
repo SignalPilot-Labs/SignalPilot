@@ -612,6 +612,42 @@ export function foldRunSteps(
 }
 
 /** Current real server-side phase for a running dashboard preview tool. */
+export type DashboardAuthoringProgress = {
+  label: string;
+  phase: string;
+  sessionId: string | null;
+  draftRevision: number;
+};
+
+export function activeDashboardAuthoringProgress(
+  events: StandaloneChatEvent[],
+  runId: string | undefined,
+): DashboardAuthoringProgress | null {
+  if (!runId) return null;
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (
+      event.run_id !== runId ||
+      event.type !== "progress" ||
+      event.payload.scope !== "dashboard_authoring"
+    ) {
+      continue;
+    }
+    const label = event.payload.label;
+    if (typeof label !== "string" || !label) return null;
+    const phase = event.payload.phase;
+    const sessionId = event.payload.authoring_session_id;
+    const draftRevision = event.payload.draft_revision;
+    return {
+      label,
+      phase: typeof phase === "string" ? phase : "",
+      sessionId: typeof sessionId === "string" && sessionId ? sessionId : null,
+      draftRevision: typeof draftRevision === "number" ? draftRevision : 0,
+    };
+  }
+  return null;
+}
+
 export function activeDashboardPreviewLabel(
   events: StandaloneChatEvent[],
   runId: string | undefined,

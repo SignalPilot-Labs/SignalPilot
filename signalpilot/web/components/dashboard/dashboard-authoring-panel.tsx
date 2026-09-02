@@ -35,7 +35,30 @@ export type DashboardAuthoringSession = {
   dashboard_id: string | null;
   base_version_id: string | null;
   applied_version_id: string | null;
-  definition: DashboardDefinition;
+  definition: DashboardDefinition | null;
+  plan?: {
+    name: string;
+    description?: string | null;
+    timezone: string;
+    intents: Array<{
+      chart_id: string;
+      tile_id: string;
+      label: string;
+      section: string;
+      order: number;
+      layout: { x: number; y: number; w: number; h: number };
+      visualization: "kpi" | "table" | "bar" | "line" | "area";
+      required?: boolean;
+    }>;
+  } | null;
+  expected_chart_count?: number;
+  chart_drafts?: Array<{
+    chart_id: string;
+    ordinal: number;
+    status: "pending" | "running" | "ready" | "failed";
+    attempt_count: number;
+    safe_error: string | null;
+  }>;
   operations: Array<Record<string, unknown>>;
   summary: string;
   status: string;
@@ -434,6 +457,9 @@ export function DashboardAuthoringWorkspace({
                 busy ||
                 !session ||
                 session.status !== "preview" ||
+                !session.definition ||
+                Object.keys(receipts).length !==
+                  session.definition.charts.length ||
                 (session.requires_custom_sql_confirmation &&
                   !session.custom_sql_confirmed)
               }
@@ -464,7 +490,7 @@ export function DashboardAuthoringWorkspace({
           </div>
         </header>
         <div className={styles.authoringPreviewCanvas}>
-          {session ? (
+          {session?.definition ? (
             <DashboardRuntimeProvider
               key={`${session.id}:${session.draft_revision}:${session.custom_sql_confirmed}`}
               dashboardId={session.dashboard_id ?? `draft:${session.id}`}

@@ -44,6 +44,60 @@ function dashboardSession(): DashboardAuthoringSession {
   };
 }
 
+function partialDashboardSession(): DashboardAuthoringSession {
+  const definition = fromLightdashFixture(fiveComponents);
+  return {
+    ...dashboardSession(),
+    definition: {
+      ...definition,
+      charts: [definition.charts[0]],
+      tiles: [definition.tiles[0]],
+    },
+    status: "partial_failed",
+    expected_chart_count: 2,
+    plan: {
+      name: definition.name,
+      timezone: "UTC",
+      intents: [
+        {
+          chart_id: definition.charts[0].id,
+          tile_id: definition.tiles[0].uuid,
+          label: definition.charts[0].title,
+          section: "Overview",
+          order: 0,
+          layout: { x: 0, y: 0, w: 18, h: 6 },
+          visualization: "kpi",
+        },
+        {
+          chart_id: "chart-failed",
+          tile_id: "tile-failed",
+          label: "Failed revenue chart",
+          section: "Overview",
+          order: 1,
+          layout: { x: 18, y: 0, w: 18, h: 6 },
+          visualization: "bar",
+        },
+      ],
+    },
+    chart_drafts: [
+      {
+        chart_id: definition.charts[0].id,
+        ordinal: 0,
+        status: "ready",
+        attempt_count: 1,
+        safe_error: null,
+      },
+      {
+        chart_id: "chart-failed",
+        ordinal: 1,
+        status: "failed",
+        attempt_count: 2,
+        safe_error: "This chart could not be validated.",
+      },
+    ],
+  };
+}
+
 describe("Chat dashboard live preview", () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -107,7 +161,8 @@ describe("Chat dashboard live preview", () => {
     await act(async () => root.render(renderPanel(null)));
     await vi.waitFor(() => {
       expect(container.querySelector('[role="status"]')).toBeNull();
-      expect(button("Apply")?.disabled).toBe(false);
+      expect(button("Discard")?.disabled).toBe(false);
+      expect(button("Apply")?.disabled).toBe(true);
     });
     expect(requestMock).toHaveBeenCalledWith(
       "/api/dashboard-authoring/sessions/session-live",
@@ -155,5 +210,40 @@ describe("Chat dashboard live preview", () => {
     });
     expect(stage.style.visibility).toBe("visible");
     expect(stage.getAttribute("aria-hidden")).toBe("false");
+  });
+
+  it("keeps ready charts visible and exposes every safe failed-chart detail", async () => {
+    requestMock.mockResolvedValue(partialDashboardSession());
+
+    await act(async () => {
+      root.render(
+        <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+          <ChatDashboardPanel
+            sessionId="session-live"
+            updateRevision={3}
+            onClose={vi.fn()}
+          />
+        </SWRConfig>,
+      );
+    });
+
+    await vi.waitFor(() => {
+      expect(
+        container.querySelector('[data-testid="dashboard-runtime"]'),
+      ).not.toBeNull();
+      expect(
+        container.querySelector(
+          '[data-testid="dashboard-chart-placeholder-chart-failed"]',
+        ),
+      ).not.toBeNull();
+    });
+    const failed = container.querySelector(
+      '[data-testid="dashboard-chart-placeholder-chart-failed"]',
+    );
+    expect(failed?.getAttribute("title")).toBe(
+      "This chart could not be validated.",
+    );
+    expect(container.textContent).toContain("1/2 ready");
+    expect(container.textContent).toContain("Retry failed charts");
   });
 });

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  activeDashboardAuthoringProgress,
   activeDashboardPreviewLabel,
   extractRunPlan,
   extractRuntimeBoot,
@@ -198,6 +199,34 @@ describe("foldRunSteps", () => {
         "dashboard-run",
       ),
     ).toBeNull();
+  });
+
+  it("exposes the plan-ready session and revision for event-driven preview refresh", () => {
+    const progress = activeDashboardAuthoringProgress(
+      [
+        {
+          run_id: "dashboard-run",
+          sequence: 1,
+          type: "progress" as const,
+          payload: {
+            scope: "dashboard_authoring",
+            phase: "plan_ready",
+            label: "Plan ready with 9 charts",
+            authoring_session_id: "session-progressive",
+            draft_revision: 4,
+          },
+          created_at: "2026-09-01T10:00:00Z",
+        },
+      ],
+      "dashboard-run",
+    );
+
+    expect(progress).toEqual({
+      label: "Plan ready with 9 charts",
+      phase: "plan_ready",
+      sessionId: "session-progressive",
+      draftRevision: 4,
+    });
   });
 
   it("normalizes governed-tool wording in persisted chat events", () => {

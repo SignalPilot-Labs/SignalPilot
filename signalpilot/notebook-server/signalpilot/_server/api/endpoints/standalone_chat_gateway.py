@@ -6,6 +6,8 @@ from typing import Any
 
 import httpx
 
+DASHBOARD_AUTHORING_TIMEOUT_SECONDS = 1_200.0
+
 
 class StandaloneGatewayClient:
     def __init__(
@@ -143,7 +145,7 @@ class StandaloneGatewayClient:
         return await self._post_json(
             path,
             payload=payload,
-            timeout=300.0,
+            timeout=DASHBOARD_AUTHORING_TIMEOUT_SECONDS,
             invalid="Invalid dashboard authoring preview",
             failed="Dashboard preview could not be created",
         )

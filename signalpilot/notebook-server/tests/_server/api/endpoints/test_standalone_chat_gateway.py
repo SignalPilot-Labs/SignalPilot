@@ -56,7 +56,7 @@ async def test_dashboard_preview_is_bound_to_the_chat_project_revision(
 
     assert result["id"] == "authoring-session-1"
     assert observed == {
-        "timeout": 300.0,
+        "timeout": 1_200.0,
         "url": "http://gateway:3300/api/dashboard-authoring/sessions",
         "json": {
             "prompt": "Create an executive revenue dashboard",

@@ -20,8 +20,7 @@ import {
 } from "lucide-react";
 import { Bot, Brain } from "lucide-react";
 import { memo, useEffect, useState, type ReactNode } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { ChatMarkdown } from "~/components/chat/chat-markdown";
 import { format as formatSql } from "sql-formatter";
 import { ChatCode, CopyButton, type ChatCodeLanguage } from "~/components/chat/chat-code";
 import { AgentThinkingIndicator } from "~/components/chat/agent-thinking-indicator";
@@ -622,11 +621,10 @@ const SubagentRow = memo(function SubagentRow({ step }: { step: RunStep }) {
                       <p className="mb-1 text-[9px] font-medium uppercase tracking-[0.16em] text-[var(--color-text-dim)]">
                         Report
                       </p>
-                      <div className="chat-markdown text-[12px]">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                          {step.report}
-                        </ReactMarkdown>
-                      </div>
+                      <ChatMarkdown
+                        markdown={step.report}
+                        className="chat-markdown-compact"
+                      />
                     </div>
                   )}
                 </div>
@@ -815,11 +813,12 @@ export function RunActivityBlocks({
     <>
       {blocks.map((block, index) =>
         block.kind === "text" ? (
-          <div key={block.key} className="chat-markdown my-3">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-              {block.text}
-            </ReactMarkdown>
-          </div>
+          <ChatMarkdown
+            key={block.key}
+            markdown={block.text}
+            className="my-3"
+            streaming={running && index === blocks.length - 1}
+          />
         ) : block.kind === "thinking" ? (
           <ThinkingBlockView
             key={block.key}

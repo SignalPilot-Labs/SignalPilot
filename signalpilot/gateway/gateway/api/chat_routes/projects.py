@@ -44,6 +44,7 @@ async def bootstrap_chat(store: StoreD, role: OrgRole):
         "runtime_results": feature_flags.runtime_results,
         "runtime_artifacts": feature_flags.runtime_artifacts,
         "dataset_refs": feature_flags.dataset_refs,
+        "mcp_connectors": feature_flags.mcp_connectors,
     }
     if not standalone_chat_enabled():
         return ChatBootstrapResponse(

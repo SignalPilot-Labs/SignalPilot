@@ -25,7 +25,8 @@ export function StandaloneChatComposer({
   placeholder,
   projectPicker,
   mentionOptions,
-  settings,
+  onOpenSettings,
+  settingsOpen = false,
 }: {
   value: string;
   onValueChange: (value: string) => void;
@@ -40,13 +41,14 @@ export function StandaloneChatComposer({
   projectPicker?: ReactNode;
   /** Model/metric/table names for @-mention autocomplete. */
   mentionOptions?: string[];
-  /** Optional settings popover content (budgets etc.), behind a gear. */
-  settings?: ReactNode;
+  /** Shows the gear; it toggles the right-side Chat settings panel. */
+  onOpenSettings?: () => void;
+  /** Whether that panel is open (drives aria-expanded on the gear). */
+  settingsOpen?: boolean;
 }) {
   const canSubmit = Boolean(value.trim()) && !submitDisabled;
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [blockedFlash, setBlockedFlash] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [mentionIndex, setMentionIndex] = useState(0);
 
@@ -202,23 +204,21 @@ export function StandaloneChatComposer({
         <div className="flex items-center gap-2 px-2.5 pb-2.5 pt-1">
           {projectPicker && <div className="min-w-0 flex-1">{projectPicker}</div>}
           <div className="ml-auto flex items-center gap-1.5">
-            {settings && (
-              <div className="relative">
-                <button
-                  type="button"
-                  onClick={() => setSettingsOpen((v) => !v)}
-                  aria-label="Chat settings"
-                  aria-expanded={settingsOpen}
-                  className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--color-text-dim)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
-                >
-                  <Settings2 className="h-3.5 w-3.5" />
-                </button>
-                {settingsOpen && (
-                  <div className="absolute bottom-10 right-0 z-30 w-64 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-card)] p-3 shadow-xl">
-                    {settings}
-                  </div>
-                )}
-              </div>
+            {onOpenSettings && (
+              <button
+                type="button"
+                onClick={onOpenSettings}
+                aria-label="Chat settings"
+                aria-expanded={settingsOpen}
+                data-testid="chat-settings-gear"
+                className={`flex h-8 w-8 items-center justify-center rounded-lg transition-colors hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] focus-visible:ring-2 focus-visible:ring-[var(--color-text)] ${
+                  settingsOpen
+                    ? "bg-[var(--color-bg-hover)] text-[var(--color-text)]"
+                    : "text-[var(--color-text-dim)]"
+                }`}
+              >
+                <Settings2 className="h-3.5 w-3.5" />
+              </button>
             )}
             {running && onStop && (
               <button

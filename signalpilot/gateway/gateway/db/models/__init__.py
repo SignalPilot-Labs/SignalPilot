@@ -75,6 +75,13 @@ from .knowledge import (
     GatewayReport,
     GatewaySchemaWatch,
 )
+from .mcp import (
+    GatewayMcpConnector,
+    GatewayMcpMemberState,
+    GatewayMcpOAuthState,
+    GatewayMcpOrgPolicy,
+    GatewayMcpToolCall,
+)
 from .queries import (
     GatewayAnalysisTrail,
     GatewayChatObjectDeletion,
@@ -150,6 +157,11 @@ __all__ = [
     "GatewayKnowledgeDoc",
     "GatewayKnowledgeEdit",
     "GatewayKnowledgeRetrieval",
+    "GatewayMcpConnector",
+    "GatewayMcpMemberState",
+    "GatewayMcpOAuthState",
+    "GatewayMcpOrgPolicy",
+    "GatewayMcpToolCall",
     "GatewayNotebookSession",
     "GatewayNotionIntegration",
     "GatewayOrg",

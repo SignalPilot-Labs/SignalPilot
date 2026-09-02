@@ -190,6 +190,23 @@ async def prepare_execution(
     # client. Tool implementations still enforce their own frozen-project,
     # connection, SQL-governance, and dev-database boundaries.
     capabilities.extend(["sandbox:execute", "dbt:execute"])
+    run_origin = "improvement" if is_improvement_run else "user"
+    # Connectors (external MCP servers). Remote entries point at the gateway
+    # proxy, which authenticates the run's session token below (capability
+    # mcp_proxy) and enforces tool policy per call. Sandbox entries carry
+    # their decrypted per-run env like runtime_auth does.
+    mcp_connectors: list[dict[str, Any]] = []
+    if enterprise_chat_feature_flags().mcp_connectors:
+        capabilities.append("mcp_proxy")
+        from gateway.mcp_connectors.policy import proxy_base_url, resolve_injection
+
+        mcp_connectors = await resolve_injection(
+            db,
+            org_id=run.org_id,
+            user_id=run.user_id,
+            run_origin=run_origin,
+            proxy_base_url=proxy_base_url(),
+        )
     payload = {
         "run_id": run.id,
         "conversation_id": run.conversation_id,
@@ -219,7 +236,8 @@ async def prepare_execution(
         "prompt": prompt,
         "messages": messages,
         "warm_context": warm_context,
-        "run_origin": "improvement" if is_improvement_run else "user",
+        "run_origin": run_origin,
+        "mcp_connectors": mcp_connectors,
         # Optional model override. When SP_CHAT_AGENT_MODEL is set (local/staging)
         # the notebook agent uses it; unset -> the notebook keeps its own default.
         **({"model": _chat_model} if (_chat_model := os.getenv("SP_CHAT_AGENT_MODEL")) else {}),
@@ -230,6 +248,7 @@ async def prepare_execution(
             "runtime_results": enterprise_chat_feature_flags().runtime_results,
             "runtime_artifacts": enterprise_chat_feature_flags().runtime_artifacts,
             "dataset_refs": enterprise_chat_feature_flags().dataset_refs,
+            "mcp_connectors": enterprise_chat_feature_flags().mcp_connectors,
         },
         # Native Claude Agent SDK continuity. The sandbox restores this archive
         # before a cold resume and saves it after every run. Database history

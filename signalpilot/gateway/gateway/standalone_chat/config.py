@@ -20,6 +20,14 @@ def _disabled_by_default_flag(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _enabled_by_default_flag(name: str) -> bool:
+    """Read a flag that is on in every mode unless explicitly turned off."""
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return True
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class EnterpriseChatFeatureFlags:
     """Independent rollout boundaries for the enterprise runtime phases."""
@@ -34,6 +42,9 @@ class EnterpriseChatFeatureFlags:
     runtime_results: bool
     runtime_artifacts: bool
     dataset_refs: bool
+    # Connectors: external MCP servers for the chat agent. On everywhere; opt out with
+    # SP_FEATURE_CHAT_MCP_CONNECTORS=false.
+    mcp_connectors: bool
 
 
 def enterprise_chat_feature_flags() -> EnterpriseChatFeatureFlags:
@@ -49,6 +60,7 @@ def enterprise_chat_feature_flags() -> EnterpriseChatFeatureFlags:
         runtime_results=_disabled_by_default_flag("SP_FEATURE_CHAT_RUNTIME_RESULTS"),
         runtime_artifacts=_disabled_by_default_flag("SP_FEATURE_CHAT_RUNTIME_ARTIFACTS"),
         dataset_refs=_disabled_by_default_flag("SP_FEATURE_CHAT_DATASET_REFS"),
+        mcp_connectors=_enabled_by_default_flag("SP_FEATURE_CHAT_MCP_CONNECTORS"),
     )
 
 

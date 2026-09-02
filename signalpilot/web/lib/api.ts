@@ -19,3 +19,4 @@ export * from "./api/connection-tools";
 export * from "./api/projects";
 export * from "./api/platform";
 export * from "./api/knowledge";
+export * from "./api/mcp-connectors";

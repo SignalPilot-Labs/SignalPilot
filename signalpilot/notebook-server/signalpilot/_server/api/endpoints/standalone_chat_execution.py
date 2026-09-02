@@ -76,6 +76,12 @@ from signalpilot._server.auth.standalone_chat import (
     authorize_execution,
     gateway_mcp_config,
 )
+from signalpilot._server.auth.standalone_chat_connectors import (
+    connector_allowed_tools,
+    connector_secret_values,
+    connector_slugs,
+    parse_mcp_connectors,
+)
 from signalpilot._server.router import APIRouter
 from signalpilot._types.ids import SessionId
 
@@ -114,7 +120,14 @@ async def execute(*, request: Request) -> StreamingResponse:
     branch = scope.branch
     connection_name = scope.connection_name
     commit_sha = scope.commit_sha
-    mcp_config = gateway_mcp_config(authorization)
+    # Sandbox connector env values are per-run secrets: they live only in
+    # mcp_config and the redaction list below, never in the process env.
+    connectors = parse_mcp_connectors(body)
+    mcp_config = gateway_mcp_config(authorization, connectors)
+    allowed_tools = [
+        *STANDALONE_ALLOWED_TOOLS,
+        *connector_allowed_tools(connectors),
+    ]
     runtime_app = request.scope.get("app")
     (
         prompt,
@@ -128,25 +141,21 @@ async def execute(*, request: Request) -> StreamingResponse:
         branch=branch,
         commit_sha=commit_sha,
         connection_name=connection_name,
+        connector_slugs=connector_slugs(connectors),
     )
     scoped_token = authorization.gateway_token
+    runtime_redactions = (scoped_token, *connector_secret_values(connectors))
     gateway_api_url = str(
         os.getenv("SP_GATEWAY_INTERNAL_URL")
         or os.getenv("SP_GATEWAY_URL")
         or "http://gateway:3300"
-    ).rstrip("/")
-    if gateway_api_url.endswith("/mcp"):
-        gateway_api_url = gateway_api_url.removesuffix("/mcp")
+    ).rstrip("/").removesuffix("/mcp")
 
     gateway = StandaloneGatewayClient(
         gateway_url=gateway_api_url,
         token=scoped_token,
         run_id=run_id,
     )
-    load_result = gateway.load_result
-    load_report_catalog = gateway.load_report_catalog
-    load_report_context = gateway.load_report_context
-    check_published_artifact = gateway.check_published_artifact
 
     auth_config_override = _runtime_auth_override(body)
     agent_model = str(
@@ -316,22 +325,22 @@ async def execute(*, request: Request) -> StreamingResponse:
 
                 artifact_server = build_standalone_chat_mcp_server(
                     collector,
-                    result_loader=load_result,
+                    result_loader=gateway.load_result,
                     project_directory=project_directory,
                     scratch_directory=scratch,
                     notebook_mcp_app=runtime_app,
                     analysis_notebook_path=analysis_notebook_path,
                     event_sink=lifecycle_event,
                     notebook_lifecycle=lifecycle,
-                    runtime_redactions=(scoped_token,),
+                    runtime_redactions=runtime_redactions,
                     notebook_seeder=(
                         lambda notebook_name: seed_notebook(
                             analysis_notebook_path.parent, notebook_name
                         )
                     ),
-                    report_catalog_loader=load_report_catalog,
-                    report_context_loader=load_report_context,
-                    published_artifact_checker=check_published_artifact,
+                    report_catalog_loader=gateway.load_report_catalog,
+                    report_context_loader=gateway.load_report_context,
+                    published_artifact_checker=gateway.check_published_artifact,
                     attached_report_id=str(
                         (
                             (body.get("warm_context") or {}).get(
@@ -378,7 +387,7 @@ async def execute(*, request: Request) -> StreamingResponse:
                         additional_disallowed_tools=(
                             STANDALONE_DISALLOWED_MCP_TOOLS
                         ),
-                        allowed_tools=list(STANDALONE_ALLOWED_TOOLS),
+                        allowed_tools=list(allowed_tools),
                         additional_mcp_servers={
                             "standalone-chat": artifact_server
                         },

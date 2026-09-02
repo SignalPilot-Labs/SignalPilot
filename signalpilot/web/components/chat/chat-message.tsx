@@ -15,14 +15,14 @@ import {
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { ChatMarkdown } from "~/components/chat/chat-markdown";
 import {
   openStandaloneNotebookArchive,
   type StandaloneChatRunStatus,
   type ChatReportSuggestion,
 } from "~/lib/api";
 import { RunActivityBlocks, RunTimeline } from "~/components/chat/run-timeline";
+import { ConnectorSignInCards } from "~/components/chat/connector-signin-card";
 import { RuntimeBootCard } from "~/components/chat/runtime-boot-card";
 import { ReplayControls } from "~/components/chat/replay-controls";
 import {
@@ -41,6 +41,11 @@ import {
   type UiMessage,
 } from "~/components/chat/chat-ui-context";
 import { ArtifactPreview } from "~/components/chat/chat-artifact-preview";
+import { ChatArtifactCards } from "~/components/chat/chat-artifact-card";
+import {
+  deriveArtifactCards,
+  suppressCoveredCards,
+} from "~/lib/chat-artifact-cards";
 
 function WorkTimeline({ runId }: { runId: string }) {
   const { events } = useChatUi();
@@ -185,7 +190,8 @@ function AssistantMessage({
       ? (message.metadata.status as StandaloneChatRunStatus)
       : "completed");
   const [showWork, setShowWork] = useState(false);
-  const { artifacts, events, onRetry, onStop } = useChatUi();
+  const { artifacts, conversationId, events, files, openArtifact, onRetry, onStop } =
+    useChatUi();
   const { toast } = useToast();
   const blocks = useMemo(
     () => (runId ? foldRunBlocks(events, runId) : []),
@@ -213,12 +219,31 @@ function AssistantMessage({
     runStatus === "failed" &&
     Boolean(runError) &&
     message.content.trim() === runError?.trim();
-  const attachedArtifacts = artifacts.filter(
-    (artifact) =>
-      artifact.assistant_message_id === message.id || artifact.run_id === runId,
+  const attachedArtifacts = useMemo(
+    () =>
+      artifacts.filter(
+        (artifact) =>
+          artifact.assistant_message_id === message.id ||
+          artifact.run_id === runId,
+      ),
+    [artifacts, message.id, runId],
   );
   const successful = runStatus === "completed";
   const running = runStatus === "queued" || runStatus === "running";
+  // Inline artifact cards: run events anchor them, the file manifest is the
+  // source of truth. Derived, so rehydration on refresh is free. A file the
+  // legacy published previews below already render never gets a card too —
+  // one artifact must not appear twice with different verbs.
+  const fileCards = useMemo(
+    () =>
+      runId
+        ? suppressCoveredCards(
+            deriveArtifactCards(events, files, runId, running),
+            attachedArtifacts.map((artifact) => artifact.filename),
+          )
+        : [],
+    [attachedArtifacts, events, files, runId, running],
+  );
   const runtimeArchiveAvailable =
     message.metadata.runtime_archive_available === true;
   const reportSuggestion = successful
@@ -260,11 +285,18 @@ function AssistantMessage({
               />
             </div>
           )}
+          {runId && <ConnectorSignInCards events={events} runId={runId} />}
           {!blocksHaveText && message.content && !messageRepeatsRunError && (
-            <div className="chat-markdown">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                {message.content}
-              </ReactMarkdown>
+            <ChatMarkdown markdown={message.content} streaming={running} />
+          )}
+          {fileCards.length > 0 && (
+            // aria-live so a pending card resolving to ready is announced.
+            <div className="mt-4" aria-live="polite">
+              <ChatArtifactCards
+                cards={fileCards}
+                conversationId={conversationId}
+                onOpen={openArtifact}
+              />
             </div>
           )}
           {attachedArtifacts.length > 0 && (
@@ -425,6 +457,11 @@ function AssistantMessageReplay({
   const {
     events,
     artifacts,
+    conversationId,
+    files,
+    openArtifact,
+    getFileObjectUrl,
+    nowMs,
     onStop,
     onRetry,
     onApproveReportSuggestion,
@@ -473,6 +510,11 @@ function AssistantMessageReplay({
         value={{
           events: replay.visibleEvents,
           artifacts: replay.visibleArtifacts,
+          conversationId,
+          files,
+          openArtifact,
+          getFileObjectUrl,
+          nowMs,
           onStop,
           onRetry,
           onApproveReportSuggestion,

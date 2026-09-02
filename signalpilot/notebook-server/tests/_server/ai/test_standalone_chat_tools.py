@@ -740,7 +740,12 @@ def test_agent_contract_includes_default_signalpilot_mcp_tools():
     assert "publish_chart" in _prompt_flat
     assert "publish_report" in _prompt_flat
     assert "GitHub Flavored Markdown" in _prompt_flat
-    assert "HTML tags such as `<details>` do not render" in _prompt_flat
+    assert "raw HTML" in _prompt_flat
+    assert "blank line after an opening HTML tag" in _prompt_flat
+    assert "Link each dbt model to its lineage page" in _prompt_flat
+    assert "/lineage/rpt_customer_retention?project=PROJECT_ID" in _prompt_flat
+    assert "/lineage/rpt_customer_retention/raw?project=PROJECT_ID" in _prompt_flat
+    assert "Keep the link root-relative" in _prompt_flat
     assert {
         "mcp__signalpilot__get_knowledge",
         "mcp__signalpilot__propose_knowledge",
@@ -789,6 +794,7 @@ def test_notebook_workflow_is_always_enabled():
         connection_name="warehouse",
     )
     assert "`signalpilot-dbt:dbt-workflow`" in execution_prompt
+    assert "Lineage link: /lineage/<model_name>?project=project-a" in execution_prompt
     assert "mcp__standalone-chat__start_analysis_notebook" in STANDALONE_ALLOWED_TOOLS
     assert any("signalpilot-notebook" in tool for tool in STANDALONE_ALLOWED_TOOLS)
 

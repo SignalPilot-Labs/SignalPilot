@@ -73,6 +73,8 @@ export type StandaloneChatBootstrap = {
     structured_results?: boolean;
     organization_sharing?: boolean;
     forking?: boolean;
+    /** Connectors (external MCP servers) for the chat agent. */
+    mcp_connectors?: boolean;
   };
 };
 

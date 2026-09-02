@@ -193,6 +193,9 @@ function text(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value : null;
 }
 
+/** The proxy's sign-in error; the transcript shows a card for it instead. */
+const CONNECTOR_NEEDS_SIGN_IN = /needs you to sign in/i;
+
 function chatToolSummary(value: unknown): string | null {
   return text(value)?.replace(/\bgoverned tool\b/gi, "tool") ?? null;
 }
@@ -368,10 +371,19 @@ export function foldRunSteps(
       if (failed) {
         // The worker writes the failure text as `summary`; `message` is the
         // legacy field kept as a fallback.
-        step.detail =
+        const failure =
           chatToolSummary(event.payload.summary) ??
           chatToolSummary(event.payload.message) ??
           "The tool returned an error.";
+        if (CONNECTOR_NEEDS_SIGN_IN.test(failure)) {
+          // A connector sign-in card renders for this run (see
+          // chat-connector-signin.ts); the row says it once, quietly, and
+          // never repeats the agent-facing error text.
+          step.title = `${step.title} · needs sign-in`;
+          step.detail = null;
+        } else {
+          step.detail = failure;
+        }
       }
       continue;
     }

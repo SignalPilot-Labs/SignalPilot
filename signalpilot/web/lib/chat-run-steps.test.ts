@@ -255,7 +255,9 @@ describe("foldRunBlocks", () => {
     expect(chain1.steps.at(-1)?.tool).toBe("Agent");
     expect(chain1.steps.at(-2)?.tool).toBe("query_database");
     expect(narration.text).toContain("analysis runtime");
-    expect(chain2.steps).toHaveLength(7); // notebook → write → bash → todo → edit → 2 publishes
+    // notebook → write → bash → 3 export writes → edit → md write → todo →
+    // 2 publishes
+    expect(chain2.steps).toHaveLength(11);
     expect(chain2.steps[0]?.tool).toBe("start_analysis_notebook");
     expect(answer.text).toContain("EMEA drove the growth");
   });
@@ -353,7 +355,9 @@ describe("summarizeRunSteps", () => {
     const summary = summarizeRunSteps(foldRunSteps(allEvents, FIXTURE_RUN_ID));
     expect(summary.queries).toBe(2); // validate_sql + query_database
     expect(summary.codeRuns).toBe(1); // Bash
-    expect(summary.files).toBe(4); // Write + Edit + publish_table + publish_chart
+    // 5 Writes (py + html + svg + csv + md) + Edit + publish_table +
+    // publish_chart
+    expect(summary.files).toBe(8);
     expect(summary.errors).toBe(1);
     expect(summary.running).toBe(false);
   });

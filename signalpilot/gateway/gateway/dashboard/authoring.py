@@ -63,10 +63,7 @@ def canonicalize_agent_draft_query_encodings(
     if not isinstance(charts, list):
         return normalized
     metric_formats = {
-        metric.field_id: metric.format
-        for explore in context.explores
-        for metric in explore.metrics
-        if metric.format
+        metric.field_id: metric.format for explore in context.explores for metric in explore.metrics if metric.format
     }
 
     def resolve(reference: Any, candidates: list[str], *, singleton: bool = False) -> Any:
@@ -89,11 +86,7 @@ def canonicalize_agent_draft_query_encodings(
             continue
         query = chart.get("query")
         visualization = chart.get("visualization")
-        if (
-            not isinstance(query, dict)
-            or query.get("kind") != "semantic"
-            or not isinstance(visualization, dict)
-        ):
+        if not isinstance(query, dict) or query.get("kind") != "semantic" or not isinstance(visualization, dict):
             continue
         dimensions = [item for item in query.get("dimensions", []) if isinstance(item, str)]
         metrics = [item for item in query.get("metrics", []) if isinstance(item, str)]
@@ -129,6 +122,7 @@ def compact_semantic_projection(context: DashboardSemanticContext) -> dict[str, 
         "project_id": context.project_id,
         "commit_sha": context.commit_sha,
         "connection_name": context.connection_name,
+        "connection_type": context.connection_type,
         "semantic_fingerprint": context.semantic_fingerprint,
         "explores": [
             {
@@ -234,6 +228,8 @@ class DashboardAuthoringAgent:
             "grouped by region may drill to customer when customer is the lower-grain governed dimension. Omit a drill "
             "hierarchy only when the explore has no meaningful lower-grain dimension for that chart. "
             "Never emit renderer options, code, HTML, or SQL. For creation return a complete definition. "
+            "The semantic context includes the server-authorized database type; never assume syntax from another "
+            "database or invent a connection type. "
             "For updates return typed operations using stable IDs and do not rewrite unrelated charts. "
             "Never return a refusal-only summary, a null definition, or an empty operation list. When the request "
             "names a business concept without an exact approved metric, use the closest faithful governed metric or "
@@ -350,8 +346,7 @@ class DashboardAuthoringAgent:
                         f"work, and resubmit the complete {mode} payload. Valid exploreName values: "
                         f"{', '.join(explore.name for explore in context.explores) or 'none'}. Never use <UNKNOWN> "
                         "or another placeholder. Preserve every correction from earlier attempts. All validation "
-                        "failures reported so far must be fixed together:\n- "
-                        + "\n- ".join(validation_errors)
+                        "failures reported so far must be fixed together:\n- " + "\n- ".join(validation_errors)
                     ),
                 }
                 if rejected_draft is not None:
@@ -386,9 +381,7 @@ def add_default_governed_date_filter(
     for chart in definition.charts:
         if not isinstance(chart.query, SemanticChartQuery):
             continue
-        candidates = {
-            field.field_id: field for field in date_fields_by_explore.get(chart.query.exploreName, [])
-        }
+        candidates = {field.field_id: field for field in date_fields_by_explore.get(chart.query.exploreName, [])}
         selected_field = next(
             (candidates[field_id] for field_id in chart.query.dimensions if field_id in candidates),
             None,

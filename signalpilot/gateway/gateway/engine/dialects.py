@@ -14,6 +14,7 @@ SQLGLOT_DIALECTS: dict[str, str] = {
     "trino": "trino",
     "duckdb": "duckdb",
     "sqlite": "sqlite",
+    "xata": "postgres",
 }
 
 

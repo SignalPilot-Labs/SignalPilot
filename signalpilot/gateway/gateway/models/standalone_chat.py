@@ -69,6 +69,8 @@ class StandaloneChatProject(BaseModel):
     default_branch: str
     ready: bool
     readiness_message: str
+    connection_type: str | None = None
+    registered: bool = False
 
 
 class ChatBootstrapResponse(BaseModel):

@@ -7,6 +7,7 @@ Feature #9 from the feature table — P0 for demos and local dev.
 from __future__ import annotations
 
 import asyncio
+import threading
 from typing import Any
 
 from ..base import BaseConnector
@@ -25,6 +26,8 @@ class DuckDBConnector(BaseConnector):
         self._conn: duckdb.DuckDBPyConnection | None = None
         self._db_path: str = ""
         self._credential_extras: dict = {}
+        self._active_conn = None
+        self._active_conn_lock = threading.Lock()
 
     def set_credential_extras(self, extras: dict) -> None:
         """Store credential extras — primarily for MotherDuck token auth."""
@@ -104,6 +107,8 @@ class DuckDBConnector(BaseConnector):
 
         def _run():
             conn = self._open_transient() if use_transient else self._conn
+            with self._active_conn_lock:
+                self._active_conn = conn
             try:
                 if params:
                     result = conn.execute(sql, params)
@@ -113,6 +118,8 @@ class DuckDBConnector(BaseConnector):
                 rows = result.fetchall()
                 return [dict(zip(columns, row, strict=False)) for row in rows]
             finally:
+                with self._active_conn_lock:
+                    self._active_conn = None
                 if use_transient:
                     conn.close()
 
@@ -126,9 +133,11 @@ class DuckDBConnector(BaseConnector):
             raise RuntimeError(f"DuckDB query error: {e}") from e
 
     async def cancel_current_query(self) -> bool:
-        if self._conn is None:
+        with self._active_conn_lock:
+            conn = self._active_conn
+        if conn is None:
             return False
-        await asyncio.to_thread(self._conn.interrupt)
+        await asyncio.to_thread(conn.interrupt)
         return True
 
     async def _get_schema_impl(self) -> dict[str, Any]:

@@ -66,7 +66,10 @@ class BaseConnector(ABC):
 
     @abstractmethod
     async def _execute_impl(
-        self, sql: str, params: list | None = None, timeout: int | None = None
+        self,
+        sql: str,
+        params: list | dict[str, Any] | None = None,
+        timeout: int | None = None,
     ) -> list[dict[str, Any]]:
         """Execute query and return rows as list of dicts. Subclasses implement this."""
 
@@ -80,7 +83,12 @@ class BaseConnector(ABC):
 
     # ─── Audited execute (concrete — wraps _execute_impl) ────────────
 
-    async def execute(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
+    async def execute(
+        self,
+        sql: str,
+        params: list | dict[str, Any] | None = None,
+        timeout: int | None = None,
+    ) -> list[dict[str, Any]]:
         """Execute query with audit logging. Subclasses implement _execute_impl."""
         import time as _time
 

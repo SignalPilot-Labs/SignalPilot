@@ -426,7 +426,7 @@ async def _verified_context(store: StoreD, definition: DashboardDefinition) -> D
     try:
         context = await resolver.resolve(store, project_id=binding.projectId, commit_sha=binding.commitSha)
     except DashboardSemanticError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(status_code=422, detail={"code": exc.code, "message": str(exc)}) from exc
     if context.connection_name != binding.connectionName:
         raise HTTPException(status_code=422, detail="Dashboard connection does not match the project")
     if context.semantic_fingerprint != binding.semanticFingerprint:
@@ -744,7 +744,7 @@ async def get_dashboard_semantic_context(project_id: str, commit_sha: str, store
     try:
         return await resolver.resolve(store, project_id=project_id, commit_sha=commit_sha)
     except DashboardSemanticError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(status_code=422, detail={"code": exc.code, "message": str(exc)}) from exc
 
 
 async def _emit_progressive_dashboard_event(
@@ -1318,7 +1318,7 @@ async def create_dashboard_authoring_session(
     try:
         context = await resolver.resolve(store, project_id=project_id, commit_sha=commit_sha)
     except DashboardSemanticError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(status_code=422, detail={"code": exc.code, "message": str(exc)}) from exc
     if not context.explores:
         raise HTTPException(
             status_code=422,
@@ -1511,7 +1511,7 @@ async def retry_failed_dashboard_charts(session_id: str, store: StoreD):
     try:
         context = await resolver.resolve(store, project_id=row.project_id, commit_sha=row.commit_sha)
     except DashboardSemanticError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(status_code=422, detail={"code": exc.code, "message": str(exc)}) from exc
     if context.semantic_fingerprint != row.semantic_fingerprint:
         raise HTTPException(status_code=409, detail={"code": "semantic_context_changed"})
     agent, uses_oauth = await _dashboard_authoring_agent(store, org_id)
@@ -2132,6 +2132,7 @@ async def _cached_receipt(
         tables=dashboard_result.tables_json,
         semantic_definition=dashboard_result.semantic_definition_json,
         compiled_sql=None,
+        connection_type=(dashboard_result.semantic_definition_json or {}).get("connection_type"),
         cache_state="fresh"
         if dashboard_result.expires_at.replace(tzinfo=dashboard_result.expires_at.tzinfo or UTC) > now
         else "stale_refreshing",
@@ -2335,6 +2336,7 @@ async def _execute_dashboard_chart(
                 if isinstance(chart.query, SemanticChartQuery)
                 else compile_custom_sql_query(
                     chart.query,
+                    dialect=context.connection_type,
                     runtime_filters=runtime_filters,
                     timezone=parsed.signalPilot.timezone,
                 )
@@ -2347,6 +2349,7 @@ async def _execute_dashboard_chart(
                 connection_name=dashboard.connection_name,
                 sql=compiled.sql,
                 parameters=compiled.parameters,
+                bound_query=compiled.bound_query,
                 row_limit=chart.query.limit,
                 timeout_seconds=60,
                 context=GovernedQueryContext(
@@ -2417,6 +2420,7 @@ async def _execute_dashboard_chart(
                 tables=result.tables,
                 semantic_definition=compiled.semantic_definition,
                 compiled_sql=compiled.sql,
+                connection_type=context.connection_type,
                 cache_state="fresh",
             )
         except asyncio.CancelledError:
@@ -2636,6 +2640,7 @@ async def get_dashboard_filter_values(
             connection_name=dashboard.connection_name,
             sql=compiled.sql,
             parameters=compiled.parameters,
+            bound_query=compiled.bound_query,
             row_limit=body.limit,
             timeout_seconds=30,
             context=GovernedQueryContext(
@@ -2708,6 +2713,7 @@ async def get_dashboard_chart_data(
         tables=dashboard_result.tables_json,
         semantic_definition=dashboard_result.semantic_definition_json,
         compiled_sql=None,
+        connection_type=(dashboard_result.semantic_definition_json or {}).get("connection_type"),
         cache_state="fresh" if expires_at > datetime.now(UTC) else "stale_refreshing",
     )
 

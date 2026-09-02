@@ -9,6 +9,8 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Any
 
 from ..base import BaseConnector
@@ -203,6 +205,28 @@ class BigQueryConnector(BaseConnector):
             # Safety limit: fail query before execution if it would scan too many bytes
             if max_bytes is not None:
                 job_config.maximum_bytes_billed = max_bytes
+            if params:
+                type_names = {
+                    bool: "BOOL",
+                    int: "INT64",
+                    float: "FLOAT64",
+                    str: "STRING",
+                    bytes: "BYTES",
+                    datetime: "TIMESTAMP",
+                    date: "DATE",
+                    Decimal: "NUMERIC",
+                }
+                job_config.query_parameters = [
+                    bigquery.ScalarQueryParameter(
+                        None,
+                        next(
+                            (name for value_type, name in type_names.items() if isinstance(value, value_type)),
+                            "STRING",
+                        ),
+                        value,
+                    )
+                    for value in params
+                ]
 
             query_job = client.query(sql, job_config=job_config, timeout=timeout)
             self._active_query_job = query_job

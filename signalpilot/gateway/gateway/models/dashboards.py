@@ -188,6 +188,7 @@ class DashboardQueryReceipt(DashboardModel):
     tables: list[str]
     semantic_definition: dict
     compiled_sql: str | None
+    connection_type: str | None = None
     cache_state: Literal[
         "fresh",
         "stale_refreshing",

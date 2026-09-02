@@ -16,6 +16,8 @@ from gateway.dashboard.domain import (
     Scalar,
 )
 
+DASHBOARD_AUTHORING_CONTRACT_VERSION = "2026-09-02.1"
+
 
 class DashboardModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -317,6 +319,9 @@ class DashboardChartDraftInfo(DashboardModel):
     definition: ChartDefinition | None = None
     safe_error: str | None = None
     model_usage: dict[str, Any] = Field(default_factory=dict)
+    payload_hash: str | None = None
+    tool_call_id: str | None = None
+    validation_outcome: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
 
@@ -341,6 +346,8 @@ class DashboardAuthoringSessionInfo(DashboardModel):
     definition: DashboardDefinition | None
     plan: DashboardPlan | None = None
     expected_chart_count: int = 0
+    authoring_contract_version: str = DASHBOARD_AUTHORING_CONTRACT_VERSION
+    plan_revision: int = 0
     chart_drafts: list[DashboardChartDraftInfo] = Field(default_factory=list)
     operations: list[dict[str, Any]]
     summary: str
@@ -354,6 +361,63 @@ class DashboardAuthoringSessionInfo(DashboardModel):
     events: list[DashboardAuthoringEvent] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
+
+
+class BeginDashboardAuthoringRequest(DashboardModel):
+    request: str = Field(min_length=1, max_length=50_000)
+    timezone: str = Field(default="UTC", min_length=1, max_length=100)
+    authoring_session_id: str | None = None
+
+
+class SetDashboardPlanRequest(DashboardModel):
+    authoring_contract_version: str
+    expected_plan_revision: int = Field(ge=0)
+    plan: DashboardPlan
+    tool_call_id: str | None = Field(default=None, max_length=200)
+
+
+class UpsertDashboardChartRequest(DashboardModel):
+    authoring_contract_version: str
+    plan_revision: int = Field(ge=1)
+    chart: ChartDefinition
+    tool_call_id: str | None = Field(default=None, max_length=200)
+
+
+class ApplyDashboardOperationsRequest(DashboardModel):
+    authoring_contract_version: str
+    expected_draft_revision: int = Field(ge=1)
+    operations: list[dict[str, Any]] = Field(min_length=1, max_length=30)
+    tool_call_id: str | None = Field(default=None, max_length=200)
+
+
+class FinalizeDashboardPreviewRequest(DashboardModel):
+    authoring_contract_version: str
+    plan_revision: int = Field(ge=0)
+    expected_draft_revision: int = Field(ge=1)
+    tool_call_id: str | None = Field(default=None, max_length=200)
+
+
+class DashboardAuthoringValidationIssue(DashboardModel):
+    code: str
+    path: str
+    message: str
+    allowed_alternatives: list[str] = Field(default_factory=list, max_length=20)
+
+
+class DashboardAuthoringToolResult(DashboardModel):
+    status: Literal["planning", "building", "ready", "rejected", "partial_failed", "preview", "preview_ready"]
+    authoring_session_id: str
+    authoring_contract_version: str = DASHBOARD_AUTHORING_CONTRACT_VERSION
+    plan_revision: int = 0
+    draft_revision: int
+    expected_count: int = 0
+    ready_count: int = 0
+    failed_count: int = 0
+    chart_id: str | None = None
+    changed_ids: list[str] = Field(default_factory=list)
+    validation_issues: list[DashboardAuthoringValidationIssue] = Field(default_factory=list)
+    semantic_context: dict[str, Any] | None = None
+    session: DashboardAuthoringSessionInfo | None = None
 
 
 class DashboardAuthoringApplyRequest(DashboardModel):

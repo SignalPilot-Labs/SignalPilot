@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import time
@@ -64,6 +65,59 @@ from gateway.store import standalone_chat as chat_store
 
 logger = logging.getLogger(__name__)
 _CLARIFICATION_PREFIX = "CLARIFICATION_REQUESTED:"
+_DASHBOARD_AUTHORING_TOOLS = {
+    "begin_dashboard_authoring",
+    "set_dashboard_plan",
+    "upsert_dashboard_chart",
+    "apply_dashboard_operations",
+    "create_dashboard_preview",
+}
+
+
+def _dashboard_authoring_completion(tool_name: str, content: str) -> dict[str, Any]:
+    normalized = tool_name.rsplit("__", 1)[-1]
+    if normalized not in _DASHBOARD_AUTHORING_TOOLS:
+        return {}
+    try:
+        result = json.loads(content)
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(result, dict):
+        return {}
+    session_id = str(result.get("authoring_session_id") or "").strip()
+    if not session_id:
+        return {}
+    status = str(result.get("status") or "").strip()
+
+    def count(key: str) -> int:
+        value = result.get(key)
+        return value if isinstance(value, int) and value >= 0 else 0
+
+    ready = count("ready_count")
+    expected = count("expected_count")
+    labels = {
+        "begin_dashboard_authoring": "Dashboard fields resolved",
+        "set_dashboard_plan": f"Dashboard plan validated for {expected} charts",
+        "upsert_dashboard_chart": (
+            f"Dashboard chart validated ({ready} of {expected})"
+            if status == "ready"
+            else "Dashboard chart needs correction"
+        ),
+        "apply_dashboard_operations": "Dashboard refinements validated",
+        "create_dashboard_preview": "Dashboard preview ready",
+    }
+    return {
+        "dashboard_authoring": {
+            "label": labels[normalized],
+            "phase": normalized,
+            "authoring_session_id": session_id,
+            "draft_revision": count("draft_revision"),
+            "status": status,
+            "ready_count": ready,
+            "failed_count": count("failed_count"),
+            "expected_count": expected,
+        }
+    }
 
 
 async def _append(run_id: str, event_type: str, payload: dict[str, Any]) -> None:
@@ -353,13 +407,11 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                             )
                         completed_payload: dict[str, Any] = {
                             "tool_call_id": event.get("tool_call_id"),
-                            "summary": (
-                                "The tool returned an error."
-                                if is_error
-                                else "The tool completed."
-                            ),
+                            "summary": ("The tool returned an error." if is_error else "The tool completed."),
                             "error": is_error,
                         }
+                        if not is_error:
+                            completed_payload.update(_dashboard_authoring_completion(completed_tool, content))
                         if parent_tool_call_id:
                             completed_payload["parent_tool_call_id"] = parent_tool_call_id
                         if completed_tool == "Agent" and not is_error and content:
@@ -429,9 +481,7 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                             raw_report_action_outcome if isinstance(raw_report_action_outcome, dict) else None
                         )
                         raw_dashboard_preview = event.get("dashboard_preview")
-                        dashboard_preview = (
-                            raw_dashboard_preview if isinstance(raw_dashboard_preview, dict) else None
-                        )
+                        dashboard_preview = raw_dashboard_preview if isinstance(raw_dashboard_preview, dict) else None
                         await _persist_artifacts(
                             run_id=run_id,
                             worker_id=worker_id,

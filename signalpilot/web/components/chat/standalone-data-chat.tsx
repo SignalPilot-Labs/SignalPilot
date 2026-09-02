@@ -292,7 +292,7 @@ export function StandaloneDataChat({
   const latestDashboardSessionId =
     messageDashboardSessionId ?? dashboardProgress?.sessionId ?? null;
   const dashboardUpdateLabel =
-    dashboardProgress?.phase === "ready"
+    dashboardProgress?.phase === "create_dashboard_preview"
       ? null
       : (dashboardProgress?.label ?? null);
   useEffect(() => {

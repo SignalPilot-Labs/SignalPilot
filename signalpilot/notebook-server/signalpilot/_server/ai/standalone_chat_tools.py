@@ -51,7 +51,9 @@ def build_standalone_chat_mcp_server(
     | None = None,
     published_artifact_checker: Callable[[str, str], Awaitable[dict[str, Any]]]
     | None = None,
-    dashboard_preview_creator: Callable[[str, str, str | None], Awaitable[dict[str, Any]]]
+    dashboard_authoring_handler: Callable[
+        [str, dict[str, Any]], Awaitable[dict[str, Any]]
+    ]
     | None = None,
     attached_report_id: str | None = None,
 ) -> Any:
@@ -61,8 +63,9 @@ def build_standalone_chat_mcp_server(
     from mcp.types import TextContent, Tool
 
     server = Server("standalone-chat", version="1.0.0")
-    tools = standalone_chat_tools(notebook_enabled=notebook_mcp_app is not None)
-    dashboard_preview_request: tuple[str, str, str | None] | None = None
+    tools = standalone_chat_tools(
+        notebook_enabled=notebook_mcp_app is not None
+    )
     dashboard_preview_result: dict[str, Any] | None = None
 
     @server.list_tools()
@@ -73,64 +76,38 @@ def build_standalone_chat_mcp_server(
     async def call_tool(
         name: str, arguments: dict[str, Any]
     ) -> list[TextContent]:
-        nonlocal dashboard_preview_request, dashboard_preview_result
+        nonlocal dashboard_preview_result
         try:
-            if name == "create_dashboard_preview":
-                if dashboard_preview_creator is None:
+            if name in {
+                "begin_dashboard_authoring",
+                "set_dashboard_plan",
+                "upsert_dashboard_chart",
+                "apply_dashboard_operations",
+                "create_dashboard_preview",
+            }:
+                if dashboard_authoring_handler is None:
                     raise ValueError("Dashboard authoring is unavailable")
-                request = str(arguments.get("request") or "").strip()
-                timezone = str(arguments.get("timezone") or "UTC").strip()
-                authoring_session_id = str(arguments.get("authoring_session_id") or "").strip() or None
-                if not request or len(request) > 50_000:
-                    raise ValueError("A dashboard request is required")
-                if not timezone or len(timezone) > 100:
-                    raise ValueError("Invalid dashboard timezone")
-                request_key = (request, timezone, authoring_session_id)
-                if dashboard_preview_result is not None:
-                    if request_key != dashboard_preview_request:
-                        raise ValueError(
-                            "Only one dashboard preview may be created per chat run"
-                        )
-                    return [
-                        TextContent(
-                            type="text",
-                            text=json.dumps(dashboard_preview_result),
-                        )
-                    ]
-                created = await dashboard_preview_creator(request, timezone, authoring_session_id)
-                session_id = str(created.get("id") or "").strip()
-                if not session_id:
-                    raise ValueError("Dashboard authoring returned no preview")
-                definition = created.get("definition")
+                result = await dashboard_authoring_handler(name, arguments)
+                if (
+                    name != "create_dashboard_preview"
+                    or result.get("status") != "preview_ready"
+                ):
+                    return [TextContent(type="text", text=json.dumps(result))]
+                session = result.get("session")
+                session = session if isinstance(session, dict) else {}
+                session_id = str(
+                    result.get("authoring_session_id") or ""
+                ).strip()
+                definition = session.get("definition")
                 definition = definition if isinstance(definition, dict) else {}
                 charts = definition.get("charts")
                 charts = charts if isinstance(charts, list) else []
-                plan = created.get("plan")
+                plan = session.get("plan")
                 plan = plan if isinstance(plan, dict) else {}
-                chart_drafts = created.get("chart_drafts")
-                chart_drafts = chart_drafts if isinstance(chart_drafts, list) else []
-                failed_charts = [
-                    {
-                        "label": str(
-                            ((draft.get("intent") or {}).get("label"))
-                            or draft.get("chart_id")
-                            or "Chart"
-                        ),
-                        "error": str(draft.get("safe_error") or "Chart generation failed"),
-                    }
-                    for draft in chart_drafts
-                    if isinstance(draft, dict) and draft.get("status") == "failed"
-                ]
-                created_status = str(created.get("status") or "preview")
-                dashboard_preview_request = request_key
                 dashboard_preview_result = {
-                    "status": (
-                        "partial_failed"
-                        if created_status == "partial_failed"
-                        else "preview_ready"
-                    ),
+                    "status": "preview_ready",
                     "authoring_session_id": session_id,
-                    "summary": str(created.get("summary") or ""),
+                    "summary": str(session.get("summary") or ""),
                     "dashboard_name": str(
                         definition.get("name")
                         or plan.get("name")
@@ -142,7 +119,6 @@ def build_standalone_chat_mcp_server(
                         for chart in charts[:12]
                         if isinstance(chart, dict)
                     ],
-                    **({"failed_charts": failed_charts} if failed_charts else {}),
                     "requires_review": True,
                     "apply_required": True,
                 }
@@ -305,24 +281,18 @@ def build_standalone_chat_mcp_server(
                     )
                 ]
             if name == "start_analysis_notebook":
-                if (
-                    notebook_mcp_app is None
-                    or analysis_notebook_path is None
-                ):
+                if notebook_mcp_app is None or analysis_notebook_path is None:
                     raise ValueError(
                         "The run-bound analysis notebook is unavailable"
                     )
-                notebook_name = str(
-                    arguments.get("notebook") or "analysis"
-                )
+                notebook_name = str(arguments.get("notebook") or "analysis")
                 if not _NOTEBOOK_NAME_RE.fullmatch(notebook_name):
                     raise ValueError("Invalid notebook name")
                 if notebook_name == "analysis":
                     target_path = analysis_notebook_path
                 else:
                     target_path = (
-                        analysis_notebook_path.parent
-                        / f"{notebook_name}.py"
+                        analysis_notebook_path.parent / f"{notebook_name}.py"
                     )
                 running_session = (
                     notebook_lifecycle.sessions.get(notebook_name)
@@ -429,9 +399,7 @@ def build_standalone_chat_mcp_server(
                     scratch_directory=scratch_directory,
                     arguments=arguments,
                 )
-                return [
-                    TextContent(type="text", text=json.dumps(inspected))
-                ]
+                return [TextContent(type="text", text=json.dumps(inspected))]
             metadata = _clean_metadata(arguments)
             loaded_result: dict[str, Any] | None = None
             result_id = str(arguments.get("result_id") or "").strip()

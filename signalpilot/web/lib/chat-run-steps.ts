@@ -115,6 +115,13 @@ const ARTIFACT_TOOLS = new Set([
   "publish_chart",
   "publish_report",
 ]);
+const DASHBOARD_AUTHORING_TOOLS = new Set([
+  "begin_dashboard_authoring",
+  "set_dashboard_plan",
+  "upsert_dashboard_chart",
+  "apply_dashboard_operations",
+  "create_dashboard_preview",
+]);
 
 export function normalizeToolName(raw: string): {
   tool: string;
@@ -132,7 +139,7 @@ export function normalizeToolName(raw: string): {
 }
 
 function categorizeTool(tool: string): RunStepCategory {
-  if (tool === "create_dashboard_preview") return "dashboard";
+  if (DASHBOARD_AUTHORING_TOOLS.has(tool)) return "dashboard";
   if (SQL_TOOLS.has(tool)) return "sql";
   if (PYTHON_TOOLS.has(tool)) return "python";
   if (NOTEBOOK_TOOLS.has(tool)) return "notebook";
@@ -169,6 +176,10 @@ function humanizeTool(tool: string): string {
     publish_chart: "Published a chart",
     publish_report: "Published a report",
     create_dashboard_preview: "Creating dashboard preview",
+    begin_dashboard_authoring: "Resolving dashboard fields",
+    set_dashboard_plan: "Validating dashboard plan",
+    upsert_dashboard_chart: "Validating dashboard chart",
+    apply_dashboard_operations: "Applying dashboard refinements",
     Bash: "Ran a command",
     Write: "Generated a file",
     Edit: "Edited a file",
@@ -316,7 +327,9 @@ export function foldRunSteps(
         status: "running",
         title: isSpawn
           ? (text(input?.description) ?? "Subagent")
-          : humanizeTool(tool),
+          : tool === "upsert_dashboard_chart"
+            ? `Validating ${text(asRecord(input?.chart)?.title) ?? text(input?.chart_id) ?? "dashboard chart"}`
+            : humanizeTool(tool),
         tool,
         toolOrigin: origin,
         input,
@@ -367,6 +380,10 @@ export function foldRunSteps(
       step.durationMs = durationBetween(step.startedAt, event.created_at);
       if (step.category === "subagent") {
         step.report = text(event.payload.report);
+      }
+      const dashboard = asRecord(event.payload.dashboard_authoring);
+      if (step.category === "dashboard" && dashboard) {
+        step.detail = text(dashboard.label);
       }
       if (failed) {
         // The worker writes the failure text as `summary`; `message` is the
@@ -435,15 +452,6 @@ export function foldRunSteps(
     if (event.type === "progress") {
       const label = text(event.payload.label);
       if (!label) continue;
-      if (text(event.payload.scope) === "dashboard_authoring") {
-        const dashboardStep = [...open]
-          .reverse()
-          .find((step) => step.tool === "create_dashboard_preview");
-        if (dashboardStep) {
-          dashboardStep.detail = label;
-          continue;
-        }
-      }
       steps.push({
         key,
         sequence: event.sequence,
@@ -611,7 +619,7 @@ export function foldRunSteps(
   return steps;
 }
 
-/** Current real server-side phase for a running dashboard preview tool. */
+/** Latest safe dashboard state emitted by a native top-level tool completion. */
 export type DashboardAuthoringProgress = {
   label: string;
   phase: string;
@@ -628,16 +636,17 @@ export function activeDashboardAuthoringProgress(
     const event = events[index];
     if (
       event.run_id !== runId ||
-      event.type !== "progress" ||
-      event.payload.scope !== "dashboard_authoring"
+      event.type !== "tool_completed"
     ) {
       continue;
     }
-    const label = event.payload.label;
+    const dashboard = asRecord(event.payload.dashboard_authoring);
+    if (!dashboard) continue;
+    const label = dashboard.label;
     if (typeof label !== "string" || !label) return null;
-    const phase = event.payload.phase;
-    const sessionId = event.payload.authoring_session_id;
-    const draftRevision = event.payload.draft_revision;
+    const phase = dashboard.phase;
+    const sessionId = dashboard.authoring_session_id;
+    const draftRevision = dashboard.draft_revision;
     return {
       label,
       phase: typeof phase === "string" ? phase : "",
@@ -655,12 +664,9 @@ export function activeDashboardPreviewLabel(
   if (!runId) return null;
   const active = [...foldRunSteps(events, runId)]
     .reverse()
-    .find(
-      (step) =>
-        step.tool === "create_dashboard_preview" && step.status === "running",
-    );
+    .find((step) => step.category === "dashboard" && step.status === "running");
   return (
-    active?.detail ?? (active ? "Preparing governed dashboard preview" : null)
+    active?.detail ?? active?.title ?? null
   );
 }
 

@@ -52,7 +52,7 @@ services:
       # tested without one tab taking over another.
       SP_ALLOW_CONCURRENT_EDIT_SESSIONS: "true"
       SP_AGENT_EFFORT: "medium"
-      SIGNALPILOT_PLUGIN_VERSION: "deployed"
+      SIGNALPILOT_PLUGIN_VERSION: "1.3.0"
     volumes:
       - ./signalpilot/notebook-server/signalpilot:/opt/sp-notebook/signalpilot:cached
       - ./scripts/dev-watch-notebook.py:/usr/local/bin/dev-watch-notebook.py:ro

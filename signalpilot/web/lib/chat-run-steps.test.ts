@@ -136,15 +136,16 @@ describe("foldRunSteps", () => {
     expect(query?.status).toBe("running");
   });
 
-  it("updates one live dashboard step from real authoring phases", () => {
+  it("renders native top-level dashboard tools and pairs parallel charts by id", () => {
     const dashboardEvents = [
       {
         run_id: "dashboard-run",
         sequence: 1,
         type: "tool_started" as const,
         payload: {
-          tool: "mcp__standalone-chat__create_dashboard_preview",
-          tool_call_id: "dashboard-call",
+          tool: "mcp__standalone-chat__begin_dashboard_authoring",
+          tool_call_id: "begin-call",
+          parent_tool_call_id: "",
           input: { request: "Build a sales dashboard", timezone: "UTC" },
         },
         created_at: "2026-09-01T10:00:00Z",
@@ -152,53 +153,86 @@ describe("foldRunSteps", () => {
       {
         run_id: "dashboard-run",
         sequence: 2,
-        type: "progress" as const,
+        type: "tool_started" as const,
         payload: {
-          scope: "dashboard_authoring",
-          phase: "drafting",
-          label: "Drafting the dashboard structure and charts",
+          tool: "mcp__standalone-chat__upsert_dashboard_chart",
+          tool_call_id: "chart-a-call",
+          parent_tool_call_id: "",
+          input: {
+            chart_id: "revenue",
+            chart: { title: "Total revenue" },
+          },
         },
         created_at: "2026-09-01T10:00:01Z",
       },
       {
         run_id: "dashboard-run",
         sequence: 3,
-        type: "progress" as const,
+        type: "tool_started" as const,
         payload: {
-          scope: "dashboard_authoring",
-          phase: "validating",
-          label: "Validating chart fields, filters, and bindings",
+          tool: "mcp__standalone-chat__upsert_dashboard_chart",
+          tool_call_id: "chart-b-call",
+          parent_tool_call_id: "",
+          input: {
+            chart_id: "trend",
+            chart: { title: "Revenue trend" },
+          },
         },
         created_at: "2026-09-01T10:00:02Z",
+      },
+      {
+        run_id: "dashboard-run",
+        sequence: 4,
+        type: "tool_completed" as const,
+        payload: {
+          tool_call_id: "chart-b-call",
+          error: false,
+          dashboard_authoring: {
+            label: "Dashboard chart validated (1 of 2)",
+            phase: "upsert_dashboard_chart",
+            authoring_session_id: "session-top-level",
+            draft_revision: 3,
+          },
+        },
+        created_at: "2026-09-01T10:00:03Z",
+      },
+      {
+        run_id: "dashboard-run",
+        sequence: 5,
+        type: "tool_completed" as const,
+        payload: { tool_call_id: "begin-call", error: false },
+        created_at: "2026-09-01T10:00:04Z",
+      },
+      {
+        run_id: "dashboard-run",
+        sequence: 6,
+        type: "tool_completed" as const,
+        payload: { tool_call_id: "chart-a-call", error: true },
+        created_at: "2026-09-01T10:00:05Z",
       },
     ];
 
     const dashboardSteps = foldRunSteps(dashboardEvents, "dashboard-run");
-    expect(dashboardSteps).toHaveLength(1);
-    expect(dashboardSteps[0]).toMatchObject({
-      category: "dashboard",
-      status: "running",
-      detail: "Validating chart fields, filters, and bindings",
-    });
-    expect(
-      activeDashboardPreviewLabel(dashboardEvents, "dashboard-run"),
-    ).toBe("Validating chart fields, filters, and bindings");
-
-    expect(
-      activeDashboardPreviewLabel(
-        [
-          ...dashboardEvents,
-          {
-            run_id: "dashboard-run",
-            sequence: 4,
-            type: "tool_completed" as const,
-            payload: { tool_call_id: "dashboard-call", error: false },
-            created_at: "2026-09-01T10:00:03Z",
-          },
-        ],
-        "dashboard-run",
-      ),
-    ).toBeNull();
+    expect(dashboardSteps).toHaveLength(3);
+    expect(dashboardSteps.map((step) => step.category)).toEqual([
+      "dashboard",
+      "dashboard",
+      "dashboard",
+    ]);
+    expect(dashboardSteps.map((step) => step.title)).toEqual([
+      "Resolving dashboard fields",
+      "Validating Total revenue",
+      "Validating Revenue trend",
+    ]);
+    expect(dashboardSteps.map((step) => step.status)).toEqual([
+      "succeeded",
+      "failed",
+      "succeeded",
+    ]);
+    expect(dashboardSteps.every((step) => step.children.length === 0)).toBe(true);
+    expect(dashboardSteps[2]?.detail).toBe(
+      "Dashboard chart validated (1 of 2)",
+    );
   });
 
   it("exposes the plan-ready session and revision for event-driven preview refresh", () => {
@@ -207,13 +241,16 @@ describe("foldRunSteps", () => {
         {
           run_id: "dashboard-run",
           sequence: 1,
-          type: "progress" as const,
+          type: "tool_completed" as const,
           payload: {
-            scope: "dashboard_authoring",
-            phase: "plan_ready",
-            label: "Plan ready with 9 charts",
-            authoring_session_id: "session-progressive",
-            draft_revision: 4,
+            tool_call_id: "plan-call",
+            error: false,
+            dashboard_authoring: {
+              phase: "set_dashboard_plan",
+              label: "Dashboard plan validated for 9 charts",
+              authoring_session_id: "session-progressive",
+              draft_revision: 4,
+            },
           },
           created_at: "2026-09-01T10:00:00Z",
         },
@@ -222,8 +259,8 @@ describe("foldRunSteps", () => {
     );
 
     expect(progress).toEqual({
-      label: "Plan ready with 9 charts",
-      phase: "plan_ready",
+      label: "Dashboard plan validated for 9 charts",
+      phase: "set_dashboard_plan",
       sessionId: "session-progressive",
       draftRevision: 4,
     });

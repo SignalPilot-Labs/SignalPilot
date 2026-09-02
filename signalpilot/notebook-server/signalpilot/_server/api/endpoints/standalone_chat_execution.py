@@ -148,27 +148,38 @@ async def execute(*, request: Request) -> StreamingResponse:
     load_report_context = gateway.load_report_context
     check_published_artifact = gateway.check_published_artifact
 
-    async def create_dashboard_preview(
-        dashboard_request: str,
-        timezone: str,
-        authoring_session_id: str | None,
-    ) -> dict[str, Any]:
-        active_session_id = str(
-            ((body.get("warm_context") or {}).get("dashboard_authoring") or {}).get(
-                "authoring_session_id"
-            )
+    active_authoring_session_id = (
+        str(
+            (
+                (body.get("warm_context") or {}).get("dashboard_authoring")
+                or {}
+            ).get("authoring_session_id")
             or ""
-        ) or None
-        if authoring_session_id and authoring_session_id != active_session_id:
-            raise ValueError("Dashboard authoring session is not active in this Data Chat")
-        return await gateway.create_dashboard_preview(
-            request=dashboard_request,
-            project_id=project_id,
-            branch=branch,
-            commit_sha=commit_sha,
-            timezone=timezone,
-            authoring_session_id=authoring_session_id,
         )
+        or None
+    )
+
+    async def dashboard_authoring_tool(
+        tool: str,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        nonlocal active_authoring_session_id
+        supplied = str(arguments.get("authoring_session_id") or "") or None
+        if tool == "begin_dashboard_authoring":
+            if supplied and supplied != active_authoring_session_id:
+                raise ValueError(
+                    "Dashboard authoring session is not active in this Data Chat"
+                )
+        elif supplied != active_authoring_session_id:
+            raise ValueError(
+                "Dashboard authoring session is not active in this Data Chat"
+            )
+        result = await gateway.dashboard_authoring_tool(tool, arguments)
+        if tool == "begin_dashboard_authoring":
+            active_authoring_session_id = (
+                str(result.get("authoring_session_id") or "") or None
+            )
+        return result
 
     auth_config_override = _runtime_auth_override(body)
     agent_model = str(
@@ -354,7 +365,7 @@ async def execute(*, request: Request) -> StreamingResponse:
                     report_catalog_loader=load_report_catalog,
                     report_context_loader=load_report_context,
                     published_artifact_checker=check_published_artifact,
-                    dashboard_preview_creator=create_dashboard_preview,
+                    dashboard_authoring_handler=dashboard_authoring_tool,
                     attached_report_id=str(
                         (
                             (body.get("warm_context") or {}).get(
@@ -410,9 +421,7 @@ async def execute(*, request: Request) -> StreamingResponse:
                         chat_session_id_override=agent_session.session_id,
                         resume_session_override=resume_agent_session,
                         agent_env_overrides={
-                            "CLAUDE_CONFIG_DIR": str(
-                                agent_session.config_dir
-                            ),
+                            "CLAUDE_CONFIG_DIR": str(agent_session.config_dir),
                             # The system prompt directs every scratch file
                             # here. Without this the agent's shell resolves
                             # the path to an empty string and files land
@@ -492,9 +501,9 @@ async def execute(*, request: Request) -> StreamingResponse:
                         kernel_closed = _close_analysis_kernel(
                             runtime_app, lifecycle.session_id
                         )
-                        _ANALYSIS_SESSIONS_BY_RUN.get(
-                            run_id, set()
-                        ).discard(previous_notebook_session_id)
+                        _ANALYSIS_SESSIONS_BY_RUN.get(run_id, set()).discard(
+                            previous_notebook_session_id
+                        )
                         lifecycle.session_id = None
                         # Only the analysis notebook restarts; every other
                         # named kernel survives into the retry.
@@ -578,7 +587,9 @@ async def execute(*, request: Request) -> StreamingResponse:
                     kernel_stopped = False
                     _ANALYSIS_SESSIONS_BY_RUN.pop(run_id, None)
                     lifecycle.sessions.clear()
-                accepted_text = (state.final_text or state.streamed_text).strip()
+                accepted_text = (
+                    state.final_text or state.streamed_text
+                ).strip()
                 resolve_report_outcome(collector, run_id=run_id)
                 final_payload = build_final_payload(
                     collector,
@@ -596,9 +607,7 @@ async def execute(*, request: Request) -> StreamingResponse:
             await save_agent_session()
             if current_lifecycle:
                 # Close every kernel the run still owns.
-                for open_session in list(
-                    current_lifecycle.sessions.values()
-                ):
+                for open_session in list(current_lifecycle.sessions.values()):
                     try:
                         _close_analysis_kernel(runtime_app, open_session)
                     except Exception:

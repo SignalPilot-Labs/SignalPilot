@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -129,7 +129,7 @@ def _compile_predicate(
     if rule.operator == "inBetween":
         if len(values) != 2:
             raise DashboardCompileError("inBetween filters require start and end values")
-        if logical_type == "timestamp":
+        if logical_type in {"date", "timestamp"}:
             try:
                 zone = ZoneInfo(timezone)
                 normalized_values: list[Any] = []
@@ -137,13 +137,18 @@ def _compile_predicate(
                     if not isinstance(value, str):
                         normalized_values.append(value)
                         continue
-                    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-                    normalized_values.append(
-                        parsed.replace(tzinfo=zone).astimezone(UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
-                    )
+                    if logical_type == "date":
+                        normalized_values.append(date.fromisoformat(value))
+                    else:
+                        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                        normalized_values.append(
+                            parsed.replace(tzinfo=zone).astimezone(UTC)
+                            if parsed.tzinfo is None
+                            else parsed.astimezone(UTC)
+                        )
                 values = normalized_values
             except (ValueError, ZoneInfoNotFoundError) as exc:
-                raise DashboardCompileError("Invalid timestamp range or dashboard timezone") from exc
+                raise DashboardCompileError("Invalid date range or dashboard timezone") from exc
         start = dialect.parameter(len(parameters))
         end = dialect.parameter(len(parameters) + 1)
         parameters.extend(values)

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -63,6 +63,11 @@ def _context(db_type: str) -> DashboardSemanticContext:
                         field_id="orders.ordered_at",
                         column="ordered at",
                         logical_type="timestamp",
+                    ),
+                    DashboardSemanticField(
+                        field_id="orders.activity_date",
+                        column="activity date",
+                        logical_type="date",
                     ),
                 ],
                 metrics=[
@@ -341,6 +346,37 @@ def test_clickhouse_driver_passes_named_parameters_to_native_client() -> None:
 def test_unknown_dashboard_dialect_fails_closed() -> None:
     with pytest.raises(DashboardCompileError, match="Unsupported dashboard connection type"):
         compile_metric_query(_metric_query(), _context("future-db"))
+
+
+def test_date_range_values_are_bound_as_native_dates() -> None:
+    query = SemanticChartQuery.model_validate(
+        {
+            "kind": "semantic",
+            "projectId": "project-a",
+            "commitSha": "a" * 40,
+            "exploreName": "orders",
+            "dimensions": ["orders.activity_date"],
+            "metrics": ["orders.revenue"],
+            "filters": {
+                "dimensions": {
+                    "id": "all",
+                    "and": [
+                        {
+                            "id": "date",
+                            "operator": "inBetween",
+                            "values": ["2026-07-01", "2026-08-30"],
+                            "target": {"fieldId": "orders.activity_date"},
+                        }
+                    ],
+                }
+            },
+            "sorts": [],
+            "limit": 100,
+        }
+    )
+    compiled = compile_metric_query(query, _context("postgres"))
+    assert compiled.parameters == [date(2026, 7, 1), date(2026, 8, 30)]
+    assert "$1" in compiled.sql and "$2" in compiled.sql
 
 
 def test_semantic_context_uses_connection_type_in_every_registered_fingerprint() -> None:

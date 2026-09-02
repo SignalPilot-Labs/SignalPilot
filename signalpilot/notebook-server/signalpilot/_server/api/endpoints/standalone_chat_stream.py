@@ -324,6 +324,8 @@ async def forward_agent_events(
             "tool_call_id": event.tool_call_id,
             "is_error": event.is_error,
         }
+        if event.result_chars is not None:
+            payload["result_chars"] = event.result_chars
         if subagent_parent:
             payload["parent_tool_call_id"] = subagent_parent
         yield (json.dumps(payload, default=str) + "\n").encode("utf-8")

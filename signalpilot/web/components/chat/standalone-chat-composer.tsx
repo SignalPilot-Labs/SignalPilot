@@ -10,8 +10,25 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
+import type { RunLiveState } from "~/lib/chat-run-steps";
+import "./chat-live.css";
 
 const MAX_TEXTAREA_PX = 240;
+
+/** The hint under the input while a run is active, per live state. */
+function runningHint(liveState: RunLiveState, liveLabel?: string): string {
+  const queue = "Enter to queue a follow-up · Shift+Enter for a new line";
+  switch (liveState) {
+    case "writing":
+      return `Writing the answer · ${queue}`;
+    case "tool":
+      return `Running ${liveLabel || "a tool"} · ${queue}`;
+    case "booting":
+      return `Starting the runtime · ${queue}`;
+    default:
+      return "Enter to queue for the next turn · Shift+Enter for a new line";
+  }
+}
 const MENTION_RE = /(?:^|\s)@([\w./-]*)$/;
 
 export function StandaloneChatComposer({
@@ -27,6 +44,8 @@ export function StandaloneChatComposer({
   mentionOptions,
   onOpenSettings,
   settingsOpen = false,
+  liveState = "idle",
+  liveLabel,
 }: {
   value: string;
   onValueChange: (value: string) => void;
@@ -45,6 +64,10 @@ export function StandaloneChatComposer({
   onOpenSettings?: () => void;
   /** Whether that panel is open (drives aria-expanded on the gear). */
   settingsOpen?: boolean;
+  /** What the running agent is doing; colours the Stop ring and the hint. */
+  liveState?: RunLiveState;
+  /** The running tool's label, shown in the hint while `liveState` is tool. */
+  liveLabel?: string;
 }) {
   const canSubmit = Boolean(value.trim()) && !submitDisabled;
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -221,14 +244,23 @@ export function StandaloneChatComposer({
               </button>
             )}
             {running && onStop && (
-              <button
-                type="button"
-                onClick={onStop}
-                aria-label="Stop the running analysis"
-                className="flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--color-error)] text-[var(--color-error)] hover:bg-[var(--color-error)]/10"
-              >
-                <Square className="h-3 w-3 fill-current" />
-              </button>
+              <span className="relative rounded-lg">
+                {liveState !== "idle" && (
+                  <span
+                    className="chat-stop-ring absolute -inset-[3px]"
+                    data-state={liveState}
+                    aria-hidden
+                  />
+                )}
+                <button
+                  type="button"
+                  onClick={onStop}
+                  aria-label="Stop the running analysis"
+                  className="relative flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--color-error)] text-[var(--color-error)] hover:bg-[var(--color-error)]/10"
+                >
+                  <Square className="h-3 w-3 fill-current" />
+                </button>
+              </span>
             )}
             <button
               type="button"
@@ -255,7 +287,7 @@ export function StandaloneChatComposer({
       ) : (
         <p className="mt-2.5 text-center text-xs text-[var(--color-text-muted)]">
           {running
-            ? "Enter to queue for the next turn · Shift+Enter for a new line"
+            ? runningHint(liveState, liveLabel)
             : "Enter to send · Shift+Enter for a new line · @ to mention a model"}
         </p>
       )}

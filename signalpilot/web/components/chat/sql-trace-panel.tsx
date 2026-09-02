@@ -2,18 +2,10 @@
 
 import { ChevronRight } from "lucide-react";
 import { useState } from "react";
-import { format as formatSql } from "sql-formatter";
 import { ChatCode } from "~/components/chat/chat-code";
 import { formatByteSize } from "~/lib/chat-artifacts";
 import type { SqlTraceExecution } from "~/lib/api";
-
-function prettySql(sql: string): string {
-  try {
-    return formatSql(sql, { language: "postgresql", keywordCase: "upper" });
-  } catch {
-    return sql;
-  }
-}
+import { prettySql } from "~/lib/pretty-sql";
 
 function statusDotClass(status: string): string {
   if (status === "completed") return "bg-[var(--color-success)]";

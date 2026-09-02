@@ -4,6 +4,10 @@ import { ArrowRight, ChevronRight, Plug, Settings2, X } from "lucide-react";
 import Link from "next/link";
 import { useId, type Dispatch, type SetStateAction } from "react";
 import type { Connector } from "~/lib/api/mcp-connectors";
+import type {
+  StandaloneChatModel,
+  StandaloneChatModelOption,
+} from "~/lib/api";
 import {
   deriveConnectorHealth,
   describeNextChatTools,
@@ -25,6 +29,13 @@ export type ChatBudgetSettings = {
   setPerQueryBudgetUsd: Dispatch<SetStateAction<number>>;
   chatBudgetUsd: number;
   setChatBudgetUsd: Dispatch<SetStateAction<number>>;
+};
+
+export type ChatModelSettings = {
+  value: StandaloneChatModel;
+  options: StandaloneChatModelOption[];
+  disabled: boolean;
+  onChange: (model: StandaloneChatModel) => void;
 };
 
 const MANAGE_HREF = "/settings/connectors";
@@ -225,6 +236,46 @@ function BudgetsSection({ budgets }: { budgets: ChatBudgetSettings }) {
   );
 }
 
+function ModelSection({ model }: { model: ChatModelSettings }) {
+  const selectId = useId();
+  return (
+    <section aria-labelledby="chat-settings-model" className="space-y-3">
+      <div>
+        <Eyebrow>
+          <span id="chat-settings-model">Model</span>
+        </Eyebrow>
+        <p className="mt-1 text-[11.5px] text-[var(--color-text-dim)]">
+          Used for every turn in this chat.
+        </p>
+      </div>
+      <label htmlFor={selectId} className="block">
+        <span className="sr-only">Chat model</span>
+        <select
+          id={selectId}
+          data-testid="chat-settings-model-select"
+          value={model.value}
+          disabled={model.disabled}
+          onChange={(event) =>
+            model.onChange(event.target.value as StandaloneChatModel)
+          }
+          className="min-h-[38px] w-full rounded-[var(--radius-ctl)] border border-[var(--color-border)] bg-[var(--color-bg-input)] px-2.5 text-[12.5px] text-[var(--color-text)] focus:border-[var(--color-border-active)] focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {model.options.map((option) => (
+            <option key={option.id} value={option.id}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      {model.disabled && (
+        <p className="text-[11px] text-[var(--color-text-dim)]">
+          You can switch models after the current run finishes.
+        </p>
+      )}
+    </section>
+  );
+}
+
 /**
  * Right-side "Chat settings" panel — the same slot family as the artifacts
  * panel. Connectors first (a one-line "what your next chat gets" summary,
@@ -235,11 +286,13 @@ function BudgetsSection({ budgets }: { budgets: ChatBudgetSettings }) {
 export function ChatSettingsPanel({
   onClose,
   connectorsEnabled,
+  model,
   budgets,
   manageHref = MANAGE_HREF,
 }: {
   onClose: () => void;
   connectorsEnabled: boolean;
+  model: ChatModelSettings;
   budgets?: ChatBudgetSettings | null;
   manageHref?: string;
 }) {
@@ -275,6 +328,7 @@ export function ChatSettingsPanel({
         </button>
       </div>
       <div className="min-h-0 flex-1 space-y-7 overflow-y-auto px-4 py-4">
+        <ModelSection model={model} />
         {connectorsEnabled && (
           <section aria-labelledby="chat-settings-connectors-title" className="space-y-3">
             <div className="flex items-end justify-between gap-3">
@@ -308,9 +362,6 @@ export function ChatSettingsPanel({
           </section>
         )}
         {budgets && <BudgetsSection budgets={budgets} />}
-        {!connectorsEnabled && !budgets && (
-          <p className="text-[12px] text-[var(--color-text-dim)]">Nothing to set here yet.</p>
-        )}
       </div>
     </aside>
     </>

@@ -26,12 +26,14 @@ import { ConnectorSignInCards } from "~/components/chat/connector-signin-card";
 import { RuntimeBootCard } from "~/components/chat/runtime-boot-card";
 import { ReplayControls } from "~/components/chat/replay-controls";
 import {
+  deriveLiveStateFromBlocks,
   extractRunPlan,
   extractRuntimeBoot,
   foldRunBlocks,
   foldRunSteps,
   shouldShowRuntimeBoot,
 } from "~/lib/chat-run-steps";
+import { LivePill } from "~/components/chat/live-pill";
 import { PlanTracker } from "~/components/chat/plan-tracker";
 import { useChatReplay } from "~/lib/chat-replay";
 import { useToast } from "~/components/ui/toast";
@@ -235,6 +237,12 @@ function AssistantMessage({
   );
   const successful = runStatus === "completed";
   const running = runStatus === "queued" || runStatus === "running";
+  // What the agent is doing right now: drives the caret, the inline
+  // indicator and the footer pill. Idle whenever the run is not active.
+  const live = useMemo(
+    () => deriveLiveStateFromBlocks(blocks, runtimeBoot, runStatus),
+    [blocks, runtimeBoot, runStatus],
+  );
   // Inline artifact cards: run events anchor them, the file manifest is the
   // source of truth. Derived, so rehydration on refresh is free. A file the
   // legacy published previews below already render never gets a card too —
@@ -285,6 +293,7 @@ function AssistantMessage({
             <div role="status" aria-live="polite">
               <RunActivityBlocks
                 blocks={blocks}
+                live={live}
                 running={
                   running &&
                   runtimeBoot?.phase !== "provisioning" &&
@@ -382,15 +391,23 @@ function AssistantMessage({
                   )}
                 </button>
               )}
+              {running && <LivePill live={live} />}
               {running && runId && (
-                <button
-                  type="button"
-                  onClick={() => void onStop(runId)}
-                  className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] text-[var(--color-text-dim)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-error)]"
-                >
-                  <CircleStop className="h-3 w-3" />
-                  Stop
-                </button>
+                <span className="relative inline-flex rounded-lg">
+                  <span
+                    className="chat-stop-ring absolute -inset-[3px]"
+                    data-state={live.state}
+                    aria-hidden
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void onStop(runId)}
+                    className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] text-[var(--color-text-dim)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-error)]"
+                  >
+                    <CircleStop className="h-3 w-3" />
+                    Stop
+                  </button>
+                </span>
               )}
               {runStatus === "failed" && runId && (
                 <button

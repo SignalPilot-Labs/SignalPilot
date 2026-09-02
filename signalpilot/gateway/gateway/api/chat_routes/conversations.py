@@ -14,6 +14,7 @@ from gateway.models.standalone_chat import (
     SharedConversationDetail,
     StandaloneConversationCreate,
     StandaloneConversationDetail,
+    StandaloneConversationModelUpdate,
     StandaloneConversationPatch,
 )
 from gateway.security.scope_guard import RequireScope
@@ -89,6 +90,7 @@ async def create_conversation(body: StandaloneConversationCreate, store: StoreD,
         commit_sha=branch_head_sha(project.id, readiness.branch),
         per_query_budget_usd=body.per_query_budget_usd,
         chat_budget_usd=body.chat_budget_usd,
+        model=body.model,
         message_metadata={"report_reference": report_reference} if report_reference else None,
     )
     detail = await chat_store.get_conversation_detail(
@@ -188,6 +190,28 @@ async def rename_conversation(
     if not changed:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return {"id": conversation_id, "title": body.title}
+
+
+@router.put(
+    "/conversations/{conversation_id}/model",
+    dependencies=[RequireScope("write")],
+)
+async def update_conversation_model(
+    conversation_id: str,
+    body: StandaloneConversationModelUpdate,
+    store: StoreD,
+):
+    _require_enabled()
+    changed = await chat_store.update_conversation_model(
+        store.session,
+        org_id=store._require_org_id(),
+        user_id=store.user_id or "local",
+        conversation_id=conversation_id,
+        model=body.model,
+    )
+    if not changed:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return {"id": conversation_id, "model": body.model}
 
 
 @router.delete(

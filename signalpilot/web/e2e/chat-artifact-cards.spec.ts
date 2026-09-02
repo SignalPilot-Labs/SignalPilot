@@ -143,7 +143,7 @@ test.describe("inline artifact cards (fixture harness)", () => {
   test("end state: covered files defer to the legacy previews; the rest stay full cards", async ({
     page,
   }) => {
-    await page.goto(at(21_200));
+    await page.goto(at(24_800));
     await waitForHydration(page);
     const cards = page.getByTestId("chat-artifact-card");
     // The published table (csv) and report (html) previews cover those
@@ -177,7 +177,7 @@ test.describe("inline artifact cards (fixture harness)", () => {
   test("the image card renders a real inline thumbnail from file content", async ({
     page,
   }) => {
-    await page.goto(at(21_200));
+    await page.goto(at(24_800));
     await waitForHydration(page);
     const thumb = page
       .getByTestId("chat-artifact-card")
@@ -196,7 +196,7 @@ test.describe("inline artifact cards (fixture harness)", () => {
   test("cards survive a reload of the same frame (rehydration)", async ({
     page,
   }) => {
-    await page.goto(at(21_200));
+    await page.goto(at(24_800));
     await expect(page.getByTestId("chat-artifact-card")).toHaveCount(3);
     await page.reload();
     await expect(page.getByTestId("chat-artifact-card")).toHaveCount(3);
@@ -208,7 +208,7 @@ test.describe("inline artifact cards (fixture harness)", () => {
   test("the primary action opens the artifacts panel focused on the file", async ({
     page,
   }) => {
-    await page.goto(at(21_200));
+    await page.goto(at(24_800));
     await waitForHydration(page);
     await expect(page.getByTestId("live-notebook-panel")).toHaveCount(0);
     await page
@@ -227,7 +227,7 @@ test.describe("inline artifact cards (fixture harness)", () => {
   });
 
   test("whole-card click is the primary action too", async ({ page }) => {
-    await page.goto(at(21_200));
+    await page.goto(at(24_800));
     await waitForHydration(page);
     // Click lands on the card body (not the button) — the stretched
     // primary hit area catches it.
@@ -242,7 +242,7 @@ test.describe("inline artifact cards (fixture harness)", () => {
   test("the card opens from the keyboard on a single real button", async ({
     page,
   }) => {
-    await page.goto(at(21_200));
+    await page.goto(at(24_800));
     await waitForHydration(page);
     const primary = page
       .getByTestId("chat-artifact-card")

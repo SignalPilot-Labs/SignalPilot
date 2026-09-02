@@ -7,6 +7,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from gateway.standalone_chat.config import CHAT_MODEL_IDS
+
 from .chat_reports import ReportReference
 
 ChatRunStatus = Literal[
@@ -79,6 +81,8 @@ class ChatBootstrapResponse(BaseModel):
     starter_questions: list[str] = Field(default_factory=list, min_length=0, max_length=4)
     default_per_query_budget_usd: float = 0.25
     default_chat_budget_usd: float = 1.0
+    available_models: list[dict[str, str]] = Field(default_factory=list)
+    default_model: str
     enterprise_features: dict[str, bool] = Field(default_factory=dict)
 
 
@@ -87,6 +91,7 @@ class StandaloneConversationCreate(StrictChatRequest):
     message: str = Field(..., min_length=1, max_length=50_000)
     per_query_budget_usd: float = Field(default=0.25, ge=0)
     chat_budget_usd: float = Field(default=1.0, ge=0)
+    model: str | None = Field(default=None, max_length=50)
     report_reference: ReportReference | None = None
 
     @field_validator("project_id", "message")
@@ -102,6 +107,24 @@ class StandaloneConversationCreate(StrictChatRequest):
         if self.chat_budget_usd < self.per_query_budget_usd:
             raise ValueError("Chat budget must be at least the per-query budget")
         return self
+
+    @field_validator("model")
+    @classmethod
+    def validate_model(cls, value: str | None) -> str | None:
+        if value is not None and value not in CHAT_MODEL_IDS:
+            raise ValueError("Unsupported chat model")
+        return value
+
+
+class StandaloneConversationModelUpdate(StrictChatRequest):
+    model: str = Field(..., min_length=1, max_length=50)
+
+    @field_validator("model")
+    @classmethod
+    def validate_model(cls, value: str) -> str:
+        if value not in CHAT_MODEL_IDS:
+            raise ValueError("Unsupported chat model")
+        return value
 
 
 class QueryApprovalDecision(StrictChatRequest):
@@ -218,6 +241,7 @@ class StandaloneConversationInfo(BaseModel):
     updated_at: float
     run_status: ChatRunStatus | None = None
     commit_sha: str | None = None
+    model: str
     per_query_budget_usd: float = 0.25
     chat_budget_usd: float = 1.0
     estimated_spend_usd: float = 0.0

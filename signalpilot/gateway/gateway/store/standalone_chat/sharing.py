@@ -322,6 +322,7 @@ async def fork_shared_conversation(
         commit_sha=source.commit_sha,
         per_query_budget_usd=per_query_budget_usd,
         chat_budget_usd=chat_budget_usd,
+        model=source.model,
         forked_from_conversation_id=source.id,
         status="active",
         title=(source.title or "New chat")[:200],

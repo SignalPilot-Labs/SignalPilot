@@ -27,6 +27,7 @@ import {
   steerStandaloneRun,
   type ChatReportMention,
   type StandaloneChatRun,
+  type StandaloneChatModel,
   type StandaloneConversation,
   type StandaloneConversationDetail,
 } from "~/lib/api";
@@ -54,6 +55,7 @@ export function useStandaloneChatActions({
   selectedProjectId,
   perQueryBudgetUsd,
   chatBudgetUsd,
+  selectedModel,
   attachedReportReference,
   mutateDetail,
   mutateHistory,
@@ -70,6 +72,7 @@ export function useStandaloneChatActions({
   selectedProjectId: string | null;
   perQueryBudgetUsd: number;
   chatBudgetUsd: number;
+  selectedModel: StandaloneChatModel;
   attachedReportReference:
     | { report_id: string; version_id: string }
     | undefined;
@@ -104,6 +107,7 @@ export function useStandaloneChatActions({
             text,
             perQueryBudgetUsd,
             chatBudgetUsd,
+            selectedModel,
             attachedReportReference,
           );
           setSelectedReport(null);
@@ -246,6 +250,7 @@ export function useStandaloneChatActions({
       selectedProjectId,
       perQueryBudgetUsd,
       chatBudgetUsd,
+      selectedModel,
       attachedReportReference,
       toast,
       setDraft,

@@ -164,6 +164,7 @@ async def _explore_columns_data(
 
 
 def _format_columns_report(data: dict[str, Any], include_stats: bool, include_samples: bool) -> str:
+    # Format parsed by standalone_chat/tool_projection/schema.py; update tests there if you change this
     explored_cols = data.get("columns", [])
     table = data.get("table", "")
     table_type = data.get("table_type", "table")

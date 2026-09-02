@@ -26,6 +26,7 @@ function detailFixture(): StandaloneConversationDetail {
       updated_at: 100,
       run_status: null,
       commit_sha: "abc123",
+      model: "claude-opus-5",
       per_query_budget_usd: 0.25,
       chat_budget_usd: 1,
       estimated_spend_usd: 0,

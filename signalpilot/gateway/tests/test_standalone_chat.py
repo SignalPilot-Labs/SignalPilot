@@ -35,6 +35,8 @@ from gateway.mcp.context import (
     mcp_execution_identity_var,
 )
 from gateway.models.standalone_chat import (
+    StandaloneConversationCreate,
+    StandaloneConversationModelUpdate,
     StandaloneConversationPatch,
     StandaloneRunCreate,
 )
@@ -221,6 +223,15 @@ def test_state_machine_and_title_contracts():
         StandaloneRunCreate(message="answer", role="assistant")
     with pytest.raises(ValueError):
         StandaloneConversationPatch(title="Renamed", project_id="another-project")
+    assert StandaloneConversationModelUpdate(model="claude-fable-5-1").model == "claude-fable-5-1"
+    with pytest.raises(ValueError, match="Unsupported chat model"):
+        StandaloneConversationModelUpdate(model="claude-imaginary-9")
+    with pytest.raises(ValueError, match="Unsupported chat model"):
+        StandaloneConversationCreate(
+            project_id="project-a",
+            message="Analyze revenue",
+            model="claude-imaginary-9",
+        )
     messages = [{"role": "user" if index % 2 == 0 else "assistant", "content": "x" * 100} for index in range(20)]
     selection = select_context_for_summary(
         messages,
@@ -553,6 +564,10 @@ async def test_rotating_revoking_and_archiving_share_returns_not_found(db_sessio
 @pytest.mark.asyncio
 async def test_same_org_viewer_can_fork_share_safe_snapshot(db_session):
     conversation_id, _, assistant_message_id = await _completed_shared_conversation(db_session)
+    source = await db_session.get(GatewayChatConversation, conversation_id)
+    assert source is not None
+    source.model = "claude-fable-5-1"
+    await db_session.commit()
     shared = await chat_store.create_share_grant(
         db_session,
         org_id="org-a",
@@ -578,6 +593,7 @@ async def test_same_org_viewer_can_fork_share_safe_snapshot(db_session):
     assert fork.forked_from_conversation_id == conversation_id
     assert fork.per_query_budget_usd == 0.5
     assert fork.chat_budget_usd == 2.0
+    assert fork.model == "claude-fable-5-1"
 
     detail = await chat_store.get_conversation_detail(
         db_session,
@@ -1043,6 +1059,11 @@ async def test_execution_uses_org_anthropic_key_as_request_scoped_auth(
         db_session,
         user_id="user-without-a-key",
     )
+    conversation = await db_session.get(GatewayChatConversation, run.conversation_id)
+    assert conversation is not None
+    conversation.model = "claude-fable-5-1"
+    await db_session.commit()
+    monkeypatch.setenv("SP_CHAT_AGENT_MODEL", "claude-opus-5")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-server")
     monkeypatch.setattr(
         chat_execution,
@@ -1084,6 +1105,7 @@ async def test_execution_uses_org_anthropic_key_as_request_scoped_auth(
         "token": "sk-ant-org",
     }
     assert prepared.payload["conversation_id"] == run.conversation_id
+    assert prepared.payload["model"] == "claude-fable-5-1"
     assert prepared.payload["agent_session"] == {
         "session_id": run.conversation_id,
         "storage": "unavailable",
@@ -1198,6 +1220,38 @@ async def test_execution_force_oauth_fails_before_starting_runtime_when_missing(
         )
 
     ensure_runtime.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_conversation_model_is_persisted_and_can_be_updated(db_session):
+    project = await _project(db_session)
+    conversation, _run = await chat_store.create_conversation_with_run(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        project=project,
+        branch="main",
+        message="Analyze revenue",
+        model="claude-sonnet-4-6",
+    )
+    detail = await chat_store.get_conversation_detail(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        conversation_id=conversation.id,
+    )
+    assert detail is not None
+    assert detail.conversation.model == "claude-sonnet-4-6"
+
+    assert await chat_store.update_conversation_model(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        conversation_id=conversation.id,
+        model="claude-opus-5",
+    )
+    await db_session.refresh(conversation)
+    assert conversation.model == "claude-opus-5"
 
 
 @pytest.mark.asyncio

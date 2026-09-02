@@ -20,7 +20,7 @@ async function waitForHydration(page: Page) {
 
 test.describe("chat settings panel (fixture harness)", () => {
   test("the gear opens a right-side panel titled Chat settings with connector rows", async ({ page }) => {
-    await page.goto(at(21_200));
+    await page.goto(at(24_800));
     await waitForHydration(page);
     await expect(main(page).getByTestId("chat-settings-panel")).toHaveCount(0);
     const gear = main(page).getByTestId("chat-settings-gear");
@@ -30,6 +30,16 @@ test.describe("chat settings panel (fixture harness)", () => {
     await expect(panel).toBeVisible();
     await expect(gear).toHaveAttribute("aria-expanded", "true");
     await expect(panel).toContainText("Chat settings");
+    const model = panel.getByTestId("chat-settings-model-select");
+    await expect(model).toHaveValue("claude-opus-5");
+    await expect(model.locator("option")).toHaveText([
+      "Opus 4.6",
+      "Sonnet 4.6",
+      "Opus 5",
+      "Fable 5.1",
+    ]);
+    await model.selectOption("claude-fable-5-1");
+    await expect(model).toHaveValue("claude-fable-5-1");
     await expect(panel).toContainText("Available in all your chats");
     await expect(panel.getByTestId("chat-settings-connector-row")).toHaveCount(5);
     await expect(panel.getByTestId("chat-settings-manage")).toHaveAttribute("href", /\/settings\/connectors/);
@@ -48,7 +58,7 @@ test.describe("chat settings panel (fixture harness)", () => {
   });
 
   test("On for me toggles a connector for the member", async ({ page }) => {
-    await page.goto(at(21_200, "&settings=1"));
+    await page.goto(at(24_800, "&settings=1"));
     await waitForHydration(page);
     const row = main(page).getByTestId("chat-settings-connector-row").filter({ hasText: "Snowflake docs" });
     const toggle = row.getByTestId("chat-settings-on-for-me");
@@ -61,7 +71,7 @@ test.describe("chat settings panel (fixture harness)", () => {
   });
 
   test("rows that need a fix show the fix, not a green switch", async ({ page }) => {
-    await page.goto(at(21_200, "&settings=1"));
+    await page.goto(at(24_800, "&settings=1"));
     await waitForHydration(page);
     const linear = main(page).getByTestId("chat-settings-connector-row").filter({ hasText: "Linear" });
     await expect(linear.getByTestId("connector-status-pill")).toHaveText("Unreachable");
@@ -76,7 +86,7 @@ test.describe("chat settings panel (fixture harness)", () => {
   });
 
   test("opening settings tucks the artifacts panel away and restores it on close", async ({ page }) => {
-    await page.goto(at(21_200));
+    await page.goto(at(24_800));
     await waitForHydration(page);
     await main(page).getByTestId("live-notebook-toggle").click();
     await expect(main(page).getByTestId("live-notebook-panel")).toBeVisible();

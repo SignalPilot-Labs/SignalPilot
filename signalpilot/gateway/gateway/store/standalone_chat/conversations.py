@@ -51,6 +51,7 @@ async def create_conversation_with_run(
     commit_sha: str | None = None,
     per_query_budget_usd: float = 0.25,
     chat_budget_usd: float = 1.0,
+    model: str | None = None,
     message_metadata: dict[str, Any] | None = None,
     commit: bool = True,
     origin: str = "user",
@@ -68,6 +69,7 @@ async def create_conversation_with_run(
         commit_sha=commit_sha,
         per_query_budget_usd=per_query_budget_usd,
         chat_budget_usd=chat_budget_usd,
+        model=model,
         status="active",
         title="New chat",
         message_count=1,
@@ -223,6 +225,7 @@ async def list_conversations(
             updated_at=conversation.updated_at,
             run_status=run_status,
             commit_sha=conversation.commit_sha,
+            model=conversation.model or chat_config.default_chat_model(),
             per_query_budget_usd=conversation.per_query_budget_usd,
             chat_budget_usd=conversation.chat_budget_usd,
             estimated_spend_usd=conversation.estimated_spend_usd,
@@ -400,6 +403,7 @@ async def get_conversation_detail(
             updated_at=conversation.updated_at,
             run_status=current_run.status if current_run else None,
             commit_sha=conversation.commit_sha,
+            model=conversation.model or chat_config.default_chat_model(),
             per_query_budget_usd=conversation.per_query_budget_usd,
             chat_budget_usd=conversation.chat_budget_usd,
             estimated_spend_usd=conversation.estimated_spend_usd,
@@ -430,6 +434,29 @@ async def rename_conversation(
     if conversation is None:
         return False
     conversation.title = title
+    conversation.updated_at = time.time()
+    await db.commit()
+    return True
+
+
+async def update_conversation_model(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    user_id: str,
+    conversation_id: str,
+    model: str,
+) -> bool:
+    conversation = await _owned_conversation_row(
+        db,
+        org_id=org_id,
+        user_id=user_id,
+        conversation_id=conversation_id,
+        lock=True,
+    )
+    if conversation is None:
+        return False
+    conversation.model = model
     conversation.updated_at = time.time()
     await db.commit()
     return True

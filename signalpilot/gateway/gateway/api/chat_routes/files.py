@@ -17,6 +17,7 @@ from gateway.store import standalone_chat as chat_store
 
 from ..deps import StoreD
 from .artifacts import _ARCHIVE_CSP, _sanitize_runtime_archive_html
+from .common import owned_conversation_or_404 as _owned_conversation_or_404
 from .common import require_enabled as _require_enabled
 
 router = APIRouter()
@@ -30,18 +31,6 @@ _FORCED_DOWNLOAD_MIMES = {
     "application/xml",
     "text/xml",
 }
-
-
-async def _owned_conversation_or_404(store: StoreD, conversation_id: str):
-    conversation = await chat_store.get_owned_conversation(
-        store.session,
-        org_id=store._require_org_id(),
-        user_id=store.user_id or "local",
-        conversation_id=conversation_id,
-    )
-    if conversation is None:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-    return conversation
 
 
 def _file_info(row: GatewayChatFile) -> dict:

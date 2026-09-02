@@ -37,6 +37,19 @@ export type ChatUiContextValue = {
    */
   getFileObjectUrl?: (fileId: string) => Promise<string>;
   /**
+   * Override for paging the full rows of a governed query result. The
+   * fixture harness injects a deterministic generator; live pages omit it
+   * and the table card falls back to the authenticated API helper.
+   */
+  getToolResultRows?: (
+    resultId: string,
+    opts?: { offset?: number; limit?: number },
+  ) => Promise<{
+    columns: { name: string; logical_type?: string | null }[];
+    rows: unknown[][];
+    saved_row_count: number;
+  }>;
+  /**
    * Frozen clock for relative timestamps (epoch ms). Injected by the
    * fixture harness so replayed frames show honest times; live pages omit
    * it and the cards tick on the real clock.

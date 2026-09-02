@@ -38,6 +38,57 @@ def _save_chat_sessions() -> None:
         pass
 
 
+# Tool results are forwarded to the gateway in full up to this size; the
+# gateway projects them into per-tool cards and applies its own caps.
+TOOL_RESULT_EVENT_MAX_CHARS = 65_536
+
+
+def tool_result_text(content: Any) -> str:
+    """Return the plain text of an SDK ToolResultBlock content value.
+
+    The SDK hands back either a string or a list of content blocks. A
+    ``str()`` of the list is a Python repr, not the text, so the blocks
+    are flattened here: text blocks contribute their text, image blocks
+    a marker, and anything else its JSON form.
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, dict):
+                block_type = block.get("type")
+                if block_type == "text":
+                    parts.append(str(block.get("text") or ""))
+                elif block_type == "image":
+                    parts.append("[image]")
+                else:
+                    parts.append(json.dumps(block, default=str))
+                continue
+            block_text = getattr(block, "text", None)
+            if isinstance(block_text, str):
+                parts.append(block_text)
+            elif getattr(block, "type", None) == "image":
+                parts.append("[image]")
+            else:
+                parts.append(str(block))
+        return "\n".join(parts)
+    return str(content)
+
+
+def clip_tool_result_for_event(text: str) -> str:
+    """Cap a tool result for the event stream, marking how much was cut."""
+    if len(text) <= TOOL_RESULT_EVENT_MAX_CHARS:
+        return text
+    dropped = len(text) - TOOL_RESULT_EVENT_MAX_CHARS
+    return (
+        text[:TOOL_RESULT_EVENT_MAX_CHARS]
+        + f"\n…[event copy truncated: {dropped} more chars]"
+    )
+
+
 @dataclass
 class AgentEvent:
     """A streaming event from the Claude Agent."""
@@ -60,6 +111,9 @@ class AgentEvent:
     num_turns: int = 0
     diagnostic_context: dict[str, Any] | None = None
     full_trace: str = ""
+    # Full length of a tool result before the event copy was capped at
+    # TOOL_RESULT_EVENT_MAX_CHARS. None for events that carry no result.
+    result_chars: int | None = None
 
 
 @dataclass

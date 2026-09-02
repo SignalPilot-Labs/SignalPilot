@@ -1013,3 +1013,38 @@ kbd {
 @media (prefers-reduced-motion: reduce) {
   .chat-artifact-flash { animation: none !important; }
 }
+
+/* ── Plan tracker (components/chat/plan-tracker.tsx) ─────────────────────
+   The agent's plan is the one element in the transcript that is NOT a step:
+   it pins to the top while the run streams and summarises everything below.
+   It therefore gets its own surface — a success-tinted, elevated panel with
+   a left rail — so it never reads as one more step-group card, and its
+   header hover is tinted rather than the neutral --color-bg-hover the
+   step cards use. */
+.chat-plan {
+  position: relative;
+  overflow: hidden;
+  border-radius: 0.75rem;
+  border: 1px solid rgba(0, 255, 136, 0.18);
+  background:
+    linear-gradient(180deg, rgba(0, 255, 136, 0.07), rgba(0, 255, 136, 0.02)),
+    var(--color-bg-elevated);
+  box-shadow:
+    0 12px 32px -14px rgba(0, 255, 136, 0.28),
+    0 12px 28px -12px rgba(0, 0, 0, 0.7);
+}
+.chat-plan::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--color-success);
+  opacity: 0.85;
+}
+.chat-plan__header { transition: background-color 0.15s ease; }
+.chat-plan__header:hover { background: rgba(0, 255, 136, 0.06); }
+.chat-plan__eyebrow { color: rgba(0, 255, 136, 0.72); }
+.chat-plan__segment-pending { background: rgba(255, 255, 255, 0.14); }
+.chat-plan__body { border-top: 1px solid rgba(0, 255, 136, 0.14); }

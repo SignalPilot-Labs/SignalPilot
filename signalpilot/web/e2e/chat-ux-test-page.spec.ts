@@ -4,6 +4,12 @@ import { expect, test } from "@playwright/test";
  * Exercises the fixture-driven chat UX harness at /chats/test. The replay is
  * frozen at deterministic offsets via ?at=<ms>&paused=1, so no model,
  * gateway, or warehouse is required.
+ *
+ * The fixture timeline has three activity groups: the schema / SQL chain
+ * (9 steps, one failed validation), the code-and-publish chain (11 steps,
+ * 8 files) after the mid-run narration, and a short discovery chain at
+ * 21.2–24 s (list_tables, explore_columns, dbt run, knowledge search and a
+ * connector tool) that exercises the remaining tool cards.
  */
 
 const BASE = process.env.SP_WEB_BASE_URL ?? "http://localhost:3200";
@@ -63,19 +69,27 @@ test.describe("chat UX test harness", () => {
     );
   });
 
-  test("collapses both chains to summaries and shows artifacts when complete", async ({
+  test("collapses all chains to summaries and shows artifacts when complete", async ({
     page,
   }) => {
-    await page.goto(at(21_200));
+    await page.goto(at(24_800));
     await waitForHydration(page);
     const groups = page.getByTestId("chat-activity-group");
-    await expect(groups).toHaveCount(2);
+    await expect(groups).toHaveCount(3);
     await expect(groups.first()).toContainText(
       "Worked through 9 steps · 2 queries · 1 error",
     );
     await expect(groups.nth(1)).toContainText(
       "Worked through 11 steps · 1 code run · 8 files",
     );
+    // The trailing discovery chain folds to a plain count with one chip per
+    // card kind (table list, column profile, dbt run, knowledge, connector).
+    await expect(groups.nth(2)).toContainText("Worked through 5 steps");
+    await expect(groups.nth(2)).toContainText("dbt run");
+    await expect(groups.nth(2)).toContainText("47 tables");
+    await expect(
+      groups.nth(2).locator('[data-testid="chat-tool-chip"][data-kind="dbt_run"]').first(),
+    ).toBeVisible();
     await expect(page.getByText("EMEA drove the growth")).toBeVisible();
     await expect(
       page.getByText("q3_revenue_by_region.csv").first(),
@@ -89,7 +103,7 @@ test.describe("chat UX test harness", () => {
   test("expands charts and reports in a fullscreen viewer", async ({
     page,
   }) => {
-    await page.goto(at(21_200));
+    await page.goto(at(24_800));
     await waitForHydration(page);
     const expandButtons = page.getByTestId("artifact-expand");
     // One for the Vega chart, one for the HTML report.

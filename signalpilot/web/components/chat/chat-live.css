@@ -1,0 +1,132 @@
+/* Live-state motion for the chat transcript: the typing caret, the live
+ * indicator's token-flow bars and the conic sweep around Stop buttons.
+ * Imported by agent-thinking-indicator.tsx and markdown/chat-markdown.tsx;
+ * reduced-motion handling mirrors the block at the end of app/globals.css. */
+
+/* ── Typing caret ────────────────────────────────────────────────────────
+   Drawn by CSS on the last block's last inline container so the answer's
+   own markup stays untouched. The attribute sits on the wrapper above the
+   `.chat-markdown` root. `data-caret="true"` while tokens arrive,
+   `data-caret="fading"` for the settle window after the last one. Framed
+   blocks (code, tables, figures) are skipped: a caret inside a code fence
+   reads as content. */
+@keyframes chat-caret-in {
+  from { opacity: 0; transform: translateY(2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes chat-caret-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+@keyframes chat-caret-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+[data-caret] > .chat-markdown > :last-child:not(pre):not(table):not(figure):not(.chat-md-frame)::after,
+[data-caret] > .chat-markdown > :is(ul, ol):last-child > li:last-child::after,
+[data-caret] > .chat-markdown > blockquote:last-child > :last-child::after {
+  content: "▍";
+  display: inline-block;
+  margin-left: 0.08em;
+  vertical-align: baseline;
+  color: var(--color-success);
+  font-weight: 400;
+}
+/* A list's own ::after would double up with its last item's caret. */
+[data-caret] > .chat-markdown > :is(ul, ol, blockquote):last-child::after {
+  content: none;
+}
+[data-caret="true"] > .chat-markdown > :last-child::after,
+[data-caret="true"] > .chat-markdown > :last-child > :last-child::after {
+  animation:
+    chat-caret-in 0.18s ease-out both,
+    chat-caret-blink 1s steps(2, jump-none) 0.18s infinite;
+}
+[data-caret="fading"] > .chat-markdown > :last-child::after,
+[data-caret="fading"] > .chat-markdown > :last-child > :last-child::after {
+  animation: chat-caret-out 0.4s ease-out both;
+}
+
+/* ── Token flow (writing indicator) ──────────────────────────────────────
+   Four hairline bars rippling in height, like a level meter, staggered so
+   the wave reads left to right. */
+@keyframes chat-token-flow {
+  0%, 100% { transform: scaleY(0.4); opacity: 0.55; }
+  50% { transform: scaleY(1); opacity: 1; }
+}
+.chat-token-flow {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 10px;
+}
+.chat-token-flow > span {
+  display: block;
+  width: 2px;
+  height: 100%;
+  border-radius: 1px;
+  background: var(--color-success);
+  transform-origin: center;
+  animation: chat-token-flow 0.9s ease-in-out infinite;
+}
+.chat-token-flow > span:nth-child(2) { animation-delay: 0.09s; }
+.chat-token-flow > span:nth-child(3) { animation-delay: 0.18s; }
+.chat-token-flow > span:nth-child(4) { animation-delay: 0.27s; }
+
+/* ── Stop ring ───────────────────────────────────────────────────────────
+   Conic sweep tracing the Stop control's border. Same masked-gradient
+   technique as .chat-boot-orbit in globals.css: the ANGLE animates via
+   @property so the rounded silhouette stays still while the light moves.
+   Colour follows the live state — writing is the accent, tool work the
+   success green, thinking the quiet dim tone. */
+@property --chat-stop-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+@keyframes chat-stop-ring {
+  to { --chat-stop-angle: 360deg; }
+}
+.chat-stop-ring {
+  --chat-stop-color: var(--color-text-dim);
+  pointer-events: none;
+  border-radius: inherit;
+  padding: 1.5px;
+  background: conic-gradient(
+    from var(--chat-stop-angle),
+    transparent 0deg 240deg,
+    var(--chat-stop-color) 330deg,
+    transparent 360deg
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  animation: chat-stop-ring 1.8s linear infinite;
+}
+.chat-stop-ring[data-state="writing"] { --chat-stop-color: var(--color-accent); }
+.chat-stop-ring[data-state="tool"],
+.chat-stop-ring[data-state="booting"] { --chat-stop-color: var(--color-success); }
+.chat-stop-ring[data-state="thinking"] { --chat-stop-color: var(--color-text-dim); }
+
+@media (prefers-reduced-motion: reduce) {
+  [data-caret] > .chat-markdown > :last-child::after,
+  [data-caret] > .chat-markdown > :last-child > :last-child::after,
+  .chat-token-flow > span,
+  .chat-stop-ring {
+    animation: none !important;
+  }
+  [data-caret="fading"] > .chat-markdown > :last-child::after,
+  [data-caret="fading"] > .chat-markdown > :last-child > :last-child::after {
+    content: none;
+  }
+  .chat-token-flow > span { transform: scaleY(0.7); }
+  .chat-stop-ring {
+    background: none;
+    box-shadow: inset 0 0 0 1.5px var(--chat-stop-color);
+  }
+}

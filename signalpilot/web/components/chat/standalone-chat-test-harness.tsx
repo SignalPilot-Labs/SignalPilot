@@ -40,6 +40,11 @@ import { ConnectorsProvider } from "~/components/connectors/connectors-context";
 import { createFixtureConnectorsApi } from "~/lib/mcp-connectors-fixture-client";
 import { FIXTURE_ME } from "~/lib/mcp-connectors-fixture";
 import { connectorSignInFixtureEvents } from "~/lib/chat-connector-signin-fixture";
+import type { StandaloneChatModel } from "~/lib/api";
+import {
+  FIXTURE_QUERY_RESULT_ID,
+  fixtureQueryResultPage,
+} from "~/lib/chat-test-fixture-tools";
 
 const SPEEDS = [1, 2, 4] as const;
 const TICK_MS = 50;
@@ -72,6 +77,8 @@ export function StandaloneChatTestHarness() {
   const [hydrated, setHydrated] = useState(false);
   useEffect(() => setHydrated(true), []);
   const [speed, setSpeed] = useState<(typeof SPEEDS)[number]>(1);
+  const [selectedModel, setSelectedModel] =
+    useState<StandaloneChatModel>("claude-opus-5");
   const speedRef = useRef(speed);
   speedRef.current = speed;
 
@@ -139,6 +146,17 @@ export function StandaloneChatTestHarness() {
     if (!content) throw new Error(`No fixture content for file ${fileId}`);
     return URL.createObjectURL(new Blob([content.body], { type: content.mime }));
   }, []);
+  // Full-rows stub for the governed query result: the table card's "Load
+  // all rows" pages the same deterministic 1,204 rows the gateway would.
+  const getToolResultRows = useCallback(
+    async (resultId: string, opts?: { offset?: number; limit?: number }) => {
+      if (resultId !== FIXTURE_QUERY_RESULT_ID) {
+        throw new Error(`No fixture result for ${resultId}`);
+      }
+      return fixtureQueryResultPage(opts?.offset, opts?.limit);
+    },
+    [],
+  );
   const notebookPanelAutoOpenedRunRef = useRef<string | null>(null);
   useEffect(() => {
     if (
@@ -303,6 +321,7 @@ export function StandaloneChatTestHarness() {
               files: conversationFiles,
               openArtifact,
               getFileObjectUrl,
+              getToolResultRows,
               // Frozen replay clock, so relative timestamps are honest on
               // every frame instead of measuring from the real wall clock.
               nowMs: fixtureNowMs(elapsed),
@@ -344,6 +363,17 @@ export function StandaloneChatTestHarness() {
           <ChatSettingsPanel
             onClose={settingsPanel.closePanel}
             connectorsEnabled
+            model={{
+              value: selectedModel,
+              options: [
+                { id: "claude-opus-4-6", label: "Opus 4.6" },
+                { id: "claude-sonnet-4-6", label: "Sonnet 4.6" },
+                { id: "claude-opus-5", label: "Opus 5" },
+                { id: "claude-fable-5-1", label: "Fable 5.1" },
+              ],
+              disabled: false,
+              onChange: setSelectedModel,
+            }}
             manageHref="/settings/connectors?fixture=1"
           />
         )}

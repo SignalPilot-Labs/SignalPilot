@@ -1,8 +1,6 @@
 "use client";
 
-// Standalone data chat page container. The message tree, artifact
-// previews, hooks, and rail parts live in sibling modules. This file
-// re-exports the moved names so existing importers do not change.
+// Standalone data chat container; UI details live in sibling modules.
 
 import { Bot, PanelLeft, Share2 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -66,8 +64,9 @@ import {
 } from "~/components/chat/standalone-chat-panels";
 import { useChatRightSlot } from "~/components/chat/use-chat-right-slot";
 import { ConnectorsProvider } from "~/components/connectors/connectors-context";
+import { useChatModelSettings } from "~/components/chat/use-chat-model-settings";
+import { useChatBudgetSettings } from "~/components/chat/use-chat-budget-settings";
 
-// Re-exports for existing importers of this module path.
 export { ChatUiContext, useChatUi } from "~/components/chat/chat-ui-context";
 export type { UiMessage } from "~/components/chat/chat-ui-context";
 export { ChatMessage } from "~/components/chat/chat-message";
@@ -132,8 +131,8 @@ export function StandaloneDataChat({
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
     null,
   );
-  const [perQueryBudgetUsd, setPerQueryBudgetUsd] = useState(0.25);
-  const [chatBudgetUsd, setChatBudgetUsd] = useState(1);
+  const { perQueryBudgetUsd, chatBudgetUsd, budgetSettings } =
+    useChatBudgetSettings(bootstrap, conversationId);
   const [draft, setDraft] = useChatDraft(conversationId);
   const promptInitialized = useRef(false);
   const [isConversationRailOpen, setIsConversationRailOpen] =
@@ -163,8 +162,6 @@ export function StandaloneDataChat({
         bootstrap.projects[0]?.id ??
         null,
     );
-    setPerQueryBudgetUsd(bootstrap.default_per_query_budget_usd);
-    setChatBudgetUsd(bootstrap.default_chat_budget_usd);
     selectedInitialized.current = true;
   }, [bootstrap, requestedProject]);
 
@@ -268,6 +265,14 @@ export function StandaloneDataChat({
 
   const { viewportRef, shouldStickToBottomRef, onViewportScroll } =
     useChatAutoScroll(conversationId, uiMessages);
+  const { selectedModel, modelSettings } = useChatModelSettings({
+    conversationId,
+    conversationModel: detail?.conversation.model,
+    defaultModel: bootstrap?.default_model,
+    options: bootstrap?.available_models ?? [],
+    runStatus: currentRun?.status,
+    mutateDetail,
+  });
 
   const {
     submitText,
@@ -292,6 +297,7 @@ export function StandaloneDataChat({
     selectedProjectId,
     perQueryBudgetUsd,
     chatBudgetUsd,
+    selectedModel,
     attachedReportReference,
     mutateDetail,
     mutateHistory,
@@ -344,12 +350,6 @@ export function StandaloneDataChat({
   const connectorsEnabled = Boolean(
     bootstrap.enterprise_features.mcp_connectors,
   );
-  // Budgets apply to the next chat, so they are only editable on a new one.
-  const budgetSettings =
-    !conversationId && bootstrap.enterprise_features.query_approval
-      ? { perQueryBudgetUsd, setPerQueryBudgetUsd, chatBudgetUsd, setChatBudgetUsd }
-      : null;
-
   const composerNode = (
     <ChatComposerPanel
       draft={draft}
@@ -369,9 +369,7 @@ export function StandaloneDataChat({
         void setDefaultStandaloneChatProject(projectId);
         router.replace(`/chats?project=${encodeURIComponent(projectId)}`);
       }}
-      onOpenSettings={
-        connectorsEnabled || budgetSettings ? settingsPanel.toggle : undefined
-      }
+      onOpenSettings={settingsPanel.toggle}
       settingsOpen={settingsPanel.open}
     />
   );
@@ -580,6 +578,7 @@ export function StandaloneDataChat({
               settings={{
                 open: settingsPanel.open,
                 connectorsEnabled,
+                model: modelSettings,
                 budgets: budgetSettings,
                 onClose: settingsPanel.closePanel,
               }}

@@ -37,8 +37,11 @@ def _worker_id() -> str:
     return f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
 
 
-# The agent SDK forwards MCP tool results as str(content_blocks) — a Python
-# repr of a block list, not JSON. Extract the ids textually in that case.
+# Legacy fallback. Current notebook images flatten ToolResultBlock content
+# with claude_agent_state.tool_result_text, so the result arrives as the
+# tool's JSON text and json.loads below succeeds. Older sandbox images sent
+# str(content_blocks) — a Python repr of a block list — and this regex pulls
+# the ids out of that textually. Keep it until every pinned image is rebuilt.
 _TOOL_RESULT_ID_RE = re.compile(
     r"[\"'](session_id|notebook_path|notebook)\\?[\"']\s*:\s*\\?[\"']([^\"'\\]+)"
 )

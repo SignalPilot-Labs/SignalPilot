@@ -15,6 +15,8 @@ import "./styles/typography.css";
 import "./styles/containers.css";
 import "./styles/code.css";
 import "./styles/media.css";
+// Typing caret rules (`data-caret`), shared with the live indicator.
+import "../chat-live.css";
 import { MarkdownCode, MarkdownPre } from "./code-block";
 import { MarkdownLink } from "./link";
 
@@ -104,27 +106,43 @@ function useMathPlugin(): StreamdownProps["plugins"] {
  *
  * `streaming` keeps partial syntax from flickering mid-run; pass false for
  * content that is already final.
+ *
+ * `caret` draws a typing caret after the last block while tokens arrive
+ * (`"fading"` runs the exit animation for the settle window after the last
+ * one). It is drawn by chat-live.css from the `data-caret` attribute rather
+ * than by Streamdown's own `caret` prop: Streamdown's is a static glyph with
+ * no blink, colour, or fade, and it only paints when its Tailwind utility
+ * classes were compiled in. Owning the caret keeps it deterministic.
  */
 export function ChatMarkdown({
   markdown,
   className = "",
   streaming = false,
+  caret = false,
 }: {
   markdown: string;
   className?: string;
   streaming?: boolean;
+  caret?: boolean | "fading";
 }) {
   const plugins = useMathPlugin();
+  const caretAttr =
+    caret === "fading" ? "fading" : caret ? "true" : undefined;
+  // Streamdown spreads rest props onto its block renderer, not its root, so
+  // the caret attribute lives on a display:contents wrapper above it. The
+  // wrapper is always present, so toggling the caret never remounts the tree.
   return (
-    <Streamdown
-      className={`chat-markdown ${className}`.trim()}
-      mode={streaming ? "streaming" : "static"}
-      components={COMPONENTS}
-      rehypePlugins={REHYPE_PLUGINS}
-      plugins={plugins}
-      controls={{ table: true, code: false, mermaid: false }}
-    >
-      {markdown}
-    </Streamdown>
+    <div className="contents" data-caret={caretAttr}>
+      <Streamdown
+        className={`chat-markdown ${className}`.trim()}
+        mode={streaming ? "streaming" : "static"}
+        components={COMPONENTS}
+        rehypePlugins={REHYPE_PLUGINS}
+        plugins={plugins}
+        controls={{ table: true, code: false, mermaid: false }}
+      >
+        {markdown}
+      </Streamdown>
+    </div>
   );
 }

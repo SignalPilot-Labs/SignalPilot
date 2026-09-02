@@ -340,11 +340,14 @@ describe("foldRunBlocks", () => {
       "text",
       "steps",
       "text",
+      "steps",
+      "text",
     ]);
-    const [thinking, chain1, narration, chain2, answer] = blocks;
+    const [thinking, chain1, narration, chain2, answer, chain3, tail] = blocks;
     if (thinking.kind !== "thinking") throw new Error();
     if (chain1.kind !== "steps" || chain2.kind !== "steps") throw new Error();
     if (narration.kind !== "text" || answer.kind !== "text") throw new Error();
+    if (chain3.kind !== "steps" || tail.kind !== "text") throw new Error();
     expect(thinking.text).toContain("fct_orders looks right");
     expect(chain1.steps).toHaveLength(6); // progress → todo → schema → validate → query → subagent
     expect(chain1.steps.at(-1)?.tool).toBe("Agent");
@@ -355,6 +358,15 @@ describe("foldRunBlocks", () => {
     expect(chain2.steps).toHaveLength(11);
     expect(chain2.steps[0]?.tool).toBe("start_analysis_notebook");
     expect(answer.text).toContain("EMEA drove the growth");
+    // Follow-up verification chain: list_tables → explore_columns →
+    // dbt_execute → search_knowledge → hubspot connector, then a short tail.
+    expect(chain3.steps.map((step) => step.tool)).toEqual([
+      "list_tables", "explore_columns", "dbt_execute", "search_knowledge", "search_contacts",
+    ]);
+    expect(chain3.steps.map((step) => step.result?.kind)).toEqual([
+      "table_list", "column_profile", "dbt_run", "knowledge", "json",
+    ]);
+    expect(tail.text).toContain("rpt_region_rollup");
   });
 
   it("keeps a mid-stream narration attached to no group while the next chain runs", () => {

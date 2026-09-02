@@ -13,6 +13,7 @@ export * from "./api/eval-upload";
 export * from "./api/evals";
 export * from "./api/standalone-chat";
 export * from "./api/chat-files";
+export * from "./api/chat-results";
 export * from "./api/chat-reports";
 export * from "./api/connections";
 export * from "./api/connection-tools";

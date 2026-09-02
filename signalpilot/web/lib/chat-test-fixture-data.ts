@@ -3,6 +3,13 @@ import {
   artifactFileEvents,
   lateArtifactFileEvents,
 } from "./chat-test-fixture-artifact-files";
+import {
+  fixtureSchemaCompletion,
+  fixtureTableCompletion,
+  fixtureTerminalCompletion,
+  fixtureValidationFailureCompletion,
+  followUpToolEvents,
+} from "./chat-test-fixture-tools";
 
 /**
  * Raw fixture data for /chats/test: the scripted event timeline and the
@@ -96,6 +103,13 @@ const THINKING_CHUNKS: { at: number; delta: string }[] = [
   { at: 360, delta: "Plan: check the schema, query both quarters in one governed pass, then compute growth rates in the sandbox so the numbers match the published table exactly." },
 ];
 
+/** Short narration after the follow-up tool chain, before the run ends. */
+const TAIL_CHUNKS: { at: number; delta: string }[] = [
+  { at: 24_050, delta: "\n\nOne caveat from the verification pass: " },
+  { at: 24_250, delta: "`rpt_region_rollup` failed to rebuild because it still references `region_name`; " },
+  { at: 24_450, delta: "the published numbers come straight from `fct_orders`, so they are unaffected." },
+];
+
 const RAW_EVENTS: FixtureEvent[] = [
   // Cold-start boot: present in this fixture so the boot UX is replayable.
   // Warm runs simply have no runtime_boot events.
@@ -177,7 +191,7 @@ const RAW_EVENTS: FixtureEvent[] = [
     run_id: FIXTURE_RUN_ID,
     sequence: 6,
     type: "tool_completed",
-    payload: { tool_call_id: "t2", summary: "The tool completed.", error: false },
+    payload: fixtureSchemaCompletion("t2"),
   },
   {
     at: 3_200,
@@ -201,14 +215,10 @@ const RAW_EVENTS: FixtureEvent[] = [
     run_id: FIXTURE_RUN_ID,
     sequence: 9,
     type: "tool_completed",
-    payload: {
-      tool_call_id: "t3",
-      // The worker writes the failure text as `summary` (chat-run-steps reads
-      // summary first, message only as a legacy fallback).
-      summary:
-        'column "region_name" does not exist on analytics.fct_orders — regions live on dim_regions',
-      error: true,
-    },
+    // The worker writes the failure text as `summary` (chat-run-steps reads
+    // summary first, message only as a legacy fallback) next to the parsed
+    // validation result.
+    payload: fixtureValidationFailureCompletion("t3"),
   },
   {
     at: 4_700,
@@ -338,7 +348,7 @@ const RAW_EVENTS: FixtureEvent[] = [
     run_id: FIXTURE_RUN_ID,
     sequence: 13,
     type: "tool_completed",
-    payload: { tool_call_id: "t4", summary: "The tool completed.", error: false },
+    payload: fixtureTableCompletion("t4"),
   },
   ...MID_RUN_CHUNKS.map((chunk) => ({
     at: chunk.at,
@@ -417,7 +427,7 @@ const RAW_EVENTS: FixtureEvent[] = [
     run_id: FIXTURE_RUN_ID,
     sequence: 20,
     type: "tool_completed",
-    payload: { tool_call_id: "t7", summary: "The tool completed.", error: false },
+    payload: fixtureTerminalCompletion("t7"),
   },
   // Export files (HTML report, SVG chart, CSV) — the inline artifact card
   // variants. Defined in chat-test-fixture-artifact-files.ts.
@@ -524,10 +534,21 @@ const RAW_EVENTS: FixtureEvent[] = [
     type: "kernel_stopped",
     payload: { status: "stopped" },
   },
-  {
-    at: 21_000,
+  // A follow-up tool chain after the answer: the agent double-checks the
+  // marts it published from. Exercises every structured tool result kind
+  // (table_list, column_profile, dbt_run, knowledge, connector json).
+  ...followUpToolEvents(FIXTURE_RUN_ID),
+  ...TAIL_CHUNKS.map((chunk) => ({
+    at: chunk.at,
     run_id: FIXTURE_RUN_ID,
-    sequence: 31 + ANSWER_CHUNKS.length,
+    sequence: 0,
+    type: "text_delta" as const,
+    payload: { delta: chunk.delta },
+  })),
+  {
+    at: 24_600,
+    run_id: FIXTURE_RUN_ID,
+    sequence: 0,
     type: "status",
     payload: { status: "completed" },
   },

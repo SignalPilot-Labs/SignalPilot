@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from ..config.notebooks import NotebookSettings, get_notebook_settings
-from ..runtime.mode import is_cloud_mode
+from ..runtime.mode import is_cloud_mode, runtime_env
 from ..sandbox_runtime import SandboxRuntime, SandboxSpec, get_sandbox_runtime
 from ..sandbox_runtime.base import SandboxNotFound
 
@@ -37,6 +37,21 @@ _TOKEN_FILE = "/tmp/sp-notebook-token"  # nosec B108
 # Tight poll: the exec round trip itself takes ~300ms, and a cold server
 # boots in ~2s — a 2s sleep added up to 2s of pure wait to every launch.
 _HEALTH_POLL_SECONDS = 0.5
+
+
+def _notebook_sandbox_tags() -> dict[str, str]:
+    """Tags that keep one deployment from reaping another's sandboxes."""
+    environment = runtime_env()
+    if not environment:
+        return dict(NOTEBOOK_SANDBOX_TAG)
+    # Scope the purpose value as well as adding an ownership tag. An older
+    # gateway filters only on ``sp-purpose=notebook``; changing that value
+    # prevents it from matching a new sandbox during a rolling deployment.
+    return {
+        "sp-purpose": f"notebook-{environment}",
+        "sp-runtime-env": environment,
+        "sp-workload": "notebook",
+    }
 
 
 class NotebookLaunchError(RuntimeError):
@@ -199,7 +214,7 @@ class VercelNotebookBackend:
             memory_mb=settings.memory_mb,
             egress_allow_hosts=settings.egress_allow or None,
             tags={
-                **NOTEBOOK_SANDBOX_TAG,
+                **_notebook_sandbox_tags(),
                 "sp-org": request.org_id[:64],
                 "sp-session": request.session_id[:64],
             },
@@ -384,7 +399,7 @@ class VercelNotebookBackend:
         the crashed-gateway backstop."""
         reaped = 0
         try:
-            rows = await self._runtime.list(tags=dict(NOTEBOOK_SANDBOX_TAG))
+            rows = await self._runtime.list(tags=_notebook_sandbox_tags())
         except Exception:
             logger.warning("Notebook sandbox inventory failed; skipping reap", exc_info=True)
             return 0

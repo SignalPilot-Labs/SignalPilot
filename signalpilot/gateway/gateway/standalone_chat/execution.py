@@ -255,9 +255,19 @@ async def prepare_execution(
         "warm_context": warm_context,
         "run_origin": run_origin,
         "mcp_connectors": mcp_connectors,
-        # Optional model override. When SP_CHAT_AGENT_MODEL is set (local/staging)
-        # the notebook agent uses it; unset -> the notebook keeps its own default.
-        **({"model": _chat_model} if (_chat_model := os.getenv("SP_CHAT_AGENT_MODEL")) else {}),
+        # A conversation pins its selected model across warm and cold resumes.
+        # Legacy rows fall back to the deployment override, then the notebook's
+        # own default when neither is present.
+        **(
+            {"model": _chat_model}
+            if (
+                _chat_model := (
+                    conversation.model if conversation is not None else None
+                )
+                or os.getenv("SP_CHAT_AGENT_MODEL")
+            )
+            else {}
+        ),
         "features": {
             "sandbox_runtime": enterprise_chat_feature_flags().sandbox_runtime,
             "size_router": enterprise_chat_feature_flags().size_router,

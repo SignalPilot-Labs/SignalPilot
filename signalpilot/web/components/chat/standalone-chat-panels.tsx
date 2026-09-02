@@ -17,6 +17,7 @@ import { ChatDashboardPanel } from "~/components/chat/chat-dashboard-panel";
 import {
   ChatSettingsPanel,
   type ChatBudgetSettings,
+  type ChatModelSettings,
 } from "~/components/chat/chat-settings-panel";
 
 const TOGGLE_CLASS =
@@ -96,6 +97,7 @@ export function ChatRightPanels({
   settings: {
     open: boolean;
     connectorsEnabled: boolean;
+    model: ChatModelSettings;
     budgets: ChatBudgetSettings | null;
     onClose: () => void;
   };
@@ -113,6 +115,7 @@ export function ChatRightPanels({
       <ChatSettingsPanel
         onClose={settings.onClose}
         connectorsEnabled={settings.connectorsEnabled}
+        model={settings.model}
         budgets={settings.budgets}
       />
     );

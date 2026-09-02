@@ -455,7 +455,8 @@ def test_agent_contract_includes_default_signalpilot_mcp_tools():
     # The prompt file wraps lines; compare against whitespace-collapsed text.
     _prompt_flat = " ".join(STANDALONE_SYSTEM_PROMPT.split())
     assert "Answer data questions with evidence" in _prompt_flat
-    assert "first tool call for any analytics request is the `Skill` tool" in _prompt_flat
+    assert "`TodoWrite`: a first plan" in _prompt_flat
+    assert "Make no other tool call before the skill loads" in _prompt_flat
     assert "`signalpilot-dbt:dbt-workflow`" in _prompt_flat
     assert "SP_CHAT_SCRATCH_DIRECTORY" in _prompt_flat
     assert "analytics-steps.md" in _prompt_flat
@@ -471,7 +472,6 @@ def test_agent_contract_includes_default_signalpilot_mcp_tools():
     assert "blank line after an opening HTML tag" in _prompt_flat
     assert "Link each dbt model to its lineage page" in _prompt_flat
     assert "/lineage/rpt_customer_retention?project=PROJECT_ID" in _prompt_flat
-    assert "/lineage/rpt_customer_retention/raw?project=PROJECT_ID" in _prompt_flat
     assert "Keep the link root-relative" in _prompt_flat
     assert "call `create_dashboard_preview` exactly once" in _prompt_flat
     assert "user must review and Apply" in _prompt_flat

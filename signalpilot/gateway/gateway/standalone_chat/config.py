@@ -5,7 +5,25 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-from gateway.runtime.mode import is_cloud_mode
+from gateway.runtime.mode import is_cloud_mode, runtime_env
+
+__all__ = ["runtime_env"]
+
+
+CHAT_MODEL_OPTIONS: tuple[tuple[str, str], ...] = (
+    ("claude-opus-4-6", "Opus 4.6"),
+    ("claude-sonnet-4-6", "Sonnet 4.6"),
+    ("claude-opus-5", "Opus 5"),
+    ("claude-fable-5-1", "Fable 5.1"),
+)
+CHAT_MODEL_IDS = frozenset(model_id for model_id, _label in CHAT_MODEL_OPTIONS)
+FALLBACK_CHAT_MODEL = "claude-opus-4-6"
+
+
+def default_chat_model() -> str:
+    """Return the selectable deployment default, ignoring invalid overrides."""
+    configured = os.getenv("SP_CHAT_AGENT_MODEL", "").strip()
+    return configured if configured in CHAT_MODEL_IDS else FALLBACK_CHAT_MODEL
 
 
 def standalone_chat_enabled() -> bool:
@@ -62,16 +80,6 @@ def enterprise_chat_feature_flags() -> EnterpriseChatFeatureFlags:
         dataset_refs=_disabled_by_default_flag("SP_FEATURE_CHAT_DATASET_REFS"),
         mcp_connectors=_enabled_by_default_flag("SP_FEATURE_CHAT_MCP_CONNECTORS"),
     )
-
-
-def runtime_env() -> str | None:
-    """Environment label stamped on runs and used for worker claim affinity.
-
-    Unset/empty means unpartitioned: runs are stamped NULL and the worker
-    claims every run regardless of label (the pre-partitioning behavior).
-    """
-    value = os.getenv("SP_RUNTIME_ENV", "").strip()
-    return value[:50] or None
 
 
 def worker_concurrency() -> int:

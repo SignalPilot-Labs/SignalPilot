@@ -3,16 +3,21 @@
 // Composer block for the standalone data chat: input, project picker, and
 // the gear that opens the right-side Chat settings panel.
 
-import type { Dispatch, SetStateAction } from "react";
+import { useContext, type Dispatch, type SetStateAction } from "react";
 import type {
   StandaloneChatBootstrap,
+  StandaloneChatEvent,
   StandaloneChatRun,
 } from "~/lib/api";
 import { StandaloneChatComposer } from "~/components/chat/standalone-chat-composer";
+import { ChatUiContext } from "~/components/chat/chat-ui-context";
+import { useRunLiveState } from "~/components/chat/use-run-live-state";
 import {
   ProjectChip,
   ProjectPicker,
 } from "~/components/chat/project-picker";
+
+const EMPTY_EVENTS: StandaloneChatEvent[] = [];
 
 export function ChatComposerPanel({
   draft,
@@ -50,6 +55,15 @@ export function ChatComposerPanel({
 }) {
   const selectedProject =
     bootstrap.projects.find((p) => p.id === selectedProjectId) ?? null;
+  // The run's live state for the Stop ring and hint. The panel renders
+  // inside the chat UI provider on the live page; without one (harness,
+  // tests) there are no events and the state stays idle.
+  const events = useContext(ChatUiContext)?.events ?? EMPTY_EVENTS;
+  const live = useRunLiveState(
+    events,
+    currentRun?.id,
+    currentRun?.status ?? "completed",
+  );
   return (
     <StandaloneChatComposer
       value={draft}
@@ -82,6 +96,8 @@ export function ChatComposerPanel({
       }
       onOpenSettings={onOpenSettings}
       settingsOpen={settingsOpen}
+      liveState={live.state}
+      liveLabel={live.label}
     />
   );
 }

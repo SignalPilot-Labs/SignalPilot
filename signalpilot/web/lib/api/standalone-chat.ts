@@ -60,6 +60,17 @@ export type StandaloneChatProject = {
   readiness_message: string;
 };
 
+export type StandaloneChatModel =
+  | "claude-opus-4-6"
+  | "claude-sonnet-4-6"
+  | "claude-opus-5"
+  | "claude-fable-5-1";
+
+export type StandaloneChatModelOption = {
+  id: StandaloneChatModel;
+  label: string;
+};
+
 export type StandaloneChatBootstrap = {
   enabled: boolean;
   projects: StandaloneChatProject[];
@@ -68,6 +79,8 @@ export type StandaloneChatBootstrap = {
   starter_questions: string[];
   default_per_query_budget_usd: number;
   default_chat_budget_usd: number;
+  available_models: StandaloneChatModelOption[];
+  default_model: StandaloneChatModel;
   enterprise_features: {
     query_approval?: boolean;
     structured_results?: boolean;
@@ -177,6 +190,7 @@ export type StandaloneConversation = {
   updated_at: number;
   run_status: StandaloneChatRunStatus | null;
   commit_sha: string | null;
+  model: StandaloneChatModel;
   per_query_budget_usd: number;
   chat_budget_usd: number;
   estimated_spend_usd: number;
@@ -249,6 +263,7 @@ export const createStandaloneConversation = (
   message: string,
   perQueryBudgetUsd = 0.25,
   chatBudgetUsd = 1,
+  model: StandaloneChatModel = "claude-opus-4-6",
   reportReference?: { report_id: string; version_id: string },
 ) =>
   request<StandaloneConversationDetail>("/api/chat/conversations", {
@@ -258,9 +273,18 @@ export const createStandaloneConversation = (
       message,
       per_query_budget_usd: perQueryBudgetUsd,
       chat_budget_usd: chatBudgetUsd,
+      model,
       report_reference: reportReference,
     }),
   });
+export const updateStandaloneConversationModel = (
+  conversationId: string,
+  model: StandaloneChatModel,
+) =>
+  request<{ id: string; model: StandaloneChatModel }>(
+    `/api/chat/conversations/${encodeURIComponent(conversationId)}/model`,
+    { method: "PUT", body: JSON.stringify({ model }) },
+  );
 export const decideStandaloneQueryProposal = (
   proposalId: string,
   decision: "approve" | "decline",
@@ -523,3 +547,5 @@ export async function downloadSharedStandaloneArtifact(
   );
 }
 
+// Wire types for the tool result carried on `tool_completed.payload`.
+export * from "./standalone-chat-tool-results";

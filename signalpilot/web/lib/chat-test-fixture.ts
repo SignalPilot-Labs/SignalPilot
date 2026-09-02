@@ -316,7 +316,7 @@ export const fixtureReportArtifact: FixtureArtifact = {
 };
 fixtureArtifacts.push(fixtureReportArtifact);
 
-export const FIXTURE_TOTAL_MS = 21_200;
+export const FIXTURE_TOTAL_MS = 24_800;
 
 export function fixtureEventCreatedAt(at: number): string {
   return new Date(BASE_EPOCH + at).toISOString();

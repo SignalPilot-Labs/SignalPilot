@@ -6,6 +6,7 @@ from fastapi import HTTPException
 
 from gateway.standalone_chat.config import enterprise_chat_feature_flags, standalone_chat_enabled
 from gateway.standalone_chat.projects import authorize_chat_project, evaluate_project_readiness
+from gateway.store import standalone_chat as chat_store
 
 from ..deps import StoreD
 
@@ -13,6 +14,19 @@ from ..deps import StoreD
 def require_enabled() -> None:
     if not standalone_chat_enabled():
         raise HTTPException(status_code=404, detail="Standalone chat is not enabled")
+
+
+async def owned_conversation_or_404(store: StoreD, conversation_id: str):
+    """Return the conversation when the caller owns it; 404 otherwise."""
+    conversation = await chat_store.get_owned_conversation(
+        store.session,
+        org_id=store._require_org_id(),
+        user_id=store.user_id or "local",
+        conversation_id=conversation_id,
+    )
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return conversation
 
 
 def require_enterprise_feature(name: str) -> None:

@@ -286,6 +286,12 @@ class TestLaunchCredentialDelivery:
         # The token itself must never appear in argv (process lists are readable).
         assert "pod-notebook-token" not in command
 
+    def test_unpartitioned_deployment_keeps_legacy_notebook_tag(self, monkeypatch):
+        from gateway.notebooks.backends import _notebook_sandbox_tags
+
+        monkeypatch.delenv("SP_RUNTIME_ENV", raising=False)
+        assert _notebook_sandbox_tags() == {"sp-purpose": "notebook"}
+
     @pytest.mark.asyncio
     async def test_reap_orphans_spares_launching_sandboxes(self, monkeypatch):
         """A sandbox mid-launch has tags but no session row yet; the reaper
@@ -301,8 +307,10 @@ class TestLaunchCredentialDelivery:
         class FakeRuntime:
             def __init__(self):
                 self.destroyed = []
+                self.list_tags = None
 
             async def list(self, *, tags=None):
+                self.list_tags = tags
                 return [
                     SandboxInfo("young", "running", created_at_epoch=now - 30),
                     SandboxInfo("old-orphan", "running", created_at_epoch=now - 7200),
@@ -314,10 +322,16 @@ class TestLaunchCredentialDelivery:
                 self.destroyed.append(sandbox_id)
 
         monkeypatch.setenv("SP_NOTEBOOK_VERCEL_IMAGE", "reg/img@sha256:" + "0" * 64)
+        monkeypatch.setenv("SP_RUNTIME_ENV", "local-daniel")
         runtime = FakeRuntime()
         backend = VercelNotebookBackend(NotebookSettings(), runtime=runtime)
         reaped = await backend.reap_orphans({"kept"})
         assert reaped == 2
+        assert runtime.list_tags == {
+            "sp-purpose": "notebook-local-daniel",
+            "sp-runtime-env": "local-daniel",
+            "sp-workload": "notebook",
+        }
         assert sorted(runtime.destroyed) == ["old-orphan", "unknown-age"]
 
     def test_boot_command_works_without_sudo(self):
@@ -353,11 +367,19 @@ class TestLaunchCredentialDelivery:
         runtime.exec.return_value = MagicMock(ok=True)
         runtime.routes.return_value = {2718: "https://sbx-1.vercel.run"}
         monkeypatch.setenv("SP_NOTEBOOK_VERCEL_IMAGE", "reg/nb:dev")
+        monkeypatch.setenv("SP_RUNTIME_ENV", "local-daniel")
         monkeypatch.delenv("SP_DEPLOYMENT_MODE", raising=False)
         backend = VercelNotebookBackend(NotebookSettings(), runtime=runtime)
         await backend.launch(self._launch_request())
         spec = runtime.create.await_args.args[0]
         assert spec.env == {}
+        assert spec.tags == {
+            "sp-purpose": "notebook-local-daniel",
+            "sp-runtime-env": "local-daniel",
+            "sp-workload": "notebook",
+            "sp-org": "org-1",
+            "sp-session": "sess-abc",
+        }
         process_env = runtime.start_process.await_args.kwargs["env"]
         assert process_env["SP_SESSION_JWT"] == "jwt.value"
         # The token rides the process env (never the creation spec); the boot

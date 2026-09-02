@@ -54,7 +54,7 @@ test.describe("artifacts panel (fixture harness)", () => {
   test("tabs render with counts and the notebook tab stays the default", async ({
     page,
   }) => {
-    await page.goto(at(21_200));
+    await page.goto(at(24_800));
     await waitForHydration(page);
     await page.getByTestId("live-notebook-toggle").click();
     await expect(page.getByTestId("live-notebook-panel")).toBeVisible();
@@ -70,7 +70,7 @@ test.describe("artifacts panel (fixture harness)", () => {
   test("files tab lists the written file and opens the viewer", async ({
     page,
   }) => {
-    await page.goto(at(21_200));
+    await page.goto(at(24_800));
     await waitForHydration(page);
     await page.getByTestId("live-notebook-toggle").click();
     await page.getByTestId("artifacts-tab-files").click();
@@ -94,7 +94,7 @@ test.describe("artifacts panel (fixture harness)", () => {
     await expect(page.getByTestId("live-notebook-panel")).toBeVisible();
     await expect(page.getByTestId("artifacts-notebook-chip")).toHaveCount(0);
     // At the end the fixture's second ("forecast") notebook has landed.
-    await page.goto(at(21_200));
+    await page.goto(at(24_800));
     await waitForHydration(page);
     await page.getByTestId("live-notebook-toggle").click();
     const chips = page.getByTestId("artifacts-notebook-chip");
@@ -117,7 +117,7 @@ test.describe("artifacts panel (fixture harness)", () => {
   test("queries tab shows the completed governed execution", async ({
     page,
   }) => {
-    await page.goto(at(21_200));
+    await page.goto(at(24_800));
     await waitForHydration(page);
     await page.getByTestId("live-notebook-toggle").click();
     await page.getByTestId("artifacts-tab-queries").click();

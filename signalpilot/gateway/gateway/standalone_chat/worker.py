@@ -54,11 +54,15 @@ from gateway.standalone_chat.worker_errors import (
 from gateway.standalone_chat.worker_events import (
     _cancellation_monitor,
     _lease_renewer,
-    _notebook_started_payload,
+    _notebook_started_payload,  # noqa: F401 — re-exported for tests
     _persist_artifacts,
     _steering_monitor,
     _update_summary,
     _worker_id,
+)
+from gateway.standalone_chat.worker_tool_results import (
+    cache_tool_input,
+    handle_tool_result,
 )
 from gateway.store import standalone_chat as chat_store
 
@@ -117,6 +121,7 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
     dashboard_preview: dict[str, Any] | None = None
     starts_new_text_block = False
     tool_names_by_id: dict[str, str] = {}
+    tool_inputs_by_id: dict[str, dict[str, Any]] = {}
     try:
         factory = get_session_factory()
         async with factory() as db:
@@ -284,6 +289,9 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                         tool_call_id = str(event.get("tool_call_id") or "")
                         if tool_call_id:
                             tool_names_by_id[tool_call_id] = tool_name
+                            cached_input = cache_tool_input(tool_input)
+                            if cached_input is not None:
+                                tool_inputs_by_id[tool_call_id] = cached_input
                         await _append(
                             run_id,
                             "tool_started",
@@ -338,54 +346,18 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                     elif event_type == "tool_result":
                         if not parent_tool_call_id:
                             starts_new_text_block = bool(streamed_text)
-                        is_error = bool(event.get("is_error"))
-                        tool_call_id = str(event.get("tool_call_id") or "")
-                        completed_tool = tool_names_by_id.get(tool_call_id, "")
-                        if is_error:
-                            # Author-visible events redact tool errors. Log the raw
-                            # error text here (server-side only) so operators can see
-                            # exactly why a tool failed.
-                            logger.warning(
-                                "standalone-chat tool error tool=%s run=%s raw=%s",
-                                completed_tool or "unknown",
-                                run_id,
-                                (content or "")[:2000],
-                            )
-                        completed_payload: dict[str, Any] = {
-                            "tool_call_id": event.get("tool_call_id"),
-                            "summary": (
-                                "The tool returned an error."
-                                if is_error
-                                else "The tool completed."
-                            ),
-                            "error": is_error,
-                        }
-                        if parent_tool_call_id:
-                            completed_payload["parent_tool_call_id"] = parent_tool_call_id
-                        if completed_tool == "Agent" and not is_error and content:
-                            # The Agent tool result IS the subagent's final
-                            # report — surfaced in its card, same disclosure
-                            # level as the agent's own streamed narration.
-                            completed_payload["report"] = content[:4000]
-                        await _append(
-                            run_id,
-                            "tool_completed",
-                            completed_payload,
+                        # Projects the result into the tool_completed card
+                        # payload and emits the notebook/cell side events.
+                        await handle_tool_result(
+                            run_id=run_id,
+                            event=event,
+                            content=content,
+                            parent_tool_call_id=parent_tool_call_id,
+                            tool_names_by_id=tool_names_by_id,
+                            tool_inputs_by_id=tool_inputs_by_id,
+                            execution=execution,
+                            org_id=run_org_id,
                         )
-                        if not is_error and completed_tool.endswith("start_analysis_notebook"):
-                            await _announce_notebook(
-                                run_id,
-                                _notebook_started_payload(
-                                    tool_result_content=content,
-                                    gateway_session_id=execution.session_id,
-                                ),
-                            )
-                        if completed_tool.endswith("run_cells"):
-                            await _append(
-                                run_id,
-                                "cell_executed",
-                                {"status": "failed" if is_error else "completed"},
-                            )
                     elif event_type == "notebook_started":
                         # Emitted by the runtime when it starts a replacement
                         # kernel (notebook recovery). The normal path derives

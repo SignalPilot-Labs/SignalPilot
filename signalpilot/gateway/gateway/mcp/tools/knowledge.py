@@ -48,6 +48,7 @@ def _extract_keywords(task_description: str) -> list[str]:
 
 
 def _render_doc_section(doc: KnowledgeDoc, *, truncated: bool = False) -> str:
+    # Format parsed by standalone_chat/tool_projection/ops.py; update tests there if you change this
     scope_ref = doc.scope_ref or "(org)"
     header = f"[{doc.scope.value}:{scope_ref}][{doc.category.value}]"
     body = doc.body or ""
@@ -248,6 +249,7 @@ async def search_knowledge(
         if not docs:
             return f'No knowledge docs found matching "{q}".'
 
+        # Format parsed by standalone_chat/tool_projection/ops.py; update tests there if you change this
         lines = [f"Found {len(docs)} result(s) for '{q}':\n"]
         for doc in docs:
             body = doc.body or ""

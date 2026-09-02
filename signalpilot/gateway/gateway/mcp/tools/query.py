@@ -164,6 +164,7 @@ async def query_database(
         except (GovernedQueryError, QueryPlanError) as exc:
             return f"Query error: {sanitize_mcp_error(str(exc), cap=300)}"
 
+    # Format parsed by standalone_chat/tool_projection/query.py; update tests there if you change this
     # Build status footer
     meta_parts = [
         f"{result.row_count} rows",
@@ -338,6 +339,7 @@ async def validate_sql(connection_name: str, sql: str) -> str:
             )
         if r.status_code == 200:
             data = r.json()
+            # Format parsed by standalone_chat/tool_projection/query.py; update tests there if you change this
             parts = ["VALID ✓"]
             if data.get("estimated_rows"):
                 parts.append(f"Estimated rows: {data['estimated_rows']:,}")

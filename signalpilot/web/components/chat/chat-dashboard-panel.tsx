@@ -245,14 +245,12 @@ export function ChatDashboardPanel({
               session?.plan?.name ??
               "Dashboard preview"}
           </span>
-          {session && (
+          {session && session.status !== "preview" && (
             <span className="flex-none rounded-full bg-[var(--color-bg-card)] px-2 py-0.5 text-[10px] uppercase tracking-wider text-[var(--color-text-dim)]">
               {session.status === "building" ||
               session.status === "partial_failed"
                 ? `${readyCount}/${expectedCount} ready`
-                : session.status === "preview"
-                  ? `Draft ${session.draft_revision}`
-                  : "Saved"}
+                : "Saved"}
             </span>
           )}
         </div>
@@ -283,7 +281,7 @@ export function ChatDashboardPanel({
                 ) : (
                   <Check className="h-3 w-3" />
                 )}
-                Apply
+                Save Dashboard
               </button>
             </>
           )}

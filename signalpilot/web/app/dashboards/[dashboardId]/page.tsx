@@ -114,13 +114,6 @@ export default function DashboardDetailPage() {
       ];
     },
   );
-  const onApplied = (applied: {
-    dashboard: { id: string };
-    version: { id: string };
-  }) =>
-    window.location.assign(
-      `/dashboards/${applied.dashboard.id}?version=${applied.version.id}`,
-    );
   return (
     <>
       <DashboardRuntimeProvider
@@ -146,9 +139,6 @@ export default function DashboardDetailPage() {
           detail.dashboard.is_owner && repairIssues.length ? (
             <DashboardAuthoringPanel
               dashboardId={detail.dashboard.id}
-              versionId={detail.version.id}
-              baseDefinition={detail.version.definition}
-              onApplied={onApplied}
               intent="repair"
               repairIssues={repairIssues}
             />
@@ -162,9 +152,6 @@ export default function DashboardDetailPage() {
             {detail.dashboard.is_owner ? (
               <DashboardAuthoringPanel
                 dashboardId={detail.dashboard.id}
-                versionId={detail.version.id}
-                baseDefinition={detail.version.definition}
-                onApplied={onApplied}
               />
             ) : null}
             <details className={pageStyles.actionMenu}>

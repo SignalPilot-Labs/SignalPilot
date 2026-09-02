@@ -179,7 +179,6 @@ async def test_dashboard_preview_tool_creates_one_review_only_preview():
     assert payload == {
         "status": "preview_ready",
         "authoring_session_id": "authoring-session-1",
-        "preview_url": "/dashboards/new?authoring=authoring-session-1",
         "summary": "Created a governed revenue dashboard.",
         "dashboard_name": "Executive Revenue",
         "chart_count": 2,

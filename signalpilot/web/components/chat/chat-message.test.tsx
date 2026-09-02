@@ -39,7 +39,6 @@ describe("Data Chat dashboard artifact card", () => {
       metadata: {
         dashboard_preview: {
           authoring_session_id: "session-1",
-          preview_url: "/dashboards/new?authoring=session-1",
           dashboard_name: "Sales overview",
           summary: "A concise view of sales performance.",
           chart_count: 3,

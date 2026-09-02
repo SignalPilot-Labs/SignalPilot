@@ -71,7 +71,6 @@ from gateway.governance.query_executor import (
     GovernedQueryError,
     governed_query_executor,
 )
-from gateway.mcp.context import mcp_execution_identity_var
 from gateway.models.dashboards import (
     CreateDashboardRequest,
     CreateDashboardVersionRequest,
@@ -115,7 +114,7 @@ resolver = DashboardSemanticResolver()
 
 async def _request_chat_run(store: StoreD) -> GatewayChatRun | None:
     """Resolve the active Data Chat run from a scoped notebook-session JWT."""
-    identity = mcp_execution_identity_var.get(None)
+    identity = getattr(store, "execution_identity", None)
     if not isinstance(identity, str) or not identity.startswith("chat:"):
         return None
     run_id = identity.removeprefix("chat:")
@@ -1595,15 +1594,32 @@ async def open_dashboard_authoring_chat(dashboard_id: str, store: StoreD):
         dashboard_id=dashboard_id,
     )
     conversation = None
-    if session and session.conversation_id:
+    creation_conversation_id = await dashboard_store.get_dashboard_creation_conversation_id(
+        store.session,
+        org_id=org_id,
+        user_id=user_id,
+        dashboard_id=dashboard_id,
+    )
+    if creation_conversation_id:
+        conversation = await chat_store.get_owned_conversation(
+            store.session,
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=creation_conversation_id,
+        )
+    if conversation is None and session and session.conversation_id:
         conversation = await chat_store.get_owned_conversation(
             store.session,
             org_id=org_id,
             user_id=user_id,
             conversation_id=session.conversation_id,
         )
+    if session:
         session_matches_current = session.status == "preview" and session.base_version_id == version.id
         if conversation is not None and session_matches_current:
+            if session.conversation_id != conversation.id:
+                session.conversation_id = conversation.id
+                await store.session.commit()
             return {
                 "conversation_id": conversation.id,
                 "authoring_session_id": session.id,

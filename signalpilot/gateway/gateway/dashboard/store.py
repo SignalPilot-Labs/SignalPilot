@@ -19,6 +19,7 @@ from gateway.dashboard.domain import (
     normalize_dashboard_definition,
 )
 from gateway.db.models import (
+    GatewayChatMessage,
     GatewayDashboard,
     GatewayDashboardAuthoringSession,
     GatewayDashboardChartDraft,
@@ -1161,6 +1162,59 @@ async def get_active_authoring_session(
             .limit(1)
         )
     ).scalar_one_or_none()
+
+
+async def get_dashboard_creation_conversation_id(
+    db: AsyncSession, *, org_id: str, user_id: str, dashboard_id: str
+) -> str | None:
+    """Return the earliest Data Chat conversation known to own this dashboard."""
+    sessions = list(
+        (
+            await db.execute(
+                select(GatewayDashboardAuthoringSession)
+                .where(
+                    GatewayDashboardAuthoringSession.dashboard_id == dashboard_id,
+                    GatewayDashboardAuthoringSession.org_id == org_id,
+                    GatewayDashboardAuthoringSession.owner_user_id == user_id,
+                )
+                .order_by(GatewayDashboardAuthoringSession.created_at.asc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not sessions:
+        return None
+
+    session_ids = [session.id for session in sessions]
+    preview_session_id = GatewayChatMessage.metadata_json["dashboard_preview"][
+        "authoring_session_id"
+    ].as_string()
+    preview_rows = (
+        await db.execute(
+            select(GatewayChatMessage.conversation_id, preview_session_id)
+            .where(
+                GatewayChatMessage.org_id == org_id,
+                GatewayChatMessage.user_id == user_id,
+                preview_session_id.in_(session_ids),
+            )
+            .order_by(GatewayChatMessage.created_at.asc())
+        )
+    ).all()
+    preview_conversations = {
+        authoring_session_id: conversation_id
+        for conversation_id, authoring_session_id in preview_rows
+        if authoring_session_id
+    }
+    ordered_sessions = [session for session in sessions if session.base_version_id is None]
+    ordered_sessions.extend(
+        session for session in sessions if session.base_version_id is not None
+    )
+    for session in ordered_sessions:
+        conversation_id = session.conversation_id or preview_conversations.get(session.id)
+        if conversation_id:
+            return conversation_id
+    return None
 
 
 async def confirm_authoring_custom_sql(

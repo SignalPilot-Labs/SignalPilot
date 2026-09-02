@@ -1395,7 +1395,6 @@ async def test_claim_completion_and_final_message_are_idempotent(db_session):
         },
         dashboard_preview={
             "authoring_session_id": "authoring-session-1",
-            "preview_url": "https://attacker.invalid/session",
             "dashboard_name": "Executive Revenue",
             "summary": "A governed executive dashboard.",
             "chart_count": 4,
@@ -1419,7 +1418,6 @@ async def test_claim_completion_and_final_message_are_idempotent(db_session):
     }
     assert first.metadata_json["dashboard_preview"] == {
         "authoring_session_id": "authoring-session-1",
-        "preview_url": "/dashboards/new?authoring=authoring-session-1",
         "dashboard_name": "Executive Revenue",
         "summary": "A governed executive dashboard.",
         "chart_count": 4,

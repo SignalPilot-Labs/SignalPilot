@@ -168,7 +168,6 @@ function messageReportSuggestion(
 
 type DashboardPreview = {
   authoring_session_id: string;
-  preview_url: string;
   dashboard_name: string;
   summary: string;
   chart_count: number;
@@ -183,15 +182,12 @@ function messageDashboardPreview(
   if (
     typeof preview.authoring_session_id !== "string" ||
     !preview.authoring_session_id ||
-    typeof preview.preview_url !== "string" ||
-    !preview.preview_url.startsWith("/dashboards/new?authoring=") ||
     typeof preview.dashboard_name !== "string"
   ) {
     return null;
   }
   return {
     authoring_session_id: String(preview.authoring_session_id || ""),
-    preview_url: preview.preview_url,
     dashboard_name: preview.dashboard_name,
     summary: typeof preview.summary === "string" ? preview.summary : "",
     chart_count:

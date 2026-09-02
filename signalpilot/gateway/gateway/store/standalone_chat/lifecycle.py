@@ -143,7 +143,6 @@ async def complete_run(
         if session_id:
             safe_dashboard_preview = {
                 "authoring_session_id": session_id,
-                "preview_url": f"/dashboards/new?authoring={session_id}",
                 "dashboard_name": str(
                     dashboard_preview.get("dashboard_name") or "Dashboard preview"
                 )[:200],

@@ -130,7 +130,6 @@ def build_standalone_chat_mcp_server(
                         else "preview_ready"
                     ),
                     "authoring_session_id": session_id,
-                    "preview_url": f"/dashboards/new?authoring={session_id}",
                     "summary": str(created.get("summary") or ""),
                     "dashboard_name": str(
                         definition.get("name")

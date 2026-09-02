@@ -32,6 +32,8 @@ from gateway.dashboard.operations import (
 )
 from gateway.db.models import (
     GatewayBase,
+    GatewayChatConversation,
+    GatewayChatMessage,
     GatewayDashboardAuthoringSession,
     GatewayDashboardResult,
     GatewayStructuredQueryResult,
@@ -203,6 +205,26 @@ async def _seed_apply_receipts(
     db.add_all(rows)
     await db.commit()
     return rows
+
+
+def _chat_conversation(conversation_id: str, *, created_at: float) -> GatewayChatConversation:
+    return GatewayChatConversation(
+        id=conversation_id,
+        org_id="org-a",
+        user_id="owner-a",
+        project_id="project-phase-1",
+        surface="standalone",
+        origin="user",
+        branch="main",
+        commit_sha="1" * 40,
+        status="active",
+        title="Dashboard chat",
+        message_count=0,
+        total_tokens=0,
+        total_cost_usd=0,
+        created_at=created_at,
+        updated_at=created_at,
+    )
 
 
 @pytest_asyncio.fixture
@@ -1137,6 +1159,106 @@ async def test_follow_up_provider_failure_preserves_draft_and_records_safe_messa
     assert restored.definition_json == definition.model_dump(mode="json", by_alias=True, exclude_none=True)
     assert restored.events_json[-1]["message"] == dashboard_api._AUTHORING_PROVIDER_REJECTED
     assert "Input is too long" not in restored.events_json[-1]["message"]
+
+
+@pytest.mark.asyncio
+async def test_edit_reopens_the_chat_that_created_the_dashboard(
+    db_session: AsyncSession,
+) -> None:
+    created = await dashboard_store.create_private_dashboard(
+        db_session,
+        org_id="org-a",
+        user_id="owner-a",
+        definition=_definition_with_filter(),
+    )
+    creation = await dashboard_store.create_authoring_session(
+        db_session,
+        org_id="org-a",
+        user_id="owner-a",
+        dashboard_id=created.dashboard.id,
+        base_version_id=None,
+        definition=created.version.definition,
+        operations=[],
+        prompt="Create this dashboard",
+        summary="Created the dashboard.",
+        agent_run_id="creation-run",
+        model="test-model",
+        requires_custom_sql_confirmation=False,
+        custom_sql_confirmed=False,
+    )
+    origin = _chat_conversation("conversation-origin", created_at=1.0)
+    empty_edit = _chat_conversation("conversation-empty-edit", created_at=2.0)
+    db_session.add_all(
+        [
+            origin,
+            empty_edit,
+            GatewayChatMessage(
+                id="dashboard-created-message",
+                org_id="org-a",
+                user_id="owner-a",
+                project_id=created.dashboard.project_id,
+                conversation_id=origin.id,
+                role="assistant",
+                content="Your dashboard is ready.",
+                metadata_json={
+                    "dashboard_preview": {
+                        "authoring_session_id": creation.id,
+                        "dashboard_name": created.version.definition.name,
+                    }
+                },
+                sequence=2,
+                created_at=1.5,
+            ),
+        ]
+    )
+    creation.status = "applied"
+    creation.applied_version_id = created.version.id
+    creation.created_at = datetime(2026, 1, 1, tzinfo=UTC)
+    creation.updated_at = datetime(2026, 1, 1, tzinfo=UTC)
+    await db_session.commit()
+
+    active_edit = await dashboard_store.create_authoring_session(
+        db_session,
+        org_id="org-a",
+        user_id="owner-a",
+        dashboard_id=created.dashboard.id,
+        base_version_id=created.version.id,
+        definition=created.version.definition,
+        operations=[],
+        prompt="Open this dashboard for editing",
+        summary="Ready to edit.",
+        agent_run_id="edit-run",
+        model="data-chat",
+        requires_custom_sql_confirmation=False,
+        custom_sql_confirmed=True,
+        conversation_id=empty_edit.id,
+    )
+    active_row = await dashboard_store.get_authoring_session(
+        db_session,
+        org_id="org-a",
+        user_id="owner-a",
+        session_id=active_edit.id,
+    )
+    assert active_row is not None
+    active_row.created_at = datetime(2099, 1, 2, tzinfo=UTC)
+    active_row.updated_at = datetime(2099, 1, 2, tzinfo=UTC)
+    await db_session.commit()
+
+    target = await dashboard_api.open_dashboard_authoring_chat(
+        created.dashboard.id,
+        SimpleNamespace(
+            session=db_session,
+            user_id="owner-a",
+            _require_org_id=lambda: "org-a",
+        ),
+    )
+
+    assert target == {
+        "conversation_id": origin.id,
+        "authoring_session_id": active_edit.id,
+    }
+    await db_session.refresh(active_row)
+    assert active_row.conversation_id == origin.id
 
 
 @pytest.mark.asyncio

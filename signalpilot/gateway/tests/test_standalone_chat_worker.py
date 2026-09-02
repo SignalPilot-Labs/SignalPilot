@@ -268,7 +268,6 @@ async def test_notebook_stream_does_not_hold_a_database_session(monkeypatch: pyt
             "artifacts": [],
             "dashboard_preview": {
                 "authoring_session_id": "authoring-session-1",
-                "preview_url": "/dashboards/new?authoring=authoring-session-1",
                 "dashboard_name": "Executive Revenue",
                 "chart_count": 2,
             },
@@ -335,7 +334,6 @@ async def test_notebook_stream_does_not_hold_a_database_session(monkeypatch: pyt
     }
     assert completion_payloads[0]["dashboard_preview"] == {
         "authoring_session_id": "authoring-session-1",
-        "preview_url": "/dashboards/new?authoring=authoring-session-1",
         "dashboard_name": "Executive Revenue",
         "chart_count": 2,
     }

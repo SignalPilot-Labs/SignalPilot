@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 
 import type { DashboardQueryReceipt } from "~/lib/dashboard/api-data-source";
+import { dashboardDialectLabel } from "~/lib/dashboard/dialect-label";
 import type {
   ChartDefinition,
   DashboardQueryResult,
@@ -115,7 +116,9 @@ export function DashboardDetailsDrawer({
               </details>
               {receipt.compiled_sql ? (
                 <details>
-                  <summary>Compiled MSSQL</summary>
+                  <summary>
+                    Compiled {dashboardDialectLabel(receipt.connection_type)}
+                  </summary>
                   <pre>{receipt.compiled_sql}</pre>
                 </details>
               ) : null}

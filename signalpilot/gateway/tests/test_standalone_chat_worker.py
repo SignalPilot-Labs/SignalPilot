@@ -11,6 +11,33 @@ import pytest
 from gateway.standalone_chat import worker, worker_context
 
 
+def test_dashboard_tool_completion_exposes_only_safe_native_progress() -> None:
+    completion = worker._dashboard_authoring_completion(
+        "mcp__standalone-chat__upsert_dashboard_chart",
+        '{"status":"ready","authoring_session_id":"session-a","draft_revision":4,'
+        '"ready_count":2,"failed_count":0,"expected_count":3,"session":{"definition":{"sql":"secret"}}}',
+    )
+
+    assert completion == {
+        "dashboard_authoring": {
+            "label": "Building dashboard (2 of 3 charts)",
+            "phase": "upsert_dashboard_chart",
+            "authoring_session_id": "session-a",
+            "draft_revision": 4,
+            "status": "ready",
+            "ready_count": 2,
+            "failed_count": 0,
+            "expected_count": 3,
+        }
+    }
+    assert "secret" not in str(completion)
+
+
+def test_dashboard_tool_completion_ignores_untyped_or_unrelated_results() -> None:
+    assert worker._dashboard_authoring_completion("query_database", "{}") == {}
+    assert worker._dashboard_authoring_completion("create_dashboard_preview", "not-json") == {}
+
+
 def test_public_error_message_preserves_upstream_text_verbatim() -> None:
     error = RuntimeError(
         "CLIConnectionError: OAuth token expired\n"
@@ -70,7 +97,7 @@ def test_public_full_trace_is_expandable_safe_diagnostic_content() -> None:
     assert "oauth-secret" not in trace
     assert "very-secret-token" not in trace
     assert "Authorization: Bearer [REDACTED]" in trace
-    assert '/opt/runtime/agent.py' in trace
+    assert "/opt/runtime/agent.py" in trace
     assert context["auth_mode"] == "oauth"
     assert context["error_type"] == "CLIConnectionError"
     assert context["credential_present"] is True
@@ -265,7 +292,6 @@ async def test_notebook_stream_does_not_hold_a_database_session(monkeypatch: pyt
             "content": "Analysis complete",
                 "dashboard_preview": {
                 "authoring_session_id": "authoring-session-1",
-                "preview_url": "/dashboards/new?authoring=authoring-session-1",
                 "dashboard_name": "Executive Revenue",
                 "chart_count": 2,
             },
@@ -318,7 +344,6 @@ async def test_notebook_stream_does_not_hold_a_database_session(monkeypatch: pyt
     assert "report_action_outcome" not in completion_payloads[0]
     assert completion_payloads[0]["dashboard_preview"] == {
         "authoring_session_id": "authoring-session-1",
-        "preview_url": "/dashboards/new?authoring=authoring-session-1",
         "dashboard_name": "Executive Revenue",
         "chart_count": 2,
     }

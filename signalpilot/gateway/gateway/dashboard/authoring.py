@@ -1,29 +1,16 @@
-"""Model-backed dashboard draft creation constrained by typed contracts."""
+"""Pure dashboard authoring contracts and bounded semantic projections."""
 
 from __future__ import annotations
 
-import json
-import logging
-import os
 import re
-from collections.abc import Callable
 from copy import deepcopy
 from typing import Any
 
 from pydantic import Field, model_validator
 
-from gateway.analysis_delivery.model_client import (
-    AnthropicMessagesClient,
-    ClaudeAgentSDKStructuredClient,
-    MessagesModelClient,
-)
 from gateway.dashboard.domain import ContractModel, DashboardDefinition, SemanticChartQuery
 from gateway.dashboard.operations import DashboardOperation, apply_dashboard_operations
 from gateway.models.dashboards import DashboardSemanticContext
-
-DEFAULT_DASHBOARD_AUTHORING_MODEL = "claude-sonnet-4-5-20250929"
-DASHBOARD_AUTHORING_TIMEOUT_SECONDS = 240
-logger = logging.getLogger(__name__)
 
 FILTER_OPT_OUT_PATTERNS = (
     r"\bwithout (?:any )?(?:dashboard )?filters?\b",
@@ -36,7 +23,6 @@ FILTER_OPT_OUT_PATTERNS = (
     r"\bn[aã]o (?:adicione|inclua|crie|use) filtros?\b",
     r"\bn[aã]o quero filtros?\b",
 )
-MAX_DRAFT_ATTEMPTS = 3
 
 
 class DashboardAgentDraft(ContractModel):
@@ -63,10 +49,7 @@ def canonicalize_agent_draft_query_encodings(
     if not isinstance(charts, list):
         return normalized
     metric_formats = {
-        metric.field_id: metric.format
-        for explore in context.explores
-        for metric in explore.metrics
-        if metric.format
+        metric.field_id: metric.format for explore in context.explores for metric in explore.metrics if metric.format
     }
 
     def resolve(reference: Any, candidates: list[str], *, singleton: bool = False) -> Any:
@@ -89,11 +72,7 @@ def canonicalize_agent_draft_query_encodings(
             continue
         query = chart.get("query")
         visualization = chart.get("visualization")
-        if (
-            not isinstance(query, dict)
-            or query.get("kind") != "semantic"
-            or not isinstance(visualization, dict)
-        ):
+        if not isinstance(query, dict) or query.get("kind") != "semantic" or not isinstance(visualization, dict):
             continue
         dimensions = [item for item in query.get("dimensions", []) if isinstance(item, str)]
         metrics = [item for item in query.get("metrics", []) if isinstance(item, str)]
@@ -129,6 +108,7 @@ def compact_semantic_projection(context: DashboardSemanticContext) -> dict[str, 
         "project_id": context.project_id,
         "commit_sha": context.commit_sha,
         "connection_name": context.connection_name,
+        "connection_type": context.connection_type,
         "semantic_fingerprint": context.semantic_fingerprint,
         "explores": [
             {
@@ -165,205 +145,6 @@ def compact_semantic_projection(context: DashboardSemanticContext) -> dict[str, 
     }
 
 
-class DashboardAuthoringAgent:
-    def __init__(
-        self,
-        *,
-        api_key: str | None = None,
-        oauth_token: str | None = None,
-        model_client: MessagesModelClient | None = None,
-    ) -> None:
-        if api_key and oauth_token:
-            raise ValueError("Configure only one dashboard authoring credential")
-        self.model = os.getenv("SIGNALPILOT_DASHBOARD_AUTHORING_MODEL") or DEFAULT_DASHBOARD_AUTHORING_MODEL
-        if model_client is not None:
-            self.model_client = model_client
-        elif oauth_token:
-            self.model_client = ClaudeAgentSDKStructuredClient(
-                oauth_token=oauth_token,
-                timeout_seconds=DASHBOARD_AUTHORING_TIMEOUT_SECONDS,
-                # The dashboard schema is too large for Claude Code's native
-                # constrained decoder. Pydantic and compiler validation below
-                # remain authoritative for the returned JSON object.
-                use_native_structured_output=False,
-            )
-        else:
-            self.model_client = AnthropicMessagesClient(
-                api_key=api_key,
-                timeout_seconds=DASHBOARD_AUTHORING_TIMEOUT_SECONDS,
-            )
-
-    async def draft(
-        self,
-        *,
-        prompt: str,
-        context: DashboardSemanticContext,
-        base_definition: DashboardDefinition | None,
-        validator: Callable[[DashboardAgentDraft], None] | None = None,
-    ) -> DashboardAgentDraft:
-        mode = "update" if base_definition is not None else "create"
-        contract = DashboardAgentDraft.model_json_schema(by_alias=True)
-        system = (
-            "You are SignalPilot's governed dashboard author. Use only the supplied explores, fields, and metrics. "
-            "Use only KPI, table, bar, line, and area visualizations. Each semantic chart queries one explore. Copy "
-            "exploreName exactly from semantic_context.explores[].name; never invent an explore or use placeholders "
-            "such as <UNKNOWN>. "
-            "For every chart, write three distinct pieces of business copy: question is a concise natural-language "
-            "question shown at the top left and ending in a question mark; title is a short 2-5 word business label "
-            "such as Total Revenue or Net Revenue; description is one useful sentence. For Cartesian charts, begin "
-            "the description with the visualization type, for example 'Line chart showing monthly net revenue.' "
-            "Prefer compact KPI tiles in 12-column thirds and full-width 36-column Cartesian trend charts when the "
-            "requested dashboard composition allows it. Arrange every dashboard row on the 36-column grid so tile "
-            "widths sum to exactly 36, tiles use increasing x and y positions, and no row leaves unused horizontal space. "
-            "Every dashboard must include useful global filter controls unless the user's request explicitly says to omit "
-            "filters. For dashboards with time-series charts, include an applicable governed date or timestamp filter "
-            "with a valid bounded default window and use a time aggregation coarse enough for that window. Otherwise, "
-            "prefer a date filter when a governed date or timestamp dimension is available, then add a small "
-            "number of business-relevant categorical controls. Use explicit per-tile targets across explores and mark "
-            "incompatible tiles as false. Copy each filter target exactly from the dimension's filter_target object; fieldId "
-            "must remain the complete supplied field_id, including its explore prefix. When updating a draft that has no "
-            "controls, add them in the same typed operation "
-            "set unless the current request explicitly opts out. Do not treat silence about filters as an opt-out. "
-            "Every visualization encoding must copy an exact field ID already present in that chart's query: KPI field "
-            "and Cartesian yField values come from query.metrics, while Cartesian xField comes from query.dimensions. "
-            "For KPI format, copy the governed metric format when supplied; use percentage, never percent. "
-            "For every applicable semantic bar, line, or area chart, configure a meaningful lower-grain drill hierarchy "
-            "in signalPilot.drillDimensions when the same explore supplies a dimension below the chart's current business "
-            "grain. Order drill dimensions from the immediate next level to the deepest level and copy complete field_id "
-            "values exactly. Never repeat a query dimension or repeat a level within drillDimensions. For example, a chart "
-            "grouped by region may drill to customer when customer is the lower-grain governed dimension. Omit a drill "
-            "hierarchy only when the explore has no meaningful lower-grain dimension for that chart. "
-            "Never emit renderer options, code, HTML, or SQL. For creation return a complete definition. "
-            "For updates return typed operations using stable IDs and do not rewrite unrelated charts. "
-            "Never return a refusal-only summary, a null definition, or an empty operation list. When the request "
-            "names a business concept without an exact approved metric, use the closest faithful governed metric or "
-            "dimension when one is available, explain that substitution in the summary, and omit only the unsupported "
-            "element rather than refusing the entire dashboard. "
-            "The server validates all output and the user must explicitly apply it."
-        )
-        payload = {
-            "mode": mode,
-            "request": prompt,
-            "semantic_context": compact_semantic_projection(context),
-            "base_definition": (
-                base_definition.model_dump(mode="json", by_alias=True, exclude_none=True)
-                if base_definition is not None
-                else None
-            ),
-        }
-        request_body = {
-            "model": self.model,
-            "max_tokens": 16_000,
-            "system": system,
-            "messages": [{"role": "user", "content": json.dumps(payload, default=str)}],
-            "tools": [
-                {
-                    "name": "submit_dashboard_draft",
-                    "description": "Return one validated dashboard draft or typed update operation list.",
-                    "input_schema": contract,
-                }
-            ],
-            "tool_choice": {"type": "tool", "name": "submit_dashboard_draft"},
-        }
-
-        async def request_tool_input(body: dict[str, Any]) -> Any:
-            response = await self.model_client.create_message(body)
-            content = response.get("content")
-            if not isinstance(content, list):
-                raise ValueError("Dashboard authoring model returned no tool result")
-            return next(
-                (
-                    block.get("input")
-                    for block in content
-                    if isinstance(block, dict)
-                    and block.get("type") == "tool_use"
-                    and block.get("name") == "submit_dashboard_draft"
-                ),
-                None,
-            )
-
-        last_error: ValueError | None = None
-        validation_errors: list[str] = []
-        for attempt in range(MAX_DRAFT_ATTEMPTS):
-            rejected_draft: Any = None
-            try:
-                rejected_draft = await request_tool_input(request_body)
-                rejected_draft = canonicalize_agent_draft_query_encodings(rejected_draft, context)
-                draft = DashboardAgentDraft.model_validate(rejected_draft)
-                if base_definition is None and draft.definition is None:
-                    raise ValueError("Dashboard creation requires a complete definition")
-                if base_definition is not None and draft.definition is not None:
-                    raise ValueError("Dashboard updates require typed operations")
-                if not explicitly_omits_filters(prompt):
-                    draft = add_default_governed_date_filter(draft, context)
-                if not explicitly_omits_filters(prompt) and not draft_has_filters(
-                    draft, base_definition=base_definition
-                ):
-                    raise ValueError(
-                        "Dashboard authoring requires at least one governed filter control. Add a useful governed "
-                        "filter, prefer a bounded date filter when available, and include explicit per-tile targets."
-                    )
-                if validator is not None:
-                    validator(draft)
-                return draft
-            except ValueError as exc:
-                error_text = str(exc)[:6000]
-                empty_payload_feedback: str | None = None
-                if (
-                    isinstance(rejected_draft, dict)
-                    and rejected_draft.get("definition") is None
-                    and not rejected_draft.get("operations")
-                ):
-                    if mode == "create":
-                        empty_payload_feedback = (
-                            "The previous response was a refusal or empty payload. Dashboard creation must return a "
-                            "complete definition; do not return a limitation-only summary, null definition, or empty "
-                            "operations. Build the closest faithful dashboard supported by semantic_context. If a "
-                            "requested concept has no exact approved metric, use a faithful governed dimension or metric "
-                            "when available, explain the substitution in summary, and omit only that unsupported element."
-                        )
-                    else:
-                        empty_payload_feedback = (
-                            "The previous response was a refusal or empty payload. Dashboard updates must return at "
-                            "least one typed operation; do not return a limitation-only summary, null definition, or "
-                            "empty operations. Apply the closest faithful update supported by semantic_context and the "
-                            "base definition without inventing fields or metrics."
-                        )
-                last_error = ValueError(empty_payload_feedback) if empty_payload_feedback else exc
-                if empty_payload_feedback and empty_payload_feedback not in validation_errors:
-                    validation_errors.append(empty_payload_feedback)
-                if error_text not in validation_errors:
-                    validation_errors.append(error_text)
-                logger.warning(
-                    "Dashboard authoring draft rejected attempt=%s/%s error=%s",
-                    attempt + 1,
-                    MAX_DRAFT_ATTEMPTS,
-                    str(exc)[:1000],
-                )
-                if attempt + 1 >= MAX_DRAFT_ATTEMPTS:
-                    raise
-                repair_payload = {
-                    **payload,
-                    "validation_feedback": (
-                        "The server rejected the previous draft. Correct every reported contract or semantic error, "
-                        "copy explore and field identifiers exactly from semantic_context, preserve otherwise valid "
-                        f"work, and resubmit the complete {mode} payload. Valid exploreName values: "
-                        f"{', '.join(explore.name for explore in context.explores) or 'none'}. Never use <UNKNOWN> "
-                        "or another placeholder. Preserve every correction from earlier attempts. All validation "
-                        "failures reported so far must be fixed together:\n- "
-                        + "\n- ".join(validation_errors)
-                    ),
-                }
-                if rejected_draft is not None:
-                    repair_payload["rejected_draft"] = rejected_draft
-                request_body = {
-                    **request_body,
-                    "messages": [{"role": "user", "content": json.dumps(repair_payload, default=str)}],
-                }
-        assert last_error is not None
-        raise last_error
-
-
 def explicitly_omits_filters(prompt: str) -> bool:
     normalized = " ".join(prompt.casefold().split())
     return any(re.search(pattern, normalized) for pattern in FILTER_OPT_OUT_PATTERNS)
@@ -386,9 +167,7 @@ def add_default_governed_date_filter(
     for chart in definition.charts:
         if not isinstance(chart.query, SemanticChartQuery):
             continue
-        candidates = {
-            field.field_id: field for field in date_fields_by_explore.get(chart.query.exploreName, [])
-        }
+        candidates = {field.field_id: field for field in date_fields_by_explore.get(chart.query.exploreName, [])}
         selected_field = next(
             (candidates[field_id] for field_id in chart.query.dimensions if field_id in candidates),
             None,

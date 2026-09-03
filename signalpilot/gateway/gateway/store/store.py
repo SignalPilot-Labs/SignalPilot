@@ -77,6 +77,7 @@ class Store:
         allow_unscoped: bool = False,
         eval_connection: str | None = None,
         allowed_connection_name: str | None = None,
+        execution_identity: str | None = None,
     ):
         self.session = session
         self.org_id = org_id
@@ -84,6 +85,7 @@ class Store:
         self._allow_unscoped = allow_unscoped
         self.eval_connection = eval_connection
         self.allowed_connection_name = allowed_connection_name
+        self.execution_identity = execution_identity
         # Intentional: we do not store the token for reset. FastAPI runs each request in a
         # dedicated asyncio task whose contextvars copy is isolated; the var dies with the task.
         # Background task usage must set the var explicitly and reset (see main.py schema refresh loop).

@@ -1,8 +1,8 @@
 """In-process MCP tools for one standalone data-chat run.
 
-The tools are `start_analysis_notebook`, `inspect_dbt`, and
-`create_dashboard_preview`. Files the agent saves under the scratch
-directory are captured by the filesystem sweep, not by a tool.
+The tools cover notebooks, read-only dbt inspection, and typed governed
+dashboard authoring. Files the agent saves under the scratch directory are
+captured by the filesystem sweep, not by a tool.
 """
 
 from __future__ import annotations
@@ -32,6 +32,13 @@ __all__ = [
 
 # Mirrors the start_analysis_notebook input schema pattern.
 _NOTEBOOK_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,40}$")
+_DASHBOARD_AUTHORING_TOOLS = {
+    "begin_dashboard_authoring",
+    "set_dashboard_plan",
+    "upsert_dashboard_chart",
+    "apply_dashboard_operations",
+    "create_dashboard_preview",
+}
 
 
 def _dashboard_preview_summary(
@@ -53,9 +60,7 @@ def _dashboard_preview_summary(
                 or draft.get("chart_id")
                 or "Chart"
             ),
-            "error": str(
-                draft.get("safe_error") or "Chart generation failed"
-            ),
+            "error": str(draft.get("safe_error") or "Chart generation failed"),
         }
         for draft in chart_drafts
         if isinstance(draft, dict) and draft.get("status") == "failed"
@@ -68,7 +73,6 @@ def _dashboard_preview_summary(
             else "preview_ready"
         ),
         "authoring_session_id": session_id,
-        "preview_url": f"/dashboards/new?authoring={session_id}",
         "summary": str(created.get("summary") or ""),
         "dashboard_name": str(
             definition.get("name") or plan.get("name") or "Dashboard preview"
@@ -98,8 +102,8 @@ def build_standalone_chat_mcp_server(
     notebook_starter: Callable[[Any, dict[str, Any]], list[Any]] | None = None,
     notebook_session_resolver: Callable[[str], Any] | None = None,
     notebook_seeder: Callable[[str], Path] | None = None,
-    dashboard_preview_creator: Callable[
-        [str, str, str | None], Awaitable[dict[str, Any]]
+    dashboard_authoring_handler: Callable[
+        [str, dict[str, Any]], Awaitable[dict[str, Any]]
     ]
     | None = None,
 ) -> Any:
@@ -109,49 +113,35 @@ def build_standalone_chat_mcp_server(
     from mcp.types import TextContent, Tool
 
     server = Server("standalone-chat", version="1.0.0")
-    tools = standalone_chat_tools(notebook_enabled=notebook_mcp_app is not None)
-    dashboard_preview_request: tuple[str, str, str | None] | None = None
+    tools = standalone_chat_tools(
+        notebook_enabled=notebook_mcp_app is not None
+    )
     dashboard_preview_result: dict[str, Any] | None = None
 
     @server.list_tools()
     async def list_tools() -> list[Tool]:
         return tools
 
-    async def create_dashboard_preview(
+    async def author_dashboard(
+        name: str,
         arguments: dict[str, Any],
     ) -> list[TextContent]:
-        nonlocal dashboard_preview_request, dashboard_preview_result
-        if dashboard_preview_creator is None:
+        nonlocal dashboard_preview_result
+        if dashboard_authoring_handler is None:
             raise ValueError("Dashboard authoring is unavailable")
-        request = str(arguments.get("request") or "").strip()
-        timezone = str(arguments.get("timezone") or "UTC").strip()
-        authoring_session_id = (
-            str(arguments.get("authoring_session_id") or "").strip() or None
-        )
-        if not request or len(request) > 50_000:
-            raise ValueError("A dashboard request is required")
-        if not timezone or len(timezone) > 100:
-            raise ValueError("Invalid dashboard timezone")
-        request_key = (request, timezone, authoring_session_id)
-        if dashboard_preview_result is not None:
-            if request_key != dashboard_preview_request:
-                raise ValueError(
-                    "Only one dashboard preview may be created per chat run"
-                )
-            return [
-                TextContent(
-                    type="text", text=json.dumps(dashboard_preview_result)
-                )
-            ]
-        created = await dashboard_preview_creator(
-            request, timezone, authoring_session_id
-        )
-        session_id = str(created.get("id") or "").strip()
+        result = await dashboard_authoring_handler(name, arguments)
+        if (
+            name != "create_dashboard_preview"
+            or result.get("status") != "preview_ready"
+        ):
+            return [TextContent(type="text", text=json.dumps(result))]
+        session = result.get("session")
+        session = session if isinstance(session, dict) else {}
+        session_id = str(result.get("authoring_session_id") or "").strip()
         if not session_id:
             raise ValueError("Dashboard authoring returned no preview")
-        dashboard_preview_request = request_key
         dashboard_preview_result = _dashboard_preview_summary(
-            created, session_id
+            session, session_id
         )
         collector.dashboard_preview = dashboard_preview_result
         return [
@@ -169,9 +159,7 @@ def build_standalone_chat_mcp_server(
         if notebook_name == "analysis":
             target_path = analysis_notebook_path
         else:
-            target_path = (
-                analysis_notebook_path.parent / f"{notebook_name}.py"
-            )
+            target_path = analysis_notebook_path.parent / f"{notebook_name}.py"
         running_session = (
             notebook_lifecycle.sessions.get(notebook_name)
             if notebook_lifecycle is not None
@@ -194,9 +182,7 @@ def build_standalone_chat_mcp_server(
         if notebook_name != "analysis" and not target_path.is_file():
             # Named notebooks seed lazily in the SAME scratch.
             if notebook_seeder is None:
-                raise ValueError(
-                    "Named notebooks are unavailable in this run"
-                )
+                raise ValueError("Named notebooks are unavailable in this run")
             target_path = notebook_seeder(notebook_name)
         start_arguments = {"file_path": str(target_path), "auto_run": True}
         if notebook_starter is None:
@@ -267,7 +253,6 @@ def build_standalone_chat_mcp_server(
         return [TextContent(type="text", text=json.dumps(inspected))]
 
     handlers = {
-        "create_dashboard_preview": create_dashboard_preview,
         "start_analysis_notebook": start_analysis_notebook,
         "inspect_dbt": inspect_dbt,
     }
@@ -277,6 +262,8 @@ def build_standalone_chat_mcp_server(
         name: str, arguments: dict[str, Any]
     ) -> list[TextContent]:
         try:
+            if name in _DASHBOARD_AUTHORING_TOOLS:
+                return await author_dashboard(name, arguments)
             handler = handlers.get(name)
             if handler is None:
                 raise ValueError(f"Unknown tool: {name}")

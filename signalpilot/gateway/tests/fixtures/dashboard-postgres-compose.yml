@@ -1,0 +1,14 @@
+services:
+  dashboard-postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: signalpilot_dashboard
+      POSTGRES_USER: signalpilot
+      POSTGRES_PASSWORD: signalpilot-test
+    ports:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U signalpilot -d signalpilot_dashboard"]
+      interval: 1s
+      timeout: 3s
+      retries: 30

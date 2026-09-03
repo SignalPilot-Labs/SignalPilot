@@ -15,6 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.config.notebooks import chat_force_oauth_token
+from gateway.connectors.registry import get_connector_registration
 from gateway.db.models import (
     GatewayChatConversation,
     GatewayChatStarterCache,
@@ -37,6 +38,8 @@ class ProjectReadiness:
     branch: str | None
     connection_name: str | None
     metadata_checksum: str | None
+    connection_type: str | None = None
+    registered: bool = False
 
 
 async def authorize_chat_project(
@@ -118,13 +121,9 @@ def _has_dbt_metadata(project: GatewayWorkspaceProject, files: list[str]) -> boo
         return False
     prefix = f"{project_dir}/" if project_dir else ""
     has_project_file = f"{prefix}dbt_project.yml" in files
-    resource_prefixes = tuple(
-        f"{prefix}{sub}/" for sub in ("models", "metrics", "semantic_models", "snapshots")
-    )
+    resource_prefixes = tuple(f"{prefix}{sub}/" for sub in ("models", "metrics", "semantic_models", "snapshots"))
     has_resource = any(
-        file.startswith(resource_prefixes)
-        and file.endswith((".sql", ".yml", ".yaml", ".json"))
-        for file in files
+        file.startswith(resource_prefixes) and file.endswith((".sql", ".yml", ".yaml", ".json")) for file in files
     )
     return has_project_file and has_resource
 
@@ -167,9 +166,7 @@ async def evaluate_project_readiness(
         from gateway.git.sync import ensure_repo_mirror
 
         try:
-            if await ensure_repo_mirror(
-                db, org_id=org_id, project_id=project.id, default_branch=branch
-            ):
+            if await ensure_repo_mirror(db, org_id=org_id, project_id=project.id, default_branch=branch):
                 files, head = _project_tree(project.id, branch)
         except Exception:
             pass
@@ -177,15 +174,12 @@ async def evaluate_project_readiness(
         return ProjectReadiness(
             False,
             "branch_unavailable",
-            "The repository could not be synced. Re-sync the project, or reconnect "
-            "the GitHub app if it was removed.",
+            "The repository could not be synced. Re-sync the project, or reconnect the GitHub app if it was removed.",
             None,
             project.connection_name,
             None,
         )
-    if not _has_dbt_metadata(project, files) and not await _has_successful_compile(
-        db, project.id, branch
-    ):
+    if not _has_dbt_metadata(project, files) and not await _has_successful_compile(db, project.id, branch):
         return ProjectReadiness(
             False,
             "metadata_unavailable",
@@ -213,6 +207,27 @@ async def evaluate_project_readiness(
             )
         )
     ).scalar_one_or_none()
+    if connection is None:
+        return ProjectReadiness(
+            False,
+            "connection_missing",
+            "The configured data connection no longer exists.",
+            branch,
+            connection_name,
+            None,
+        )
+    try:
+        get_connector_registration(connection.db_type)
+    except ValueError:
+        return ProjectReadiness(
+            False,
+            "connection_type_unknown",
+            "The project uses an unknown database connection type.",
+            branch,
+            connection_name,
+            None,
+            connection_type=connection.db_type,
+        )
     credential = (
         await db.execute(
             select(GatewayCredential.id).where(
@@ -222,11 +237,18 @@ async def evaluate_project_readiness(
         )
     ).scalar_one_or_none()
     unusable_statuses = {"disconnected", "error", "failed", "unhealthy"}
-    if (
-        connection is None
-        or credential is None
-        or str(connection.status or "").lower() in unusable_statuses
-    ):
+    if credential is None:
+        return ProjectReadiness(
+            False,
+            "credentials_missing",
+            "The production data connection credentials are unavailable.",
+            branch,
+            connection_name,
+            None,
+            connection_type=connection.db_type,
+            registered=True,
+        )
+    if str(connection.status or "").lower() in unusable_statuses:
         return ProjectReadiness(
             False,
             "connection_unusable",
@@ -234,6 +256,8 @@ async def evaluate_project_readiness(
             branch,
             connection_name,
             None,
+            connection_type=connection.db_type,
+            registered=True,
         )
 
     oauth_token = os.getenv("CLAUDE_CODE_OAUTH_TOKEN") or os.getenv("OAUTH_TOKEN")
@@ -256,6 +280,8 @@ async def evaluate_project_readiness(
             branch,
             connection_name,
             None,
+            connection_type=connection.db_type,
+            registered=True,
         )
 
     return ProjectReadiness(
@@ -265,6 +291,8 @@ async def evaluate_project_readiness(
         branch,
         connection_name,
         _metadata_checksum(project, files, head, branch),
+        connection_type=connection.db_type,
+        registered=True,
     )
 
 
@@ -289,8 +317,7 @@ def _metadata_terms(project: GatewayWorkspaceProject, branch: str) -> tuple[list
     yaml_files = [
         filename
         for filename in files
-        if filename.startswith(("models/", "metrics/", "semantic_models/"))
-        and filename.endswith((".yml", ".yaml"))
+        if filename.startswith(("models/", "metrics/", "semantic_models/")) and filename.endswith((".yml", ".yaml"))
     ][:40]
     for filename in yaml_files:
         raw = _git_show(project.id, branch, filename)
@@ -406,8 +433,7 @@ async def cached_starter_questions(
                 select(GatewayChatStarterCache).where(
                     GatewayChatStarterCache.org_id == org_id,
                     GatewayChatStarterCache.project_id == project.id,
-                    GatewayChatStarterCache.metadata_checksum
-                    == readiness.metadata_checksum,
+                    GatewayChatStarterCache.metadata_checksum == readiness.metadata_checksum,
                 )
             )
         ).scalar_one()

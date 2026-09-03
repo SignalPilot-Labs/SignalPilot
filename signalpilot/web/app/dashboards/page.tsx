@@ -62,7 +62,7 @@ export default function DashboardsPage() {
           <p>Governed dashboards for you and your organization.</p>
         </div>
         <Link
-          href="/dashboards/new"
+          href="/chats"
           className={styles.primaryIconButton}
           aria-label="Build dashboard with AI"
           title="Build dashboard with AI"

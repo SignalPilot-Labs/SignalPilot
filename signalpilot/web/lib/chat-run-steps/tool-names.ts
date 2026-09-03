@@ -49,7 +49,9 @@ export function categorizeTool(tool: string): RunStepCategory {
   if (tool === "TodoWrite") return "todo";
   if (WEB_TOOLS.has(tool)) return "web";
   if (tool === "inspect_dbt" || tool.startsWith("dbt_")) return "dbt";
-  if (/schema|table|column|relationship|metric|model|source|lineage/.test(tool)) {
+  if (
+    /schema|table|column|relationship|metric|model|source|lineage/.test(tool)
+  ) {
     return "source";
   }
   return "generic";
@@ -71,6 +73,10 @@ export function humanizeTool(tool: string): string {
     sandbox_write_file: "Wrote a file in the sandbox",
     sandbox_read_file: "Read a file in the sandbox",
     create_dashboard_preview: "Creating dashboard preview",
+    begin_dashboard_authoring: "Resolving dashboard fields",
+    set_dashboard_plan: "Validating dashboard plan",
+    upsert_dashboard_chart: "Validating dashboard chart",
+    apply_dashboard_operations: "Applying dashboard refinements",
     Bash: "Ran a command",
     Write: "Generated a file",
     Edit: "Edited a file",
@@ -136,7 +142,9 @@ export function extractCode(
   return null;
 }
 
-export function extractSources(input: Record<string, unknown> | null): string[] {
+export function extractSources(
+  input: Record<string, unknown> | null,
+): string[] {
   if (!input) return [];
   const keys = [
     "metric_name",

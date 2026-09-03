@@ -4,6 +4,7 @@ import { Check, ChevronDown, ExternalLink, FolderGit2, Search } from "lucide-rea
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { StandaloneChatProject } from "~/lib/api";
+import { dashboardDialectLabel } from "~/lib/dashboard/dialect-label";
 
 function ReadinessDot({ ready }: { ready: boolean }) {
   return (
@@ -122,7 +123,13 @@ export function ProjectPicker({
                       {project.display_name}
                     </span>
                     <span className="block truncate text-[10px] text-[var(--color-text-dim)]">
-                      {[project.connection_name, project.default_branch]
+                      {[
+                        project.connection_type
+                          ? dashboardDialectLabel(project.connection_type)
+                          : null,
+                        project.connection_name,
+                        project.default_branch,
+                      ]
                         .filter(Boolean)
                         .join(" · ") || "no connection"}
                     </span>
@@ -168,6 +175,9 @@ export function ProjectChip({
       title={[
         `project: ${project.display_name}`,
         project.connection_name ? `connection: ${project.connection_name}` : null,
+        project.connection_type
+          ? `database: ${dashboardDialectLabel(project.connection_type)}`
+          : null,
         `branch: ${project.default_branch}`,
         commitSha ? `commit: ${commitSha.slice(0, 12)}` : null,
         project.ready ? "ready" : project.readiness_message,

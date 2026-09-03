@@ -102,7 +102,9 @@ export function useChatDashboardPanel({
   );
   const latestSessionId = messageSessionId ?? progress?.sessionId ?? null;
   const updateLabel =
-    progress?.phase === "ready" ? null : (progress?.label ?? null);
+    progress?.phase === "create_dashboard_preview"
+      ? null
+      : (progress?.label ?? null);
 
   useEffect(() => {
     if (currentRun?.status === "queued" || currentRun?.status === "running") {

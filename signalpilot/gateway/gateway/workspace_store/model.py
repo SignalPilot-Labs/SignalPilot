@@ -65,6 +65,13 @@ def dbt_graph_key(org_id: str, project_id: str, branch: str, revision: int) -> s
     )
 
 
+def dbt_sql_key(org_id: str, project_id: str, branch: str, revision: int) -> str:
+    return (
+        f"{project_prefix(org_id, project_id)}/branches/{_branch_part(branch)}"
+        f"/dbt/{revision:012d}-sql.json.gz"
+    )
+
+
 @dataclass(frozen=True)
 class FileEntry:
     path: str

@@ -9,9 +9,17 @@
  *   /lineage/<model>               focus mode (name or dbt unique_id)
  *   /lineage/<model>/raw           focus mode, Raw Tables panel
  *
- * URL state follows the knowledge-page pattern: initialized from the path
- * once, then kept in sync with history.replaceState. Focus is the shareable
- * unit; selection stays out of the URL.
+ * URL state follows the knowledge-page pattern: seeded from the route, then
+ * kept in sync with history.replaceState. A route change that the page did
+ * not produce itself (a chat link clicked while on /lineage, the modal
+ * pointed at another model) updates focus in place: the page never
+ * remounts, so the cached project graph stays on screen. Focus is the
+ * shareable unit; selection stays out of the URL.
+ *
+ * `embedded` mode (the chat lineage modal) keeps the same body, canvas and
+ * panels but drops the page chrome: no header, no URL sync, no remembered
+ * project, no global "/" and Escape shortcuts, and it fills its host instead
+ * of the viewport. See lineage-embed.tsx for the public wrapper.
  */
 
 import { Hammer, Loader2 } from "lucide-react";
@@ -25,25 +33,19 @@ import { MapCanvas } from "./map-canvas";
 import { MapHeader } from "./map-header";
 import { SchemaWindow } from "./schema-window";
 import { FocusPanel } from "./focus-panel";
-import { Inspector } from "./inspector";
+import { Inspector, type InspectorTab } from "./inspector";
 import { LayerLegend } from "./layer-legend";
 import { NotFoundCard, UnmappedCard } from "./not-found-card";
-import { useDbtMap } from "./use-dbt-map";
+import { useDbtMap, useModelColumns, useModelSql, type MapStatus } from "./use-dbt-map";
 import {
   canonicalRef,
   lineagePath,
   pathBetween,
   resolveModelRef,
+  type LineageRoute,
 } from "./lineage-nav";
 
-export interface LineageRoute {
-  /** Model ref from the URL path — bare name or dbt unique_id. */
-  ref: string | null;
-  /** True when the path ends in /raw (Raw Tables view). */
-  raw: boolean;
-  /** Optional ?project= override. */
-  projectId: string | null;
-}
+export type { LineageRoute };
 
 function LoadingSkeleton() {
   return (
@@ -65,8 +67,19 @@ function LoadingSkeleton() {
   );
 }
 
-export function DbtMapPage({ route }: { route?: LineageRoute }) {
-  const map = useDbtMap(route?.projectId ?? null);
+export function DbtMapPage({
+  route,
+  embedded = false,
+  onStatusChange,
+}: {
+  route?: LineageRoute;
+  embedded?: boolean;
+  onStatusChange?: (status: MapStatus) => void;
+}) {
+  const map = useDbtMap(route?.projectId ?? null, route?.ref ?? null, {
+    remember: !embedded,
+    onStatusChange,
+  });
   const { parsed, mapInfo, mapStatus, compiling, compileNow } = map;
 
   const [visibleLayers, setVisibleLayers] = useState<Set<MapLayer>>(new Set(LAYER_ORDER));
@@ -76,6 +89,7 @@ export function DbtMapPage({ route }: { route?: LineageRoute }) {
   const [focusTarget, setFocusTarget] = useState<string | null>(route?.ref ?? null);
   const [rawView, setRawView] = useState<boolean>(route?.raw ?? false);
   const [highlightSource, setHighlightSource] = useState<string | null>(null);
+  const [inspectorTab, setInspectorTab] = useState<InspectorTab>("details");
   const searchRef = useRef<HTMLInputElement>(null);
 
   // Resolve the focus target against the loaded graph.
@@ -93,28 +107,54 @@ export function DbtMapPage({ route }: { route?: LineageRoute }) {
     return lineagePath(ref, rawView);
   }, [parsed, focusTarget, focusId, rawView]);
 
+  // Route changes from outside (props) re-seed focus without a remount. The
+  // page's own replaceState echoes back as the current path and is ignored.
+  const routeRef = route?.ref ?? null;
+  const routeRaw = route?.raw ?? false;
+  useEffect(() => {
+    const incoming = routeRef ? lineagePath(routeRef, routeRaw) : null;
+    if (incoming === focusPath) return;
+    setFocusTarget(routeRef);
+    setRawView(routeRaw);
+    setHighlightSource(null);
+    setSelectedId(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routeRef, routeRaw]);
+
+  // Time-to-focused-node instrumentation: marked once per focus target.
+  const markedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!focusModel || markedRef.current === focusModel.id) return;
+    markedRef.current = focusModel.id;
+    if (typeof performance !== "undefined" && performance.mark) {
+      performance.mark("sp:lineage:focus-ready", { detail: focusModel.id });
+    }
+  }, [focusModel]);
+
   // URL sync — knowledge-page pattern (replaceState; focus is shareable,
   // selection is not). The not-found case keeps the bad URL visible.
   useEffect(() => {
-    if (typeof window === "undefined") return;
+    if (embedded || typeof window === "undefined") return;
     const path = focusPath ?? "/lineage";
     const url = `${path}${window.location.search}`;
     if (window.location.pathname + window.location.search !== url) {
       window.history.replaceState(null, "", url);
     }
-  }, [focusPath]);
+  }, [focusPath, embedded]);
 
-  // Switching projects (after boot) drops focus/selection — model ids don't
-  // carry across projects.
+  // Switching projects (after boot) drops focus/selection: model ids don't
+  // carry across projects. A switch the route asked for keeps its own ref.
   const prevProject = useRef<string | null>(null);
   useEffect(() => {
     if (prevProject.current && prevProject.current !== map.projectId) {
+      const fromRoute = route?.projectId === map.projectId;
       setSelectedId(null);
-      setFocusTarget(null);
-      setRawView(false);
+      setFocusTarget(fromRoute ? route?.ref ?? null : null);
+      setRawView(fromRoute ? route?.raw ?? false : false);
       setHighlightSource(null);
     }
     prevProject.current = map.projectId;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [map.projectId]);
 
   // Leaving focus mode clears raw view + path highlight.
@@ -145,8 +185,10 @@ export function DbtMapPage({ route }: { route?: LineageRoute }) {
   // Keyboard: "/" focuses search (also inside focus mode — it searches the
   // cone). Escape inside the search field clears it (then blurs) — the
   // universal field convention — and only when the canvas owns focus does the
-  // ladder apply: raw view -> focus -> selection.
+  // ladder apply: raw view -> focus -> selection. Embedded hosts own the
+  // keyboard (the modal closes on Escape), so the shortcuts stay off there.
   useEffect(() => {
+    if (embedded) return;
     const onKey = (e: KeyboardEvent) => {
       const active = document.activeElement as HTMLElement | null;
       const inField =
@@ -171,7 +213,7 @@ export function DbtMapPage({ route }: { route?: LineageRoute }) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rawView, focusTarget, query]);
+  }, [rawView, focusTarget, query, embedded]);
 
   const highlightIds = useMemo(
     () =>
@@ -182,27 +224,49 @@ export function DbtMapPage({ route }: { route?: LineageRoute }) {
   );
 
   const selected = selectedId && parsed ? parsed.models.get(selectedId) ?? null : null;
-  const unresolved = Boolean(parsed && focusTarget && resolution && resolution.kind !== "found");
+  const lazyColumns = useModelColumns(
+    map.projectId,
+    selected && !selected.columnsLoaded ? selected.id : null,
+  );
+  const selectedColumns = selected?.columnsLoaded ? selected.columns : lazyColumns.columns;
+  // SQL loads only once the tab is open; sources never have any.
+  const sqlState = useModelSql(
+    map.projectId,
+    selected && selected.layer !== "source" ? selected.id : null,
+    inspectorTab === "sql",
+  );
+  const selectedSql = selected?.layer === "source" ? ({ state: "unavailable" } as const) : sqlState;
+  // A cone-only graph cannot judge an unknown ref; wait for the skeleton.
+  const unresolved = Boolean(
+    parsed && !map.partial && focusTarget && resolution && resolution.kind !== "found",
+  );
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden">
-      <MapHeader
-        projects={map.projects}
-        projectId={map.projectId}
-        onProjectChange={map.setProjectId}
-        query={query}
-        onQueryChange={setQuery}
-        searchRef={searchRef}
-        focusModel={focusModel}
-        rawView={rawView}
-        focusUrl={focusPath}
-        onExitFocus={exitFocus}
-        mapInfo={mapInfo}
-        mapStatus={mapStatus}
-        watched={map.watched}
-        compiling={compiling}
-        onCompile={() => void compileNow()}
-      />
+    <div
+      className={`flex flex-col overflow-hidden ${embedded ? "h-full" : "h-screen"}`}
+      data-testid={embedded ? "lineage-embed" : "lineage-page"}
+      data-graph={map.partial ? "cone" : parsed ? "full" : "none"}
+      data-focus-ready={focusModel ? "1" : "0"}
+    >
+      {!embedded && (
+        <MapHeader
+          projects={map.projects}
+          projectId={map.projectId}
+          onProjectChange={map.setProjectId}
+          query={query}
+          onQueryChange={setQuery}
+          searchRef={searchRef}
+          focusModel={focusModel}
+          rawView={rawView}
+          focusUrl={focusPath}
+          onExitFocus={exitFocus}
+          mapInfo={mapInfo}
+          mapStatus={mapStatus}
+          watched={map.watched}
+          compiling={compiling}
+          onCompile={() => void compileNow()}
+        />
+      )}
 
       <div className="flex min-h-0 flex-1">
         {parsed &&
@@ -311,6 +375,10 @@ export function DbtMapPage({ route }: { route?: LineageRoute }) {
           <Inspector
             parsed={parsed}
             model={selected}
+            columns={selectedColumns}
+            sql={selectedSql}
+            tab={inspectorTab}
+            onTabChange={setInspectorTab}
             isFocused={selected.id === focusId}
             onClose={() => setSelectedId(null)}
             onNavigate={(id) => setSelectedId(id)}

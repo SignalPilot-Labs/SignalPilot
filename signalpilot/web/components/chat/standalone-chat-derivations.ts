@@ -44,3 +44,19 @@ export function readinessNotice(
     bootstrap?.is_admin === true && (noProjects || readiness?.setup_cta === true);
   return { message, showSetup };
 }
+
+/** Outer shell classes: embedded fills its host; the page pins a min width
+ * wide enough for whichever right-hand panel is open. */
+export function chatShellClassName(
+  embedded: boolean,
+  settingsOpen: boolean,
+  sidePanelOpen: boolean,
+): string {
+  if (embedded) return "h-full min-w-0 overflow-hidden";
+  const minWidth = settingsOpen
+    ? "min-w-[1180px]"
+    : sidePanelOpen
+      ? "min-w-[1360px]"
+      : "min-w-[960px]";
+  return `h-screen overflow-hidden p-4 ${minWidth}`;
+}

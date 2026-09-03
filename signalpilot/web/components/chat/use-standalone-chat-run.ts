@@ -18,6 +18,7 @@ import {
   getDbtMap,
   streamStandaloneRunEvents,
   type StandaloneChatEvent,
+  type StandaloneChatBootstrap,
   type StandaloneChatMessage,
   type StandaloneChatRun,
   type StandaloneChatRunStatus,
@@ -25,6 +26,7 @@ import {
   type StandaloneConversationDetail,
 } from "~/lib/api";
 import { useToast } from "~/components/ui/toast";
+import { toastRequestError } from "~/components/chat/toast-request-error";
 import {
   applyStandaloneChatEvent,
   assembleStandaloneRunText,
@@ -34,6 +36,7 @@ import {
   type OptimisticUserMessage,
 } from "~/lib/standalone-chat-state";
 import type { UiMessage } from "~/components/chat/chat-ui-context";
+import type { ChatEventArrival } from "~/lib/chat-telemetry";
 import {
   eventText,
   isStreamingStatus,
@@ -43,6 +46,35 @@ export type DetailMutator = KeyedMutator<StandaloneConversationDetail>;
 export type HistoryMutator = KeyedMutator<{
   conversations: StandaloneConversation[];
 }>;
+
+/** Resolve the selected project once, then keep it aligned to an opened chat. */
+export function useSelectedChatProject(
+  bootstrap: StandaloneChatBootstrap | undefined,
+  requestedProject: string | null,
+  conversationProjectId: string | undefined,
+) {
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const initialized = useRef(false);
+  useEffect(() => {
+    if (!bootstrap || initialized.current) return;
+    const requested = bootstrap.projects.find(
+      (project) => project.id === requestedProject,
+    );
+    setSelectedProjectId(
+      requested?.id ??
+        bootstrap.selected_project_id ??
+        bootstrap.projects[0]?.id ??
+        null,
+    );
+    initialized.current = true;
+  }, [bootstrap, requestedProject]);
+  useEffect(() => {
+    if (!conversationProjectId) return;
+    setSelectedProjectId(conversationProjectId);
+    initialized.current = true;
+  }, [conversationProjectId]);
+  return [selectedProjectId, setSelectedProjectId] as const;
+}
 
 /** Follow the current run's event stream and fold events into SWR caches. */
 export function useStandaloneRunStream({
@@ -60,10 +92,14 @@ export function useStandaloneRunStream({
   mutateDetail: DetailMutator;
   mutateHistory: HistoryMutator;
 }) {
+  const [arrivalSamples, setArrivalSamples] = useState<ChatEventArrival[]>([]);
   const eventsRef = useRef(events);
   useEffect(() => {
     eventsRef.current = events;
   }, [events]);
+  useEffect(() => {
+    setArrivalSamples([]);
+  }, [conversationId]);
   useEffect(() => {
     if (!currentRunId) {
       return;
@@ -87,6 +123,15 @@ export function useStandaloneRunStream({
             controller.signal,
             (event) => {
               cursor = Math.max(cursor, event.sequence);
+              setArrivalSamples((current) => [
+                ...current.slice(-1_999),
+                {
+                  runId: event.run_id,
+                  sequence: event.sequence,
+                  type: event.type,
+                  receivedAt: Date.now(),
+                },
+              ]);
               void mutateDetail(
                 (current) =>
                   current ? applyStandaloneChatEvent(current, event) : current,
@@ -140,6 +185,7 @@ export function useStandaloneRunStream({
     void followRun();
     return () => controller.abort();
   }, [conversationId, currentRunId, streamStatus, mutateDetail, mutateHistory]);
+  return arrivalSamples;
 }
 
 /** Build the rendered message list, adding optimistic and synthetic rows. */
@@ -218,7 +264,11 @@ export function useStandaloneUiMessages({
           content,
           sequence: Number.MAX_SAFE_INTEGER,
           created_at: Date.parse(currentRun.created_at) / 1_000,
-          metadata: { run_id: currentRun.id, optimistic: true },
+          metadata: {
+            run_id: currentRun.id,
+            optimistic: true,
+            ...(currentRun.usage ? { token_usage: currentRun.usage } : {}),
+          },
           runId: currentRun.id,
           runStatus: currentRun.status,
           activity: deriveStandaloneRunActivity(runEvents, currentRun.id),
@@ -343,12 +393,7 @@ export function useStandaloneQueryApproval({
         await mutateDetail();
         await mutateHistory();
       } catch (error) {
-        toast(
-          error instanceof Error
-            ? error.message
-            : "Could not save the query decision",
-          "error",
-        );
+        toastRequestError(toast, error, "Could not save the query decision");
       }
     },
     [approvalEvent, detail, mutateDetail, mutateHistory, toast],

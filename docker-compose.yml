@@ -327,6 +327,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.web
+      args:
+        NEXT_PUBLIC_CHAT_TELEMETRY_ENABLED: ${NEXT_PUBLIC_CHAT_TELEMETRY_ENABLED:-false}
     ports:
       # The web service listens on loopback unless SP_WEB_HOST specifies another host.
       # Local mode grants all scopes to requests without an API key.

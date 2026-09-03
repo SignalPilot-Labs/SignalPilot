@@ -209,6 +209,7 @@ class ChatRunInfo(BaseModel):
     terminal_at: datetime | None = None
     last_event_sequence: int
     runtime_archive_available: bool = False
+    usage: dict[str, int] | None = None
 
 
 class StandaloneMessageInfo(BaseModel):

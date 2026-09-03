@@ -110,6 +110,14 @@ export type StandaloneChatRun = {
   terminal_at: string | null;
   last_event_sequence: number;
   runtime_archive_available?: boolean;
+  usage?: ChatTokenUsage | null;
+};
+
+export type ChatTokenUsage = {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_creation_input_tokens?: number;
+  cache_read_input_tokens?: number;
 };
 
 export type StandaloneChatEvent = {

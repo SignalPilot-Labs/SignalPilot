@@ -1,22 +1,33 @@
 "use client";
 
 /**
- * Inspector drawer for the selected model: identity, columns, tests, and
- * layer-labeled upstream/downstream lists. Actions: Focus (staged lineage
+ * Inspector drawer for the selected model. Two tabs: Details (identity,
+ * columns, tests, layer-labeled upstream/downstream lists) and SQL (raw or
+ * compiled body, see inspector-sql.tsx). Actions: Focus (staged lineage
  * exploration) and Copy link (the model's shareable /lineage URL).
  */
 
 import { Crosshair, Link2, X } from "lucide-react";
 import React from "react";
 
+import { Skeleton } from "~/components/ui/skeleton";
 import { useToast } from "~/components/ui/toast";
 import { LAYER_COLOR, LAYER_LABEL, matGlyph } from "./palette";
-import type { MapModel, ParsedMap } from "./parse-map";
+import type { MapColumn, MapModel, ParsedMap } from "./parse-map";
 import { canonicalRef, lineagePath } from "./lineage-nav";
+import { InspectorSql } from "./inspector-sql";
+import type { ModelSqlState } from "./use-dbt-map";
+
+export type InspectorTab = "details" | "sql";
+const TABS: InspectorTab[] = ["details", "sql"];
 
 export function Inspector({
   parsed,
   model,
+  columns,
+  sql,
+  tab,
+  onTabChange,
   isFocused,
   onClose,
   onNavigate,
@@ -24,6 +35,11 @@ export function Inspector({
 }: {
   parsed: ParsedMap;
   model: MapModel;
+  /** Resolved columns; null while the lazy request is in flight. */
+  columns: MapColumn[] | null;
+  sql: ModelSqlState;
+  tab: InspectorTab;
+  onTabChange: (tab: InspectorTab) => void;
   isFocused: boolean;
   onClose: () => void;
   onNavigate: (id: string) => void;
@@ -119,23 +135,77 @@ export function Inspector({
         </button>
       </div>
 
-      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-3">
+      {/* Tabs: arrow keys move between them, the panel below follows. */}
+      <div role="tablist" aria-label="Inspector sections" className="flex items-center gap-1 border-b border-[var(--color-border)] px-2 py-1.5">
+        {TABS.map((t) => (
+          <button
+            key={t}
+            type="button"
+            role="tab"
+            id={`inspector-tab-${t}`}
+            aria-selected={tab === t}
+            aria-controls={`inspector-panel-${t}`}
+            tabIndex={tab === t ? 0 : -1}
+            data-testid={`inspector-tab-${t}`}
+            onClick={() => onTabChange(t)}
+            onKeyDown={(e) => {
+              if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+              e.preventDefault();
+              const step = e.key === "ArrowRight" ? 1 : TABS.length - 1;
+              const next = TABS[(TABS.indexOf(t) + step) % TABS.length];
+              onTabChange(next);
+              document.getElementById(`inspector-tab-${next}`)?.focus();
+            }}
+            className={`rounded-[7px] px-2.5 py-1 text-[10px] uppercase tracking-[0.1em] transition-colors ${
+              tab === t
+                ? "bg-[var(--color-bg-hover)] text-[var(--color-text)]"
+                : "text-[var(--color-text-dim)] hover:text-[var(--color-text)]"
+            }`}
+          >
+            {t}
+          </button>
+        ))}
+      </div>
+
+      {tab === "sql" ? (
+        <div
+          role="tabpanel"
+          id="inspector-panel-sql"
+          aria-labelledby="inspector-tab-sql"
+          className="min-h-0 flex-1 overflow-y-auto"
+        >
+          <InspectorSql state={sql} modelName={model.name} />
+        </div>
+      ) : (
+      <div
+        role="tabpanel"
+        id="inspector-panel-details"
+        aria-labelledby="inspector-tab-details"
+        className="min-h-0 flex-1 space-y-4 overflow-y-auto p-3"
+      >
         <div className="font-mono text-[11px] text-[var(--color-text-dim)]">
           {[model.database, model.schema, model.name].filter(Boolean).join(".")}
         </div>
         {model.description && (
           <p className="text-[11px] leading-5 text-[var(--color-text-muted)]">{model.description}</p>
         )}
-        {model.columns.length > 0 && (
-          <div>
+        {model.columnCount > 0 && (
+          <div data-testid="inspector-columns" data-loaded={columns ? "1" : "0"}>
             <div className="mb-1 text-[9px] uppercase tracking-[0.1em] text-[var(--color-text-dim)]">
-              columns ({model.columns.length})
+              columns ({model.columnCount})
             </div>
             {/* Name / dimmed type (when the distilled graph carries one —
                 data follow-up for the gateway payload), description visible
                 on its own clamped line instead of tooltip-only. */}
             <div className="max-h-48 overflow-y-auto rounded-[8px] border border-[var(--color-border)] bg-[var(--color-bg-input)]">
-              {model.columns.map((c) => (
+              {columns === null && (
+                <div className="space-y-1.5 px-2 py-1.5" aria-busy="true">
+                  {Array.from({ length: Math.min(model.columnCount, 4) }, (_, i) => (
+                    <Skeleton key={i} className={`h-2.5 ${i % 2 ? "w-24" : "w-32"}`} />
+                  ))}
+                </div>
+              )}
+              {(columns ?? []).map((c) => (
                 <div key={c.name} className="border-b border-[var(--color-border)] px-2 py-1 last:border-b-0">
                   <div className="flex items-baseline gap-2">
                     <span className="min-w-0 truncate font-mono text-[11px] text-[var(--color-text-muted)]">
@@ -175,6 +245,7 @@ export function Inspector({
         {relList(model.parents, "upstream")}
         {relList(model.children, "downstream")}
       </div>
+      )}
     </div>
   );
 }

@@ -48,6 +48,7 @@ import {
   useChatDraft,
   useMentionOptions,
   useNotebookPanelState,
+  useSelectedChatProject,
   useStandaloneQueryApproval,
   useStandaloneRunStream,
   useStandaloneUiMessages,
@@ -55,6 +56,7 @@ import {
 import { useStandaloneChatActions } from "~/components/chat/use-standalone-chat-actions";
 import { ChatEmptyHero } from "~/components/chat/chat-empty-hero";
 import {
+  chatShellClassName,
   composerDisabledReason,
   readinessNotice,
 } from "~/components/chat/standalone-chat-derivations";
@@ -63,9 +65,11 @@ import {
   ChatRightPanels,
 } from "~/components/chat/standalone-chat-panels";
 import { useChatRightSlot } from "~/components/chat/use-chat-right-slot";
+import { useDockScrollCompensation } from "~/components/chat/use-dock-scroll-compensation";
 import { ConnectorsProvider } from "~/components/connectors/connectors-context";
 import { useChatModelSettings } from "~/components/chat/use-chat-model-settings";
 import { useChatBudgetSettings } from "~/components/chat/use-chat-budget-settings";
+import { ChatTelemetryBoundary } from "~/components/chat/chat-telemetry-panel";
 
 export { ChatUiContext, useChatUi } from "~/components/chat/chat-ui-context";
 export type { UiMessage } from "~/components/chat/chat-ui-context";
@@ -126,8 +130,10 @@ export function StandaloneDataChat({
         version_id: selectedReport.current_version_id,
       }
     : undefined;
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
-    null,
+  const [selectedProjectId, setSelectedProjectId] = useSelectedChatProject(
+    bootstrap,
+    requestedProject,
+    detail?.conversation.project_id,
   );
   const { perQueryBudgetUsd, chatBudgetUsd, budgetSettings } =
     useChatBudgetSettings(bootstrap, conversationId);
@@ -141,27 +147,12 @@ export function StandaloneDataChat({
   const [loadingConversationId, setLoadingConversationId] = useState<
     string | null
   >(null);
-  const selectedInitialized = useRef(false);
 
   useEffect(() => {
     if (!requestedPrompt || promptInitialized.current) return;
     setDraft(requestedPrompt);
     promptInitialized.current = true;
   }, [requestedPrompt, setDraft]);
-
-  useEffect(() => {
-    if (!bootstrap || selectedInitialized.current) return;
-    const requested = bootstrap.projects.find(
-      (project) => project.id === requestedProject,
-    );
-    setSelectedProjectId(
-      requested?.id ??
-        bootstrap.selected_project_id ??
-        bootstrap.projects[0]?.id ??
-        null,
-    );
-    selectedInitialized.current = true;
-  }, [bootstrap, requestedProject]);
 
   useEffect(() => {
     if (!requestedReportId || selectedReport?.report_id === requestedReportId)
@@ -186,13 +177,6 @@ export function StandaloneDataChat({
       active = false;
     };
   }, [requestedReportId, selectedReport?.report_id, toast]);
-
-  useEffect(() => {
-    if (detail?.conversation.project_id) {
-      setSelectedProjectId(detail.conversation.project_id);
-      selectedInitialized.current = true;
-    }
-  }, [detail?.conversation.project_id]);
 
   const { data: readiness } = useSWR(
     selectedProjectId ? `standalone-chat-readiness:${selectedProjectId}` : null,
@@ -228,7 +212,7 @@ export function StandaloneDataChat({
     mutateDetail,
     mutateHistory,
   });
-  useStandaloneRunStream({
+  const eventArrivals = useStandaloneRunStream({
     conversationId,
     currentRunId: currentRun?.id,
     streamStatus: currentRun?.status,
@@ -263,6 +247,8 @@ export function StandaloneDataChat({
 
   const { viewportRef, shouldStickToBottomRef, onViewportScroll } =
     useChatAutoScroll(conversationId, uiMessages);
+  // The plan dock grows upward; keep the last transcript line above it.
+  const composerDockRef = useDockScrollCompensation(viewportRef);
   const { selectedModel, selectedEffort, modelSettings } = useChatModelSettings({
     conversationId,
     conversationModel: detail?.conversation.model,
@@ -376,6 +362,13 @@ export function StandaloneDataChat({
   );
 
   return (
+    <ChatTelemetryBoundary
+      messages={uiMessages}
+      events={events}
+      currentRun={currentRun}
+      arrivals={eventArrivals}
+      running={runIsStreaming}
+    >
     <ConnectorsProvider enabled={connectorsEnabled}>
     <ChatUiContext.Provider
       value={{
@@ -390,17 +383,11 @@ export function StandaloneDataChat({
       }}
     >
       <div
-        className={
-          embedded
-            ? "h-full min-w-0 overflow-hidden"
-            : `h-screen overflow-hidden p-4 ${
-                settingsPanel.open
-                  ? "min-w-[1180px]"
-                  : notebookPanelOpen || dashboardPanel.sessionId
-                    ? "min-w-[1360px]"
-                    : "min-w-[960px]"
-              }`
-        }
+        className={chatShellClassName(
+          embedded,
+          settingsPanel.open,
+          notebookPanelOpen || Boolean(dashboardPanel.sessionId),
+        )}
       >
         <div className="relative flex h-full overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg)] shadow-2xl shadow-black/20">
           {!embedded && (
@@ -526,16 +513,21 @@ export function StandaloneDataChat({
                 </div>
               ) : (
                 <div data-testid="standalone-chat-messages">
-                  {uiMessages.map((message) => (
+                  {uiMessages.map((message, index) => (
                     <ChatMessage
                       key={standaloneMessageKey(conversationId, message)}
                       message={message}
+                      previousMessageAt={uiMessages[index - 1]?.created_at}
                     />
                   ))}
                 </div>
               )}
               {!isEmptyNewChat && (
-                <div className="sticky bottom-0 isolate z-30 bg-gradient-to-t from-[var(--color-bg)] via-[var(--color-bg)] to-transparent pt-3">
+                <div
+                  ref={composerDockRef}
+                  data-testid="chat-composer-dock"
+                  className="sticky bottom-0 isolate z-30 bg-gradient-to-t from-[var(--color-bg)] via-[var(--color-bg)] to-transparent pt-3"
+                >
                   {approvalEvent && (
                     <QueryApprovalCard
                       event={approvalEvent}
@@ -594,5 +586,6 @@ export function StandaloneDataChat({
       </div>
     </ChatUiContext.Provider>
     </ConnectorsProvider>
+    </ChatTelemetryBoundary>
   );
 }

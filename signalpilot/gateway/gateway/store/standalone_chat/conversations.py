@@ -31,6 +31,7 @@ from gateway.store.standalone_chat.helpers import (
     _now,
     _owned_conversation_row,
     _run_info,
+    _token_usage,
 )
 
 
@@ -280,14 +281,23 @@ async def get_conversation_detail(
         .scalars()
         .all()
     )
-    current_run = (
-        await db.execute(
-            select(GatewayChatRun)
-            .where(GatewayChatRun.conversation_id == conversation_id)
-            .order_by(GatewayChatRun.created_at.desc())
-            .limit(1)
+    runs = list(
+        (
+            await db.execute(
+                select(GatewayChatRun)
+                .where(GatewayChatRun.conversation_id == conversation_id)
+                .order_by(GatewayChatRun.created_at.desc())
+            )
         )
-    ).scalar_one_or_none()
+        .scalars()
+        .all()
+    )
+    current_run = runs[0] if runs else None
+    run_usage = {
+        run.id: usage
+        for run in runs
+        if (usage := _token_usage(run.usage_json)) is not None
+    }
     events = list(
         (
             await db.execute(
@@ -318,7 +328,7 @@ async def get_conversation_detail(
             actual_spend_usd=conversation.actual_spend_usd,
             reserved_spend_usd=conversation.reserved_spend_usd,
         ),
-        messages=[_message_info(row) for row in messages],
+        messages=[_message_info(row, run_usage=run_usage) for row in messages],
         current_run=_run_info(current_run) if current_run else None,
         run_events=[_event_info(row) for row in events],
     )

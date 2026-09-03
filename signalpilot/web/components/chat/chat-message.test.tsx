@@ -173,6 +173,27 @@ describe("Data Chat live state", () => {
     expect(container.querySelector("[data-caret]")).toBeNull();
     expect(container.querySelector(".chat-markdown")).not.toBeNull();
   });
+
+  it("never renders the plan tracker inside the message; it lives on the composer", async () => {
+    const todoWrite: StandaloneChatEvent = {
+      run_id: "run-1",
+      sequence: 2,
+      type: "tool_started",
+      payload: {
+        tool: "TodoWrite",
+        tool_call_id: "call-plan",
+        input: { todos: [{ content: "Find the model", status: "in_progress" }] },
+      },
+      created_at: "2026-01-01T00:00:00Z",
+    };
+    await render(message("running"), [todoWrite]);
+    // The TodoWrite step still shows as a timeline card; only the tracker
+    // itself moved to the composer.
+    expect(
+      container.querySelector('[data-testid="chat-plan-tracker"]'),
+    ).toBeNull();
+    expect(container.textContent).toContain("Updated the plan");
+  });
 });
 
 describe("Data Chat artifact cards in the timeline", () => {

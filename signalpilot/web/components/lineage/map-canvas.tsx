@@ -308,90 +308,101 @@ export function MapCanvas({
     [parsed, visibleEdges, pathCone],
   );
 
-  // Initial camera. A fit-all (or fit-all-marts) of a big DAG is unreadable
-  // dust, so the landing frame is the densest mart/fact cluster at a zoom
-  // clamped to a readability floor — the minimap answers "where am I
-  // globally". Focus mode frames the cone, floored at FOCUS_MIN_ZOOM so the
-  // staged story reads without manual zooming.
+  // Camera. A fit-all (or fit-all-marts) of a big DAG is unreadable dust, so
+  // the landing frame is the densest mart/fact cluster at a zoom clamped to
+  // a readability floor; the minimap answers "where am I globally". Focus
+  // mode frames the cone, floored at FOCUS_MIN_ZOOM so the staged story
+  // reads without manual zooming.
+  //
+  // The frame runs as soon as ReactFlow reports init (no timer) and only
+  // when the framed set changes: the cone-to-skeleton swap lays out the same
+  // nodes and must not move the camera. The very first frame snaps into
+  // place; later, user-driven refocuses animate.
   const wrapRef = useRef<HTMLDivElement>(null);
+  const frameKeyRef = useRef<string | null>(null);
+  const frameKey = useMemo(
+    () => `${focusId ?? ""}|${[...visible].sort().join(",")}`,
+    [focusId, visible],
+  );
   useEffect(() => {
-    const duration = reducedMotion ? 0 : 400;
-    const t = setTimeout(() => {
-      const vw = wrapRef.current?.clientWidth ?? 1200;
-      const vh = wrapRef.current?.clientHeight ?? 800;
-      const boundsOf = (ids: string[]) => {
-        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-        for (const id of ids) {
-          const p = positions.get(id);
-          if (!p) continue;
-          minX = Math.min(minX, p.x);
-          minY = Math.min(minY, p.y);
-          maxX = Math.max(maxX, p.x + NODE_W);
-          maxY = Math.max(maxY, p.y + NODE_H);
-        }
-        return { minX, minY, maxX, maxY };
-      };
-      // Center the bounds at a zoom clamped to [floor, ceil] — fitBounds
-      // can't take a zoom floor, so the clamp goes through setCenter. When
-      // the floor makes the content overflow the viewport, `mustSee` (the
-      // focus root) is kept fully in frame instead of clipping at an edge.
-      const frame = (
-        b: { minX: number; minY: number; maxX: number; maxY: number },
-        floor: number,
-        ceil: number,
-        mustSee?: { x: number; y: number },
-      ) => {
-        const w = Math.max(1, b.maxX - b.minX);
-        const h = Math.max(1, b.maxY - b.minY);
-        const fit = Math.min((vw * 0.85) / w, (vh * 0.85) / h);
-        const zoom = Math.min(Math.max(fit, floor), ceil);
-        let cx = b.minX + w / 2;
-        if (mustSee) {
-          const halfW = vw / (2 * zoom);
-          const margin = 24 / zoom;
-          cx = Math.max(cx, mustSee.x + NODE_W + margin - halfW);
-          cx = Math.min(cx, mustSee.x - margin + halfW);
-        }
-        api.setCenter(cx, b.minY + h / 2, { zoom, duration });
-      };
+    if (initTick === 0) return;
+    if (frameKeyRef.current === frameKey) return;
+    const firstFrame = frameKeyRef.current === null;
+    frameKeyRef.current = frameKey;
+    const duration = reducedMotion || firstFrame ? 0 : 400;
+    const vw = wrapRef.current?.clientWidth ?? 1200;
+    const vh = wrapRef.current?.clientHeight ?? 800;
+    const boundsOf = (ids: string[]) => {
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const id of ids) {
+        const p = positions.get(id);
+        if (!p) continue;
+        minX = Math.min(minX, p.x);
+        minY = Math.min(minY, p.y);
+        maxX = Math.max(maxX, p.x + NODE_W);
+        maxY = Math.max(maxY, p.y + NODE_H);
+      }
+      return { minX, minY, maxX, maxY };
+    };
+    // Center the bounds at a zoom clamped to [floor, ceil]; fitBounds
+    // can't take a zoom floor, so the clamp goes through setCenter. When
+    // the floor makes the content overflow the viewport, `mustSee` (the
+    // focus root) is kept fully in frame instead of clipping at an edge.
+    const frame = (
+      b: { minX: number; minY: number; maxX: number; maxY: number },
+      floor: number,
+      ceil: number,
+      mustSee?: { x: number; y: number },
+    ) => {
+      const w = Math.max(1, b.maxX - b.minX);
+      const h = Math.max(1, b.maxY - b.minY);
+      const fit = Math.min((vw * 0.85) / w, (vh * 0.85) / h);
+      const zoom = Math.min(Math.max(fit, floor), ceil);
+      let cx = b.minX + w / 2;
+      if (mustSee) {
+        const halfW = vw / (2 * zoom);
+        const margin = 24 / zoom;
+        cx = Math.max(cx, mustSee.x + NODE_W + margin - halfW);
+        cx = Math.min(cx, mustSee.x - margin + halfW);
+      }
+      api.setCenter(cx, b.minY + h / 2, { zoom, duration });
+    };
 
-      const ids = [...visible];
-      const all = boundsOf(ids);
-      if (!Number.isFinite(all.minX)) {
-        api.fitView({ padding: 0.1, duration });
-        return;
-      }
-      if (focusId) {
-        // Captions in frame; the focus root never clipped by the zoom floor.
-        frame({ ...all, minY: all.minY - 96 }, FOCUS_MIN_ZOOM, 1, positions.get(focusId));
-        return;
-      }
-      if (ids.length > 80) {
-        const anchors = ids
-          .filter((id) => {
-            const layer = parsed.models.get(id)!.layer;
-            return layer === "mart" || layer === "fact";
-          })
-          .map((id) => ({ id, y: positions.get(id)?.y ?? 0 }))
-          .sort((a, b) => a.y - b.y);
-        if (anchors.length >= 2) {
-          // Densest vertical run of marts/facts that fits at the landing floor.
-          const windowH = (vh * 0.85) / LANDING_MIN_ZOOM;
-          let best = { from: 0, to: 0, count: 1 };
-          let from = 0;
-          for (let to = 0; to < anchors.length; to++) {
-            while (anchors[to].y + NODE_H - anchors[from].y > windowH) from++;
-            if (to - from + 1 > best.count) best = { from, to, count: to - from + 1 };
-          }
-          const cluster = anchors.slice(best.from, best.to + 1).map((a) => a.id);
-          frame(boundsOf(cluster), LANDING_MIN_ZOOM, LANDING_MAX_ZOOM);
-          return;
+    const ids = [...visible];
+    const all = boundsOf(ids);
+    if (!Number.isFinite(all.minX)) {
+      api.fitView({ padding: 0.1, duration });
+      return;
+    }
+    if (focusId) {
+      // Captions in frame; the focus root never clipped by the zoom floor.
+      frame({ ...all, minY: all.minY - 96 }, FOCUS_MIN_ZOOM, 1, positions.get(focusId));
+      return;
+    }
+    if (ids.length > 80) {
+      const anchors = ids
+        .filter((id) => {
+          const layer = parsed.models.get(id)!.layer;
+          return layer === "mart" || layer === "fact";
+        })
+        .map((id) => ({ id, y: positions.get(id)?.y ?? 0 }))
+        .sort((a, b) => a.y - b.y);
+      if (anchors.length >= 2) {
+        // Densest vertical run of marts/facts that fits at the landing floor.
+        const windowH = (vh * 0.85) / LANDING_MIN_ZOOM;
+        let best = { from: 0, to: 0, count: 1 };
+        let from = 0;
+        for (let to = 0; to < anchors.length; to++) {
+          while (anchors[to].y + NODE_H - anchors[from].y > windowH) from++;
+          if (to - from + 1 > best.count) best = { from, to, count: to - from + 1 };
         }
+        const cluster = anchors.slice(best.from, best.to + 1).map((a) => a.id);
+        frame(boundsOf(cluster), LANDING_MIN_ZOOM, LANDING_MAX_ZOOM);
+        return;
       }
-      frame(all, 0.05, 1);
-    }, 120);
-    return () => clearTimeout(t);
-  }, [api, parsed, positions, visible, focusId, initTick, reducedMotion]);
+    }
+    frame(all, 0.05, 1);
+  }, [api, parsed, positions, visible, focusId, frameKey, initTick, reducedMotion]);
 
   // External selection (schema panel / inspector nav) -> center the node.
   useEffect(() => {

@@ -241,6 +241,26 @@ class TestMCPAuthMiddleware:
     """Tests for the pure ASGI MCPAuthMiddleware."""
 
     @pytest.mark.asyncio
+    async def test_unknown_path_returns_404_before_any_credential_check(self):
+        """The MCP app is mounted at the root, so unrouted paths land here.
+
+        A browser that mis-builds a notebook-proxy URL must get a 404, not a
+        401 that blames its (valid) Clerk token as a bad notebook session token.
+        """
+
+        async def downstream_app(scope, receive, send):
+            raise AssertionError("unrouted paths must never reach the MCP app")
+
+        middleware = MCPAuthMiddleware(downstream_app)
+        scope = _make_scope(_bearer_headers("eyJhbGciOiJSUzI1NiJ9.clerk.token"))
+        scope["path"] = "/notebook/6a1927cd"
+
+        result = await _collect_response(middleware, scope)
+
+        assert result["status"] == 404
+        assert result["body"] == {"detail": "Not Found"}
+
+    @pytest.mark.asyncio
     async def test_db_error_returns_503_not_401(self):
         """When the DB is unavailable during local auth, return 503 (not 401).
 

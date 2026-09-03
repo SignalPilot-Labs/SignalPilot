@@ -9,8 +9,6 @@ import type { RunPlan } from "~/lib/chat-run-steps";
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
-const MENTION_OPTIONS = ["revenue_by_region", "revenue_monthly", "orders"];
-
 /** Stateful wrapper mirroring real usage: the page owns the draft state. */
 function ComposerHarness({ onValue }: { onValue: (value: string) => void }) {
   const [value, setValue] = useState("");
@@ -24,13 +22,12 @@ function ComposerHarness({ onValue }: { onValue: (value: string) => void }) {
       onSubmit={vi.fn()}
       submitDisabled={false}
       placeholder="Ask"
-      mentionOptions={MENTION_OPTIONS}
     />
   );
 }
 
 /** Types into the textarea the way a user would: native value setter +
- * input event, so React's onChange (and the mention scanner) run. */
+ * input event, so React's onChange runs. */
 function typeIntoComposer(container: HTMLElement, text: string) {
   const textarea = container.querySelector("textarea");
   if (!textarea) throw new Error("composer textarea not found");
@@ -43,7 +40,7 @@ function typeIntoComposer(container: HTMLElement, text: string) {
   textarea.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
-describe("Standalone Data Chat composer mentions", () => {
+describe("Standalone Data Chat composer typing", () => {
   let container: HTMLDivElement;
   let root: Root;
 
@@ -59,45 +56,21 @@ describe("Standalone Data Chat composer mentions", () => {
     vi.clearAllMocks();
   });
 
-  it("suggests matching models while typing an @-mention and inserts the pick", async () => {
+  it("inserts a literal @ with no autocomplete popover", async () => {
     const onValue = vi.fn();
     await act(async () => {
       root.render(<ComposerHarness onValue={onValue} />);
     });
     await act(async () => typeIntoComposer(container, "Compare @rev"));
 
-    const options = [...container.querySelectorAll("button")].filter((button) =>
-      button.textContent?.startsWith("revenue"),
+    expect(onValue).toHaveBeenLastCalledWith("Compare @rev");
+    expect(container.querySelector("textarea")?.value).toBe("Compare @rev");
+    // The only buttons are the composer controls, never a suggestion list.
+    const buttons = [...container.querySelectorAll("button")];
+    expect(buttons.every((button) => button.hasAttribute("aria-label"))).toBe(
+      true,
     );
-    expect(options.map((button) => button.textContent)).toEqual([
-      "revenue_by_region",
-      "revenue_monthly",
-    ]);
-
-    await act(async () =>
-      options[0].dispatchEvent(
-        new MouseEvent("mousedown", { bubbles: true, cancelable: true }),
-      ),
-    );
-    expect(onValue).toHaveBeenLastCalledWith("Compare @revenue_by_region ");
-  });
-
-  it("does not open the mention popover for plain text", async () => {
-    await act(async () => {
-      root.render(<ComposerHarness onValue={vi.fn()} />);
-    });
-    await act(async () =>
-      typeIntoComposer(
-        container,
-        "Compare this with the quarterly revenue numbers",
-      ),
-    );
-
-    expect(
-      [...container.querySelectorAll("button")].some((button) =>
-        button.textContent?.includes("revenue_by_region"),
-      ),
-    ).toBe(false);
+    expect(container.textContent).not.toContain("models & metrics");
   });
 });
 

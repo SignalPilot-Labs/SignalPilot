@@ -84,7 +84,6 @@ describe("ChatComposerPanel plan dock", () => {
             runIsStreaming={currentRun?.status === "running"}
             currentRun={currentRun}
             onStop={vi.fn(async () => undefined)}
-            mentionOptions={[]}
             conversationId={currentRun ? "conv-1" : undefined}
             bootstrap={bootstrap}
             selectedProjectId={null}

@@ -25,6 +25,11 @@ import {
 } from "~/components/connectors/connectors-context";
 import { useConnectorActions } from "~/components/connectors/use-connector-actions";
 import { Chip, Eyebrow, FOCUS_RING } from "~/components/connectors/ui";
+import {
+  CHAT_TELEMETRY_AVAILABLE,
+  setChatTelemetryEnabled,
+  useChatTelemetrySetting,
+} from "~/components/chat/use-chat-telemetry-setting";
 
 export type ChatBudgetSettings = {
   perQueryBudgetUsd: number;
@@ -306,6 +311,35 @@ function ModelSection({ model }: { model: ChatModelSettings }) {
   );
 }
 
+function TelemetrySection() {
+  const enabled = useChatTelemetrySetting();
+  if (!CHAT_TELEMETRY_AVAILABLE) return null;
+
+  return (
+    <section aria-labelledby="chat-settings-telemetry" className="space-y-3">
+      <Eyebrow>
+        <span id="chat-settings-telemetry">Diagnostics</span>
+      </Eyebrow>
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <p className="text-[12.5px] font-medium text-[var(--color-text)]">
+            Chat telemetry
+          </p>
+          <p className="mt-0.5 text-[11.5px] leading-5 text-[var(--color-text-dim)]">
+            Show live timing and token diagnostics. Saved only in this browser.
+          </p>
+        </div>
+        <Switch
+          checked={enabled}
+          onCheckedChange={setChatTelemetryEnabled}
+          aria-label="Enable chat telemetry"
+          data-testid="chat-settings-telemetry-toggle"
+        />
+      </div>
+    </section>
+  );
+}
+
 /**
  * Right-side "Chat settings" panel — the same slot family as the artifacts
  * panel. Connectors first (a one-line "what your next chat gets" summary,
@@ -392,6 +426,7 @@ export function ChatSettingsPanel({
           </section>
         )}
         {budgets && <BudgetsSection budgets={budgets} />}
+        <TelemetrySection />
       </div>
     </aside>
     </>

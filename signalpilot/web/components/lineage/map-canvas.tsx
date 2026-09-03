@@ -324,12 +324,38 @@ export function MapCanvas({
     () => `${focusId ?? ""}|${[...visible].sort().join(",")}`,
     [focusId, visible],
   );
+  // The canvas box changes size when the inspector is resized (or the
+  // window is): once the change settles, reframe the same set so the
+  // story stays in view instead of sliding under the panel.
+  const [resizeTick, setResizeTick] = useState(0);
+  const framedResizeRef = useRef(0);
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    let first = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const ro = new ResizeObserver(() => {
+      if (first) {
+        first = false;
+        return;
+      }
+      clearTimeout(timer);
+      timer = setTimeout(() => setResizeTick((t) => t + 1), 180);
+    });
+    ro.observe(el);
+    return () => {
+      ro.disconnect();
+      clearTimeout(timer);
+    };
+  }, []);
   useEffect(() => {
     if (initTick === 0) return;
-    if (frameKeyRef.current === frameKey) return;
+    const resized = framedResizeRef.current !== resizeTick;
+    if (frameKeyRef.current === frameKey && !resized) return;
     const firstFrame = frameKeyRef.current === null;
     frameKeyRef.current = frameKey;
-    const duration = reducedMotion || firstFrame ? 0 : 400;
+    framedResizeRef.current = resizeTick;
+    const duration = reducedMotion || firstFrame ? 0 : resized ? 250 : 400;
     const vw = wrapRef.current?.clientWidth ?? 1200;
     const vh = wrapRef.current?.clientHeight ?? 800;
     const boundsOf = (ids: string[]) => {
@@ -402,7 +428,7 @@ export function MapCanvas({
       }
     }
     frame(all, 0.05, 1);
-  }, [api, parsed, positions, visible, focusId, frameKey, initTick, reducedMotion]);
+  }, [api, parsed, positions, visible, focusId, frameKey, initTick, resizeTick, reducedMotion]);
 
   // External selection (schema panel / inspector nav) -> center the node.
   useEffect(() => {

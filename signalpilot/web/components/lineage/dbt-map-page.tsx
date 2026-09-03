@@ -34,6 +34,9 @@ import { MapHeader } from "./map-header";
 import { SchemaWindow } from "./schema-window";
 import { FocusPanel } from "./focus-panel";
 import { Inspector, type InspectorTab } from "./inspector";
+import { leftPanelCollapses, widthFittingPanel } from "./inspector-resize";
+import { useInspectorWidth } from "./use-inspector-width";
+import { PanelRail } from "./panel-rail";
 import { LayerLegend } from "./layer-legend";
 import { NotFoundCard, UnmappedCard } from "./not-found-card";
 import { useDbtMap, useModelColumns, useModelSql, type MapStatus } from "./use-dbt-map";
@@ -91,6 +94,7 @@ export function DbtMapPage({
   const [highlightSource, setHighlightSource] = useState<string | null>(null);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("details");
   const searchRef = useRef<HTMLInputElement>(null);
+  const rowRef = useRef<HTMLDivElement>(null);
 
   // Resolve the focus target against the loaded graph.
   const resolution = useMemo(
@@ -99,6 +103,11 @@ export function DbtMapPage({
   );
   const focusId = resolution?.kind === "found" ? resolution.id : null;
   const focusModel = focusId && parsed ? parsed.models.get(focusId) ?? null : null;
+
+  // Inspector width: owned here so the left panel can yield to the rail.
+  // Full left panel widths: focus panel w-72, schema window w-60.
+  const leftPanelWidth = focusId ? 288 : 240;
+  const inspectorSize = useInspectorWidth(rowRef, embedded ? "modal" : "page", leftPanelWidth);
 
   // Canonical share path for the current view (drives the URL + copy-link).
   const focusPath = useMemo(() => {
@@ -241,6 +250,14 @@ export function DbtMapPage({
     parsed && !map.partial && focusTarget && resolution && resolution.kind !== "found",
   );
 
+  // When the open inspector leaves less than the canvas reserve, the panel
+  // collapses to a rail and the rail button hands the width back.
+  const leftCollapsed =
+    Boolean(selected && parsed) &&
+    leftPanelCollapses(inspectorSize.containerWidth, inspectorSize.width, leftPanelWidth);
+  const restoreLeftPanel = () =>
+    inspectorSize.commit(widthFittingPanel(inspectorSize.containerWidth, leftPanelWidth));
+
   return (
     <div
       className={`flex flex-col overflow-hidden ${embedded ? "h-full" : "h-screen"}`}
@@ -268,8 +285,10 @@ export function DbtMapPage({
         />
       )}
 
-      <div className="flex min-h-0 flex-1">
-        {parsed &&
+      <div ref={rowRef} className="flex min-h-0 flex-1" data-testid="lineage-row">
+        {parsed && leftCollapsed ? (
+          <PanelRail label={focusId ? "lineage" : "schemas"} onExpand={restoreLeftPanel} />
+        ) : parsed &&
           (focusId ? (
             <FocusPanel
               parsed={parsed}
@@ -289,7 +308,7 @@ export function DbtMapPage({
             />
           ))}
 
-        <div className="relative min-w-0 flex-1 bg-[var(--color-bg)]">
+        <div className="relative min-w-0 flex-1 bg-[var(--color-bg)]" data-testid="lineage-canvas">
           {parsed ? (
             <>
               <ReactFlowProvider>
@@ -383,6 +402,7 @@ export function DbtMapPage({
             onClose={() => setSelectedId(null)}
             onNavigate={(id) => setSelectedId(id)}
             onFocus={focusOn}
+            size={inspectorSize}
           />
         )}
       </div>

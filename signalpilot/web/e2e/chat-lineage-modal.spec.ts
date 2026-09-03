@@ -141,6 +141,7 @@ test.describe("chat lineage modal", () => {
     const mock = await mockLineageRoutes(context, { skeletonDelayMs: 1500, projectsDelayMs: 1500 });
     try {
       await openProse(page);
+      await page.evaluate(() => localStorage.removeItem("sp:lineage-inspector-width"));
       await page.getByTestId("showcase-rendered").locator(`a[href="${LINK_HREF}"]`).click();
       const modal = page.getByTestId("lineage-modal");
       await expect(modal).toBeVisible();
@@ -193,6 +194,34 @@ test.describe("chat lineage modal", () => {
       await sql.getByRole("button", { name: "compiled" }).click();
       await expect(sql.locator("pre")).toContainText("demo.analytics.stg_refunds");
       expect(mock.count(/dbt-map\/model\/[^/]+\/sql/)).toBe(1);
+
+      // The inspector resizes inside the modal too: the default is a share
+      // of the modal, a drag on the left-edge handle widens it and the
+      // canvas gives the width up, and the code block follows.
+      const inspector = embed.getByTestId("lineage-inspector");
+      const canvas = embed.getByTestId("lineage-canvas");
+      const handle = embed.getByTestId("inspector-resize-handle");
+      const width = async (l: typeof inspector) => (await l.boundingBox())!.width;
+      const embedWidth = await width(embed);
+      const inspectorBefore = await width(inspector);
+      const canvasBefore = await width(canvas);
+      expect(inspectorBefore).toBe(Math.round(embedWidth * 0.45));
+      const box = (await handle.boundingBox())!;
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(box.x + box.width / 2 - 200, box.y + box.height / 2, { steps: 6 });
+      await page.mouse.up();
+      await expect.poll(() => width(inspector)).toBe(inspectorBefore + 200);
+      // The canvas gave the width up, unless that would take it under its
+      // reserve: then the left panel collapsed to a rail instead.
+      const canvasAfter = await width(canvas);
+      if (canvasBefore - 200 >= 240) expect(canvasAfter).toBe(canvasBefore - 200);
+      else await expect(embed.getByTestId("lineage-panel-rail")).toBeVisible();
+      expect(canvasAfter).toBeGreaterThanOrEqual(240);
+      expect(await width(embed.getByTestId("inspector-sql-code"))).toBe(inspectorBefore + 200 - 25);
+      await expect(modal).toBeVisible();
+      await handle.dblclick();
+      await expect.poll(() => width(inspector)).toBe(inspectorBefore);
 
       // The stg_refunds node already has its columns from the cone: no request.
       const columnCalls = mock.count(/dbt-map\/columns/);

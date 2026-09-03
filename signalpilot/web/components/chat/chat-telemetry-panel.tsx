@@ -15,9 +15,10 @@ import {
   type ChatEventArrival,
 } from "~/lib/chat-telemetry";
 import { ChatTelemetryContext } from "~/components/chat/chat-telemetry-context";
-
-const CHAT_TELEMETRY_ENABLED =
-  process.env.NEXT_PUBLIC_CHAT_TELEMETRY_ENABLED === "true";
+import {
+  CHAT_TELEMETRY_AVAILABLE,
+  useChatTelemetrySetting,
+} from "~/components/chat/use-chat-telemetry-setting";
 
 function Metric({ label, value, detail }: { label: string; value: string; detail?: string }) {
   return (
@@ -160,23 +161,26 @@ export function ChatTelemetryBoundary({
   arrivals: ChatEventArrival[];
   running: boolean;
 }) {
+  const telemetryEnabled = useChatTelemetrySetting();
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
-    if (!CHAT_TELEMETRY_ENABLED || !running) return;
+    if (!CHAT_TELEMETRY_AVAILABLE || !telemetryEnabled || !running) return;
     const timer = window.setInterval(() => setNowMs(Date.now()), 500);
     return () => window.clearInterval(timer);
-  }, [running]);
-  if (!CHAT_TELEMETRY_ENABLED) return children;
+  }, [running, telemetryEnabled]);
+  if (!CHAT_TELEMETRY_AVAILABLE) return children;
   return (
-    <ChatTelemetryContext.Provider value={{ enabled: true, nowMs }}>
+    <ChatTelemetryContext.Provider value={{ enabled: telemetryEnabled, nowMs }}>
       {children}
-      <ChatTelemetryPanel
-        messages={messages}
-        events={events}
-        currentRun={currentRun}
-        arrivals={arrivals}
-        nowMs={nowMs}
-      />
+      {telemetryEnabled && (
+        <ChatTelemetryPanel
+          messages={messages}
+          events={events}
+          currentRun={currentRun}
+          arrivals={arrivals}
+          nowMs={nowMs}
+        />
+      )}
     </ChatTelemetryContext.Provider>
   );
 }

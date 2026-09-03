@@ -34,7 +34,6 @@ export function ChatComposerPanel({
   runIsStreaming,
   currentRun,
   onStop,
-  mentionOptions,
   conversationId,
   bootstrap,
   selectedProjectId,
@@ -50,7 +49,6 @@ export function ChatComposerPanel({
   runIsStreaming: boolean;
   currentRun: StandaloneChatRun | null;
   onStop: (runId: string) => Promise<void>;
-  mentionOptions: string[];
   conversationId?: string;
   bootstrap: StandaloneChatBootstrap;
   selectedProjectId: string | null;
@@ -85,7 +83,6 @@ export function ChatComposerPanel({
       disabledReason={disabledReason}
       running={runIsStreaming}
       onStop={currentRun ? () => void onStop(currentRun.id) : undefined}
-      mentionOptions={mentionOptions}
       placeholder={
         currentRun?.status === "waiting_for_user"
           ? "Answer the clarification…"

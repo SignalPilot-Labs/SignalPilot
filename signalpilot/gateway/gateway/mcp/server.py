@@ -41,6 +41,13 @@ mcp = FastMCP(
         "Use list_connections to see available databases."
     ),
     transport_security=_transport_security,
+    # Stateless streamable HTTP: no server-side session table. The chat
+    # agent's MCP client holds its session id for a whole run, and a stateful
+    # transport keeps that table in one process's memory. Every deploy,
+    # restart, or second replica then answers the rest of the run with
+    # "Session not found". Per-request auth already lives in
+    # MCPAuthMiddleware and contextvars, so no tool depends on the session.
+    stateless_http=True,
 )
 
 

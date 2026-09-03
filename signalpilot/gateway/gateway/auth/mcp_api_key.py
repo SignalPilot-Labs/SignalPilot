@@ -167,6 +167,9 @@ async def validate_api_key(key: str, backend_url: str) -> dict[str, Any] | None:
 
 _warned_no_backend_url: bool = False
 
+# The streamable-http MCP transport serves exactly one route.
+_MCP_PATHS = frozenset({"/mcp", "/mcp/"})
+
 
 class MCPAuthMiddleware:
     """Pure ASGI middleware that authenticates MCP streamable-http requests.
@@ -195,6 +198,15 @@ class MCPAuthMiddleware:
         # Only intercept HTTP connections (not lifespan/websocket)
         if scope["type"] != "http":
             await self._app(scope, receive, send)
+            return
+
+        # This app is mounted at the root, so every path no router claimed
+        # lands here. Answer those with a plain 404 before any credential
+        # check; otherwise a mistyped notebook-proxy URL sent with a Clerk
+        # token is rejected as an "invalid notebook session token", which
+        # misleads the browser and the person reading the toast.
+        if scope.get("path", "") not in _MCP_PATHS:
+            await _send_json(send, 404, "Not Found")
             return
 
         # All modes: validate against gateway's own DB-backed API keys
@@ -472,11 +484,16 @@ def _extract_api_key_header(scope: dict[str, Any]) -> str | None:
 
 async def _send_401(send: Callable, message: str) -> None:
     """Send a minimal 401 JSON response through the ASGI send callable."""
+    await _send_json(send, 401, message)
+
+
+async def _send_json(send: Callable, status: int, message: str) -> None:
+    """Send a minimal ``{"detail": message}`` JSON response with ``status``."""
     body = json.dumps({"detail": message}).encode()
     await send(
         {
             "type": "http.response.start",
-            "status": 401,
+            "status": status,
             "headers": [
                 (b"content-type", b"application/json"),
                 (b"content-length", str(len(body)).encode()),

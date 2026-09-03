@@ -115,13 +115,23 @@ def _project_projection(project_map: ProjectMap) -> dict[str, Any]:
     }
 
 
+def _physical_schema_name(table: dict[str, Any]) -> str:
+    """Return the schema without a duplicated multi-database prefix."""
+    database = str(table.get("database") or "")
+    table_schema = str(table.get("schema") or "")
+    prefix = f"{database}."
+    if database and table_schema.lower().startswith(prefix.lower()):
+        return table_schema[len(prefix) :]
+    return table_schema
+
+
 def _relation_for_model(model: ModelInfo, schema: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
     alias = str((model.config or {}).get("alias") or model.name)
     configured_schema = str((model.config or {}).get("schema") or "").lower()
     matches: list[tuple[str, dict[str, Any]]] = []
     for key, table in schema.items():
         table_name = str(table.get("name") or key.split(".")[-1])
-        table_schema = str(table.get("schema") or "")
+        table_schema = _physical_schema_name(table)
         if table_name.lower() != alias.lower():
             continue
         if configured_schema and table_schema.lower() != configured_schema:
@@ -131,7 +141,7 @@ def _relation_for_model(model: ModelInfo, schema: dict[str, Any]) -> tuple[str, 
         key, table = matches[0]
         database = str(table.get("database") or "")
         relation = ".".join(
-            part for part in (database, str(table.get("schema") or ""), str(table.get("name") or alias)) if part
+            part for part in (database, _physical_schema_name(table), str(table.get("name") or alias)) if part
         )
         return relation or key, table
     return None

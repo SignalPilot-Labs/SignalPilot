@@ -26,6 +26,7 @@ import {
   type StandaloneConversationDetail,
 } from "~/lib/api";
 import { useToast } from "~/components/ui/toast";
+import { toastRequestError } from "~/components/chat/toast-request-error";
 import {
   applyStandaloneChatEvent,
   assembleStandaloneRunText,
@@ -392,12 +393,7 @@ export function useStandaloneQueryApproval({
         await mutateDetail();
         await mutateHistory();
       } catch (error) {
-        toast(
-          error instanceof Error
-            ? error.message
-            : "Could not save the query decision",
-          "error",
-        );
+        toastRequestError(toast, error, "Could not save the query decision");
       }
     },
     [approvalEvent, detail, mutateDetail, mutateHistory, toast],

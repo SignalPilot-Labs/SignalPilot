@@ -32,6 +32,7 @@ import {
   type StandaloneConversationDetail,
 } from "~/lib/api";
 import { useToast } from "~/components/ui/toast";
+import { toastRequestError } from "~/components/chat/toast-request-error";
 import {
   appendOptimisticUserMessage,
   markStandaloneRunStopped,
@@ -234,10 +235,7 @@ export function useStandaloneChatActions({
         }
         setPendingSubmission(null);
         setDraft(text);
-        toast(
-          error instanceof Error ? error.message : "Could not send message",
-          "error",
-        );
+        toastRequestError(toast, error, "Could not send message");
       } finally {
         setIsSubmitting(false);
       }
@@ -299,10 +297,7 @@ export function useStandaloneChatActions({
       } catch (error) {
         void mutateDetail();
         void mutateHistory();
-        toast(
-          error instanceof Error ? error.message : "Could not stop the run",
-          "error",
-        );
+        toastRequestError(toast, error, "Could not stop the run");
       }
     },
     [conversationId, mutateDetail, mutateHistory, toast],
@@ -324,10 +319,7 @@ export function useStandaloneChatActions({
         void mutateDetail();
         await mutateHistory();
       } catch (error) {
-        toast(
-          error instanceof Error ? error.message : "Could not retry the run",
-          "error",
-        );
+        toastRequestError(toast, error, "Could not retry the run");
       }
     },
     [mutateDetail, mutateHistory, toast],
@@ -369,12 +361,7 @@ export function useStandaloneChatActions({
         await loadConversation(id);
         router.push(`/chats/${id}`);
       } catch (error) {
-        toast(
-          error instanceof Error
-            ? error.message
-            : "Could not load the conversation",
-          "error",
-        );
+        toastRequestError(toast, error, "Could not load the conversation");
       } finally {
         setLoadingConversationId(null);
       }
@@ -399,10 +386,7 @@ export function useStandaloneChatActions({
       await mutateHistory();
       if (conversation.id === conversationId) await mutateDetail();
     } catch (error) {
-      toast(
-        error instanceof Error ? error.message : "Could not rename the chat",
-        "error",
-      );
+      toastRequestError(toast, error, "Could not rename the chat");
     }
   };
   const archiveConversation = async (conversation: StandaloneConversation) => {
@@ -418,10 +402,7 @@ export function useStandaloneChatActions({
       await mutateHistory();
       if (conversation.id === conversationId) router.push("/chats");
     } catch (error) {
-      toast(
-        error instanceof Error ? error.message : "Could not remove the chat",
-        "error",
-      );
+      toastRequestError(toast, error, "Could not remove the chat");
     }
   };
   const shareConversation = async (conversation: StandaloneConversation) => {
@@ -435,10 +416,7 @@ export function useStandaloneChatActions({
         window.prompt("Copy team link", url);
       }
     } catch (error) {
-      toast(
-        error instanceof Error ? error.message : "Could not share the chat",
-        "error",
-      );
+      toastRequestError(toast, error, "Could not share the chat");
     }
   };
   const revokeShare = async (conversation: StandaloneConversation) => {
@@ -447,10 +425,7 @@ export function useStandaloneChatActions({
       await revokeStandaloneConversationShare(conversation.id);
       toast("Team link revoked", "success");
     } catch (error) {
-      toast(
-        error instanceof Error ? error.message : "Could not revoke the link",
-        "error",
-      );
+      toastRequestError(toast, error, "Could not revoke the link");
     }
   };
 

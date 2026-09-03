@@ -132,6 +132,30 @@ export class ApiRequestError extends Error {
   }
 }
 
+/**
+ * True for the gateway's rejection of a sandbox session token. The browser
+ * never holds that token; the failure belongs to a chat sandbox whose token
+ * expired, so the text carries no meaning for the person reading the page.
+ */
+export function isNotebookSessionAuthError(
+  message: string | null | undefined,
+): boolean {
+  return /invalid notebook session token/i.test(message ?? "");
+}
+
+/**
+ * Text for an error toast, or null when the error must stay silent.
+ * Unchanged from the raw message except for the silent cases.
+ */
+export function userFacingErrorMessage(
+  error: unknown,
+  fallback: string,
+): string | null {
+  const raw = error instanceof Error ? error.message : "";
+  if (isNotebookSessionAuthError(raw)) return null;
+  return raw || fallback;
+}
+
 /** HTTP status of a thrown request error, or null when it is not one. */
 export function requestErrorStatus(err: unknown): number | null {
   if (err instanceof ApiRequestError) return err.status;

@@ -40,7 +40,6 @@ describe("Data Chat dashboard artifact card", () => {
       metadata: {
         dashboard_preview: {
           authoring_session_id: "session-1",
-          preview_url: "/dashboards/new?authoring=session-1",
           dashboard_name: "Sales overview",
           summary: "A concise view of sales performance.",
           chart_count: 3,
@@ -173,6 +172,27 @@ describe("Data Chat live state", () => {
     expect(container.querySelector(".chat-stop-ring")).toBeNull();
     expect(container.querySelector("[data-caret]")).toBeNull();
     expect(container.querySelector(".chat-markdown")).not.toBeNull();
+  });
+
+  it("never renders the plan tracker inside the message; it lives on the composer", async () => {
+    const todoWrite: StandaloneChatEvent = {
+      run_id: "run-1",
+      sequence: 2,
+      type: "tool_started",
+      payload: {
+        tool: "TodoWrite",
+        tool_call_id: "call-plan",
+        input: { todos: [{ content: "Find the model", status: "in_progress" }] },
+      },
+      created_at: "2026-01-01T00:00:00Z",
+    };
+    await render(message("running"), [todoWrite]);
+    // The TodoWrite step still shows as a timeline card; only the tracker
+    // itself moved to the composer.
+    expect(
+      container.querySelector('[data-testid="chat-plan-tracker"]'),
+    ).toBeNull();
+    expect(container.textContent).toContain("Updated the plan");
   });
 });
 

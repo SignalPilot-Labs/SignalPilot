@@ -26,6 +26,9 @@ from signalpilot._server.ai.chat_runtime_output import (
     notebook_server_headers,
 )
 from signalpilot._server.ai.claude_agent import _apply_auth_config
+from signalpilot._server.ai.standalone_chat_tool_schemas import (
+    standalone_chat_tools as standalone_chat_tool_definitions,
+)
 from signalpilot._server.ai.standalone_chat_tools import (
     StandaloneArtifactCollector,
     StandaloneNotebookLifecycle,
@@ -104,7 +107,14 @@ async def test_publish_tools_are_gone_and_unknown_tools_are_errors():
         ListToolsRequest()
     )
     names = {tool.name for tool in listed.root.tools}
-    assert names == {"inspect_dbt", "create_dashboard_preview"}
+    assert names == {
+        "inspect_dbt",
+        "begin_dashboard_authoring",
+        "set_dashboard_plan",
+        "upsert_dashboard_chart",
+        "apply_dashboard_operations",
+        "create_dashboard_preview",
+    }
     assert not any(name.startswith("publish_") for name in names)
     assert not any("report" in name for name in names)
 
@@ -129,58 +139,176 @@ async def test_publish_tools_are_gone_and_unknown_tools_are_errors():
 
 
 @pytest.mark.asyncio
-async def test_dashboard_preview_tool_creates_one_review_only_preview():
-    calls: list[tuple[str, str]] = []
+async def test_dashboard_authoring_tools_publish_only_the_final_review_preview():
+    calls: list[tuple[str, dict[str, Any]]] = []
 
-    async def create_preview(
-        request: str, timezone: str, authoring_session_id: str | None
+    async def authoring_tool(
+        name: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        assert authoring_session_id is None
-        calls.append((request, timezone))
+        calls.append((name, arguments))
+        if name == "upsert_dashboard_chart":
+            return {
+                "status": "ready",
+                "authoring_session_id": "authoring-session-1",
+                "ready_count": 1,
+                "expected_count": 2,
+            }
         return {
-            "id": "authoring-session-1",
-            "summary": "Created a governed revenue dashboard.",
-            "definition": {
-                "name": "Executive Revenue",
-                "charts": [
-                    {"title": "Total Revenue"},
-                    {"title": "Revenue Trend"},
-                ],
+            "status": "preview_ready",
+            "authoring_session_id": "authoring-session-1",
+            "session": {
+                "summary": "Created a governed revenue dashboard.",
+                "definition": {
+                    "name": "Executive Revenue",
+                    "charts": [
+                        {"title": "Total Revenue"},
+                        {"title": "Revenue Trend"},
+                    ],
+                },
             },
         }
 
     collector = StandaloneArtifactCollector()
     server = build_standalone_chat_mcp_server(
         collector,
-        dashboard_preview_creator=create_preview,
+        dashboard_authoring_handler=authoring_tool,
     )["instance"]
-    listed = await server.request_handlers[ListToolsRequest](ListToolsRequest())
-    assert "create_dashboard_preview" in {
-        tool.name for tool in listed.root.tools
-    }
+    listed = await server.request_handlers[ListToolsRequest](
+        ListToolsRequest()
+    )
+    assert {
+        "begin_dashboard_authoring",
+        "set_dashboard_plan",
+        "upsert_dashboard_chart",
+        "apply_dashboard_operations",
+        "create_dashboard_preview",
+    } <= {tool.name for tool in listed.root.tools}
 
-    request = CallToolRequest(
-        params=CallToolRequestParams(
-            name="create_dashboard_preview",
-            arguments={
-                "request": "Create an executive revenue dashboard",
-                "timezone": "America/New_York",
-            },
+    plan_result = await server.request_handlers[CallToolRequest](
+        CallToolRequest(
+            params=CallToolRequestParams(
+                name="set_dashboard_plan",
+                arguments={
+                    "authoring_session_id": "authoring-session-1",
+                    "authoring_contract_version": "2026-09-02.1",
+                    "expected_plan_revision": 0,
+                    "plan": {
+                        "name": "Executive Revenue",
+                        "timezone": "UTC",
+                        "filters": [
+                            {
+                                "id": "date-window",
+                                "operator": "inThePast",
+                                "values": [90],
+                                "target": {
+                                    "tableName": "orders",
+                                    "fieldId": "orders.order_date",
+                                },
+                                "settings": {"unitOfTime": "days"},
+                            }
+                        ],
+                        "intents": [
+                            {
+                                "chart_id": "revenue-trend",
+                                "tile_id": "revenue-trend-tile",
+                                "label": "Revenue trend",
+                                "question": "How is revenue trending?",
+                                "description": "Approved revenue trend.",
+                                "required_concepts": ["revenue"],
+                                "explore_name": "orders",
+                                "dimensions": ["orders.order_date"],
+                                "metrics": ["orders.revenue"],
+                                "section": "Revenue",
+                                "order": 0,
+                                "layout": {"x": 0, "y": 0, "w": 12, "h": 6},
+                                "visualization": "line",
+                                "shared_filter_ids": ["date-window"],
+                                "required": True,
+                            }
+                        ],
+                    },
+                },
+            )
         )
     )
-    created = await server.request_handlers[CallToolRequest](request)
-    repeated = await server.request_handlers[CallToolRequest](request)
+    assert plan_result.root.isError is False
+
+    chart_result = await server.request_handlers[CallToolRequest](
+        CallToolRequest(
+            params=CallToolRequestParams(
+                name="upsert_dashboard_chart",
+                arguments={
+                    "authoring_session_id": "authoring-session-1",
+                    "authoring_contract_version": "2026-09-02.1",
+                    "plan_revision": 1,
+                    "chart_id": "revenue-trend",
+                    "chart": {
+                        "id": "revenue-trend",
+                        "title": "Revenue Trend",
+                        "question": "How is revenue trending?",
+                        "description": "Approved revenue trend.",
+                        "query": {
+                            "kind": "semantic",
+                            "exploreName": "orders",
+                            "dimensions": ["orders.order_date"],
+                            "metrics": ["orders.revenue"],
+                            "filters": {},
+                            "sorts": [
+                                {
+                                    "fieldId": "orders.order_date",
+                                    "descending": False,
+                                }
+                            ],
+                            "limit": 500,
+                            "projectId": "project-1",
+                            "commitSha": "a" * 40,
+                        },
+                        "visualization": {
+                            "type": "cartesian",
+                            "config": {
+                                "seriesType": "line",
+                                "layout": {
+                                    "xField": "orders.order_date",
+                                    "yField": ["orders.revenue"],
+                                },
+                            },
+                        },
+                        "signalPilot": {
+                            "crossFilter": False,
+                            "provenanceRef": "revenue-trend",
+                        },
+                    },
+                },
+            )
+        )
+    )
+    assert chart_result.root.isError is False
+    assert collector.dashboard_preview is None
+
+    created = await server.request_handlers[CallToolRequest](
+        CallToolRequest(
+            params=CallToolRequestParams(
+                name="create_dashboard_preview",
+                arguments={
+                    "authoring_session_id": "authoring-session-1",
+                    "authoring_contract_version": "2026-09-02.1",
+                    "plan_revision": 1,
+                    "expected_draft_revision": 2,
+                },
+            )
+        )
+    )
 
     assert created.root.isError is False
-    assert repeated.root.isError is False
-    assert calls == [
-        ("Create an executive revenue dashboard", "America/New_York")
+    assert [name for name, _arguments in calls] == [
+        "set_dashboard_plan",
+        "upsert_dashboard_chart",
+        "create_dashboard_preview",
     ]
     payload = json.loads(created.root.content[0].text)
     assert payload == {
         "status": "preview_ready",
         "authoring_session_id": "authoring-session-1",
-        "preview_url": "/dashboards/new?authoring=authoring-session-1",
         "summary": "Created a governed revenue dashboard.",
         "dashboard_name": "Executive Revenue",
         "chart_count": 2,
@@ -190,16 +318,76 @@ async def test_dashboard_preview_tool_creates_one_review_only_preview():
     }
     assert collector.dashboard_preview == payload
 
-    conflicting = await server.request_handlers[CallToolRequest](
-        CallToolRequest(
-            params=CallToolRequestParams(
-                name="create_dashboard_preview",
-                arguments={"request": "Create a different dashboard"},
-            )
-        )
-    )
-    assert conflicting.root.isError is True
-    assert "Only one dashboard preview" in conflicting.root.content[0].text
+
+def test_dashboard_authoring_tool_schemas_expose_the_complete_nested_contract():
+    tools = {
+        tool.name: tool
+        for tool in standalone_chat_tool_definitions(notebook_enabled=True)
+    }
+
+    plan = tools["set_dashboard_plan"].inputSchema["properties"]["plan"]
+    intent = plan["properties"]["intents"]["items"]
+    dashboard_filter = plan["properties"]["filters"]["items"]
+    assert {
+        "label",
+        "description",
+        "required_concepts",
+        "explore_name",
+        "metrics",
+        "layout",
+        "visualization",
+    } <= set(intent["required"])
+    assert intent["properties"]["visualization"]["enum"] == [
+        "kpi",
+        "table",
+        "bar",
+        "line",
+        "area",
+    ]
+    assert dashboard_filter["required"] == ["id", "operator", "target"]
+    assert dashboard_filter["properties"]["operator"]["enum"] == [
+        "equals",
+        "isNull",
+        "notNull",
+        "inBetween",
+        "inThePast",
+        "inTheCurrent",
+        "inPeriodToDate",
+    ]
+
+    chart = tools["upsert_dashboard_chart"].inputSchema["properties"]["chart"]
+    semantic_query = chart["properties"]["query"]["oneOf"][0]
+    assert {
+        "exploreName",
+        "dimensions",
+        "metrics",
+        "filters",
+        "sorts",
+        "limit",
+        "projectId",
+        "commitSha",
+    } <= set(semantic_query["required"])
+    sort = semantic_query["properties"]["sorts"]["items"]
+    assert sort["required"] == ["fieldId", "descending"]
+
+    visualizations = chart["properties"]["visualization"]["oneOf"]
+    assert [
+        item["properties"]["type"]["const"] for item in visualizations
+    ] == [
+        "big_number",
+        "table",
+        "cartesian",
+    ]
+    assert visualizations[0]["properties"]["config"]["required"] == ["field"]
+    assert visualizations[1]["properties"]["config"]["required"] == ["columns"]
+    assert visualizations[2]["properties"]["config"]["required"] == [
+        "seriesType",
+        "layout",
+    ]
+    assert chart["properties"]["signalPilot"]["required"] == [
+        "crossFilter",
+        "provenanceRef",
+    ]
 
 
 @pytest.mark.asyncio
@@ -354,7 +542,12 @@ def test_agent_contract_includes_default_signalpilot_mcp_tools():
     assert "Link each dbt model to its lineage page" in _prompt_flat
     assert "/lineage/rpt_customer_retention?project=PROJECT_ID" in _prompt_flat
     assert "Keep the link root-relative" in _prompt_flat
-    assert "call `create_dashboard_preview` exactly once" in _prompt_flat
+    assert "`Skill(signalpilot-dbt:dashboard-authoring)`" in _prompt_flat
+    assert "Never use the `Agent` tool" in _prompt_flat
+    assert (
+        "Call `create_dashboard_preview` only after every required chart"
+        in _prompt_flat
+    )
     assert "user must review and Apply" in _prompt_flat
     assert {
         "mcp__signalpilot__get_knowledge",
@@ -363,6 +556,10 @@ def test_agent_contract_includes_default_signalpilot_mcp_tools():
         "mcp__signalpilot__notion_create_page",
         "mcp__signalpilot__sandbox_exec",
         "mcp__signalpilot__dbt_execute",
+        "mcp__standalone-chat__begin_dashboard_authoring",
+        "mcp__standalone-chat__set_dashboard_plan",
+        "mcp__standalone-chat__upsert_dashboard_chart",
+        "mcp__standalone-chat__apply_dashboard_operations",
         "mcp__standalone-chat__create_dashboard_preview",
     } <= set(STANDALONE_ALLOWED_TOOLS)
     assert all(
@@ -409,9 +606,17 @@ def test_notebook_workflow_is_always_enabled():
         connection_name="warehouse",
     )
     assert "`signalpilot-dbt:dbt-workflow`" in execution_prompt
-    assert "Lineage link: /lineage/<model_name>?project=project-a" in execution_prompt
-    assert "mcp__standalone-chat__start_analysis_notebook" in STANDALONE_ALLOWED_TOOLS
-    assert any("signalpilot-notebook" in tool for tool in STANDALONE_ALLOWED_TOOLS)
+    assert (
+        "Lineage link: /lineage/<model_name>?project=project-a"
+        in execution_prompt
+    )
+    assert (
+        "mcp__standalone-chat__start_analysis_notebook"
+        in STANDALONE_ALLOWED_TOOLS
+    )
+    assert any(
+        "signalpilot-notebook" in tool for tool in STANDALONE_ALLOWED_TOOLS
+    )
 
 
 def test_runtime_publication_sdk_is_exposed_from_top_level_package():

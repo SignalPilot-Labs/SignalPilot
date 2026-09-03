@@ -85,8 +85,10 @@ describe("foldRunSteps", () => {
           sequence: 1,
           type: "error" as const,
           payload: {
-            message: "You've hit your session limit · resets 2:50pm (America/Los_Angeles)",
-            full_trace: "CLIConnectionError: authentication failed\n[traceback]",
+            message:
+              "You've hit your session limit · resets 2:50pm (America/Los_Angeles)",
+            full_trace:
+              "CLIConnectionError: authentication failed\n[traceback]",
             diagnostic_context: {
               auth_mode: "oauth",
               credential_present: true,
@@ -136,15 +138,16 @@ describe("foldRunSteps", () => {
     expect(query?.status).toBe("running");
   });
 
-  it("updates one live dashboard step from real authoring phases", () => {
+  it("renders dashboard validation as regular tools and the final preview specially", () => {
     const dashboardEvents = [
       {
         run_id: "dashboard-run",
         sequence: 1,
         type: "tool_started" as const,
         payload: {
-          tool: "mcp__standalone-chat__create_dashboard_preview",
-          tool_call_id: "dashboard-call",
+          tool: "mcp__standalone-chat__begin_dashboard_authoring",
+          tool_call_id: "begin-call",
+          parent_tool_call_id: "",
           input: { request: "Build a sales dashboard", timezone: "UTC" },
         },
         created_at: "2026-09-01T10:00:00Z",
@@ -152,53 +155,115 @@ describe("foldRunSteps", () => {
       {
         run_id: "dashboard-run",
         sequence: 2,
-        type: "progress" as const,
+        type: "tool_started" as const,
         payload: {
-          scope: "dashboard_authoring",
-          phase: "drafting",
-          label: "Drafting the dashboard structure and charts",
+          tool: "mcp__standalone-chat__upsert_dashboard_chart",
+          tool_call_id: "chart-a-call",
+          parent_tool_call_id: "",
+          input: {
+            chart_id: "revenue",
+            chart: { title: "Total revenue" },
+          },
         },
         created_at: "2026-09-01T10:00:01Z",
       },
       {
         run_id: "dashboard-run",
         sequence: 3,
-        type: "progress" as const,
+        type: "tool_started" as const,
         payload: {
-          scope: "dashboard_authoring",
-          phase: "validating",
-          label: "Validating chart fields, filters, and bindings",
+          tool: "mcp__standalone-chat__upsert_dashboard_chart",
+          tool_call_id: "chart-b-call",
+          parent_tool_call_id: "",
+          input: {
+            chart_id: "trend",
+            chart: { title: "Revenue trend" },
+          },
         },
         created_at: "2026-09-01T10:00:02Z",
+      },
+      {
+        run_id: "dashboard-run",
+        sequence: 4,
+        type: "tool_started" as const,
+        payload: {
+          tool: "mcp__standalone-chat__create_dashboard_preview",
+          tool_call_id: "preview-call",
+          parent_tool_call_id: "",
+          input: { expected_draft_revision: 3 },
+        },
+        created_at: "2026-09-01T10:00:02Z",
+      },
+      {
+        run_id: "dashboard-run",
+        sequence: 5,
+        type: "tool_completed" as const,
+        payload: {
+          tool_call_id: "chart-b-call",
+          error: false,
+          dashboard_authoring: {
+            label: "Dashboard chart validated (1 of 2)",
+            phase: "upsert_dashboard_chart",
+            authoring_session_id: "session-top-level",
+            draft_revision: 3,
+          },
+        },
+        created_at: "2026-09-01T10:00:03Z",
+      },
+      {
+        run_id: "dashboard-run",
+        sequence: 6,
+        type: "tool_completed" as const,
+        payload: {
+          tool_call_id: "preview-call",
+          error: false,
+          dashboard_authoring: {
+            label: "Dashboard preview ready",
+            phase: "create_dashboard_preview",
+            authoring_session_id: "session-top-level",
+            draft_revision: 3,
+          },
+        },
+        created_at: "2026-09-01T10:00:04Z",
+      },
+      {
+        run_id: "dashboard-run",
+        sequence: 7,
+        type: "tool_completed" as const,
+        payload: { tool_call_id: "begin-call", error: false },
+        created_at: "2026-09-01T10:00:05Z",
+      },
+      {
+        run_id: "dashboard-run",
+        sequence: 8,
+        type: "tool_completed" as const,
+        payload: { tool_call_id: "chart-a-call", error: true },
+        created_at: "2026-09-01T10:00:06Z",
       },
     ];
 
     const dashboardSteps = foldRunSteps(dashboardEvents, "dashboard-run");
-    expect(dashboardSteps).toHaveLength(1);
-    expect(dashboardSteps[0]).toMatchObject({
-      category: "dashboard",
-      status: "running",
-      detail: "Validating chart fields, filters, and bindings",
-    });
-    expect(
-      activeDashboardPreviewLabel(dashboardEvents, "dashboard-run"),
-    ).toBe("Validating chart fields, filters, and bindings");
-
-    expect(
-      activeDashboardPreviewLabel(
-        [
-          ...dashboardEvents,
-          {
-            run_id: "dashboard-run",
-            sequence: 4,
-            type: "tool_completed" as const,
-            payload: { tool_call_id: "dashboard-call", error: false },
-            created_at: "2026-09-01T10:00:03Z",
-          },
-        ],
-        "dashboard-run",
-      ),
-    ).toBeNull();
+    expect(dashboardSteps).toHaveLength(4);
+    expect(dashboardSteps.map((step) => step.category)).toEqual([
+      "generic",
+      "generic",
+      "generic",
+      "dashboard",
+    ]);
+    expect(dashboardSteps.map((step) => step.title)).toEqual([
+      "Resolving dashboard fields",
+      "Validating Total revenue",
+      "Validating Revenue trend",
+      "Creating dashboard preview",
+    ]);
+    expect(dashboardSteps.map((step) => step.status)).toEqual([
+      "succeeded",
+      "failed",
+      "succeeded",
+      "succeeded",
+    ]);
+    expect(dashboardSteps[2]?.detail).toBeNull();
+    expect(dashboardSteps[3]?.detail).toBe("Dashboard preview ready");
   });
 
   it("exposes the plan-ready session and revision for event-driven preview refresh", () => {
@@ -207,13 +272,16 @@ describe("foldRunSteps", () => {
         {
           run_id: "dashboard-run",
           sequence: 1,
-          type: "progress" as const,
+          type: "tool_completed" as const,
           payload: {
-            scope: "dashboard_authoring",
-            phase: "plan_ready",
-            label: "Plan ready with 9 charts",
-            authoring_session_id: "session-progressive",
-            draft_revision: 4,
+            tool_call_id: "plan-call",
+            error: false,
+            dashboard_authoring: {
+              phase: "set_dashboard_plan",
+              label: "Building 9 dashboard charts",
+              authoring_session_id: "session-progressive",
+              draft_revision: 4,
+            },
           },
           created_at: "2026-09-01T10:00:00Z",
         },
@@ -222,8 +290,8 @@ describe("foldRunSteps", () => {
     );
 
     expect(progress).toEqual({
-      label: "Plan ready with 9 charts",
-      phase: "plan_ready",
+      label: "Building 9 dashboard charts",
+      phase: "set_dashboard_plan",
       sessionId: "session-progressive",
       draftRevision: 4,
     });
@@ -361,10 +429,18 @@ describe("foldRunBlocks", () => {
     // Follow-up verification chain: list_tables → explore_columns →
     // dbt_execute → search_knowledge → hubspot connector, then a short tail.
     expect(chain3.steps.map((step) => step.tool)).toEqual([
-      "list_tables", "explore_columns", "dbt_execute", "search_knowledge", "search_contacts",
+      "list_tables",
+      "explore_columns",
+      "dbt_execute",
+      "search_knowledge",
+      "search_contacts",
     ]);
     expect(chain3.steps.map((step) => step.result?.kind)).toEqual([
-      "table_list", "column_profile", "dbt_run", "knowledge", "json",
+      "table_list",
+      "column_profile",
+      "dbt_run",
+      "knowledge",
+      "json",
     ]);
     expect(tail.text).toContain("rpt_region_rollup");
   });
@@ -414,7 +490,9 @@ describe("shouldShowAgentThinking", () => {
   });
 
   it("stays hidden after the run finishes", () => {
-    expect(shouldShowAgentThinking(foldRunBlocks(allEvents, FIXTURE_RUN_ID), false)).toBe(false);
+    expect(
+      shouldShowAgentThinking(foldRunBlocks(allEvents, FIXTURE_RUN_ID), false),
+    ).toBe(false);
   });
 });
 
@@ -480,12 +558,17 @@ describe("formatStepDuration", () => {
 
 describe("extractRunPlan", () => {
   it("returns null before any TodoWrite is published", () => {
-    expect(extractRunPlan(materializeFixtureEvents(500), FIXTURE_RUN_ID)).toBeNull();
+    expect(
+      extractRunPlan(materializeFixtureEvents(500), FIXTURE_RUN_ID),
+    ).toBeNull();
     expect(extractRunPlan(allEvents, "some-other-run")).toBeNull();
   });
 
   it("reads the first published plan mid-run", () => {
-    const plan = extractRunPlan(materializeFixtureEvents(2_000), FIXTURE_RUN_ID);
+    const plan = extractRunPlan(
+      materializeFixtureEvents(2_000),
+      FIXTURE_RUN_ID,
+    );
     expect(plan).not.toBeNull();
     expect(plan!.items).toHaveLength(4);
     expect(plan!.completed).toBe(0);
@@ -516,7 +599,9 @@ describe("extractRunPlan", () => {
         payload: {
           tool: "TodoWrite",
           parent_tool_call_id: "toolu_subagent",
-          input: { todos: [{ content: "Subagent-only step", status: "pending" }] },
+          input: {
+            todos: [{ content: "Subagent-only step", status: "pending" }],
+          },
         },
       },
     ];

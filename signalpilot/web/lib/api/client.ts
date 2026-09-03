@@ -120,6 +120,52 @@ export async function getGatewayAuthToken(): Promise<string | null> {
   return header.startsWith("Bearer ") ? header.slice(7) : header;
 }
 
+/** A non-2xx gateway reply. `status` lets callers branch on 404/409/422. */
+export class ApiRequestError extends Error {
+  status: number;
+  body: string;
+  constructor(status: number, body: string) {
+    super(`${status}: ${body}`);
+    this.name = "ApiRequestError";
+    this.status = status;
+    this.body = body;
+  }
+}
+
+/**
+ * True for the gateway's rejection of a sandbox session token. The browser
+ * never holds that token; the failure belongs to a chat sandbox whose token
+ * expired, so the text carries no meaning for the person reading the page.
+ */
+export function isNotebookSessionAuthError(
+  message: string | null | undefined,
+): boolean {
+  return /invalid notebook session token/i.test(message ?? "");
+}
+
+/**
+ * Text for an error toast, or null when the error must stay silent.
+ * Unchanged from the raw message except for the silent cases.
+ */
+export function userFacingErrorMessage(
+  error: unknown,
+  fallback: string,
+): string | null {
+  const raw = error instanceof Error ? error.message : "";
+  if (isNotebookSessionAuthError(raw)) return null;
+  return raw || fallback;
+}
+
+/** HTTP status of a thrown request error, or null when it is not one. */
+export function requestErrorStatus(err: unknown): number | null {
+  if (err instanceof ApiRequestError) return err.status;
+  if (err instanceof Error) {
+    const m = /^(\d{3}):/.exec(err.message);
+    if (m) return Number(m[1]);
+  }
+  return null;
+}
+
 export async function request<T>(
   path: string,
   options?: RequestInit,
@@ -151,7 +197,7 @@ export async function request<T>(
   }
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`${res.status}: ${body}`);
+    throw new ApiRequestError(res.status, body);
   }
   if (res.status === 204) return undefined as T;
   return res.json();

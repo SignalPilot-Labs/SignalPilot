@@ -44,6 +44,14 @@ _NOTEBOOK_PROXY_PATH_RE = re.compile(r"^/notebook/[^/]+/")
 # the header it set, and only when it set one.
 _PRIVATE_CACHEABLE_PATH_RE = re.compile(r"^/api/mcp/connectors/[^/]+/icon$")
 
+# dbt-map reads are ETag-revalidated (`private, max-age=0, must-revalidate`),
+# set by the route itself. Same rule: keep it only when the route set one.
+_DBT_MAP_PATH_RE = re.compile(r"^/api/workspace-projects/[^/]+/dbt-map(/|$)")
+
+
+def _keeps_own_cache_control(path: str) -> bool:
+    return bool(_PRIVATE_CACHEABLE_PATH_RE.match(path) or _DBT_MAP_PATH_RE.match(path))
+
 _CSP_DEFAULT_POLICY = (
     "default-src 'self'; "
     "script-src 'self'; "
@@ -84,7 +92,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         # Cache-Control: only set on non-proxy paths. For /notebook/* let upstream's
         # own headers pass through (or leave absent if upstream sets nothing).
         keeps_own_cache_control = bool(
-            _PRIVATE_CACHEABLE_PATH_RE.match(request.url.path) and response.headers.get("Cache-Control")
+            _keeps_own_cache_control(request.url.path) and response.headers.get("Cache-Control")
         )
         if not is_proxy and not keeps_own_cache_control:
             response.headers["Cache-Control"] = "no-store"

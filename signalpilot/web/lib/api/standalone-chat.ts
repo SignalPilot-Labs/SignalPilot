@@ -53,6 +53,8 @@ export type StandaloneChatProject = {
   default_branch: string;
   ready: boolean;
   readiness_message: string;
+  connection_type: string | null;
+  registered: boolean;
 };
 
 export type StandaloneChatModel =
@@ -108,6 +110,14 @@ export type StandaloneChatRun = {
   terminal_at: string | null;
   last_event_sequence: number;
   runtime_archive_available?: boolean;
+  usage?: ChatTokenUsage | null;
+};
+
+export type ChatTokenUsage = {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_creation_input_tokens?: number;
+  cache_read_input_tokens?: number;
 };
 
 export type StandaloneChatEvent = {
@@ -223,6 +233,8 @@ export const getStandaloneChatProjectReadiness = (projectId: string) =>
     setup_cta: boolean;
     branch: string | null;
     connection_name: string | null;
+    connection_type: string | null;
+    registered: boolean;
     starter_questions: string[];
   }>(`/api/chat/projects/${encodeURIComponent(projectId)}/readiness`);
 export const setDefaultStandaloneChatProject = (projectId: string) =>

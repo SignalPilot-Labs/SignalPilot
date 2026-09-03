@@ -23,6 +23,22 @@ async function waitForHydration(page: import("@playwright/test").Page) {
   );
 }
 
+/** Lets finite entrance animations (the plan's slide-in) finish before
+ * measuring boxes. Infinite loops (live dots, sheen) are skipped. */
+async function settleAnimations(locator: import("@playwright/test").Locator) {
+  await locator.evaluate((el) =>
+    Promise.all(
+      el
+        .getAnimations({ subtree: true })
+        .filter(
+          (animation) =>
+            animation.effect?.getTiming().iterations !== Infinity,
+        )
+        .map((animation) => animation.finished.catch(() => undefined)),
+    ),
+  );
+}
+
 test.describe("chat UX test harness", () => {
   test("shows a live working header while the first chain streams", async ({
     page,
@@ -114,7 +130,7 @@ test.describe("chat UX test harness", () => {
     ).toHaveCount(6);
   });
 
-  test("shows the agent plan as an always-visible card in the main window", async ({
+  test("docks the agent plan above the composer while the run streams", async ({
     page,
   }) => {
     // First TodoWrite has landed: 0/4, first item live, list expanded.
@@ -122,27 +138,93 @@ test.describe("chat UX test harness", () => {
     await waitForHydration(page);
     const tracker = page.getByTestId("chat-plan-tracker");
     await expect(tracker).toBeVisible();
+    await expect(tracker).toContainText("Plan");
     await expect(tracker).toContainText("0/4");
     await expect(tracker).toContainText(
       "Confirm the revenue model and region join",
     );
     await expect(tracker).toContainText("Save the chart and the underlying rows");
+    // It lives inside the composer, directly above the input, never in the
+    // transcript.
+    const composer = page.getByTestId("standalone-chat-composer");
+    await expect(composer.getByTestId("chat-plan-tracker")).toBeVisible();
+    await expect(
+      page.getByTestId("standalone-chat-messages").getByTestId("chat-plan-tracker"),
+    ).toHaveCount(0);
+    await settleAnimations(tracker);
+    const trackerBox = (await tracker.boundingBox())!;
+    const inputBox = (await composer.locator("textarea").boundingBox())!;
+    expect(trackerBox.y + trackerBox.height).toBeLessThanOrEqual(inputBox.y + 1);
     // The header toggle collapses the checklist to the one-line summary.
-    const header = tracker.locator("button").first();
+    const header = tracker.getByRole("button", { name: /agent plan/i });
     await expect(header).toHaveAttribute("aria-expanded", "true");
     await header.click();
     await expect(header).toHaveAttribute("aria-expanded", "false");
     // Late in the run the second TodoWrite advances the plan to 3/4.
     await page.goto(at(16_000));
     await expect(tracker).toContainText("3/4");
-    // After the run completes the plan stays in the transcript, folded.
+    await expect(header).toHaveAttribute("aria-expanded", "true");
+  });
+
+  test("folds the plan to its summary header once the run completes, and reopens on demand", async ({
+    page,
+  }) => {
     await page.goto(at(30_000));
+    await waitForHydration(page);
+    const tracker = page.getByTestId("chat-plan-tracker");
+    const header = tracker.getByRole("button", { name: /agent plan/i });
     await expect(tracker).toBeVisible();
+    await expect(tracker).toContainText("Plan");
     await expect(tracker).toContainText("3/4");
-    await expect(tracker.locator("button").first()).toHaveAttribute(
-      "aria-expanded",
-      "false",
-    );
+    await expect(header).toHaveAttribute("aria-expanded", "false");
+    await settleAnimations(tracker);
+    // Folded: the checklist body is clipped away, only the header shows.
+    const foldedBox = (await tracker.boundingBox())!;
+    const headerBox = (await header.boundingBox())!;
+    expect(foldedBox.height).toBeLessThanOrEqual(headerBox.height + 2);
+    // Toggle: the checklist expands upward from the input.
+    await header.click();
+    await expect(header).toHaveAttribute("aria-expanded", "true");
+    await expect(tracker).toContainText("Save the chart and the underlying rows");
+    await expect
+      .poll(async () => (await tracker.boundingBox())!.height)
+      .toBeGreaterThan(headerBox.height * 3);
+    const openBox = (await tracker.boundingBox())!;
+    const inputBox = (await page.locator("textarea[data-chat-composer]").boundingBox())!;
+    expect(openBox.y + openBox.height).toBeLessThanOrEqual(inputBox.y + 1);
+    expect(openBox.y).toBeLessThan(foldedBox.y);
+  });
+
+  test("expanding the plan never covers the transcript's last lines", async ({
+    page,
+  }) => {
+    await page.goto(at(24_800));
+    await waitForHydration(page);
+    const viewport = page.getByTestId("chat-test-viewport");
+    await viewport.evaluate((el) => {
+      el.scrollTop = el.scrollHeight;
+    });
+    const lastMessage = page.locator("[data-chat-message-id]").last();
+    const dock = page.getByTestId("chat-composer-dock");
+    const tracker = page.getByTestId("chat-plan-tracker");
+    const header = tracker.getByRole("button", { name: /agent plan/i });
+    await expect(header).toHaveAttribute("aria-expanded", "false");
+    await settleAnimations(dock);
+    const before = (await lastMessage.boundingBox())!;
+    const dockBefore = (await dock.boundingBox())!;
+    expect(before.y + before.height).toBeLessThanOrEqual(dockBefore.y + 1);
+    await header.click();
+    await expect(header).toHaveAttribute("aria-expanded", "true");
+    // Wait for the collapse transition to settle, then the last message's
+    // bottom must still sit above the (taller) dock.
+    await expect
+      .poll(async () => (await dock.boundingBox())!.height)
+      .toBeGreaterThan(dockBefore.height + 40);
+    await settleAnimations(dock);
+    const after = (await lastMessage.boundingBox())!;
+    const dockAfter = (await dock.boundingBox())!;
+    expect(after.y + after.height).toBeLessThanOrEqual(dockAfter.y + 1);
+    await expect(page.getByText("EMEA drove the growth")).toBeVisible();
   });
 
   test("replay controls scrub the run deterministically", async ({ page }) => {

@@ -13,6 +13,7 @@ import {
   type ChatUiContextValue,
 } from "~/components/chat/chat-ui-context";
 import { useMessageRun } from "~/components/chat/message-run-context";
+import { LineageLink, parseLineageHref } from "~/components/chat/lineage-modal";
 import { str } from "./attrs";
 import { FileChip, MissingFileChip, PendingFileChip } from "./file-chip";
 
@@ -25,10 +26,11 @@ const SANDBOX_PATH_RE = /signalpilot-chat-runs\/|\/artifacts\//;
  *
  * A resolved file renders a FileChip. A relative href that does not
  * resolve renders pending (only while this message's own run is still
- * running) or missing at chip size. Root-relative hrefs
- * (the agent's /lineage/<model> deep links) stay next/link soft
- * navigations unless they resolve to a file or look like a sandbox path.
- * Anything with a scheme opens in a new tab with rel=noopener.
+ * running) or missing at chip size. Root-relative hrefs stay next/link
+ * soft navigations unless they resolve to a file or look like a sandbox
+ * path. The agent's /lineage/<model>?project=<id> deep links open the
+ * in-chat lineage modal on a plain click (RouteLink). Anything with a
+ * scheme opens in a new tab with rel=noopener.
  */
 export function MarkdownLink({
   children,
@@ -46,16 +48,33 @@ export function MarkdownLink({
     return <ResolvedOrRoute norm={norm} ui={ui} url={url} title={title}>{children}</ResolvedOrRoute>;
   }
   if (rootRelative) {
-    return (
-      <Link href={url} title={title}>
-        {children}
-      </Link>
-    );
+    return <RouteLink url={url} title={title}>{children}</RouteLink>;
   }
   return (
     <a href={url} title={title} target="_blank" rel="noopener noreferrer">
       {children}
     </a>
+  );
+}
+
+/** In-app route: a lineage deep link opens the modal, anything else soft-navigates. */
+function RouteLink({
+  url,
+  title,
+  children,
+}: {
+  url: string;
+  title?: string;
+  children: ReactNode;
+}) {
+  const lineage = parseLineageHref(url);
+  if (lineage) {
+    return <LineageLink link={lineage} title={title}>{children}</LineageLink>;
+  }
+  return (
+    <Link href={url} title={title}>
+      {children}
+    </Link>
   );
 }
 
@@ -94,9 +113,5 @@ function ResolvedOrRoute({
     [norm, ui.files, runId],
   );
   if (file) return <FileChip file={file} ui={ui} />;
-  return (
-    <Link href={url} title={title}>
-      {children}
-    </Link>
-  );
+  return <RouteLink url={url} title={title}>{children}</RouteLink>;
 }

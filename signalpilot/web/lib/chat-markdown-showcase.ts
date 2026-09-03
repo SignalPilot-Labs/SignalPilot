@@ -85,7 +85,9 @@ flowchart LR
     markdown: `## Revenue reconciliation
 
 The **June** figure moved by _4.1%_ after the late-arriving refunds landed. See
-[fct_orders](/lineage/fct_orders) for the model that produces it.
+[fct_orders](/lineage/fct_orders) for the model that produces it. A model link
+that carries its project, like [stg_refunds](/lineage/stg_refunds?project=showcase-project),
+opens the lineage view in place; middle-click still opens the page.
 
 - Grain: one row per \`order_id\`
 - Source: \`raw.shopify.orders\`, loaded hourly

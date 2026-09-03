@@ -67,6 +67,10 @@ STANDALONE_ALLOWED_TOOLS = [
     "mcp__signalpilot__validate_model_output",
     "mcp__signalpilot__verify_model_values",
     "mcp__signalpilot__verify_metric_conformance",
+    "mcp__standalone-chat__begin_dashboard_authoring",
+    "mcp__standalone-chat__set_dashboard_plan",
+    "mcp__standalone-chat__upsert_dashboard_chart",
+    "mcp__standalone-chat__apply_dashboard_operations",
     "mcp__standalone-chat__create_dashboard_preview",
     "mcp__standalone-chat__inspect_dbt",
     "mcp__standalone-chat__start_analysis_notebook",
@@ -128,7 +132,9 @@ def _execution_prompt_values(
     """
     prompt = str(body.get("prompt") or "").strip()
     if not prompt or len(prompt) > 50_000:
-        raise HTTPException(status_code=400, detail="Prompt is empty or too large")
+        raise HTTPException(
+            status_code=400, detail="Prompt is empty or too large"
+        )
     history = [
         {
             "role": str(item.get("role") or "user"),
@@ -137,10 +143,16 @@ def _execution_prompt_values(
         for item in list(body.get("messages") or [])[-40:]
         if isinstance(item, dict)
     ]
-    warm_context = json.dumps(body.get("warm_context") or {}, default=str)[:120_000]
-    features = body.get("features") if isinstance(body.get("features"), dict) else {}
+    warm_context = json.dumps(body.get("warm_context") or {}, default=str)[
+        :120_000
+    ]
+    features = (
+        body.get("features") if isinstance(body.get("features"), dict) else {}
+    )
     is_improvement_run = str(body.get("run_origin") or "user") == "improvement"
-    sandbox_runtime_enabled = bool(features.get("sandbox_runtime")) and not is_improvement_run
+    sandbox_runtime_enabled = (
+        bool(features.get("sandbox_runtime")) and not is_improvement_run
+    )
     prompt_parts = [STANDALONE_SYSTEM_PROMPT]
     if sandbox_runtime_enabled:
         prompt_parts.append(_load_prompt("sandbox_dbt_suffix.md"))

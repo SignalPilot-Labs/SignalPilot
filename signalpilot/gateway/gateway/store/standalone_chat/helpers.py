@@ -108,6 +108,25 @@ async def _owned_run_row(
     return (await db.execute(query)).scalar_one_or_none()
 
 
+_TOKEN_USAGE_KEYS = (
+    "input_tokens",
+    "output_tokens",
+    "cache_creation_input_tokens",
+    "cache_read_input_tokens",
+)
+
+
+def _token_usage(raw: dict | None) -> dict[str, int] | None:
+    if not isinstance(raw, dict):
+        return None
+    usage = {
+        key: max(0, int(raw[key]))
+        for key in _TOKEN_USAGE_KEYS
+        if isinstance(raw.get(key), (int, float))
+    }
+    return usage or None
+
+
 def _run_info(row: GatewayChatRun) -> ChatRunInfo:
     return ChatRunInfo(
         id=row.id,
@@ -122,12 +141,22 @@ def _run_info(row: GatewayChatRun) -> ChatRunInfo:
         terminal_at=row.terminal_at,
         last_event_sequence=row.last_event_sequence,
         runtime_archive_available=bool(row.runtime_archive_id),
+        usage=_token_usage(row.usage_json),
     )
 
 
-def _message_info(row: GatewayChatMessage) -> StandaloneMessageInfo:
+def _message_info(
+    row: GatewayChatMessage,
+    *,
+    run_usage: dict[str, dict[str, int]] | None = None,
+) -> StandaloneMessageInfo:
     metadata = dict(row.metadata_json or {})
     metadata.pop("internal", None)
+    run_id = metadata.get("run_id")
+    if row.role == "assistant" and isinstance(run_id, str) and run_usage:
+        usage = run_usage.get(run_id)
+        if usage:
+            metadata["token_usage"] = usage
     return StandaloneMessageInfo(
         id=row.id,
         role=row.role,

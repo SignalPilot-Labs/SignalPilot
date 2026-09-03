@@ -801,12 +801,58 @@ async def test_readiness_recognizes_a_nested_dbt_project(db_session, monkeypatch
 
     assert readiness.ready
     assert readiness.code == "ready"
+    assert readiness.connection_type == "postgres"
+    assert readiness.registered is True
 
 
 @pytest.mark.asyncio
-async def test_readiness_trusts_a_successful_compile_when_tree_is_bare(
-    db_session, monkeypatch
-):
+async def test_readiness_distinguishes_unknown_type_and_missing_credentials(db_session, monkeypatch):
+    project = await _project(db_session)
+    monkeypatch.setattr(
+        chat_projects,
+        "_project_tree",
+        lambda *_args: (["dbt_project.yml", "models/orders.sql"], "head-sha"),
+    )
+    connection = GatewayConnection(
+        org_id="org-a",
+        user_id="user-a",
+        name="production",
+        db_type="future-db",
+        status="connected",
+        created_at=1.0,
+        description="",
+        tags=[],
+        schema_filter_include=[],
+        schema_filter_exclude=[],
+    )
+    db_session.add(connection)
+    await db_session.commit()
+
+    readiness = await evaluate_project_readiness(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        project=project,
+    )
+    assert readiness.code == "connection_type_unknown"
+    assert readiness.connection_type == "future-db"
+    assert readiness.registered is False
+
+    connection.db_type = "duckdb"
+    await db_session.commit()
+    readiness = await evaluate_project_readiness(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        project=project,
+    )
+    assert readiness.code == "credentials_missing"
+    assert readiness.connection_type == "duckdb"
+    assert readiness.registered is True
+
+
+@pytest.mark.asyncio
+async def test_readiness_trusts_a_successful_compile_when_tree_is_bare(db_session, monkeypatch):
     """A green dbt-map manifest is proof metadata exists even when the local git
     mirror can't surface the files (sparse/generated models)."""
     project = await _project(db_session)
@@ -843,9 +889,7 @@ async def test_readiness_trusts_a_successful_compile_when_tree_is_bare(
     assert readiness.ready
 
     # A failed compile is NOT proof — flip the manifest and readiness must fail.
-    manifest = (
-        await db_session.execute(select(GatewayDbtManifest))
-    ).scalar_one()
+    manifest = (await db_session.execute(select(GatewayDbtManifest))).scalar_one()
     manifest.status = "failed"
     await db_session.commit()
 
@@ -1101,6 +1145,55 @@ async def test_one_nonterminal_run_and_atomic_initial_state(db_session):
 
 
 @pytest.mark.asyncio
+async def test_conversation_detail_exposes_sanitized_token_usage_on_run_and_agent_message(
+    db_session,
+):
+    conversation_id, run = await _conversation_and_run(db_session)
+    run.usage_json = {
+        "input_tokens": 120,
+        "output_tokens": 30,
+        "cache_creation_input_tokens": 40,
+        "cache_read_input_tokens": 500,
+        "ignored_provider_field": "not exposed",
+    }
+    conversation = await db_session.get(GatewayChatConversation, conversation_id)
+    assert conversation is not None
+    conversation.message_count = 2
+    db_session.add(
+        GatewayChatMessage(
+            id="assistant-with-usage",
+            org_id="org-a",
+            user_id="user-a",
+            project_id=run.project_id,
+            conversation_id=conversation_id,
+            role="assistant",
+            content="The analysis is complete.",
+            metadata_json={"run_id": run.id, "status": "completed"},
+            sequence=2,
+            created_at=2.0,
+        )
+    )
+    await db_session.commit()
+
+    detail = await chat_store.get_conversation_detail(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        conversation_id=conversation_id,
+    )
+    assert detail is not None and detail.current_run is not None
+    expected = {
+        "input_tokens": 120,
+        "output_tokens": 30,
+        "cache_creation_input_tokens": 40,
+        "cache_read_input_tokens": 500,
+    }
+    assert detail.current_run.usage == expected
+    assert detail.messages[-1].metadata["token_usage"] == expected
+    assert "ignored_provider_field" not in detail.messages[-1].metadata["token_usage"]
+
+
+@pytest.mark.asyncio
 async def test_running_run_steering_is_durable_and_marked_picked_up(db_session):
     conversation_id, run = await _conversation_and_run(db_session)
     assert await chat_store.claim_runs(
@@ -1138,11 +1231,14 @@ async def test_running_run_steering_is_durable_and_marked_picked_up(db_session):
     )
     await db_session.refresh(queued)
     assert queued.metadata_json["steering_status"] == "picked_up"
-    assert await chat_store.pending_steering_messages(
-        db_session,
-        run_id=run.id,
-        worker_id="worker-a",
-    ) == []
+    assert (
+        await chat_store.pending_steering_messages(
+            db_session,
+            run_id=run.id,
+            worker_id="worker-a",
+        )
+        == []
+    )
     undelivered = await chat_store.queue_steering_message(
         db_session,
         org_id="org-a",
@@ -1151,10 +1247,13 @@ async def test_running_run_steering_is_durable_and_marked_picked_up(db_session):
         message="This one loses the runtime race.",
     )
     assert undelivered is not None
-    assert await chat_store.finalize_undelivered_steering(
-        db_session,
-        run_id=run.id,
-    ) == 1
+    assert (
+        await chat_store.finalize_undelivered_steering(
+            db_session,
+            run_id=run.id,
+        )
+        == 1
+    )
     await db_session.refresh(undelivered)
     assert undelivered.metadata_json["steering_status"] == "not_delivered"
     events = await chat_store.list_run_events(
@@ -1262,7 +1361,6 @@ async def test_claim_completion_and_final_message_are_idempotent(db_session):
         content="Revenue increased.",
         dashboard_preview={
             "authoring_session_id": "authoring-session-1",
-            "preview_url": "https://attacker.invalid/session",
             "dashboard_name": "Executive Revenue",
             "summary": "A governed executive dashboard.",
             "chart_count": 4,
@@ -1279,7 +1377,6 @@ async def test_claim_completion_and_final_message_are_idempotent(db_session):
     assert "report_action_outcome" not in first.metadata_json
     assert first.metadata_json["dashboard_preview"] == {
         "authoring_session_id": "authoring-session-1",
-        "preview_url": "/dashboards/new?authoring=authoring-session-1",
         "dashboard_name": "Executive Revenue",
         "summary": "A governed executive dashboard.",
         "chart_count": 4,
@@ -1662,9 +1759,7 @@ def test_standalone_session_claims_and_mcp_allowlist(monkeypatch):
         assert standalone_chat_tool_denial("notion_create_page", None) is None
         assert standalone_chat_tool_denial("get_knowledge", None) is None
         assert standalone_chat_tool_denial("propose_knowledge", None) is None
-        assert "unavailable" in (
-            standalone_chat_tool_denial("create_xata_branch", None) or ""
-        )
+        assert "unavailable" in (standalone_chat_tool_denial("create_xata_branch", None) or "")
     finally:
         mcp_execution_identity_var.reset(identity_token)
         mcp_allowed_connection_var.reset(connection_token)

@@ -171,6 +171,10 @@ class GatewayDashboardAuthoringSession(GatewayBase):
     definition_json: Mapped[dict | None] = mapped_column(JSON)
     plan_json: Mapped[dict | None] = mapped_column(JSON)
     expected_chart_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    authoring_contract_version: Mapped[str] = mapped_column(
+        String(40), nullable=False, default="2026-09-02.1", server_default="2026-09-02.1"
+    )
+    plan_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     operations_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     events_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     agent_runs_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
@@ -221,6 +225,9 @@ class GatewayDashboardChartDraft(GatewayBase):
     definition_json: Mapped[dict | None] = mapped_column(JSON)
     safe_error: Mapped[str | None] = mapped_column(Text)
     model_usage_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    payload_hash: Mapped[str | None] = mapped_column(String(64))
+    tool_call_id: Mapped[str | None] = mapped_column(String(200))
+    validation_outcome_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now(), onupdate=func.now())
     session: Mapped[GatewayDashboardAuthoringSession] = relationship(back_populates="chart_drafts")

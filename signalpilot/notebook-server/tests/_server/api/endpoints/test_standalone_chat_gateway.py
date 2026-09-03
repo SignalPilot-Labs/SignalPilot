@@ -13,17 +13,17 @@ from signalpilot._server.api.endpoints.standalone_chat_gateway import (
 
 
 @pytest.mark.asyncio
-async def test_dashboard_preview_is_bound_to_the_chat_project_revision(
+async def test_begin_dashboard_authoring_is_bound_to_the_active_chat_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     observed: dict[str, Any] = {}
 
     class Response:
-        def raise_for_status(self) -> None:
-            return None
-
         def json(self) -> dict[str, Any]:
-            return {"id": "authoring-session-1", "definition": {"charts": []}}
+            return {
+                "status": "planning",
+                "authoring_session_id": "authoring-session-1",
+            }
 
     class Client:
         def __init__(self, *, timeout: float) -> None:
@@ -46,23 +46,20 @@ async def test_dashboard_preview_is_bound_to_the_chat_project_revision(
         run_id="run-dashboard-1",
     )
 
-    result = await client.create_dashboard_preview(
-        request="Create an executive revenue dashboard",
-        project_id="project-1",
-        branch="main",
-        commit_sha="a" * 40,
-        timezone="America/Sao_Paulo",
+    result = await client.dashboard_authoring_tool(
+        "begin_dashboard_authoring",
+        {
+            "request": "Create an executive revenue dashboard",
+            "timezone": "America/Sao_Paulo",
+        },
     )
 
-    assert result["id"] == "authoring-session-1"
+    assert result["authoring_session_id"] == "authoring-session-1"
     assert observed == {
         "timeout": 1_200.0,
-        "url": "http://gateway:3300/api/dashboard-authoring/sessions",
+        "url": "http://gateway:3300/api/dashboard-authoring/begin",
         "json": {
-            "prompt": "Create an executive revenue dashboard",
-            "project_id": "project-1",
-            "branch": "main",
-            "commit_sha": "a" * 40,
+            "request": "Create an executive revenue dashboard",
             "timezone": "America/Sao_Paulo",
         },
         "headers": {"Authorization": "Bearer scoped-token"},
@@ -70,7 +67,7 @@ async def test_dashboard_preview_is_bound_to_the_chat_project_revision(
 
 
 @pytest.mark.asyncio
-async def test_dashboard_preview_preserves_safe_gateway_error(
+async def test_dashboard_authoring_tool_preserves_safe_gateway_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class Response:
@@ -104,31 +101,34 @@ async def test_dashboard_preview_preserves_safe_gateway_error(
     with pytest.raises(
         ValueError,
         match=(
-            "Dashboard preview could not be created: Dashboard authoring is "
+            "Dashboard authoring tool failed: Dashboard authoring is "
             "temporarily unavailable"
         ),
     ):
-        await client.create_dashboard_preview(
-            request="Create a dashboard",
-            project_id="project-1",
-            branch="main",
-            commit_sha="a" * 40,
-            timezone="UTC",
+        await client.dashboard_authoring_tool(
+            "set_dashboard_plan",
+            {
+                "authoring_session_id": "authoring-session-1",
+                "authoring_contract_version": "2026-09-02.1",
+                "expected_plan_revision": 0,
+                "plan": {},
+            },
         )
 
 
 @pytest.mark.asyncio
-async def test_dashboard_refinement_updates_the_active_authoring_session(
+async def test_dashboard_chart_tool_routes_by_session_and_chart_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     observed: dict[str, Any] = {}
 
     class Response:
-        def raise_for_status(self) -> None:
-            return None
-
         def json(self) -> dict[str, Any]:
-            return {"id": "authoring-session-1", "definition": {"charts": []}}
+            return {
+                "status": "ready",
+                "authoring_session_id": "authoring-session-1",
+                "chart_id": "revenue-trend",
+            }
 
     class Client:
         def __init__(self, *, timeout: float) -> None:
@@ -151,16 +151,24 @@ async def test_dashboard_refinement_updates_the_active_authoring_session(
         run_id="run-dashboard-2",
     )
 
-    await client.create_dashboard_preview(
-        request="Make the revenue trend a line chart",
-        project_id="project-1",
-        branch="main",
-        commit_sha="a" * 40,
-        timezone="UTC",
-        authoring_session_id="authoring-session-1",
+    await client.dashboard_authoring_tool(
+        "upsert_dashboard_chart",
+        {
+            "authoring_session_id": "authoring-session-1",
+            "chart_id": "revenue-trend",
+            "authoring_contract_version": "2026-09-02.1",
+            "plan_revision": 1,
+            "chart": {"id": "revenue-trend"},
+            "tool_call_id": "tool-chart-1",
+        },
     )
 
     assert observed["url"].endswith(
-        "/api/dashboard-authoring/sessions/authoring-session-1/messages"
+        "/api/dashboard-authoring/sessions/authoring-session-1/charts/revenue-trend"
     )
-    assert observed["json"] == {"prompt": "Make the revenue trend a line chart"}
+    assert observed["json"] == {
+        "authoring_contract_version": "2026-09-02.1",
+        "plan_revision": 1,
+        "chart": {"id": "revenue-trend"},
+        "tool_call_id": "tool-chart-1",
+    }

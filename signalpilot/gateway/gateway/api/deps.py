@@ -50,6 +50,7 @@ async def get_store(
         user_id=user_id,
         eval_connection=auth.get("eval_connection"),
         allowed_connection_name=allowed_connection_name,
+        execution_identity=execution_identity if isinstance(execution_identity, str) else None,
     )
 
 

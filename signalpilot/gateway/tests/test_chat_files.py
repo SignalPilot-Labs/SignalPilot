@@ -540,7 +540,6 @@ async def test_shared_routes_require_the_sharing_flag_and_an_active_grant(
     with pytest.raises(HTTPException) as exc:
         await files_routes.list_shared_conversation_files("x" * 40, _store(db_session, "user-b"))
     assert exc.value.status_code == 404
-
     monkeypatch.setenv("SP_FEATURE_CHAT_ORG_SHARING", "1")
     with pytest.raises(HTTPException) as exc:
         await files_routes.list_shared_conversation_files("x" * 40, _store(db_session, "user-b"))
@@ -576,4 +575,3 @@ async def test_shared_routes_require_the_sharing_flag_and_an_active_grant(
     with pytest.raises(HTTPException) as exc:
         await files_routes.list_shared_conversation_files(token, foreign)
     assert exc.value.status_code == 404
-

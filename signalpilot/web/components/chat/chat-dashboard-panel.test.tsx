@@ -155,14 +155,15 @@ describe("Chat dashboard live preview", () => {
       [...container.querySelectorAll("button")].find(
         (candidate) => candidate.textContent?.trim() === label,
       ) as HTMLButtonElement | undefined;
-    expect(button("Apply")?.disabled).toBe(true);
+    expect(button("Save Dashboard")?.disabled).toBe(true);
     expect(button("Discard")?.disabled).toBe(true);
+    expect(container.textContent).not.toContain("Draft 1");
 
     await act(async () => root.render(renderPanel(null)));
     await vi.waitFor(() => {
       expect(container.querySelector('[role="status"]')).toBeNull();
       expect(button("Discard")?.disabled).toBe(false);
-      expect(button("Apply")?.disabled).toBe(true);
+      expect(button("Save Dashboard")?.disabled).toBe(true);
     });
     expect(requestMock).toHaveBeenCalledWith(
       "/api/dashboard-authoring/sessions/session-live",

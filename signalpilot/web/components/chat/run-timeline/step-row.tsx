@@ -28,6 +28,32 @@ import {
 import { resolveToolCard } from "~/components/chat/tool-cards/registry";
 import { ToolCard } from "~/components/chat/tool-cards/tool-card";
 import { StepBody, stepHasBody } from "./step-body";
+import {
+  formatTelemetryClock,
+  formatTelemetryDuration,
+} from "~/lib/chat-telemetry";
+import { useChatTelemetryContext } from "~/components/chat/chat-telemetry-context";
+
+export function ToolTelemetryTime({ step }: { step: RunStep }) {
+  const telemetry = useChatTelemetryContext();
+  if (!telemetry.enabled) return null;
+  const startedAt = Date.parse(step.startedAt);
+  const duration =
+    step.durationMs ??
+    (step.status === "running"
+      ? Math.max(0, telemetry.nowMs - startedAt)
+      : null);
+  return (
+    <span
+      data-testid="chat-tool-timing"
+      title={`${new Date(startedAt).toLocaleString()}${duration == null ? "" : ` · ${formatTelemetryDuration(duration)}`}`}
+      className="font-mono text-[10px] tabular-nums text-cyan-300/60 transition-colors group-hover:text-cyan-300"
+    >
+      {formatTelemetryClock(startedAt)}
+      {duration != null ? ` · ${formatTelemetryDuration(duration)}` : ""}
+    </span>
+  );
+}
 
 export const CATEGORY_ICONS: Partial<Record<RunStepCategory, typeof Database>> = {
   sql: Database,
@@ -165,6 +191,7 @@ const LegacyStepRow = memo(function LegacyStepRow({ step }: { step: RunStep }) {
               </span>
             )}
             <span className="ml-auto flex flex-none items-center gap-2">
+              <ToolTelemetryTime step={step} />
               {duration && (
                 <span className="text-[10px] tabular-nums text-[var(--color-text-dim)]">
                   {duration}

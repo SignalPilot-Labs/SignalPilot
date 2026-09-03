@@ -1,4 +1,5 @@
 import type { SetStateAction } from "jotai";
+import { isNotebookSessionAuthError } from "~/lib/api/client";
 import { type CellActions, getNotebook } from "@/core/cells/cells";
 import { applyTransactionChanges } from "@/core/cells/document-changes";
 import { AUTOCOMPLETER } from "@/core/codemirror/completion/Autocompleter";
@@ -231,7 +232,10 @@ export function createMessageHandler(
         );
         return;
       case "alert":
-        if (msg.data.title === "Reconnected") {
+        if (
+          msg.data.title === "Reconnected" ||
+          isNotebookSessionAuthError(msg.data.description)
+        ) {
           return;
         }
         toast({
@@ -243,7 +247,10 @@ export function createMessageHandler(
         });
         return;
       case "banner":
-        if (msg.data.title === "Reconnected") {
+        if (
+          msg.data.title === "Reconnected" ||
+          isNotebookSessionAuthError(msg.data.description)
+        ) {
           return;
         }
         actions.addBanner(msg.data);

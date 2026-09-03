@@ -3,7 +3,10 @@
 import { Waypoints } from "lucide-react";
 import { memo, useContext } from "react";
 import { ChatUiContext } from "~/components/chat/chat-ui-context";
-import { StatusDot } from "~/components/chat/run-timeline/step-row";
+import {
+  StatusDot,
+  ToolTelemetryTime,
+} from "~/components/chat/run-timeline/step-row";
 import type { RunStep } from "~/lib/chat-run-steps";
 import "./tool-cards.css";
 // Registers every card definition (side effect) before the first resolve.
@@ -72,31 +75,37 @@ export const ToolCard = memo(function ToolCard({
         <StatusDot status={step.status} />
         <div className="min-w-0 flex-1 pb-1">
           {density === "compact" ? (
-            <div className="pt-px">
+            <div className="flex items-center gap-2 pt-px">
               <ToolChip step={step} def={def} onClick={toggle} />
+              <ToolTelemetryTime step={step} />
             </div>
           ) : (
-            <CardFrame
-              Icon={def.Icon}
-              accent={def.accent}
-              summary={summary}
-              step={step}
-              running={running}
-              failed={failed}
-              open={open}
-              onToggle={toggle}
-              testId={`chat-tool-card-${def.kind}`}
-            >
-              {running ? (
-                <def.Running {...context} />
-              ) : (
-                <>
-                  <def.Expanded {...context} />
-                  {failed && <ErrorBanner message={errorMessage} />}
-                  {showRaw && <RawResultTab result={step.result} />}
-                </>
-              )}
-            </CardFrame>
+            <>
+              <CardFrame
+                Icon={def.Icon}
+                accent={def.accent}
+                summary={summary}
+                step={step}
+                running={running}
+                failed={failed}
+                open={open}
+                onToggle={toggle}
+                testId={`chat-tool-card-${def.kind}`}
+              >
+                {running ? (
+                  <def.Running {...context} />
+                ) : (
+                  <>
+                    <def.Expanded {...context} />
+                    {failed && <ErrorBanner message={errorMessage} />}
+                    {showRaw && <RawResultTab result={step.result} />}
+                  </>
+                )}
+              </CardFrame>
+              <div className="mt-1 flex justify-end pr-1">
+                <ToolTelemetryTime step={step} />
+              </div>
+            </>
           )}
           {step.sources.length > 0 && (
             <div className="mt-1.5 flex flex-wrap gap-1.5">

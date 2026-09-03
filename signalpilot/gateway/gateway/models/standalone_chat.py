@@ -69,6 +69,8 @@ class StandaloneChatProject(BaseModel):
     default_branch: str
     ready: bool
     readiness_message: str
+    connection_type: str | None = None
+    registered: bool = False
 
 
 class ChatBootstrapResponse(BaseModel):
@@ -207,6 +209,7 @@ class ChatRunInfo(BaseModel):
     terminal_at: datetime | None = None
     last_event_sequence: int
     runtime_archive_available: bool = False
+    usage: dict[str, int] | None = None
 
 
 class StandaloneMessageInfo(BaseModel):

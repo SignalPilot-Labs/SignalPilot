@@ -1,4 +1,5 @@
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
+import { isNotebookSessionAuthError } from "~/lib/api/client";
 import { useEffect, useRef } from "react";
 import { useErrorBoundary } from "react-error-boundary";
 import { toast } from "@/components/ui/use-toast";
@@ -347,7 +348,10 @@ export function useSpKernelConnection(opts: {
         return;
       case "alert":
         // Always suppress "Reconnected" alerts — not useful in project context
-        if (msg.data.title === "Reconnected") {
+        if (
+          msg.data.title === "Reconnected" ||
+          isNotebookSessionAuthError(msg.data.description)
+        ) {
           return;
         }
         toast({
@@ -359,7 +363,10 @@ export function useSpKernelConnection(opts: {
         });
         return;
       case "banner":
-        if (msg.data.title === "Reconnected") {
+        if (
+          msg.data.title === "Reconnected" ||
+          isNotebookSessionAuthError(msg.data.description)
+        ) {
           return;
         }
         addBanner(msg.data);

@@ -45,10 +45,27 @@ export class RuntimeManager {
     // resolve against the last path SEGMENT's parent, so a session base of
     // ".../notebook/{sid}" (no slash) would silently drop the session id
     // and 404 every virtual file.
-    const url = this.config.url.endsWith("/")
-      ? this.config.url
-      : `${this.config.url}/`;
-    return new URL(url);
+    // Parse before normalizing: appending "/" to a raw string that carries
+    // a query string (".../notebook/{sid}?kiosk=true") corrupts the query
+    // and leaves the path without its trailing slash.
+    const url = new URL(this.config.url);
+    if (!url.pathname.endsWith("/")) {
+      url.pathname = `${url.pathname}/`;
+    }
+    return url;
+  }
+
+  /**
+   * Base for REST calls against the runtime: origin and path only. Query
+   * params on the configured URL (such as the kiosk flag) belong to the
+   * websocket; joined onto an HTTP path they produce a URL no router
+   * matches.
+   */
+  get httpBaseURL(): URL {
+    const url = this.httpURL;
+    url.search = "";
+    url.hash = "";
+    return url;
   }
 
   get isSameOrigin(): boolean {

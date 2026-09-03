@@ -67,9 +67,7 @@ async function getBaseUrlAndHeaders(): Promise<{
   // Fallback: RuntimeManager (standalone mode / after full init)
   const rm = getRuntimeManager();
   await rm.waitForHealthy();
-  const url = rm.httpURL;
-  url.search = "";
-  url.hash = "";
+  const url = rm.httpBaseURL;
   const baseUrl = Strings.withTrailingSlash(url.toString());
   const hdrs: Record<string, string> = {
     "Content-Type": "application/json",

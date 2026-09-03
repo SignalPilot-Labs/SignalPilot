@@ -30,14 +30,12 @@ import { RuntimeBootCard } from "~/components/chat/runtime-boot-card";
 import { ReplayControls } from "~/components/chat/replay-controls";
 import {
   deriveLiveStateFromBlocks,
-  extractRunPlan,
   extractRuntimeBoot,
   foldRunBlocks,
   foldRunSteps,
   shouldShowRuntimeBoot,
 } from "~/lib/chat-run-steps";
 import { LivePill } from "~/components/chat/live-pill";
-import { PlanTracker } from "~/components/chat/plan-tracker";
 import { useChatReplay } from "~/lib/chat-replay";
 import { useToast } from "~/components/ui/toast";
 import {
@@ -53,6 +51,69 @@ import {
   deriveArtifactCards,
   groupCardsByAnchor,
 } from "~/lib/chat-artifact-cards";
+import {
+  formatTelemetryClock,
+  formatTelemetryDuration,
+  formatTokenCount,
+  estimateMessageTokens,
+  parseChatTokenUsage,
+  totalChatTokens,
+} from "~/lib/chat-telemetry";
+import { useChatTelemetryContext } from "~/components/chat/chat-telemetry-context";
+
+function MessageTiming({
+  message,
+  previousMessageAt,
+  running,
+}: {
+  message: UiMessage;
+  previousMessageAt?: number;
+  running?: boolean;
+}) {
+  const telemetry = useChatTelemetryContext();
+  if (!telemetry.enabled) return null;
+  const recordedAt = message.created_at * 1_000;
+  const endAt = running ? telemetry.nowMs : recordedAt;
+  const duration =
+    message.role === "assistant" && previousMessageAt != null
+      ? Math.max(0, endAt - previousMessageAt * 1_000)
+      : null;
+  const exact = new Date(recordedAt).toLocaleString();
+  const estimatedTextTokens = estimateMessageTokens(message.content);
+  const usage = parseChatTokenUsage(message.metadata.token_usage);
+  const runTokens = totalChatTokens(usage);
+  const usageTitle = usage
+    ? [
+        `Exact SDK run usage: ${runTokens.toLocaleString("en-US")} tokens`,
+        `${(usage.input_tokens ?? 0).toLocaleString("en-US")} input`,
+        `${(usage.output_tokens ?? 0).toLocaleString("en-US")} output`,
+        `${(usage.cache_creation_input_tokens ?? 0).toLocaleString("en-US")} cache write`,
+        `${(usage.cache_read_input_tokens ?? 0).toLocaleString("en-US")} cache read`,
+      ].join(" · ")
+    : "Estimated visible-text tokens; exact usage is only available at run completion";
+  return (
+    <span
+      data-testid="chat-message-timing"
+      className="inline-flex flex-wrap items-center gap-1.5 font-mono text-[10px] tabular-nums text-[var(--color-text-dim)] opacity-60 transition-opacity group-hover:opacity-100"
+    >
+      <span
+        title={
+          duration == null
+            ? exact
+            : `${exact} · response ${formatTelemetryDuration(duration)}`
+        }
+      >
+        {formatTelemetryClock(recordedAt)}
+        {duration != null ? ` · ${formatTelemetryDuration(duration)}` : ""}
+      </span>
+      <span aria-hidden>·</span>
+      <span data-testid="chat-message-token-count" title={usageTitle}>
+        ~{formatTokenCount(estimatedTextTokens)} text
+        {usage ? ` · ${formatTokenCount(runTokens)} run tokens` : " tokens"}
+      </span>
+    </span>
+  );
+}
 
 function WorkTimeline({ runId }: { runId: string }) {
   const { events } = useChatUi();
@@ -62,10 +123,12 @@ function WorkTimeline({ runId }: { runId: string }) {
 
 function AssistantMessage({
   message,
+  previousMessageAt,
   onReplay,
   replayMode = false,
 }: {
   message: UiMessage;
+  previousMessageAt?: number;
   onReplay?: () => void;
   replayMode?: boolean;
 }) {
@@ -89,13 +152,6 @@ function AssistantMessage({
   // Present only on cold sandbox starts — warm follow-ups emit no boot events.
   const runtimeBoot = useMemo(
     () => (runId ? extractRuntimeBoot(events, runId) : null),
-    [events, runId],
-  );
-  // The agent's published plan, shown as a first-class card in the message
-  // flow — pinned to the top of the viewport while the run streams, folded
-  // into the transcript afterwards.
-  const runPlan = useMemo(
-    () => (runId ? extractRunPlan(events, runId) : null),
     [events, runId],
   );
   const steps = useMemo(
@@ -158,11 +214,6 @@ function AssistantMessage({
         <div className="min-w-0 flex-1">
           {shouldShowRuntimeBoot(runtimeBoot, running) && runtimeBoot && (
             <RuntimeBootCard boot={runtimeBoot} />
-          )}
-          {runPlan && (
-            <div className={running ? "sticky top-2 z-20 mb-3" : "mb-3"}>
-              <PlanTracker plan={runPlan} running={running} />
-            </div>
           )}
           {(running ||
             blocks.length > 0 ||
@@ -243,6 +294,11 @@ function AssistantMessage({
                 </button>
               )}
               {running && <LivePill live={live} />}
+              <MessageTiming
+                message={message}
+                previousMessageAt={previousMessageAt}
+                running={running}
+              />
               {running && runId && (
                 <span className="relative inline-flex rounded-lg">
                   <span
@@ -310,6 +366,9 @@ function UserMessage({ message }: { message: UiMessage }) {
             Not delivered · The run finished before pickup
           </div>
         )}
+      </div>
+      <div className="mt-1 flex justify-end pr-1">
+        <MessageTiming message={message} />
       </div>
     </article>
   );
@@ -402,7 +461,13 @@ function AssistantMessageReplay({
   );
 }
 
-function ReplayableAssistantMessage({ message }: { message: UiMessage }) {
+function ReplayableAssistantMessage({
+  message,
+  previousMessageAt,
+}: {
+  message: UiMessage;
+  previousMessageAt?: number;
+}) {
   const { events } = useChatUi();
   const [replaying, setReplaying] = useState(false);
   const runId = messageRunId(message);
@@ -421,15 +486,25 @@ function ReplayableAssistantMessage({ message }: { message: UiMessage }) {
   return (
     <AssistantMessage
       message={message}
+      previousMessageAt={previousMessageAt}
       onReplay={canReplay ? () => setReplaying(true) : undefined}
     />
   );
 }
 
-export function ChatMessage({ message }: { message: UiMessage }) {
+export function ChatMessage({
+  message,
+  previousMessageAt,
+}: {
+  message: UiMessage;
+  previousMessageAt?: number;
+}) {
   return message.role === "user" ? (
     <UserMessage message={message} />
   ) : (
-    <ReplayableAssistantMessage message={message} />
+    <ReplayableAssistantMessage
+      message={message}
+      previousMessageAt={previousMessageAt}
+    />
   );
 }

@@ -10,7 +10,8 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
-import type { RunLiveState } from "~/lib/chat-run-steps";
+import type { RunLiveState, RunPlan } from "~/lib/chat-run-steps";
+import { PlanTracker } from "~/components/chat/plan-tracker";
 import "./chat-live.css";
 
 const MAX_TEXTAREA_PX = 240;
@@ -46,6 +47,8 @@ export function StandaloneChatComposer({
   settingsOpen = false,
   liveState = "idle",
   liveLabel,
+  plan = null,
+  planRunning = false,
 }: {
   value: string;
   onValueChange: (value: string) => void;
@@ -68,6 +71,10 @@ export function StandaloneChatComposer({
   liveState?: RunLiveState;
   /** The running tool's label, shown in the hint while `liveState` is tool. */
   liveLabel?: string;
+  /** The current run's plan, docked above the input. Null renders no dock. */
+  plan?: RunPlan | null;
+  /** The plan's run is streaming: the dock opens by default. */
+  planRunning?: boolean;
 }) {
   const canSubmit = Boolean(value.trim()) && !submitDisabled;
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -169,10 +176,21 @@ export function StandaloneChatComposer({
       data-testid="standalone-chat-composer"
       className="mx-auto w-full max-w-3xl px-6 pb-6 pt-3"
     >
+      {/* Plan dock: the run's TodoWrite list, fused to the top of the input
+          so the two read as one control. It grows upward as items land. */}
+      {plan && (
+        <div data-testid="chat-composer-plan-dock" className="relative z-10">
+          <PlanTracker plan={plan} running={planRunning} />
+        </div>
+      )}
       {/* Single field: textarea on top, one borderless control bar beneath.
           A lifted surface (#1f1f22) separates it from the near-black page, so
           the border can stay soft — legibility over harsh outlines. */}
-      <div className="relative flex flex-col rounded-2xl border border-[var(--color-border)] bg-[#1f1f22] shadow-2xl shadow-black/40 transition-colors focus-within:border-[var(--color-border-hover)]">
+      <div
+        className={`relative flex flex-col border border-[var(--color-border)] bg-[#1f1f22] shadow-2xl shadow-black/40 transition-colors focus-within:border-[var(--color-border-hover)] ${
+          plan ? "rounded-b-2xl rounded-t-none" : "rounded-2xl"
+        }`}
+      >
         {/* @-mention popover */}
         {mentionMatches.length > 0 && (
           <div className="absolute bottom-full left-4 z-30 mb-2 w-80 overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-card)] shadow-xl">

@@ -3,7 +3,13 @@
 // Composer block for the standalone data chat: input, project picker, and
 // the gear that opens the right-side Chat settings panel.
 
-import { useContext, type Dispatch, type SetStateAction } from "react";
+import {
+  useContext,
+  useMemo,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
+import { selectComposerPlan } from "~/lib/chat-composer-plan";
 import type {
   StandaloneChatBootstrap,
   StandaloneChatEvent,
@@ -64,6 +70,12 @@ export function ChatComposerPanel({
     currentRun?.id,
     currentRun?.status ?? "completed",
   );
+  // The current run's plan, docked above the input. Derived from the same
+  // events the transcript folds, so a refresh rehydrates it for free.
+  const composerPlan = useMemo(
+    () => selectComposerPlan(events, currentRun),
+    [events, currentRun],
+  );
   return (
     <StandaloneChatComposer
       value={draft}
@@ -98,6 +110,8 @@ export function ChatComposerPanel({
       settingsOpen={settingsOpen}
       liveState={live.state}
       liveLabel={live.label}
+      plan={composerPlan?.plan ?? null}
+      planRunning={composerPlan?.running ?? false}
     />
   );
 }

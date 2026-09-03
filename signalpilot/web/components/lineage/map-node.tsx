@@ -99,10 +99,10 @@ function MapNodeInner({ data }: NodeProps<MapNodeData>) {
               </span>
               <span aria-hidden="true">·</span>
               <span className="truncate">{model.schema || model.materialized}</span>
-              {model.columns.length > 0 && (
+              {model.columnCount > 0 && (
                 <>
                   <span aria-hidden="true">·</span>
-                  <span>{model.columns.length} col</span>
+                  <span>{model.columnCount} col</span>
                 </>
               )}
             </div>

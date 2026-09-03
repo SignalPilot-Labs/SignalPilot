@@ -120,6 +120,28 @@ export async function getGatewayAuthToken(): Promise<string | null> {
   return header.startsWith("Bearer ") ? header.slice(7) : header;
 }
 
+/** A non-2xx gateway reply. `status` lets callers branch on 404/409/422. */
+export class ApiRequestError extends Error {
+  status: number;
+  body: string;
+  constructor(status: number, body: string) {
+    super(`${status}: ${body}`);
+    this.name = "ApiRequestError";
+    this.status = status;
+    this.body = body;
+  }
+}
+
+/** HTTP status of a thrown request error, or null when it is not one. */
+export function requestErrorStatus(err: unknown): number | null {
+  if (err instanceof ApiRequestError) return err.status;
+  if (err instanceof Error) {
+    const m = /^(\d{3}):/.exec(err.message);
+    if (m) return Number(m[1]);
+  }
+  return null;
+}
+
 export async function request<T>(
   path: string,
   options?: RequestInit,
@@ -151,7 +173,7 @@ export async function request<T>(
   }
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`${res.status}: ${body}`);
+    throw new ApiRequestError(res.status, body);
   }
   if (res.status === 204) return undefined as T;
   return res.json();

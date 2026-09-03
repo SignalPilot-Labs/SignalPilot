@@ -33,8 +33,9 @@ from ..runtime.mode import is_cloud_mode
 from ..sandbox_runtime import SandboxSpec, get_sandbox_runtime
 from ..workspace_store import workspace_object_storage
 from ..workspace_store.dbt_detect import resolve_dbt_project_dir_detailed
-from ..workspace_store.model import dbt_graph_key, dbt_manifest_key
+from ..workspace_store.model import dbt_graph_key, dbt_manifest_key, dbt_sql_key
 from ..workspace_store.store import RevisionNotFound, WorkspaceStore
+from .sql_slices import extract_sql_map
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +81,14 @@ def classify_failure(output: str) -> str | None:
     return None
 
 
+def _distill_column(name: str, col: dict) -> dict:
+    slim = {"name": name, "description": (col.get("description") or "")[:200]}
+    # data_type is only present when the project declares it in schema yml.
+    if col.get("data_type") is not None:
+        slim["data_type"] = col["data_type"]
+    return slim
+
+
 def _distill_node(node: dict) -> dict:
     """One manifest node with only the fields the lineage UI reads."""
     config = node.get("config") or {}
@@ -95,8 +104,7 @@ def _distill_node(node: dict) -> dict:
         "tags": node.get("tags") or [],
         "config": {"materialized": config.get("materialized")},
         "columns": {
-            name: {"name": name, "description": (col.get("description") or "")[:200]}
-            for name, col in (node.get("columns") or {}).items()
+            name: _distill_column(name, col) for name, col in (node.get("columns") or {}).items()
         },
     }
     if node.get("test_metadata") is not None:
@@ -187,12 +195,19 @@ async def run_compile(
             graph = distill_graph(manifest)
             m_key = dbt_manifest_key(org_id, project_id, branch, head)
             g_key = dbt_graph_key(org_id, project_id, branch, head)
+            s_key = dbt_sql_key(org_id, project_id, branch, head)
             manifest_gz = await asyncio.to_thread(gzip.compress, manifest_bytes)
             graph_gz = await asyncio.to_thread(
                 gzip.compress, json.dumps(graph, separators=(",", ":")).encode()
             )
             await storage.put_bytes(m_key, manifest_gz, content_type="application/gzip")
             await storage.put_bytes(g_key, graph_gz, content_type="application/gzip")
+            # Raw/compiled SQL per non-test node so the UI never reads the manifest.
+            sql_map = extract_sql_map(manifest.get("nodes") or {})
+            sql_gz = await asyncio.to_thread(
+                gzip.compress, json.dumps(sql_map, separators=(",", ":")).encode()
+            )
+            await storage.put_bytes(s_key, sql_gz, content_type="application/gzip")
 
             await _finish(
                 session,
@@ -200,6 +215,7 @@ async def run_compile(
                 status="success",
                 manifest_key=m_key,
                 graph_key=g_key,
+                sql_key=s_key,
                 manifest_bytes=len(manifest_bytes),
                 node_count=len(graph["nodes"]),
                 dbt_version=dbt_version or graph["metadata"].get("dbt_version"),

@@ -16,6 +16,9 @@ import {
   type UiMessage,
 } from "~/components/chat/standalone-data-chat";
 import { ArtifactsPanel } from "~/components/chat/artifacts-panel";
+import { StandaloneChatComposer } from "~/components/chat/standalone-chat-composer";
+import { useDockScrollCompensation } from "~/components/chat/use-dock-scroll-compensation";
+import { selectComposerPlan } from "~/lib/chat-composer-plan";
 import { hasArtifactsContent } from "~/lib/chat-artifacts";
 import { pickDefaultNotebook } from "~/lib/chat-live-notebook";
 import {
@@ -228,6 +231,24 @@ export function StandaloneChatTestHarness() {
     [elapsed, status, withFollowUp],
   );
 
+  // The docked composer mirrors the chat page: the plan of the current run
+  // (the follow-up turn under ?followup=1, which has no plan yet) sits above
+  // a real, inert input so the dock stays e2e-verifiable at /chats/test.
+  const currentRun = useMemo(
+    () =>
+      withFollowUp
+        ? { id: FIXTURE_FOLLOW_UP_RUN_ID, status: "running" as const }
+        : { id: FIXTURE_RUN_ID, status },
+    [status, withFollowUp],
+  );
+  const composerPlan = useMemo(
+    () => selectComposerPlan(events, currentRun),
+    [events, currentRun],
+  );
+  const [draft, setDraft] = useState("");
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const composerDockRef = useDockScrollCompensation(viewportRef);
+
   const progress = Math.round((elapsed / FIXTURE_TOTAL_MS) * 100);
   return (
     <div
@@ -331,34 +352,53 @@ export function StandaloneChatTestHarness() {
         </button>
       </header>
       <ConnectorsProvider api={connectorsApi} fixture currentUserId={FIXTURE_ME}>
+      {/* The provider wraps the panels too: the artifacts panel joins query
+          descriptions from the same run events. */}
+      <ChatUiContext.Provider
+        value={{
+          events,
+          conversationId: "conversation-fixture-1",
+          files: conversationFiles,
+          openArtifact,
+          getFileObjectUrl,
+          getToolResultRows,
+          // Frozen replay clock, so relative timestamps are honest on
+          // every frame instead of measuring from the real wall clock.
+          nowMs: fixtureNowMs(elapsed),
+          openChatSettings: settingsPanel.openPanel,
+          onStop: async () => undefined,
+          onRetry: async () => undefined,
+          onOpenDashboardPreview: () => undefined,
+        }}
+      >
       <div className="relative flex min-h-0 flex-1 overflow-hidden">
         <div
+          ref={viewportRef}
           className="min-h-0 min-w-0 flex-1 overflow-y-auto"
           data-testid="chat-test-viewport"
         >
-          <ChatUiContext.Provider
-            value={{
-              events,
-              conversationId: "conversation-fixture-1",
-              files: conversationFiles,
-              openArtifact,
-              getFileObjectUrl,
-              getToolResultRows,
-              // Frozen replay clock, so relative timestamps are honest on
-              // every frame instead of measuring from the real wall clock.
-              nowMs: fixtureNowMs(elapsed),
-              openChatSettings: settingsPanel.openPanel,
-              onStop: async () => undefined,
-              onRetry: async () => undefined,
-              onOpenDashboardPreview: () => undefined,
-            }}
+          <div className="py-6" data-testid="standalone-chat-messages">
+            {messages.map((message) => (
+              <ChatMessage key={message.id} message={message} />
+            ))}
+          </div>
+          <div
+            ref={composerDockRef}
+            data-testid="chat-composer-dock"
+            className="sticky bottom-0 isolate z-30 bg-gradient-to-t from-[var(--color-bg)] via-[var(--color-bg)] to-transparent pt-3"
           >
-            <div className="py-6" data-testid="standalone-chat-messages">
-              {messages.map((message) => (
-                <ChatMessage key={message.id} message={message} />
-              ))}
-            </div>
-          </ChatUiContext.Provider>
+            <StandaloneChatComposer
+              value={draft}
+              onValueChange={setDraft}
+              onSubmit={() => undefined}
+              submitDisabled
+              disabledReason="Fixture replay: the composer is inert"
+              running={currentRun.status === "running"}
+              placeholder="Ask anything about this project…"
+              plan={composerPlan?.plan ?? null}
+              planRunning={composerPlan?.running ?? false}
+            />
+          </div>
         </div>
         {hasArtifactsContent(
           conversationNotebooks,
@@ -432,6 +472,7 @@ export function StandaloneChatTestHarness() {
           />
         )}
       </div>
+      </ChatUiContext.Provider>
       </ConnectorsProvider>
     </div>
   );

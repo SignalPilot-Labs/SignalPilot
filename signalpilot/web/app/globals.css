@@ -1017,8 +1017,8 @@ kbd {
 /* ── Plan tracker (components/chat/plan-tracker.tsx) ─────────────────────
    The agent's plan is the one element in the transcript that is NOT a step:
    it pins to the top while the run streams and summarises everything below.
-   It therefore gets its own surface — a success-tinted, elevated panel with
-   a left rail — so it never reads as one more step-group card, and its
+   It therefore gets its own surface — a success-tinted, elevated panel — so
+   it never reads as one more step-group card, and its
    header hover is tinted rather than the neutral --color-bg-hover the
    step cards use. */
 .chat-plan {
@@ -1033,18 +1033,30 @@ kbd {
     0 12px 32px -14px rgba(0, 255, 136, 0.28),
     0 12px 28px -12px rgba(0, 0, 0, 0.7);
 }
-.chat-plan::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 3px;
-  background: var(--color-success);
-  opacity: 0.85;
-}
 .chat-plan__header { transition: background-color 0.15s ease; }
 .chat-plan__header:hover { background: rgba(0, 255, 136, 0.06); }
 .chat-plan__eyebrow { color: rgba(0, 255, 136, 0.72); }
 .chat-plan__segment-pending { background: rgba(255, 255, 255, 0.14); }
 .chat-plan__body { border-top: 1px solid rgba(0, 255, 136, 0.14); }
+
+/* ── Plan dock (composer) ─────────────────────────────────────────────── */
+/* The plan fuses to the top of the composer input: square bottom corners,
+   no bottom border (the input's top border is the divider), and a stronger
+   surface than the transcript so it reads as part of the input control. */
+.chat-plan--docked {
+  border-radius: 1rem 1rem 0 0;
+  border-bottom: 0;
+  border-color: rgba(0, 255, 136, 0.28);
+  background:
+    linear-gradient(180deg, rgba(0, 255, 136, 0.1), rgba(0, 255, 136, 0.04)),
+    #232328;
+  box-shadow: 0 -12px 28px -16px rgba(0, 255, 136, 0.35);
+}
+.chat-plan--docked .chat-plan__body {
+  border-top: 0;
+  border-bottom: 1px solid rgba(0, 255, 136, 0.14);
+}
+.chat-plan--docked[data-open="true"] .chat-plan__header {
+  background: rgba(0, 255, 136, 0.04);
+}
+.chat-plan--docked .chat-plan__header:hover { background: rgba(0, 255, 136, 0.08); }

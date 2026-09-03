@@ -1101,6 +1101,55 @@ async def test_one_nonterminal_run_and_atomic_initial_state(db_session):
 
 
 @pytest.mark.asyncio
+async def test_conversation_detail_exposes_sanitized_token_usage_on_run_and_agent_message(
+    db_session,
+):
+    conversation_id, run = await _conversation_and_run(db_session)
+    run.usage_json = {
+        "input_tokens": 120,
+        "output_tokens": 30,
+        "cache_creation_input_tokens": 40,
+        "cache_read_input_tokens": 500,
+        "ignored_provider_field": "not exposed",
+    }
+    conversation = await db_session.get(GatewayChatConversation, conversation_id)
+    assert conversation is not None
+    conversation.message_count = 2
+    db_session.add(
+        GatewayChatMessage(
+            id="assistant-with-usage",
+            org_id="org-a",
+            user_id="user-a",
+            project_id=run.project_id,
+            conversation_id=conversation_id,
+            role="assistant",
+            content="The analysis is complete.",
+            metadata_json={"run_id": run.id, "status": "completed"},
+            sequence=2,
+            created_at=2.0,
+        )
+    )
+    await db_session.commit()
+
+    detail = await chat_store.get_conversation_detail(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        conversation_id=conversation_id,
+    )
+    assert detail is not None and detail.current_run is not None
+    expected = {
+        "input_tokens": 120,
+        "output_tokens": 30,
+        "cache_creation_input_tokens": 40,
+        "cache_read_input_tokens": 500,
+    }
+    assert detail.current_run.usage == expected
+    assert detail.messages[-1].metadata["token_usage"] == expected
+    assert "ignored_provider_field" not in detail.messages[-1].metadata["token_usage"]
+
+
+@pytest.mark.asyncio
 async def test_running_run_steering_is_durable_and_marked_picked_up(db_session):
     conversation_id, run = await _conversation_and_run(db_session)
     assert await chat_store.claim_runs(

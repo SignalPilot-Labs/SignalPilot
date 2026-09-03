@@ -437,7 +437,41 @@ export interface DbtMapResponse {
   status: "none" | "queued" | "running" | "success" | "failed";
   map: DbtMapInfo | null;
   // A manifest-shaped subset: nodes/sources records + parent_map/child_map.
+  // `graph=skeleton` drops test nodes and columns (column_count + inline tests).
   graph: Record<string, unknown> | null;
+}
+
+export interface DbtMapColumn {
+  name: string;
+  description?: string | null;
+  data_type?: string | null;
+}
+
+/** GET .../dbt-map/columns?nodes=a,b (max 50 ids per call). */
+export interface DbtMapColumnsResponse {
+  columns: Record<string, DbtMapColumn[]>;
+}
+
+/** GET .../dbt-map/model/{ref}/sql: a model's raw and compiled SQL. */
+export interface DbtModelSqlResponse {
+  unique_id: string;
+  name: string;
+  path: string | null;
+  original_file_path: string | null;
+  language: "sql" | "python";
+  raw_sql: string | null;
+  compiled_sql: string | null;
+  source: "artifact" | "manifest";
+  truncated?: boolean;
+}
+
+/** GET .../dbt-map/model/{ref}: the focused model plus its lineage cone. */
+export interface DbtMapConeResponse {
+  status: DbtMapResponse["status"];
+  map: DbtMapInfo | null;
+  model: Record<string, unknown> | null;
+  graph: Record<string, unknown> | null;
+  cone: { upstream: string[]; downstream: string[] } | null;
 }
 
 export interface GitCredentials {

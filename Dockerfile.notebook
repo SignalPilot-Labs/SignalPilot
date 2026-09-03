@@ -71,7 +71,6 @@ ENV SP_GATEWAY_URL=""
 ENV SP_API_KEY=""
 ENV SP_LOG_LEVEL="10"
 ENV SP_AGENT_PLUGIN_PATH="/opt/signalpilot-plugin"
-ENV SIGNALPILOT_PLUGIN_VERSION="1.3.0"
 
 # Fallback for a bare `docker run` of this image: auth is always on, with a
 # self-provisioned token file (see _server/local_token.py). In a Vercel

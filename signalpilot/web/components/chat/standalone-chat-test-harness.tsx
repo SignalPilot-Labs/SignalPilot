@@ -40,6 +40,7 @@ import { createFixtureConnectorsApi } from "~/lib/mcp-connectors-fixture-client"
 import { FIXTURE_ME } from "~/lib/mcp-connectors-fixture";
 import { connectorSignInFixtureEvents } from "~/lib/chat-connector-signin-fixture";
 import type { StandaloneChatModel } from "~/lib/api";
+import type { StandaloneChatEffort } from "~/lib/api";
 import {
   FIXTURE_QUERY_RESULT_ID,
   fixtureQueryResultPage,
@@ -47,6 +48,9 @@ import {
 
 const SPEEDS = [1, 2, 4] as const;
 const TICK_MS = 50;
+/** Second turn for ?followup=1: a run with no events yet. */
+const FIXTURE_FOLLOW_UP_RUN_ID = "run-fixture-0002";
+const FIXTURE_FOLLOW_UP_PROMPT = "Project Q4 from these growth rates.";
 
 /**
  * Replays the scripted fixture run through the real chat message components,
@@ -64,6 +68,9 @@ export function StandaloneChatTestHarness() {
   // ?settings=1 opens the Chat settings panel; both run on fixture connectors.
   const withSignIn = searchParams.get("signin") === "1";
   const settingsInitiallyOpen = searchParams.get("settings") === "1";
+  // ?followup=1 appends a second turn whose run is still queued, so the
+  // first message's unresolved references must stay "missing".
+  const withFollowUp = searchParams.get("followup") === "1";
   const connectorsApi = useMemo(
     () => createFixtureConnectorsApi({ latencyMs: 120 }),
     [],
@@ -78,6 +85,8 @@ export function StandaloneChatTestHarness() {
   const [speed, setSpeed] = useState<(typeof SPEEDS)[number]>(1);
   const [selectedModel, setSelectedModel] =
     useState<StandaloneChatModel>("claude-opus-5");
+  const [selectedEffort, setSelectedEffort] =
+    useState<StandaloneChatEffort>("medium");
   const speedRef = useRef(speed);
   speedRef.current = speed;
 
@@ -193,8 +202,30 @@ export function StandaloneChatTestHarness() {
         runId: FIXTURE_RUN_ID,
         runStatus: status,
       },
+      ...(withFollowUp
+        ? ([
+            {
+              id: "fixture-user-2",
+              role: "user",
+              content: FIXTURE_FOLLOW_UP_PROMPT,
+              sequence: 3,
+              created_at: 0,
+              metadata: {},
+            },
+            {
+              id: `run-${FIXTURE_FOLLOW_UP_RUN_ID}`,
+              role: "assistant",
+              content: "",
+              sequence: 4,
+              created_at: 0,
+              metadata: { run_id: FIXTURE_FOLLOW_UP_RUN_ID },
+              runId: FIXTURE_FOLLOW_UP_RUN_ID,
+              runStatus: "running",
+            },
+          ] satisfies UiMessage[])
+        : []),
     ],
-    [elapsed, status],
+    [elapsed, status, withFollowUp],
   );
 
   const progress = Math.round((elapsed / FIXTURE_TOTAL_MS) * 100);
@@ -310,10 +341,6 @@ export function StandaloneChatTestHarness() {
               events,
               conversationId: "conversation-fixture-1",
               files: conversationFiles,
-              runningRunId:
-                status === "queued" || status === "running"
-                  ? FIXTURE_RUN_ID
-                  : null,
               openArtifact,
               getFileObjectUrl,
               getToolResultRows,
@@ -365,6 +392,15 @@ export function StandaloneChatTestHarness() {
               ],
               disabled: false,
               onChange: setSelectedModel,
+              effort: selectedEffort,
+              effortOptions: [
+                { id: "low", label: "Low" },
+                { id: "medium", label: "Medium" },
+                { id: "high", label: "High" },
+                { id: "xhigh", label: "Extra high" },
+                { id: "max", label: "Max" },
+              ],
+              onEffortChange: setSelectedEffort,
             }}
             manageHref="/settings/connectors?fixture=1"
           />

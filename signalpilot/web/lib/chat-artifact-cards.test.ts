@@ -8,8 +8,8 @@ import {
   middleTruncate,
   pathsMatch,
   primaryActionLabel,
+  groupCardsByAnchor,
   relativeTimeLabel,
-  suppressReferencedCards,
 } from "./chat-artifact-cards";
 
 const RUN = "run-1";
@@ -435,44 +435,133 @@ describe("files_changed touch source", () => {
   });
 });
 
-describe("suppressReferencedCards", () => {
-  const ready = (path: string) =>
-    deriveArtifactCards([writeEvent(path)], [file(path)], RUN, true)[0];
-  const pending = (path: string) =>
-    deriveArtifactCards([writeEvent(path)], [], RUN, true)[0];
+describe("anchoring", () => {
+  function toolStarted(
+    tool: string,
+    toolCallId: string,
+    sequence: number,
+  ): StandaloneChatEvent {
+    return {
+      run_id: RUN,
+      sequence,
+      type: "tool_started",
+      payload: { tool, tool_call_id: toolCallId, input: { cells: [] } },
+      created_at: "2026-01-15T17:30:10.000Z",
+    } as StandaloneChatEvent;
+  }
+  function captured(
+    path: string,
+    sequence: number,
+    toolCallId: string | null,
+  ): StandaloneChatEvent {
+    return {
+      run_id: RUN,
+      sequence,
+      type: "files_changed",
+      payload: {
+        changed: 1,
+        files: [{ path, filename: path.split("/").pop(), kind: "image" }],
+        ...(toolCallId ? { tool_call_id: toolCallId } : {}),
+        origin: "runtime",
+      },
+      created_at: "2026-01-15T17:30:20.000Z",
+    } as StandaloneChatEvent;
+  }
 
-  it("drops cards the message body references inline", () => {
-    const cards = [
-      ready("artifacts/revenue.png"),
-      ready("artifacts/rows.csv"),
-      ready("exports/report.html"),
-    ];
-    const kept = suppressReferencedCards(
-      cards,
-      "![Revenue](artifacts/revenue.png)\n\n[rows](rows.csv)",
+  it("anchors a Write card at its own tool_started sequence", () => {
+    const cards = deriveArtifactCards(
+      [writeEvent("exports/report.html", { sequence: 5 })],
+      [file("exports/report.html")],
+      RUN,
+      true,
     );
-    expect(kept.map((card) => card.path)).toEqual(["exports/report.html"]);
+    expect(cards[0].anchorSequence).toBe(5);
   });
 
-  it("keeps every card when nothing is referenced", () => {
-    const cards = [ready("artifacts/revenue.png")];
-    expect(suppressReferencedCards(cards, "plain text")).toBe(cards);
-    expect(suppressReferencedCards(cards, "")).toBe(cards);
-  });
-
-  it("matches pending cards on their path", () => {
-    const cards = [pending("artifacts/revenue.png"), pending("exports/x.md")];
-    const kept = suppressReferencedCards(
-      cards,
-      "![Revenue](/tmp/signalpilot-chat-runs/run-1/artifacts/revenue.png)",
+  it("joins a files_changed event to the step with the same tool_call_id", () => {
+    const cards = deriveArtifactCards(
+      [
+        toolStarted("mcp__standalone-chat__run_cells", "call-9", 12),
+        captured("artifacts/chart.png", 30, "call-9"),
+        captured("artifacts/rows.csv", 31, "call-9"),
+      ],
+      [file("artifacts/chart.png"), file("artifacts/rows.csv")],
+      RUN,
+      true,
     );
-    expect(kept.map((card) => card.path)).toEqual(["exports/x.md"]);
+    expect(cards.map((card) => card.anchorSequence)).toEqual([12, 12]);
+    // Order still follows the capture sequence, not the anchor.
+    expect(cards.map((card) => card.sequence)).toEqual([30, 31]);
   });
 
-  it("ignores external references", () => {
-    const cards = [ready("artifacts/revenue.png")];
-    expect(
-      suppressReferencedCards(cards, "![x](https://cdn/revenue.png)"),
-    ).toHaveLength(1);
+  it("leaves a card unanchored when nothing claims it", () => {
+    const cards = deriveArtifactCards(
+      [
+        toolStarted("Bash", "call-1", 3),
+        captured("artifacts/sweep.txt", 40, null),
+        captured("artifacts/orphan.txt", 41, "call-unknown"),
+      ],
+      [file("artifacts/sweep.txt"), file("artifacts/orphan.txt"), file("notes.md")],
+      RUN,
+      false,
+    );
+    expect(cards.map((card) => card.anchorSequence)).toEqual([null, null, null]);
+  });
+
+  it("keeps a pending capture card anchored to its step", () => {
+    const cards = deriveArtifactCards(
+      [toolStarted("Write", "call-2", 7), captured("artifacts/x.png", 8, "call-2")],
+      [],
+      RUN,
+      true,
+    );
+    expect(cards[0]).toMatchObject({ state: "pending", anchorSequence: 7 });
+  });
+
+  it("groups cards by rendered step and trails the rest", () => {
+    const cards = deriveArtifactCards(
+      [
+        toolStarted("mcp__standalone-chat__run_cells", "call-9", 12),
+        writeEvent("exports/report.html", { sequence: 20 }),
+        captured("artifacts/chart.png", 30, "call-9"),
+        captured("artifacts/sweep.txt", 40, null),
+        captured("artifacts/dropped.txt", 41, "call-gone"),
+      ],
+      [
+        file("artifacts/chart.png"),
+        file("exports/report.html"),
+        file("artifacts/sweep.txt"),
+        file("artifacts/dropped.txt"),
+        file("manifest-only.md"),
+      ],
+      RUN,
+      false,
+    );
+    // The timeline renders steps 12 and 20 only.
+    const grouped = groupCardsByAnchor(cards, new Set([12, 20]));
+    expect([...grouped.byStep.keys()].sort()).toEqual([12, 20]);
+    expect(grouped.byStep.get(12)?.map((card) => card.path)).toEqual([
+      "artifacts/chart.png",
+    ]);
+    expect(grouped.byStep.get(20)?.map((card) => card.path)).toEqual([
+      "exports/report.html",
+    ]);
+    expect(grouped.trailing.map((card) => card.path)).toEqual([
+      "artifacts/sweep.txt",
+      "artifacts/dropped.txt",
+      "manifest-only.md",
+    ]);
+  });
+
+  it("trails a card whose anchor step is not rendered", () => {
+    const cards = deriveArtifactCards(
+      [writeEvent("exports/report.html", { sequence: 5 })],
+      [file("exports/report.html")],
+      RUN,
+      false,
+    );
+    const grouped = groupCardsByAnchor(cards, new Set<number>());
+    expect(grouped.byStep.size).toBe(0);
+    expect(grouped.trailing).toHaveLength(1);
   });
 });

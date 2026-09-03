@@ -3,12 +3,6 @@ import type {
   ConversationFileKind,
   StandaloneChatEvent,
 } from "~/lib/api";
-import {
-  collectFileRefs,
-  pathMatchesRef,
-  resolveFileRef,
-  fileRefBasename,
-} from "~/lib/chat-file-refs";
 
 /**
  * Derives the inline artifact cards for one chat run.
@@ -46,6 +40,12 @@ export type ArtifactCardModel = {
   writeCount: number;
   /** Anchor order within the run (first write sequence; manifest-only last). */
   sequence: number;
+  /**
+   * Sequence of the tool_started event that produced the file, or null when
+   * nothing in the run claims it (run-end sweep, unmatched tool_call_id,
+   * manifest-only). The timeline places the card right after that step.
+   */
+  anchorSequence: number | null;
   /** ISO timestamp of the last observed change. */
   lastTouchedAt: string;
 };
@@ -104,6 +104,7 @@ export function guessKindFromPath(path: string): ConversationFileKind {
 type PathTouch = {
   path: string;
   firstSequence: number;
+  anchorSequence: number | null;
   count: number;
   lastAt: string;
 };
@@ -150,11 +151,25 @@ function collectTouches(
         (event.type === "tool_started" || event.type === "files_changed"),
     )
     .sort((a, b) => a.sequence - b.sequence);
+  // tool_call_id -> tool_started sequence: the join key from a capture
+  // event to the step that produced the file.
+  const stepSequenceByCallId = new Map<string, number>();
   for (const event of sorted) {
-    const paths =
-      event.type === "files_changed"
-        ? filesChangedTouchPaths(event)
-        : toolTouchPaths(event);
+    if (event.type !== "tool_started") continue;
+    const callId = text(event.payload.tool_call_id);
+    if (callId && !stepSequenceByCallId.has(callId)) {
+      stepSequenceByCallId.set(callId, event.sequence);
+    }
+  }
+  for (const event of sorted) {
+    const capture = event.type === "files_changed";
+    const paths = capture
+      ? filesChangedTouchPaths(event)
+      : toolTouchPaths(event);
+    const callId = capture ? text(event.payload.tool_call_id) : null;
+    const anchor = capture
+      ? (callId ? (stepSequenceByCallId.get(callId) ?? null) : null)
+      : event.sequence;
     for (const path of paths) {
       if (!isMirroredPath(path)) continue;
       const touches = [...byPath.values()];
@@ -165,10 +180,12 @@ function collectTouches(
       if (existing) {
         existing.count += 1;
         existing.lastAt = event.created_at;
+        if (existing.anchorSequence === null) existing.anchorSequence = anchor;
       } else {
         byPath.set(path, {
           path,
           firstSequence: event.sequence,
+          anchorSequence: anchor,
           count: 1,
           lastAt: event.created_at,
         });
@@ -217,6 +234,7 @@ export function deriveArtifactCards(
       updated: editedInPlace,
       writeCount: touch?.count ?? 0,
       sequence: touch?.firstSequence ?? Number.MAX_SAFE_INTEGER,
+      anchorSequence: touch?.anchorSequence ?? null,
       lastTouchedAt: lastAt,
     });
   }
@@ -233,6 +251,7 @@ export function deriveArtifactCards(
       updated: false,
       writeCount: touch.count,
       sequence: touch.firstSequence,
+      anchorSequence: touch.anchorSequence,
       lastTouchedAt: touch.lastAt,
     });
   }
@@ -245,40 +264,36 @@ export function deriveArtifactCards(
   });
 }
 
+export type AnchoredArtifactCards = {
+  /** Cards keyed by the sequence of the step that produced them. */
+  byStep: Map<number, ArtifactCardModel[]>;
+  /** Cards no rendered step claims; shown after the timeline. */
+  trailing: ArtifactCardModel[];
+};
+
 /**
- * Drop cards already covered by a richer surface in the same message —
- * the legacy published-artifact previews (table/chart/report). One file must
- * never render twice, back to back, with different verbs (design review #5).
- * Matches by exact filename or full path; `q3_growth_by_region.vl.json`
- * does not cover `q3_growth_by_region.svg`.
+ * Split a run's cards by the timeline step they belong to. `stepSequences`
+ * is the set of steps the timeline renders; a card whose anchor is missing
+ * from it (run-end sweep, unmatched tool_call_id, manifest-only) goes to
+ * the trailing group so every file still gets a card.
  */
-/**
- * Drop cards for files the message body references inline. The inline
- * figure or chip is the richer surface, so the card would say the same
- * thing twice (say-it-once rule). A ready card is matched through the
- * manifest resolver; a pending card matches on its path alone.
- */
-export function suppressReferencedCards(
+export function groupCardsByAnchor(
   cards: ArtifactCardModel[],
-  markdown: string,
-): ArtifactCardModel[] {
-  if (cards.length === 0 || !markdown) return cards;
-  const refs = collectFileRefs(markdown);
-  if (refs.length === 0) return cards;
-  const files = cards.flatMap((card) => (card.file ? [card.file] : []));
-  const referencedIds = new Set<string>();
-  for (const ref of refs) {
-    const file = resolveFileRef(ref, files);
-    if (file) referencedIds.add(file.id);
+  stepSequences: ReadonlySet<number>,
+): AnchoredArtifactCards {
+  const byStep = new Map<number, ArtifactCardModel[]>();
+  const trailing: ArtifactCardModel[] = [];
+  for (const card of cards) {
+    const anchor = card.anchorSequence;
+    if (anchor === null || !stepSequences.has(anchor)) {
+      trailing.push(card);
+      continue;
+    }
+    const group = byStep.get(anchor);
+    if (group) group.push(card);
+    else byStep.set(anchor, [card]);
   }
-  return cards.filter((card) => {
-    if (card.file) return !referencedIds.has(card.file.id);
-    return !refs.some(
-      (ref) =>
-        pathMatchesRef(card.path, ref) ||
-        card.filename === fileRefBasename(ref),
-    );
-  });
+  return { byStep, trailing };
 }
 
 /** Plain-English type label. Never repeats what the extension already says

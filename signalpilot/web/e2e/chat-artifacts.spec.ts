@@ -129,6 +129,11 @@ test.describe("artifacts panel (fixture harness)", () => {
     await expect(page.getByTestId("sql-trace-row")).toContainText(
       "warehouse_prod",
     );
+    // The agent's query description headlines the row; the connection is
+    // demoted to the secondary line.
+    await expect(page.getByTestId("sql-trace-description")).toHaveText(
+      "Comparing Q2 and Q3 revenue by region from fct_orders",
+    );
   });
 });
 
@@ -208,26 +213,76 @@ test.describe("inline file references (fixture harness)", () => {
     );
   });
 
-  test("a referenced file gets no card; unreferenced files still do", async ({
+  test("referenced and unreferenced files alike get a timeline card", async ({
     page,
   }) => {
     await page.goto(at(24_800));
     await waitForHydration(page);
     const cards = page.getByTestId("chat-artifact-cards");
     await expect(cards).toBeVisible();
-    // Both runtime files are referenced inline (figure + chip): no cards.
-    await expect(cards).not.toContainText("revenue_by_month.png");
-    await expect(cards).not.toContainText("revenue_by_month.csv");
-    // A file nothing references keeps its card.
+    // The inline figure and chip are one surface; the timeline card is
+    // another. Both runtime files show in both places.
+    await expect(cards).toContainText("revenue_by_month.png");
+    await expect(cards).toContainText("revenue_by_month.csv");
     await expect(cards).toContainText("q3_growth.py");
     await expect(cards).toContainText("q3_summary.md");
-    // The panel still lists every file, referenced or not.
+    await expect(page.getByTestId("chat-md-figure")).toHaveCount(1);
+    await expect(page.getByTestId("chat-md-file-chip")).toHaveCount(1);
+    // The panel still lists every file.
     await page.getByTestId("live-notebook-toggle").click();
     await page.getByTestId("artifacts-tab-files").click();
     await expect(page.getByTestId("artifacts-file-row")).toHaveCount(7);
   });
 
-  test("/chats/markdown shows a not-available chip for a relative image without a context", async ({
+  test("a missing image reference renders as a block band after the run ends", async ({
+    page,
+  }) => {
+    // The tail narration at 24.5s embeds artifacts/q4_forecast.png, which
+    // the run never saves. Once the run ends (24.6s) it is "missing".
+    await page.goto(at(24_800));
+    await waitForHydration(page);
+    const band = page.getByTestId("chat-md-image-missing");
+    await expect(band).toHaveCount(1);
+    await expect(band).toHaveAttribute("role", "status");
+    await expect(band).toContainText("Image not available");
+    await expect(band).toContainText("q4_forecast.png");
+    await expect(page.getByTestId("chat-md-figure-pending")).toHaveCount(0);
+    // A block on its own line: it spans the transcript column, not the
+    // width of its text.
+    const bandBox = await band.boundingBox();
+    const columnBox = await page
+      .locator(".chat-markdown")
+      .filter({ has: band })
+      .last()
+      .boundingBox();
+    expect(bandBox).not.toBeNull();
+    expect(columnBox).not.toBeNull();
+    expect(bandBox!.width).toBeGreaterThan(columnBox!.width * 0.9);
+    // Never the inline chip for an image reference.
+    await expect(page.getByTestId("chat-md-file-chip-missing")).toHaveCount(0);
+  });
+
+  test("a missing reference is pending only while its own run streams", async ({
+    page,
+  }) => {
+    // 24.55s: the reference landed, the run is still running.
+    await page.goto(at(24_550));
+    await waitForHydration(page);
+    await expect(page.getByTestId("chat-md-figure-pending")).toHaveCount(1);
+    await expect(page.getByTestId("chat-md-image-missing")).toHaveCount(0);
+    // ?followup=1 appends a later turn whose run is queued. The earlier
+    // message's reference must stay missing, not flip back to a shimmer.
+    await page.goto(`${at(24_800)}&followup=1`);
+    await waitForHydration(page);
+    const messages = page.locator("[data-chat-message-id]");
+    await expect(messages).toHaveCount(4);
+    await expect(page.getByTestId("chat-live-indicator")).toHaveCount(1);
+    await expect(page.getByTestId("chat-md-image-missing")).toHaveCount(1);
+    await expect(page.getByTestId("chat-md-figure-pending")).toHaveCount(0);
+    await expect(page.getByTestId("chat-md-figure")).toHaveCount(1);
+  });
+
+  test("/chats/markdown shows a not-available band for a relative image without a context", async ({
     page,
   }) => {
     await page.goto(`${BASE}/chats/markdown`);
@@ -238,9 +293,9 @@ test.describe("inline file references (fixture harness)", () => {
     await page.getByTestId("showcase-section-media").click();
     const rendered = page.getByTestId("showcase-rendered");
     // No conversation: there is no manifest to resolve against, so the
-    // reference renders as the quiet "not available" chip — never a broken
+    // reference renders as the "not available" band — never a broken
     // image (no figure, no placeholder, no file chip).
-    const missing = rendered.getByTestId("chat-md-file-chip-missing");
+    const missing = rendered.getByTestId("chat-md-image-missing");
     await expect(missing).toHaveCount(2);
     await expect(missing.first()).toContainText("revenue_by_month.png");
     await expect(

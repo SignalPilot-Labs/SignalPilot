@@ -5,6 +5,10 @@ import {
   ChatUiContext,
   type ChatUiContextValue,
 } from "~/components/chat/chat-ui-context";
+import {
+  MessageRunContext,
+  type MessageRunContextValue,
+} from "~/components/chat/message-run-context";
 import type { ConversationFileInfo } from "~/lib/api";
 import { ChatMarkdown } from "./chat-markdown";
 import { MarkdownImage } from "./image";
@@ -39,7 +43,6 @@ function ui(overrides: Partial<ChatUiContextValue>): ChatUiContextValue {
     events: [],
     conversationId: "conv-1",
     files: [],
-    runningRunId: null,
     openArtifact: vi.fn(),
     getFileObjectUrl: vi.fn(async (id: string) => `blob:${id}`),
     onStop: async () => undefined,
@@ -73,17 +76,27 @@ describe("MarkdownImage", () => {
   const render = async (
     node: React.ReactNode,
     value: ChatUiContextValue | null,
+    run: MessageRunContextValue | null = null,
   ) => {
+    const inner = run ? (
+      <MessageRunContext.Provider value={run}>{node}</MessageRunContext.Provider>
+    ) : (
+      node
+    );
     await act(async () => {
       root.render(
         value ? (
-          <ChatUiContext.Provider value={value}>{node}</ChatUiContext.Provider>
+          <ChatUiContext.Provider value={value}>{inner}</ChatUiContext.Provider>
         ) : (
-          node
+          inner
         ),
       );
     });
   };
+  const missing = () =>
+    container.querySelector('[data-testid="chat-md-image-missing"]');
+  const pending = () =>
+    container.querySelector('[data-testid="chat-md-figure-pending"]');
 
   it("renders an external image as a plain img", async () => {
     await render(
@@ -102,9 +115,9 @@ describe("MarkdownImage", () => {
     expect(container.querySelector('[data-testid="chat-md-figure-pending"]')).toBeNull();
   });
 
-  it("renders the not-available chip for a sentinel-origin image without a context", async () => {
+  it("renders the not-available band for a sentinel-origin image without a context", async () => {
     // ChatMarkdown's sanitizer rebases relative targets onto the sentinel
-    // origin; with no manifest to resolve against, a chip beats a broken img.
+    // origin; with no manifest to resolve against, a band beats a broken img.
     await render(
       <MarkdownImage
         src="https://conversation-files.invalid/artifacts/x.png"
@@ -112,35 +125,70 @@ describe("MarkdownImage", () => {
       />,
       null,
     );
-    const chip = container.querySelector('[data-testid="chat-md-file-chip-missing"]');
-    expect(chip?.textContent).toContain("Image not available");
-    expect(chip?.textContent).toContain("x.png");
+    expect(missing()?.textContent).toContain("Image not available");
+    expect(missing()?.textContent).toContain("x.png");
     expect(container.querySelector("img")).toBeNull();
   });
 
-  it("shows the chip, never a broken image, through ChatMarkdown without a context", async () => {
+  it("shows the band, never a broken image, through ChatMarkdown without a context", async () => {
     await render(<ChatMarkdown markdown="![Chart](artifacts/x.png)" />, null);
     expect(container.querySelector("img")).toBeNull();
-    expect(
-      container.querySelector('[data-testid="chat-md-file-chip-missing"]')?.textContent,
-    ).toContain("x.png");
+    expect(missing()?.textContent).toContain("x.png");
   });
 
-  it("renders a pending placeholder while the run streams", async () => {
+  it("renders a pending placeholder while this message's run streams", async () => {
     await render(
       <MarkdownImage src="artifacts/x.png" alt="chart" />,
-      ui({ runningRunId: "run-1" }),
+      ui({}),
+      { runId: "run-1", running: true },
     );
-    const pending = container.querySelector('[data-testid="chat-md-figure-pending"]');
-    expect(pending?.getAttribute("aria-busy")).toBe("true");
-    expect(pending?.textContent).toContain("x.png");
+    expect(pending()?.getAttribute("aria-busy")).toBe("true");
+    expect(pending()?.textContent).toContain("x.png");
+    expect(missing()).toBeNull();
   });
 
-  it("renders a not-available chip once the run ended", async () => {
+  it("renders the missing band once this message's run ended", async () => {
+    await render(
+      <MarkdownImage src="artifacts/x.png" alt="chart" />,
+      ui({}),
+      { runId: "run-1", running: false },
+    );
+    expect(missing()?.textContent).toContain("Image not available");
+    expect(missing()?.textContent).toContain("x.png");
+    expect(pending()).toBeNull();
+  });
+
+  it("stays missing for an old message while a later run is streaming", async () => {
+    // The old message's own run finished. Another run streaming elsewhere
+    // in the conversation must not flip it back to a shimmer.
+    await render(
+      <MarkdownImage src="artifacts/x.png" alt="chart" />,
+      ui({}),
+      { runId: "run-1", running: false },
+    );
+    expect(missing()).not.toBeNull();
+    expect(pending()).toBeNull();
+    // No message context at all (playground): never pending.
     await render(<MarkdownImage src="artifacts/x.png" alt="chart" />, ui({}));
-    const chip = container.querySelector('[data-testid="chat-md-file-chip-missing"]');
-    expect(chip?.textContent).toContain("Image not available");
-    expect(chip?.textContent).toContain("x.png");
+    expect(missing()).not.toBeNull();
+    expect(pending()).toBeNull();
+  });
+
+  it("renders the missing state as a block on its own line, never inline", async () => {
+    await render(
+      <ChatMarkdown markdown="See the chart ![Chart](artifacts/gone.png) above." />,
+      ui({}),
+      { runId: "run-1", running: false },
+    );
+    const band = missing();
+    expect(band?.getAttribute("role")).toBe("status");
+    expect(band?.classList.contains("chat-md-image-missing")).toBe(true);
+    expect(band?.textContent).toContain("Image not available");
+    expect(band?.textContent).toContain("gone.png");
+    // Never the inline chip for an image reference.
+    expect(
+      container.querySelector('[data-testid="chat-md-file-chip-missing"]'),
+    ).toBeNull();
   });
 
   it("renders a captioned figure with actions for a resolved image", async () => {

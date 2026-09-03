@@ -371,6 +371,45 @@
   }
 }
 
+/* ------------------------------------------------- missing image band */
+
+/* An image reference that never resolved: a full-width warning band on
+   its own line, never inline in the sentence. */
+.chat-markdown .chat-md-image-missing {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  margin: var(--md-gap) 0;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid rgba(255, 170, 0, 0.28);
+  border-radius: var(--md-radius);
+  background: rgba(255, 170, 0, 0.06);
+  color: var(--color-text-muted);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 1.3;
+}
+.chat-markdown .chat-md-image-missing-icon {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  color: var(--color-warning);
+}
+.chat-markdown .chat-md-image-missing-label {
+  flex: none;
+  font-weight: 500;
+}
+.chat-markdown .chat-md-image-missing-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-dim);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+
 /* ------------------------------------------------------------ file chips */
 
 /* A linked conversation file: inline-block so it sits inside a sentence. */

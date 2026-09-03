@@ -134,7 +134,6 @@ describe("runtime card", () => {
       events: [],
       conversationId: "conv-1",
       files,
-      runningRunId: null,
       openArtifact,
       onStop: async () => undefined,
       onRetry: async () => undefined,

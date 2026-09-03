@@ -19,6 +19,13 @@ export {
 } from "./subagent-row";
 export { RunTimeline } from "./timeline";
 export {
+  ArtifactCardBlock,
+  StepArtifactCards,
+  StepArtifactCardsContext,
+  collectGroupArtifactCards,
+  collectStepSequences,
+} from "./step-artifact-cards";
+export {
   ActivityGroup,
   DashboardPreviewActivityCard,
   StandardActivityGroup,

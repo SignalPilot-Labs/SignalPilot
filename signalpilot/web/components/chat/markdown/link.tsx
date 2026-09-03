@@ -12,6 +12,7 @@ import {
   ChatUiContext,
   type ChatUiContextValue,
 } from "~/components/chat/chat-ui-context";
+import { useMessageRun } from "~/components/chat/message-run-context";
 import { str } from "./attrs";
 import { FileChip, MissingFileChip, PendingFileChip } from "./file-chip";
 
@@ -23,7 +24,8 @@ const SANDBOX_PATH_RE = /signalpilot-chat-runs\/|\/artifacts\//;
  * external anchor.
  *
  * A resolved file renders a FileChip. A relative href that does not
- * resolve renders pending or missing at chip size. Root-relative hrefs
+ * resolve renders pending (only while this message's own run is still
+ * running) or missing at chip size. Root-relative hrefs
  * (the agent's /lineage/<model> deep links) stay next/link soft
  * navigations unless they resolve to a file or look like a sandbox path.
  * Anything with a scheme opens in a new tab with rel=noopener.
@@ -58,13 +60,14 @@ export function MarkdownLink({
 }
 
 function FileLink({ norm, ui }: { norm: string; ui: ChatUiContextValue }) {
+  const { runId, running } = useMessageRun();
   const file = useMemo(
-    () => resolveFileRef(norm, ui.files, { runId: ui.runningRunId }),
-    [norm, ui.files, ui.runningRunId],
+    () => resolveFileRef(norm, ui.files, { runId }),
+    [norm, ui.files, runId],
   );
   if (file) return <FileChip file={file} ui={ui} />;
   const name = fileRefBasename(norm);
-  return ui.runningRunId ? (
+  return running ? (
     <PendingFileChip name={name} />
   ) : (
     <MissingFileChip name={name} />
@@ -85,9 +88,10 @@ function ResolvedOrRoute({
   title?: string;
   children: ReactNode;
 }) {
+  const { runId } = useMessageRun();
   const file = useMemo(
-    () => resolveFileRef(norm, ui.files, { runId: ui.runningRunId }),
-    [norm, ui.files, ui.runningRunId],
+    () => resolveFileRef(norm, ui.files, { runId }),
+    [norm, ui.files, runId],
   );
   if (file) return <FileChip file={file} ui={ui} />;
   return (

@@ -1,9 +1,14 @@
 "use client";
 
 import { AlertCircle, Check, ChevronRight, LayoutDashboard } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useContext, useEffect, useState } from "react";
 import { summarizeRunSteps, type RunStep } from "~/lib/chat-run-steps";
 import { DashboardPreviewDetails } from "./step-body";
+import {
+  ArtifactCardBlock,
+  StepArtifactCardsContext,
+  collectGroupArtifactCards,
+} from "./step-artifact-cards";
 import { cardKindForStep } from "~/components/chat/tool-cards/registry-tools";
 import { ToolChipStrip } from "~/components/chat/tool-cards/tool-chip";
 import { RunTimeline } from "./timeline";
@@ -165,6 +170,7 @@ export function StandardActivityGroup({
 }) {
   const [userToggle, setUserToggle] = useState<boolean | null>(null);
   const [focus, setFocus] = useState<{ key: string; nonce: number } | null>(null);
+  const cardsByStep = useContext(StepArtifactCardsContext);
   const active = live || steps.some((step) => step.status === "running");
   // Reopen automatically if this group starts working again (e.g. retry).
   useEffect(() => {
@@ -176,6 +182,10 @@ export function StandardActivityGroup({
   const pinnedTable =
     !active && isFinalGroup && runCompleted ? lastTableStep(steps) : null;
   const open = userToggle ?? (active || pinnedTable !== null);
+  // A collapsed group hides its step rows, so the files it produced move
+  // to a footer under the header until the group is reopened. The inner
+  // rows get no cards meanwhile, so a file never renders twice.
+  const hoistedCards = open ? [] : collectGroupArtifactCards(steps, cardsByStep);
   const focusStepKey = focus?.key ?? pinnedTable?.key ?? null;
   const latest = steps[steps.length - 1] ?? null;
   const pick = (key: string) => {
@@ -233,15 +243,22 @@ export function StandardActivityGroup({
       <div className="chat-collapse" data-open={open}>
         <div>
           <div className="border-t border-[var(--color-border)] px-3 py-3">
-            <RunTimeline
-              steps={steps}
-              groupLive={active}
-              focusStepKey={focusStepKey}
-              focusNonce={focus?.nonce ?? 0}
-            />
+            <StepArtifactCardsContext.Provider value={open ? cardsByStep : null}>
+              <RunTimeline
+                steps={steps}
+                groupLive={active}
+                focusStepKey={focusStepKey}
+                focusNonce={focus?.nonce ?? 0}
+              />
+            </StepArtifactCardsContext.Provider>
           </div>
         </div>
       </div>
+      <ArtifactCardBlock
+        cards={hoistedCards}
+        testId="chat-group-artifact-cards"
+        className="border-t border-[var(--color-border)] px-3 py-3"
+      />
     </section>
   );
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { Brain, ChevronRight } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { AgentLiveIndicator } from "~/components/chat/agent-thinking-indicator";
 import { ChatMarkdown } from "~/components/chat/chat-markdown";
 import { useSettled } from "~/components/chat/use-settled";
@@ -11,7 +11,9 @@ import {
   type RunBlock,
   type RunLiveInfo,
 } from "~/lib/chat-run-steps";
+import type { ArtifactCardModel } from "~/lib/chat-artifact-cards";
 import { ActivityGroup } from "./activity-group";
+import { ArtifactCardBlock } from "./step-artifact-cards";
 
 const IDLE_LIVE: RunLiveInfo = { state: "idle", label: "", step: null };
 const THINKING_LIVE: RunLiveInfo = {
@@ -110,10 +112,13 @@ export function RunActivityBlocks({
   blocks,
   running: runningProp,
   live: liveProp,
+  trailingCards = [],
 }: {
   blocks: RunBlock[];
   running?: boolean;
   live?: RunLiveInfo;
+  /** Cards no step claims; rendered after the last tool group. */
+  trailingCards?: ArtifactCardModel[];
 }) {
   const live =
     liveProp ?? (runningProp ? THINKING_LIVE : IDLE_LIVE);
@@ -132,8 +137,20 @@ export function RunActivityBlocks({
   const showThinking =
     shouldShowAgentThinking(blocks, running) &&
     (live.state === "thinking" || live.state === "booting");
+  const trailing = (
+    <ArtifactCardBlock
+      cards={trailingCards}
+      testId="chat-trailing-artifact-cards"
+      className="my-3"
+    />
+  );
   if (!blocks.length) {
-    return showThinking ? <AgentLiveIndicator live={live} /> : null;
+    return (
+      <>
+        {trailing}
+        {showThinking && <AgentLiveIndicator live={live} />}
+      </>
+    );
   }
   const lastStepsIndex = blocks.reduce(
     (latest, block, index) => (block.kind === "steps" ? index : latest),
@@ -143,6 +160,8 @@ export function RunActivityBlocks({
     lastStepsIndex === blocks.length - 1 && lastStepsIndex >= 0;
   return (
     <>
+      {/* No tool group at all: the unclaimed files lead the narration. */}
+      {lastStepsIndex === -1 && trailing}
       {blocks.map((block, index) =>
         block.kind === "text" ? (
           <StreamingTextBlock
@@ -159,13 +178,15 @@ export function RunActivityBlocks({
             live={running && index === blocks.length - 1}
           />
         ) : (
-          <ActivityGroup
-            key={block.key}
-            steps={block.steps}
-            live={running && trailingSteps && index === lastStepsIndex}
-            isFinalGroup={index === lastStepsIndex}
-            runCompleted={!running}
-          />
+          <Fragment key={block.key}>
+            <ActivityGroup
+              steps={block.steps}
+              live={running && trailingSteps && index === lastStepsIndex}
+              isFinalGroup={index === lastStepsIndex}
+              runCompleted={!running}
+            />
+            {index === lastStepsIndex && trailing}
+          </Fragment>
         ),
       )}
       {showThinking && <AgentLiveIndicator live={live} />}

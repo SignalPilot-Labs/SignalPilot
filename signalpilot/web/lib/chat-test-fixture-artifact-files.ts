@@ -208,6 +208,7 @@ export function runCellsEvents(runId: string): FixtureEvent[] {
       type: "tool_started",
       payload: {
         tool: "mcp__standalone-chat__run_cells",
+        tool_call_id: RUN_CELLS_TOOL_CALL_ID,
         input: {
           cells: [
             {

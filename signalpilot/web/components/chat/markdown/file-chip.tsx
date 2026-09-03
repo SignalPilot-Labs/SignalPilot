@@ -95,14 +95,10 @@ export function PendingFileChip({ name }: { name: string }) {
   );
 }
 
-/** The run ended and the referenced file never arrived. */
-export function MissingFileChip({
-  name,
-  label = "File not available",
-}: {
-  name: string;
-  label?: string;
-}) {
+/** The run ended and the referenced file never arrived. Stays inline at
+ * chip size with the warning tone; image references use the block band in
+ * image.tsx instead. */
+export function MissingFileChip({ name }: { name: string }) {
   return (
     <span
       data-testid="chat-md-file-chip-missing"
@@ -110,7 +106,7 @@ export function MissingFileChip({
       title={name}
     >
       <AlertTriangle className={ICON_CLASS} aria-hidden />
-      <span className="chat-md-chip-meta">{label}</span>
+      <span className="chat-md-chip-meta">File not available</span>
       <span className="chat-md-chip-name">{middleTruncate(name, 40)}</span>
     </span>
   );

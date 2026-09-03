@@ -5,6 +5,7 @@ import {
   ChatUiContext,
   type ChatUiContextValue,
 } from "~/components/chat/chat-ui-context";
+import { MessageRunContext } from "~/components/chat/message-run-context";
 import type { ConversationFileInfo } from "~/lib/api";
 
 const downloadConversationFile = vi.fn(async () => undefined);
@@ -48,7 +49,6 @@ function ui(overrides: Partial<ChatUiContextValue>): ChatUiContextValue {
     events: [],
     conversationId: "conv-1",
     files: [],
-    runningRunId: null,
     openArtifact: vi.fn(),
     onStop: async () => undefined,
     onRetry: async () => undefined,
@@ -202,11 +202,28 @@ describe("MarkdownLink", () => {
 
   it("renders pending then missing for an unresolved relative reference", async () => {
     await render(
-      <MarkdownLink href="artifacts/rows.csv">x</MarkdownLink>,
-      ui({ runningRunId: "run-1" }),
+      <MessageRunContext.Provider value={{ runId: "run-1", running: true }}>
+        <MarkdownLink href="artifacts/rows.csv">x</MarkdownLink>
+      </MessageRunContext.Provider>,
+      ui({}),
     );
     expect(container.querySelector('[data-testid="chat-md-file-chip-pending"]')).not.toBeNull();
+    await render(
+      <MessageRunContext.Provider value={{ runId: "run-1", running: false }}>
+        <MarkdownLink href="artifacts/rows.csv">x</MarkdownLink>
+      </MessageRunContext.Provider>,
+      ui({}),
+    );
+    const missing = container.querySelector('[data-testid="chat-md-file-chip-missing"]');
+    expect(missing).not.toBeNull();
+    // A link-form reference stays an inline chip, in the warning tone.
+    expect(missing?.classList.contains("chat-md-chip-missing")).toBe(true);
+    expect(container.querySelector('[data-testid="chat-md-image-missing"]')).toBeNull();
+  });
+
+  it("is missing, not pending, without a message context", async () => {
     await render(<MarkdownLink href="artifacts/rows.csv">x</MarkdownLink>, ui({}));
+    expect(container.querySelector('[data-testid="chat-md-file-chip-pending"]')).toBeNull();
     expect(container.querySelector('[data-testid="chat-md-file-chip-missing"]')).not.toBeNull();
   });
 

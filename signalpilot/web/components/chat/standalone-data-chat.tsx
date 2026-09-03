@@ -263,11 +263,14 @@ export function StandaloneDataChat({
 
   const { viewportRef, shouldStickToBottomRef, onViewportScroll } =
     useChatAutoScroll(conversationId, uiMessages);
-  const { selectedModel, modelSettings } = useChatModelSettings({
+  const { selectedModel, selectedEffort, modelSettings } = useChatModelSettings({
     conversationId,
     conversationModel: detail?.conversation.model,
+    conversationEffort: detail?.conversation.effort,
     defaultModel: bootstrap?.default_model,
+    defaultEffort: bootstrap?.default_effort,
     options: bootstrap?.available_models ?? [],
+    effortOptions: bootstrap?.available_efforts ?? [],
     runStatus: currentRun?.status,
     mutateDetail,
   });
@@ -295,6 +298,7 @@ export function StandaloneDataChat({
     perQueryBudgetUsd,
     chatBudgetUsd,
     selectedModel,
+    selectedEffort,
     attachedReportReference,
     mutateDetail,
     mutateHistory,
@@ -378,7 +382,6 @@ export function StandaloneDataChat({
         events,
         conversationId: conversationId ?? null,
         files: conversationFiles,
-        runningRunId: runIsStreaming && currentRun ? currentRun.id : null,
         openArtifact,
         openChatSettings: settingsPanel.openPanel,
         onStop,

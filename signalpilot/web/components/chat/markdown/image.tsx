@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowDownToLine, PanelRight } from "lucide-react";
+import { AlertTriangle, ArrowDownToLine, PanelRight } from "lucide-react";
 import {
   useContext,
   useMemo,
@@ -20,10 +20,11 @@ import {
   ChatUiContext,
   type ChatUiContextValue,
 } from "~/components/chat/chat-ui-context";
+import { useMessageRun } from "~/components/chat/message-run-context";
 import { useFileObjectUrl } from "~/components/chat/use-file-object-url";
 import { useToast } from "~/components/ui/toast";
 import { domProps, str } from "./attrs";
-import { FileChip, MissingFileChip, downloadUiFile } from "./file-chip";
+import { FileChip, downloadUiFile } from "./file-chip";
 
 type ImageProps = ComponentProps<"img"> & { node?: unknown };
 
@@ -33,18 +34,19 @@ type ImageProps = ComponentProps<"img"> & { node?: unknown };
  * External images (any scheme) render as a plain image. A relative or
  * sandbox path is a conversation file reference: it resolves against the
  * manifest in ChatUiContext and renders a figure, a pending placeholder,
- * a "not available" chip, or a file chip for a non-image kind. Without a
- * context (the playground, the file viewer) there is no manifest to resolve
- * against: a reference the sanitizer rebased onto the sentinel origin
- * renders as the "not available" chip (never a broken image), and any
- * other image is external.
+ * a "not available" band, or a file chip for a non-image kind. Pending is
+ * decided per message (MessageRunContext): only while the run that wrote
+ * this message is still running. Without a context (the playground, the
+ * file viewer) there is no manifest to resolve against: a reference the
+ * sanitizer rebased onto the sentinel origin renders as the "not
+ * available" band (never a broken image), and any other image is external.
  */
 export function MarkdownImage(props: ImageProps) {
   const { src, alt, title, ...rest } = domProps(props);
   const ui = useContext(ChatUiContext);
   const norm = normalizeFileRef(str(src));
   if (!ui && norm !== null && str(src).startsWith(`${FILE_REF_ORIGIN}/`)) {
-    return <MissingFileChip name={fileRefBasename(norm)} label="Image not available" />;
+    return <MissingImageBand name={fileRefBasename(norm)} />;
   }
   if (!ui || norm === null) {
     // eslint-disable-next-line @next/next/no-img-element
@@ -64,17 +66,18 @@ function FileImage({
   title?: string;
   ui: ChatUiContextValue;
 }) {
-  const { files, runningRunId } = ui;
+  const { files } = ui;
+  const { runId, running } = useMessageRun();
   const file = useMemo(
-    () => resolveFileRef(norm, files, { runId: runningRunId }),
-    [norm, files, runningRunId],
+    () => resolveFileRef(norm, files, { runId }),
+    [norm, files, runId],
   );
   const name = fileRefBasename(norm);
   if (!file) {
-    return runningRunId ? (
+    return running ? (
       <PendingFigure name={name} />
     ) : (
-      <MissingFileChip name={name} label="Image not available" />
+      <MissingImageBand name={name} />
     );
   }
   if (file.kind !== "image") return <FileChip file={file} ui={ui} />;
@@ -98,6 +101,26 @@ function PendingFigure({ name }: { name: string }) {
   );
 }
 
+/**
+ * An image reference that never resolved. A block on its own line, never
+ * inline in the sentence: the reader must see at a glance that a chart is
+ * missing here. A span with block display, so it is valid inside a <p>.
+ */
+export function MissingImageBand({ name }: { name: string }) {
+  return (
+    <span
+      role="status"
+      data-testid="chat-md-image-missing"
+      className="chat-md-image-missing"
+      title={name}
+    >
+      <AlertTriangle className="chat-md-image-missing-icon" aria-hidden />
+      <span className="chat-md-image-missing-label">Image not available</span>
+      <span className="chat-md-image-missing-name">{name}</span>
+    </span>
+  );
+}
+
 function ReadyFigure({
   file,
   alt,
@@ -112,7 +135,7 @@ function ReadyFigure({
   const { toast } = useToast();
   const { url, fresh, error } = useFileObjectUrl(file, ui.conversationId);
   const [open, setOpen] = useState(false);
-  if (error) return <MissingFileChip name={file.filename} label="Image not available" />;
+  if (error) return <MissingImageBand name={file.filename} />;
   if (!url) return <PendingFigure name={file.filename} />;
   const caption = alt || title || "";
   const download = (event: MouseEvent) => {

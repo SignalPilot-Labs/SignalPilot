@@ -25,12 +25,6 @@ export type ChatUiContextValue = {
   conversationId: string | null;
   /** The gateway's conversation file manifest (drives inline artifact cards). */
   files: ConversationFileInfo[];
-  /**
-   * The run currently streaming, or null. An inline file reference that
-   * does not resolve yet renders as pending while this is set and as
-   * missing once it is null.
-   */
-  runningRunId: string | null;
   /** Open the artifacts panel focused on one file. */
   openArtifact: (fileId: string) => void;
   /**

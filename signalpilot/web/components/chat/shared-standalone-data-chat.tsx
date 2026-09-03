@@ -94,7 +94,6 @@ export function SharedStandaloneDataChat({ token }: { token: string }) {
       events: [],
       conversationId: null,
       files,
-      runningRunId: null,
       openArtifact,
       getFileObjectUrl,
       downloadFile,

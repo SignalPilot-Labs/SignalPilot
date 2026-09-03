@@ -12,11 +12,16 @@ import { expect, test, type Page } from "@playwright/test";
  * - 13 700ms  Write exports/q3_revenue_by_region.csv (mirrored 14 050ms)
  * - 14 300ms  Edit q3_growth.py → its card gains the Updated badge
  * - 15 150ms  Write exports/q3_summary.md (mirrored 15 460ms) → 5th file
- * - 20 600ms  files_changed captures artifacts/revenue_by_month.png and
- * - 20 700ms  artifacts/revenue_by_month.csv; the answer references both
- *             inline (figure + chip), so neither gets a card
- * Collapse rule: compact rows appear only when ≥2 cards overflow the
- * 3-full-card budget (4 files → 4 full cards; 5 files → 3 + 2 rows).
+ * - 15 700ms  run_cells saves the PNG and the CSV; the capture events at
+ * - 20 600ms  and 20 700ms carry its tool_call_id, so both cards anchor
+ *             under that step (the answer also embeds them inline)
+ *
+ * Every file gets a card in the timeline, right after the step that
+ * produced it. While the tool group is open each step shows its own
+ * cards; once the group collapses (the answer starts at 18.1s) the cards
+ * hoist to a footer under the group header, where the collapse rule
+ * applies: compact rows appear only when ≥2 cards overflow the
+ * 3-full-card budget (7 files → 3 full + 4 rows).
  */
 
 const BASE = process.env.SP_WEB_BASE_URL ?? "http://localhost:3200";
@@ -107,60 +112,78 @@ test.describe("inline artifact cards (fixture harness)", () => {
     ).toContainText("q3_growth_by_region.svg");
   });
 
-  test("a single overflow file does not collapse into a grouped stump", async ({
+  test("cards render at the step position while the run streams", async ({
     page,
   }) => {
-    // 14.1s: exactly four ready files. Hiding one file behind a "1 more
-    // file" header spends more space than it saves — all four stay full.
-    await page.goto(at(14_100));
+    // 12.5s: the report Write is pending. Its card is the timeline row
+    // right after the Write step that produced it, inside the open group.
+    await page.goto(at(12_500));
     await waitForHydration(page);
-    await expect(page.getByTestId("chat-artifact-card")).toHaveCount(4);
-    await expect(page.getByTestId("chat-artifact-card-row")).toHaveCount(0);
+    const anchored = page
+      .getByTestId("chat-step-artifact-cards")
+      .filter({ hasText: "q3_regional_review.html" });
+    await expect(anchored).toHaveCount(1);
+    await expect(anchored.getByTestId("chat-artifact-card-pending")).toBeVisible();
+    const previousStep = anchored.locator(
+      "xpath=ancestor::li[1]/preceding-sibling::li[1]",
+    );
+    await expect(previousStep).toContainText("q3_regional_review.html");
+    // The earlier script card sits under its own Write step, not here.
+    await expect(
+      page
+        .getByTestId("chat-step-artifact-cards")
+        .filter({ hasText: "q3_growth.py" }),
+    ).toHaveCount(1);
+    await expect(page.getByTestId("chat-trailing-artifact-cards")).toHaveCount(0);
+    await expect(page.getByTestId("chat-group-artifact-cards")).toHaveCount(0);
   });
 
-  test("five files collapse to three full cards plus two compact rows", async ({
+  test("each written file sits under its own step while the group is open", async ({
     page,
   }) => {
-    // 15.6s: the markdown summary (5th file) is mirrored.
+    // 15.6s: five files, five Write steps, one full card each — the
+    // collapse rule applies per anchor group, so nothing collapses.
     await page.goto(at(15_600));
     await waitForHydration(page);
+    await expect(page.getByTestId("chat-step-artifact-cards")).toHaveCount(5);
     const cards = page.getByTestId("chat-artifact-card");
-    await expect(cards).toHaveCount(3);
+    await expect(cards).toHaveCount(5);
     await expect(cards.nth(0)).toContainText("q3_growth.py");
     await expect(cards.nth(1)).toContainText("q3_regional_review.html");
     await expect(cards.nth(2)).toContainText("q3_growth_by_region.svg");
-    const rows = page.getByTestId("chat-artifact-card-row");
-    await expect(rows).toHaveCount(2);
-    await expect(rows.nth(0)).toContainText("q3_revenue_by_region.csv");
+    await expect(cards.nth(3)).toContainText("q3_revenue_by_region.csv");
     await expect(
-      rows.nth(0).getByTestId("chat-artifact-card-primary"),
+      cards.nth(3).getByTestId("chat-artifact-card-primary"),
     ).toHaveText("Preview");
-    await expect(rows.nth(1)).toContainText("q3_summary.md");
+    await expect(cards.nth(4)).toContainText("q3_summary.md");
+    await expect(page.getByTestId("chat-artifact-card-row")).toHaveCount(0);
   });
 
-  test("end state: inline-referenced files get no card; the rest keep theirs", async ({
+  test("end state: every file has a card, hoisted under the collapsed group", async ({
     page,
   }) => {
     await page.goto(at(24_800));
     await waitForHydration(page);
+    // The code-and-notebook group produced all seven files. Collapsed, it
+    // hoists them into one footer: 3 full cards + 4 compact rows.
+    const footer = page.getByTestId("chat-group-artifact-cards");
+    await expect(footer).toHaveCount(1);
+    await expect(page.getByTestId("chat-step-artifact-cards")).toHaveCount(0);
+    await expect(page.getByTestId("chat-trailing-artifact-cards")).toHaveCount(0);
     const cards = page.getByTestId("chat-artifact-card");
-    // The five export files keep their cards (3 full + 2 compact rows); the
-    // two runtime files the answer references inline (figure + chip) get
-    // none — no duplicate surfaces with different verbs.
     await expect(cards).toHaveCount(3);
     await expect(cards.nth(0)).toContainText("q3_growth.py");
     await expect(cards.nth(1)).toContainText("q3_regional_review.html");
     await expect(cards.nth(2)).toContainText("q3_growth_by_region.svg");
     const rows = page.getByTestId("chat-artifact-card-row");
-    await expect(rows).toHaveCount(2);
+    await expect(rows).toHaveCount(4);
     await expect(rows.nth(0)).toContainText("q3_revenue_by_region.csv");
     await expect(rows.nth(1)).toContainText("q3_summary.md");
-    await expect(
-      page.getByTestId("chat-artifact-cards"),
-    ).not.toContainText("revenue_by_month.png");
-    await expect(
-      page.getByTestId("chat-artifact-cards"),
-    ).not.toContainText("revenue_by_month.csv");
+    // The files the answer embeds inline get a card too: the figure and
+    // the timeline card are two surfaces.
+    await expect(rows.nth(2)).toContainText("revenue_by_month.png");
+    await expect(rows.nth(3)).toContainText("revenue_by_month.csv");
+    await expect(page.getByTestId("chat-md-figure")).toHaveCount(1);
     // The Edit at 14.3s updated the script in place — same card, badged
     // once (the meta line shows only the time, no second "Updated").
     await expect(
@@ -172,16 +195,47 @@ test.describe("inline artifact cards (fixture harness)", () => {
     await expect(cards.nth(0)).toContainText("just now");
   });
 
+  test("reopening the group puts the PNG and CSV cards under the run_cells step", async ({
+    page,
+  }) => {
+    await page.goto(at(24_800));
+    await waitForHydration(page);
+    const group = page.getByTestId("chat-activity-group").nth(1);
+    await group.locator("button").first().click();
+    await expect(group).toContainText("Executed notebook cells");
+    // Open again: the footer empties and each step shows its own cards.
+    await expect(page.getByTestId("chat-group-artifact-cards")).toHaveCount(0);
+    const anchored = group
+      .getByTestId("chat-step-artifact-cards")
+      .filter({ hasText: "revenue_by_month.png" });
+    await expect(anchored).toHaveCount(1);
+    await expect(anchored).toContainText("revenue_by_month.csv");
+    const previousStep = anchored.locator(
+      "xpath=ancestor::li[1]/preceding-sibling::li[1]",
+    );
+    await expect(previousStep).toContainText("Executed notebook cells");
+    // The script card stays under its Write step, separate from these.
+    await expect(
+      group
+        .getByTestId("chat-step-artifact-cards")
+        .filter({ hasText: "q3_growth.py" }),
+    ).not.toContainText("revenue_by_month.png");
+  });
+
   test("the image card renders a real inline thumbnail from file content", async ({
     page,
   }) => {
     await page.goto(at(24_800));
     await waitForHydration(page);
-    const thumb = page
+    const card = page
       .getByTestId("chat-artifact-card")
-      .filter({ hasText: "q3_growth_by_region.svg" })
-      .getByTestId("chat-artifact-card-thumb")
-      .locator("img");
+      .filter({ hasText: "q3_growth_by_region.svg" });
+    // Collapsed by default: the answer already shows the chart inline.
+    await expect(card.getByTestId("chat-artifact-card-thumb")).toHaveCount(0);
+    const toggle = card.getByTestId("chat-artifact-card-preview-toggle");
+    await expect(toggle).toHaveText(/show preview/i);
+    await toggle.click();
+    const thumb = card.getByTestId("chat-artifact-card-thumb").locator("img");
     await expect(thumb).toBeVisible();
     // Not a broken image: the SVG chart actually decoded.
     await expect
@@ -198,6 +252,7 @@ test.describe("inline artifact cards (fixture harness)", () => {
     await expect(page.getByTestId("chat-artifact-card")).toHaveCount(3);
     await page.reload();
     await expect(page.getByTestId("chat-artifact-card")).toHaveCount(3);
+    await expect(page.getByTestId("chat-artifact-card-row")).toHaveCount(4);
     await expect(
       page.getByTestId("chat-artifact-card-pending"),
     ).toHaveCount(0);
@@ -257,12 +312,13 @@ test.describe("inline artifact cards (fixture harness)", () => {
     page,
   }) => {
     await stubFileContent(page);
-    // 15.6s: the CSV is a compact row with its own download control.
+    // 15.6s: the CSV is a full card under its Write step, with its own
+    // download control.
     await page.goto(at(15_600));
     await waitForHydration(page);
     const downloadPromise = page.waitForEvent("download");
     await page
-      .getByTestId("chat-artifact-card-row")
+      .getByTestId("chat-artifact-card")
       .filter({ hasText: "q3_revenue_by_region.csv" })
       .getByTestId("chat-artifact-card-download")
       .click();

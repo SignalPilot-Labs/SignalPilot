@@ -18,7 +18,13 @@ import {
   openStandaloneNotebookArchive,
   type StandaloneChatRunStatus,
 } from "~/lib/api";
-import { RunActivityBlocks, RunTimeline } from "~/components/chat/run-timeline";
+import {
+  RunActivityBlocks,
+  RunTimeline,
+  StepArtifactCardsContext,
+  collectStepSequences,
+} from "~/components/chat/run-timeline";
+import { MessageRunContext } from "~/components/chat/message-run-context";
 import { ConnectorSignInCards } from "~/components/chat/connector-signin-card";
 import { RuntimeBootCard } from "~/components/chat/runtime-boot-card";
 import { ReplayControls } from "~/components/chat/replay-controls";
@@ -43,10 +49,9 @@ import {
   DashboardPreviewCard,
   messageDashboardPreview,
 } from "~/components/chat/chat-dashboard-preview-card";
-import { ChatArtifactCards } from "~/components/chat/chat-artifact-card";
 import {
   deriveArtifactCards,
-  suppressReferencedCards,
+  groupCardsByAnchor,
 } from "~/lib/chat-artifact-cards";
 
 function WorkTimeline({ runId }: { runId: string }) {
@@ -75,8 +80,7 @@ function AssistantMessage({
       ? (message.metadata.status as StandaloneChatRunStatus)
       : "completed");
   const [showWork, setShowWork] = useState(false);
-  const { conversationId, events, files, openArtifact, onRetry, onStop } =
-    useChatUi();
+  const { events, files, onRetry, onStop } = useChatUi();
   const { toast } = useToast();
   const blocks = useMemo(
     () => (runId ? foldRunBlocks(events, runId) : []),
@@ -113,19 +117,21 @@ function AssistantMessage({
     () => deriveLiveStateFromBlocks(blocks, runtimeBoot, runStatus),
     [blocks, runtimeBoot, runStatus],
   );
-  // Inline artifact cards: run events anchor them, the file manifest is the
-  // source of truth. Derived, so rehydration on refresh is free. A file the
-  // message body references inline (figure or chip) never gets a card too:
-  // one artifact must not appear twice with different verbs.
+  // Artifact cards: every captured file gets one, placed in the timeline
+  // right after the step that produced it (joined on the tool_started
+  // sequence). Files no step claims trail the timeline. Derived from the
+  // persisted events and manifest, so rehydration on refresh is free.
   const fileCards = useMemo(
-    () =>
-      runId
-        ? suppressReferencedCards(
-            deriveArtifactCards(events, files, runId, running),
-            message.content,
-          )
-        : [],
-    [events, files, message.content, runId, running],
+    () => (runId ? deriveArtifactCards(events, files, runId, running) : []),
+    [events, files, runId, running],
+  );
+  const anchoredCards = useMemo(
+    () => groupCardsByAnchor(fileCards, collectStepSequences(steps)),
+    [fileCards, steps],
+  );
+  const messageRun = useMemo(
+    () => ({ runId: runId || null, running }),
+    [runId, running],
   );
   const runtimeArchiveAvailable =
     message.metadata.runtime_archive_available === true;
@@ -147,6 +153,8 @@ function AssistantMessage({
             <Sparkles className="h-3.5 w-3.5 text-[var(--color-text-muted)]" />
           )}
         </div>
+        <MessageRunContext.Provider value={messageRun}>
+        <StepArtifactCardsContext.Provider value={anchoredCards.byStep}>
         <div className="min-w-0 flex-1">
           {shouldShowRuntimeBoot(runtimeBoot, running) && runtimeBoot && (
             <RuntimeBootCard boot={runtimeBoot} />
@@ -156,7 +164,9 @@ function AssistantMessage({
               <PlanTracker plan={runPlan} running={running} />
             </div>
           )}
-          {(running || blocks.length > 0) && (
+          {(running ||
+            blocks.length > 0 ||
+            anchoredCards.trailing.length > 0) && (
             <div role="status" aria-live="polite">
               <RunActivityBlocks
                 blocks={blocks}
@@ -166,22 +176,13 @@ function AssistantMessage({
                   runtimeBoot?.phase !== "provisioning" &&
                   runtimeBoot?.phase !== "resuming"
                 }
+                trailingCards={anchoredCards.trailing}
               />
             </div>
           )}
           {runId && <ConnectorSignInCards events={events} runId={runId} />}
           {!blocksHaveText && message.content && !messageRepeatsRunError && (
             <ChatMarkdown markdown={message.content} streaming={running} />
-          )}
-          {fileCards.length > 0 && (
-            // aria-live so a pending card resolving to ready is announced.
-            <div className="mt-4" aria-live="polite">
-              <ChatArtifactCards
-                cards={fileCards}
-                conversationId={conversationId}
-                onOpen={openArtifact}
-              />
-            </div>
           )}
           {dashboardPreview && (
             <DashboardPreviewCard preview={dashboardPreview} />
@@ -277,6 +278,8 @@ function AssistantMessage({
             </div>
           )}
         </div>
+        </StepArtifactCardsContext.Provider>
+        </MessageRunContext.Provider>
       </div>
     </article>
   );
@@ -384,7 +387,6 @@ function AssistantMessageReplay({
           events: replay.visibleEvents,
           conversationId,
           files,
-          runningRunId: replay.finished ? null : runId,
           openArtifact,
           getFileObjectUrl,
           downloadFile,

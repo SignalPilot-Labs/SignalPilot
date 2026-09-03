@@ -7,7 +7,7 @@
 // index with honest previews: only images render inline; every other kind
 // routes to the artifacts panel, which is the reader.
 
-import { AlertCircle, ArrowDownToLine } from "lucide-react";
+import { AlertCircle, ArrowDownToLine, ChevronDown, ChevronRight } from "lucide-react";
 import { memo, useEffect, useRef, useState } from "react";
 import { downloadConversationFile } from "~/lib/api";
 import {
@@ -114,6 +114,43 @@ function ImageThumb({
     </button>
   );
 }
+
+/**
+ * Collapsed by default: the answer usually embeds the same chart inline, and
+ * a second full render right under the step is noise. The thumbnail is not
+ * fetched until the reader opens it.
+ */
+function ImagePreviewToggle({
+  conversationId,
+  card,
+  onOpen,
+}: {
+  conversationId: string;
+  card: ArtifactCardModel;
+  onOpen: (fileId: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const Chevron = open ? ChevronDown : ChevronRight;
+  return (
+    // Sits above the primary button's stretched hit area, or clicks fall through.
+    <div className="relative z-[1] border-t border-[var(--color-border)]">
+      <button
+        type="button"
+        data-testid="chat-artifact-card-preview-toggle"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+        className="flex w-full items-center gap-1.5 px-4 py-2 text-left text-[11px] font-medium uppercase tracking-[0.08em] text-[var(--color-text-dim)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
+      >
+        <Chevron className="h-3.5 w-3.5 flex-none" />
+        {open ? "Hide preview" : "Show preview"}
+      </button>
+      {open && (
+        <ImageThumb conversationId={conversationId} card={card} onOpen={onOpen} />
+      )}
+    </div>
+  );
+}
+
 
 /** Kind icon inside a tinted well — the card's visual anchor. */
 function IconWell({ kind }: { kind: string }) {
@@ -237,7 +274,7 @@ const FullCard = memo(function FullCard({
         </div>
       </div>
       {card.kind === "image" && conversationId && (
-        <ImageThumb
+        <ImagePreviewToggle
           conversationId={conversationId}
           card={card}
           onOpen={onOpen}

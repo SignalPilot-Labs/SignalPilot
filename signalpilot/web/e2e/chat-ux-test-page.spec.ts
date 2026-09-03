@@ -96,12 +96,22 @@ test.describe("chat UX test harness", () => {
     await expect(page.getByText("EMEA drove the growth")).toBeVisible();
     // The chart the notebook cell saved renders inline from the manifest.
     await expect(page.getByTestId("chat-md-figure")).toBeVisible();
+    // The chart the run never saved is a block "not available" band.
+    await expect(page.getByTestId("chat-md-image-missing")).toBeVisible();
+    // The collapsed code chain keeps its files visible in a footer.
     await expect(
-      page.getByText("q3_revenue_by_region.csv").first(),
-    ).toBeVisible();
-    // A collapsed chain reopens on demand.
+      groups.nth(1).getByTestId("chat-group-artifact-cards"),
+    ).toContainText("q3_revenue_by_region.csv");
+    // A collapsed chain reopens on demand, and its cards move under the
+    // steps that produced them.
     await groups.nth(1).locator("button").first().click();
     await expect(groups.nth(1)).toContainText("Executed notebook cells");
+    await expect(
+      groups.nth(1).getByTestId("chat-group-artifact-cards"),
+    ).toHaveCount(0);
+    await expect(
+      groups.nth(1).getByTestId("chat-step-artifact-cards"),
+    ).toHaveCount(6);
   });
 
   test("shows the agent plan as an always-visible card in the main window", async ({

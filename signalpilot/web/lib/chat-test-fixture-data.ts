@@ -115,6 +115,9 @@ const TAIL_CHUNKS: { at: number; delta: string }[] = [
   { at: 24_050, delta: "\n\nOne caveat from the verification pass: " },
   { at: 24_250, delta: "`rpt_region_rollup` failed to rebuild because it still references `region_name`; " },
   { at: 24_450, delta: "the numbers above come straight from `fct_orders`, so they are unaffected." },
+  // A reference to a chart the run never saved: pending until the run ends
+  // at 24.6s, then the block "Image not available" band.
+  { at: 24_500, delta: "\n\nThe Q4 projection chart did not save:\n\n![Q4 forecast by region](artifacts/q4_forecast.png)" },
 ];
 
 const RAW_EVENTS: FixtureEvent[] = [

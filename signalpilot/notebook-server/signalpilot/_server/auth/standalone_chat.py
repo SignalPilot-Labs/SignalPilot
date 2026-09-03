@@ -10,10 +10,18 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import jwt
 from starlette.exceptions import HTTPException
+
+from signalpilot._server.auth.standalone_chat_connectors import (
+    ChatConnector,
+    connector_mcp_servers,
+)
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 _AUDIENCE = "signalpilot-gateway"
 _ISSUER = "signalpilot-notebook-session"
@@ -98,8 +106,17 @@ def authorize_execution(body: dict[str, Any]) -> AuthorizedExecution:
     return AuthorizedExecution(scope=scope, gateway_token=token)
 
 
-def gateway_mcp_config(authorization: AuthorizedExecution) -> dict[str, Any]:
-    """Build the only gateway MCP credential exposed to the chat agent."""
+def gateway_mcp_config(
+    authorization: AuthorizedExecution,
+    mcp_connectors: Sequence[ChatConnector] = (),
+) -> dict[str, Any]:
+    """Build the MCP server config exposed to the chat agent.
+
+    The ``signalpilot`` entry carries the only gateway credential. External
+    connectors (already validated by ``parse_mcp_connectors``) are added as
+    standard entries keyed by slug; remote ones reuse the same scoped token
+    because the gateway proxy identifies the run by it.
+    """
     gateway_url = str(
         os.getenv("SP_GATEWAY_INTERNAL_URL")
         or os.getenv("SP_GATEWAY_URL")
@@ -107,17 +124,21 @@ def gateway_mcp_config(authorization: AuthorizedExecution) -> dict[str, Any]:
     ).rstrip("/")
     if not gateway_url.endswith("/mcp"):
         gateway_url = f"{gateway_url}/mcp"
-    return {
-        "mcpServers": {
-            "signalpilot": {
-                "type": "http",
-                "url": gateway_url,
-                "headers": {
-                    "Authorization": f"Bearer {authorization.gateway_token}"
-                },
-            }
+    servers: dict[str, Any] = {
+        "signalpilot": {
+            "type": "http",
+            "url": gateway_url,
+            "headers": {
+                "Authorization": f"Bearer {authorization.gateway_token}"
+            },
         }
     }
+    servers.update(
+        connector_mcp_servers(
+            mcp_connectors, gateway_token=authorization.gateway_token
+        )
+    )
+    return {"mcpServers": servers}
 
 
 def _verify_gateway_token(token: str) -> dict[str, Any]:

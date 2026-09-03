@@ -111,7 +111,6 @@ def test_dashboard_chart_reference_is_preloaded_into_existing_chat_runtime(
                 metadata_json={"dashboard_chart_reference": reference},
             )
         ],
-        "artifacts": [],
         "query_approvals": [],
         "query_proposals": [],
         "query_executions": [],
@@ -123,6 +122,45 @@ def test_dashboard_chart_reference_is_preloaded_into_existing_chat_runtime(
 
     assert warm["dashboard_chart_reference"] == reference
     assert warm["project"]["commit_sha"] == "a" * 40
+
+
+def test_dashboard_authoring_session_is_preloaded_for_chat_refinement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = {
+        "conversation": SimpleNamespace(branch="main", commit_sha="a" * 40, internal_summary=None),
+        "project": SimpleNamespace(
+            id="project-a",
+            name="pilot",
+            display_name="Pilot",
+            description=None,
+            connection_name="production",
+        ),
+        "messages": [],
+        "query_approvals": [],
+        "query_proposals": [],
+        "query_executions": [],
+        "query_results": [],
+        "dashboard_authoring_session": SimpleNamespace(
+            id="session-a",
+            dashboard_id="dashboard-a",
+            definition_json={"name": "Executive dashboard"},
+            draft_revision=3,
+            status="preview",
+        ),
+    }
+    monkeypatch.setattr(worker_context, "project_metadata_context", lambda *_args: {"models": []})
+
+    warm = worker._warm_context(context)
+
+    assert warm["dashboard_authoring"] == {
+        "authoring_session_id": "session-a",
+        "dashboard_id": "dashboard-a",
+        "dashboard_name": "Executive dashboard",
+        "draft_revision": 3,
+        "status": "preview",
+        "instruction": "Refine this dashboard session when the user asks for dashboard changes.",
+    }
 
 
 @pytest.mark.asyncio
@@ -225,13 +263,11 @@ async def test_notebook_stream_does_not_hold_a_database_session(monkeypatch: pyt
         yield {
             "type": "final",
             "content": "Analysis complete",
-            "artifacts": [],
-            "report_action_outcome": {
-                "action": "no_suggestion",
-                "artifact_kind": "report",
-                "artifact_filename": "diagnostic.html",
-                "reason": "One-off diagnostic.",
-                "catalog_scan_complete": True,
+                "dashboard_preview": {
+                "authoring_session_id": "authoring-session-1",
+                "preview_url": "/dashboards/new?authoring=authoring-session-1",
+                "dashboard_name": "Executive Revenue",
+                "chart_count": 2,
             },
         }
 
@@ -272,7 +308,6 @@ async def test_notebook_stream_does_not_hold_a_database_session(monkeypatch: pyt
     monkeypatch.setattr(worker, "stream_execution", stream_execution)
     monkeypatch.setattr(worker, "_warm_context", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(worker, "_append", append_event)
-    monkeypatch.setattr(worker, "_persist_artifacts", noop)
     monkeypatch.setattr(worker, "_lease_renewer", wait_until_stopped)
     monkeypatch.setattr(worker, "_cancellation_monitor", wait_until_stopped)
     monkeypatch.setattr(worker, "cleanup_finished_execution", noop)
@@ -280,12 +315,12 @@ async def test_notebook_stream_does_not_hold_a_database_session(monkeypatch: pyt
     await worker._execute_claimed_run("run-a", "worker-a")
 
     assert completed_runs == ["run-a"]
-    assert completion_payloads[0]["report_action_outcome"] == {
-        "action": "no_suggestion",
-        "artifact_kind": "report",
-        "artifact_filename": "diagnostic.html",
-        "reason": "One-off diagnostic.",
-        "catalog_scan_complete": True,
+    assert "report_action_outcome" not in completion_payloads[0]
+    assert completion_payloads[0]["dashboard_preview"] == {
+        "authoring_session_id": "authoring-session-1",
+        "preview_url": "/dashboards/new?authoring=authoring-session-1",
+        "dashboard_name": "Executive Revenue",
+        "chart_count": 2,
     }
     assert failed_runs == []
     assert ("cell_executed", {"status": "failed"}) in appended_events
@@ -296,12 +331,11 @@ async def test_notebook_stream_does_not_hold_a_database_session(monkeypatch: pyt
 
 
 @pytest.mark.asyncio
-async def test_terminal_notebook_validation_error_persists_no_answer_or_artifact(
+async def test_terminal_notebook_validation_error_persists_no_answer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     completed_runs: list[str] = []
     failed_runs: list[str] = []
-    persisted_artifacts: list[str] = []
 
     class FakeSessionContext:
         async def __aenter__(self) -> object:
@@ -329,7 +363,6 @@ async def test_terminal_notebook_validation_error_persists_no_answer_or_artifact
             internal_summary=None,
         ),
         "messages": [SimpleNamespace(role="user", content="Diagnose revenue")],
-        "artifacts": [],
         "query_approvals": [],
         "query_proposals": [],
         "query_executions": [],
@@ -357,9 +390,6 @@ async def test_terminal_notebook_validation_error_persists_no_answer_or_artifact
     async def fail_run(*_args: Any, **kwargs: Any) -> None:
         failed_runs.append(kwargs["run_id"])
 
-    async def persist_artifacts(*_args: Any, **kwargs: Any) -> None:
-        persisted_artifacts.append(kwargs["run_id"])
-
     async def wait_until_stopped(
         _run_id: str,
         _worker_id: str,
@@ -380,7 +410,6 @@ async def test_terminal_notebook_validation_error_persists_no_answer_or_artifact
     monkeypatch.setattr(worker, "stream_execution", stream_execution)
     monkeypatch.setattr(worker, "_warm_context", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(worker, "_append", noop)
-    monkeypatch.setattr(worker, "_persist_artifacts", persist_artifacts)
     monkeypatch.setattr(worker, "_lease_renewer", wait_until_stopped)
     monkeypatch.setattr(worker, "_cancellation_monitor", wait_until_stopped)
     monkeypatch.setattr(worker, "cleanup_finished_execution", noop)
@@ -388,7 +417,6 @@ async def test_terminal_notebook_validation_error_persists_no_answer_or_artifact
     await worker._execute_claimed_run("run-dirty", "worker-a")
 
     assert completed_runs == []
-    assert persisted_artifacts == []
     assert failed_runs == ["run-dirty"]
 
 

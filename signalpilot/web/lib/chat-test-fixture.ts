@@ -2,7 +2,6 @@ import type {
   ConversationFileInfo,
   ConversationNotebook,
   SqlTraceExecution,
-  StandaloneChatArtifact,
   StandaloneChatEvent,
   StandaloneChatRunStatus,
 } from "~/lib/api";
@@ -15,7 +14,17 @@ import {
   FIXTURE_WRITTEN_FILE_PATH,
   PYTHON_FILE,
   fixtureEvents,
+  type FixtureEvent,
 } from "./chat-test-fixture-data";
+import {
+  CHART_SVG_FILE,
+  CSV_FILE,
+  REPORT_HTML_FILE,
+  REVENUE_CSV_FILE,
+  REVENUE_PNG_BASE64,
+  SUMMARY_MD_FILE,
+  fixtureArtifactFiles,
+} from "./chat-test-fixture-artifact-files";
 
 /**
  * Deterministic fixture for /chats/test: a scripted agent run replayed on a
@@ -107,14 +116,26 @@ export function fixtureConversationNotebook(
 export function fixtureConversationFiles(
   events: StandaloneChatEvent[],
 ): ConversationFileInfo[] {
-  const written = events.some(
-    (event) => event.type === "tool_started" && event.payload.tool === "Write",
+  // Export files (HTML report, SVG chart, CSV) land later in the replay,
+  // each gated on its files_changed mirror event.
+  const exportFiles = fixtureArtifactFiles(
+    events,
+    FIXTURE_RUN_ID,
+    fixtureEventCreatedAt,
   );
-  if (!written) return [];
+  const written = events.some(
+    (event) =>
+      event.type === "tool_started" &&
+      event.payload.tool === "Write" &&
+      (event.payload.input as { file_path?: string } | undefined)?.file_path ===
+        FIXTURE_WRITTEN_FILE_PATH,
+  );
+  if (!written) return exportFiles;
   const edited = events.some(
     (event) => event.type === "tool_started" && event.payload.tool === "Edit",
   );
   return [
+    ...exportFiles,
     {
       id: "file-fixture-1",
       path: FIXTURE_WRITTEN_FILE_PATH,
@@ -186,127 +207,66 @@ export function fixtureSqlTrace(
   ];
 }
 
-export type FixtureArtifact = StandaloneChatArtifact & { at: number };
-
 export const FIXTURE_USER_PROMPT =
   "Which regions drove Q3 revenue growth compared to Q2?";
 
-const TABLE_ROWS = [
-  { region: "AMER", revenue_q3: 9_204_100, revenue_q2: 8_930_600, growth_pct: 3.1 },
-  { region: "EMEA", revenue_q3: 4_812_400, revenue_q2: 4_101_900, growth_pct: 17.3 },
-  { region: "APAC", revenue_q3: 2_118_800, revenue_q2: 1_611_200, growth_pct: 31.5 },
-];
-
-export const fixtureArtifacts: FixtureArtifact[] = [
-  {
-    at: 16_700,
-    id: "artifact-table-1",
-    run_id: FIXTURE_RUN_ID,
-    assistant_message_id: null,
-    kind: "table",
-    filename: "q3_revenue_by_region.csv",
-    mime_type: "text/csv",
-    snapshot: {
-      columns: ["region", "revenue_q3", "revenue_q2", "growth_pct"],
-      rows: TABLE_ROWS,
-      truncated: false,
-    },
-    provenance: null,
-    freshness_at: "2026-01-15T06:10:00Z",
-    assumptions: ["Net revenue excludes refunds issued after quarter close."],
-    exclusions: ["Internal test accounts (7 accounts) are excluded."],
-    caveats: ["APAC growth reflects a small Q2 base."],
-    parent_artifact_id: null,
-    created_at: "2026-01-15T17:30:16Z",
-    download_formats: ["csv"],
-  },
-  {
-    at: 17_900,
-    id: "artifact-chart-1",
-    run_id: FIXTURE_RUN_ID,
-    assistant_message_id: null,
-    kind: "chart",
-    filename: "q3_growth_by_region.vl.json",
-    mime_type: "application/json",
-    snapshot: {
-      spec: {
-        mark: { type: "bar" },
-        encoding: {
-          x: { field: "region", type: "nominal", title: "Region" },
-          y: { field: "revenue", type: "quantitative", title: "Net revenue (USD)" },
-          xOffset: { field: "quarter" },
-          color: { field: "quarter", type: "nominal", title: "Quarter" },
-        },
-      },
-      rows: TABLE_ROWS.flatMap((row) => [
-        { region: row.region, quarter: "2025-Q2", revenue: row.revenue_q2 },
-        { region: row.region, quarter: "2025-Q3", revenue: row.revenue_q3 },
-      ]),
-      truncated: false,
-    },
-    provenance: null,
-    freshness_at: "2026-01-15T06:10:00Z",
-    assumptions: [],
-    exclusions: [],
-    caveats: [],
-    parent_artifact_id: null,
-    created_at: "2026-01-15T17:30:18Z",
-    download_formats: ["csv"],
-  },
-];
-
-const REPORT_HTML = `<!doctype html><html><head><style>
-body { font-family: -apple-system, "Segoe UI", sans-serif; margin: 2rem; color: #1a1a1a; }
-h1 { font-size: 1.3rem; } h2 { font-size: 1rem; margin-top: 1.6rem; }
-table { border-collapse: collapse; margin-top: .8rem; }
-td, th { border: 1px solid #ddd; padding: .45rem .8rem; font-size: .85rem; text-align: right; }
-th:first-child, td:first-child { text-align: left; }
-.up { color: #0a7d33; } .flag { color: #b54708; font-weight: 600; }
-</style></head><body>
-<h1>Q3 2025 Regional Revenue Review</h1>
-<p>Q3 revenue reached <b>$16.1M</b>, up <b>10.4%</b> quarter over quarter. EMEA drove the
-growth in absolute terms; APAC grew fastest from a smaller base.</p>
-<h2>Per-region summary</h2>
-<table><tr><th>Region</th><th>Q2</th><th>Q3</th><th>Growth</th></tr>
-<tr><td>AMER</td><td>$8.93M</td><td>$9.20M</td><td class="up">+3.1%</td></tr>
-<tr><td>EMEA</td><td>$4.10M</td><td>$4.81M</td><td class="up">+17.3%</td></tr>
-<tr><td>APAC</td><td>$1.61M</td><td>$2.12M</td><td class="up">+31.5%</td></tr></table>
-<h2>Watch items</h2>
-<p class="flag">APAC growth is concentrated in two marketplace launches; retention after
-the launch quarter is not yet observable.</p>
-</body></html>`;
-
-export const fixtureReportArtifact: FixtureArtifact = {
-  at: 18_000,
-  id: "artifact-report-1",
-  run_id: FIXTURE_RUN_ID,
-  assistant_message_id: null,
-  kind: "report",
-  filename: "q3_regional_review.html",
-  mime_type: "text/html",
-  snapshot: { html: REPORT_HTML },
-  provenance: null,
-  freshness_at: "2026-01-15T06:10:00Z",
-  assumptions: [],
-  exclusions: [],
-  caveats: [],
-  parent_artifact_id: null,
-  created_at: "2026-01-15T17:30:18Z",
-  download_formats: ["html"],
-};
-fixtureArtifacts.push(fixtureReportArtifact);
-
-export const FIXTURE_TOTAL_MS = 21_200;
+export const FIXTURE_TOTAL_MS = 24_800;
 
 export function fixtureEventCreatedAt(at: number): string {
   return new Date(BASE_EPOCH + at).toISOString();
 }
 
+/** The frozen wall clock (epoch ms) at a replay offset — injected into the
+ * chat UI context so relative timestamps stay honest on frozen frames. */
+export function fixtureNowMs(at: number): number {
+  return BASE_EPOCH + at;
+}
+
+/**
+ * Literal contents of the fixture's mirrored files, by manifest id. The
+ * harness turns these into object URLs so content-dependent UI (the image
+ * card thumbnail) renders for real at /chats/test.
+ */
+export function fixtureFileContent(
+  fileId: string,
+): { body: string | Uint8Array<ArrayBuffer>; mime: string } | null {
+  switch (fileId) {
+    case "file-fixture-revenue-png":
+      return { body: decodeBase64(REVENUE_PNG_BASE64), mime: "image/png" };
+    case "file-fixture-revenue-csv":
+      return { body: REVENUE_CSV_FILE, mime: "text/csv" };
+    case "file-fixture-1":
+      return { body: PYTHON_FILE, mime: "text/x-python" };
+    case "file-fixture-report":
+      return { body: REPORT_HTML_FILE, mime: "text/html" };
+    case "file-fixture-chart":
+      return { body: CHART_SVG_FILE, mime: "image/svg+xml" };
+    case "file-fixture-csv":
+      return { body: CSV_FILE, mime: "text/csv" };
+    case "file-fixture-summary":
+      return { body: SUMMARY_MD_FILE, mime: "text/markdown" };
+    default:
+      return null;
+  }
+}
+
+/** Base64 to bytes without Buffer, so the harness works in the browser. */
+function decodeBase64(value: string): Uint8Array<ArrayBuffer> {
+  const binary = atob(value);
+  const bytes = new Uint8Array(new ArrayBuffer(binary.length));
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+
 export function materializeFixtureEvents(
   upToMs: number,
+  extra: FixtureEvent[] = [],
 ): StandaloneChatEvent[] {
-  return fixtureEvents
+  return [...fixtureEvents, ...extra]
     .filter((event) => event.at <= upToMs)
+    .sort((a, b) => a.at - b.at)
     .map(({ at, ...event }) => ({
       ...event,
       created_at: fixtureEventCreatedAt(at),

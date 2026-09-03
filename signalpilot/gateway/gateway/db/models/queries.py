@@ -10,6 +10,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     Float,
+    ForeignKey,
     Index,
     Integer,
     String,
@@ -17,7 +18,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import GatewayBase, TZDateTime
 
@@ -157,6 +158,7 @@ class GatewayDashboardAuthoringSession(GatewayBase):
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     thread_id: Mapped[str] = mapped_column(String, nullable=False, default=lambda: str(uuid.uuid4()))
+    conversation_id: Mapped[str | None] = mapped_column(String)
     dashboard_id: Mapped[str | None] = mapped_column(String)
     base_version_id: Mapped[str | None] = mapped_column(String)
     org_id: Mapped[str] = mapped_column(String, nullable=False)
@@ -166,7 +168,9 @@ class GatewayDashboardAuthoringSession(GatewayBase):
     commit_sha: Mapped[str] = mapped_column(String(40), nullable=False)
     semantic_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
-    definition_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    definition_json: Mapped[dict | None] = mapped_column(JSON)
+    plan_json: Mapped[dict | None] = mapped_column(JSON)
+    expected_chart_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     operations_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     events_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     agent_runs_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
@@ -184,11 +188,47 @@ class GatewayDashboardAuthoringSession(GatewayBase):
     updated_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now(), onupdate=func.now())
     applied_at: Mapped[datetime | None] = mapped_column(TZDateTime)
     discarded_at: Mapped[datetime | None] = mapped_column(TZDateTime)
+    chart_drafts: Mapped[list[GatewayDashboardChartDraft]] = relationship(
+        back_populates="session",
+        lazy="selectin",
+        order_by="GatewayDashboardChartDraft.ordinal",
+    )
 
     __table_args__ = (
         Index("ix_gw_dashboard_authoring_owner", "org_id", "owner_user_id", "created_at"),
         Index("ix_gw_dashboard_authoring_dashboard", "org_id", "dashboard_id", "created_at"),
         Index("ix_gw_dashboard_authoring_thread", "org_id", "owner_user_id", "thread_id", "created_at"),
+        Index("ix_gw_dashboard_authoring_conversation", "org_id", "owner_user_id", "conversation_id", "updated_at"),
+    )
+
+
+class GatewayDashboardChartDraft(GatewayBase):
+    """One private, independently validated chart in a progressive build."""
+
+    __tablename__ = "gateway_dashboard_chart_drafts"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    session_id: Mapped[str] = mapped_column(
+        String,
+        ForeignKey("gateway_dashboard_authoring_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    chart_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    intent_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending", server_default="pending")
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    definition_json: Mapped[dict | None] = mapped_column(JSON)
+    safe_error: Mapped[str | None] = mapped_column(Text)
+    model_usage_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now(), onupdate=func.now())
+    session: Mapped[GatewayDashboardAuthoringSession] = relationship(back_populates="chart_drafts")
+
+    __table_args__ = (
+        UniqueConstraint("session_id", "chart_id", name="uq_gw_dashboard_chart_draft"),
+        UniqueConstraint("session_id", "ordinal", name="uq_gw_dashboard_chart_ordinal"),
+        Index("ix_gw_dashboard_chart_drafts_session", "session_id", "ordinal"),
     )
 
 
@@ -486,4 +526,3 @@ class GatewayAnalysisTrail(GatewayBase):
         Index("ix_gw_analysis_trail_project", "org_id", "project_id", "branch"),
         Index("ix_gw_analysis_trail_source_status", "org_id", "source", "status"),
     )
-

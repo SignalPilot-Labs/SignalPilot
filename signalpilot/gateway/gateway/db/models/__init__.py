@@ -75,6 +75,13 @@ from .knowledge import (
     GatewayReport,
     GatewaySchemaWatch,
 )
+from .mcp import (
+    GatewayMcpConnector,
+    GatewayMcpMemberState,
+    GatewayMcpOAuthState,
+    GatewayMcpOrgPolicy,
+    GatewayMcpToolCall,
+)
 from .queries import (
     GatewayAnalysisTrail,
     GatewayChatObjectDeletion,
@@ -83,6 +90,7 @@ from .queries import (
     GatewayChatTraceThread,
     GatewayDashboard,
     GatewayDashboardAuthoringSession,
+    GatewayDashboardChartDraft,
     GatewayDashboardResult,
     GatewayDashboardVersion,
     GatewayGovernedQueryExecution,
@@ -134,6 +142,7 @@ __all__ = [
     "GatewayCredential",
     "GatewayDashboard",
     "GatewayDashboardAuthoringSession",
+    "GatewayDashboardChartDraft",
     "GatewayDashboardResult",
     "GatewayDashboardVersion",
     "GatewayDbtManifest",
@@ -150,6 +159,11 @@ __all__ = [
     "GatewayKnowledgeDoc",
     "GatewayKnowledgeEdit",
     "GatewayKnowledgeRetrieval",
+    "GatewayMcpConnector",
+    "GatewayMcpMemberState",
+    "GatewayMcpOAuthState",
+    "GatewayMcpOrgPolicy",
+    "GatewayMcpToolCall",
     "GatewayNotebookSession",
     "GatewayNotionIntegration",
     "GatewayOrg",

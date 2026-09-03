@@ -24,6 +24,9 @@ PUBLIC_PATHS = frozenset(
         "/openapi.json",
         "/api/integrations/notion/oauth/callback",
         "/api/integrations/slack/oauth/callback",
+        # Connector sign-in: provider redirect and the public client-metadata document.
+        "/api/mcp/oauth/callback",
+        "/api/mcp/oauth/client-metadata.json",
         "/api/notion/webhooks/events",
         "/api/github/webhook",
         "/slack/events",

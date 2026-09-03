@@ -10,20 +10,15 @@ from sqlalchemy import and_, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.db.models import (
-    GatewayChatArtifact,
     GatewayChatConversation,
     GatewayChatMessage,
     GatewayChatObjectDeletion,
     GatewayChatRun,
     GatewayChatRunEvent,
     GatewayChatShareGrant,
-    GatewayReportRefresh,
-    GatewaySavedReport,
-    GatewaySavedReportVersion,
     GatewayWorkspaceProject,
 )
 from gateway.models.standalone_chat import (
-    ChatArtifactInfo,
     StandaloneConversationDetail,
     StandaloneConversationInfo,
 )
@@ -31,7 +26,6 @@ from gateway.standalone_chat import config as chat_config
 from gateway.standalone_chat.domain import RunStatus
 from gateway.standalone_chat.object_storage import conversation_prefix
 from gateway.store.standalone_chat.helpers import (
-    _artifact_info,
     _event_info,
     _message_info,
     _now,
@@ -51,6 +45,8 @@ async def create_conversation_with_run(
     commit_sha: str | None = None,
     per_query_budget_usd: float = 0.25,
     chat_budget_usd: float = 1.0,
+    model: str | None = None,
+    effort: str | None = None,
     message_metadata: dict[str, Any] | None = None,
     commit: bool = True,
     origin: str = "user",
@@ -68,6 +64,8 @@ async def create_conversation_with_run(
         commit_sha=commit_sha,
         per_query_budget_usd=per_query_budget_usd,
         chat_budget_usd=chat_budget_usd,
+        model=model,
+        effort=effort or chat_config.default_chat_effort(),
         status="active",
         title="New chat",
         message_count=1,
@@ -109,6 +107,40 @@ async def create_conversation_with_run(
         raise
     await db.refresh(run)
     return conversation, run
+
+
+async def create_empty_conversation(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    user_id: str,
+    project: GatewayWorkspaceProject,
+    branch: str,
+    commit_sha: str,
+    title: str,
+) -> GatewayChatConversation:
+    """Create a Data Chat thread without inventing a user prompt or starting a run."""
+    now = time.time()
+    conversation = GatewayChatConversation(
+        id=str(uuid.uuid4()),
+        org_id=org_id,
+        user_id=user_id,
+        project_id=project.id,
+        surface="standalone",
+        origin="user",
+        branch=branch,
+        commit_sha=commit_sha,
+        status="active",
+        title=title[:200],
+        message_count=0,
+        total_tokens=0,
+        total_cost_usd=0.0,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(conversation)
+    await db.flush()
+    return conversation
 
 
 async def list_conversations(
@@ -189,6 +221,8 @@ async def list_conversations(
             updated_at=conversation.updated_at,
             run_status=run_status,
             commit_sha=conversation.commit_sha,
+            model=conversation.model or chat_config.default_chat_model(),
+            effort=conversation.effort or chat_config.default_chat_effort(),
             per_query_budget_usd=conversation.per_query_budget_usd,
             chat_budget_usd=conversation.chat_budget_usd,
             estimated_spend_usd=conversation.estimated_spend_usd,
@@ -246,96 +280,6 @@ async def get_conversation_detail(
         .scalars()
         .all()
     )
-    artifacts = (
-        (
-            await db.execute(
-                select(GatewayChatArtifact)
-                .where(
-                    GatewayChatArtifact.conversation_id == conversation_id,
-                    GatewayChatArtifact.org_id == org_id,
-                    GatewayChatArtifact.user_id == user_id,
-                )
-                .order_by(GatewayChatArtifact.created_at)
-            )
-        )
-        .scalars()
-        .all()
-    )
-    artifact_ids = [artifact.id for artifact in artifacts]
-    saved_by_artifact: dict[str, tuple[str, str, str]] = {}
-    if artifact_ids:
-        saved_rows = (
-            await db.execute(
-                select(GatewaySavedReportVersion, GatewaySavedReport)
-                .join(GatewaySavedReport, GatewaySavedReport.id == GatewaySavedReportVersion.report_id)
-                .where(
-                    GatewaySavedReportVersion.source_artifact_id.in_(artifact_ids),
-                    GatewaySavedReport.org_id == org_id,
-                    GatewaySavedReport.owner_user_id == user_id,
-                )
-            )
-        ).all()
-        saved_by_artifact = {
-            version.source_artifact_id: (report.id, version.id, report.title) for version, report in saved_rows
-        }
-    refresh_by_artifact: dict[str, tuple[str, str, str]] = {}
-    run_ids = {artifact.run_id for artifact in artifacts}
-    if run_ids:
-        refreshes = (
-            await db.execute(
-                select(GatewayReportRefresh, GatewaySavedReport)
-                .join(GatewaySavedReport, GatewaySavedReport.id == GatewayReportRefresh.report_id)
-                .where(
-                    GatewayReportRefresh.run_id.in_(run_ids),
-                    GatewayReportRefresh.org_id == org_id,
-                    GatewayReportRefresh.owner_user_id == user_id,
-                    GatewayReportRefresh.status == "update_available",
-                )
-            )
-        ).all()
-        for refresh, report in refreshes:
-            for artifact_id in refresh.candidate_artifact_ids_json or []:
-                refresh_by_artifact[str(artifact_id)] = (
-                    refresh.report_id,
-                    refresh.base_version_id,
-                    report.title,
-                )
-    title_by_artifact: dict[str, tuple[str, str, str]] = {}
-    default_titles = {artifact.filename.rsplit(".", 1)[0].lower() for artifact in artifacts}
-    if default_titles:
-        title_rows = (
-            await db.execute(
-                select(GatewaySavedReport)
-                .where(
-                    GatewaySavedReport.org_id == org_id,
-                    GatewaySavedReport.owner_user_id == user_id,
-                    func.lower(GatewaySavedReport.title).in_(default_titles),
-                )
-                .order_by(GatewaySavedReport.updated_at, GatewaySavedReport.id)
-            )
-        ).scalars()
-        reports_by_title = {report.title.lower(): report for report in title_rows if report.current_version_id}
-        for artifact in artifacts:
-            report = reports_by_title.get(artifact.filename.rsplit(".", 1)[0].lower())
-            if report and report.kind == artifact.kind:
-                title_by_artifact[artifact.id] = (report.id, report.current_version_id or "", report.title)
-    artifact_infos: list[ChatArtifactInfo] = []
-    for artifact in artifacts:
-        refresh_target = refresh_by_artifact.get(artifact.id)
-        saved_target = saved_by_artifact.get(artifact.id)
-        title_target = title_by_artifact.get(artifact.id)
-        target = refresh_target or saved_target or title_target or (None, None, None)
-        artifact_infos.append(
-            _artifact_info(
-                artifact,
-                saved_report_id=target[0],
-                saved_report_version_id=target[1],
-                saved_report_title=target[2],
-                report_action=(
-                    "update" if refresh_target else "open" if saved_target else "update" if title_target else "create"
-                ),
-            )
-        )
     current_run = (
         await db.execute(
             select(GatewayChatRun)
@@ -366,6 +310,8 @@ async def get_conversation_detail(
             updated_at=conversation.updated_at,
             run_status=current_run.status if current_run else None,
             commit_sha=conversation.commit_sha,
+            model=conversation.model or chat_config.default_chat_model(),
+            effort=conversation.effort or chat_config.default_chat_effort(),
             per_query_budget_usd=conversation.per_query_budget_usd,
             chat_budget_usd=conversation.chat_budget_usd,
             estimated_spend_usd=conversation.estimated_spend_usd,
@@ -373,7 +319,6 @@ async def get_conversation_detail(
             reserved_spend_usd=conversation.reserved_spend_usd,
         ),
         messages=[_message_info(row) for row in messages],
-        artifacts=artifact_infos,
         current_run=_run_info(current_run) if current_run else None,
         run_events=[_event_info(row) for row in events],
     )
@@ -396,6 +341,52 @@ async def rename_conversation(
     if conversation is None:
         return False
     conversation.title = title
+    conversation.updated_at = time.time()
+    await db.commit()
+    return True
+
+
+async def update_conversation_model(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    user_id: str,
+    conversation_id: str,
+    model: str,
+) -> bool:
+    conversation = await _owned_conversation_row(
+        db,
+        org_id=org_id,
+        user_id=user_id,
+        conversation_id=conversation_id,
+        lock=True,
+    )
+    if conversation is None:
+        return False
+    conversation.model = model
+    conversation.updated_at = time.time()
+    await db.commit()
+    return True
+
+
+async def update_conversation_effort(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    user_id: str,
+    conversation_id: str,
+    effort: str,
+) -> bool:
+    conversation = await _owned_conversation_row(
+        db,
+        org_id=org_id,
+        user_id=user_id,
+        conversation_id=conversation_id,
+        lock=True,
+    )
+    if conversation is None:
+        return False
+    conversation.effort = effort
     conversation.updated_at = time.time()
     await db.commit()
     return True

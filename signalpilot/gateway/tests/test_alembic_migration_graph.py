@@ -35,16 +35,27 @@ def test_real_migration_chain_is_the_tracked_head() -> None:
     config = build_alembic_config("postgresql://unused:unused@localhost/unused")
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_current_head() == "0016"
+    assert scripts.get_current_head() == "0024"
 
-    revision_0016 = scripts.get_revision("0016")
-    assert revision_0016 is not None
-    assert revision_0016.down_revision == "0015"
+    # 0024 stores the per-chat thinking effort on top of the connector chain.
+    revision_0024 = scripts.get_revision("0024")
+    assert revision_0024 is not None
+    assert revision_0024.down_revision == "0023"
 
-    revision_0015 = scripts.get_revision("0015")
-    assert revision_0015 is not None
-    assert revision_0015.down_revision == "0014"
+    # The connector migrations (0022, 0023) sit behind the dashboard
+    # authoring migrations (0020, 0021) in one linear chain.
+    revision_0023 = scripts.get_revision("0023")
+    assert revision_0023 is not None
+    assert revision_0023.down_revision == "0022"
 
-    revision_0014 = scripts.get_revision("0014")
-    assert revision_0014 is not None
-    assert revision_0014.down_revision == "0013"
+    revision_0022 = scripts.get_revision("0022")
+    assert revision_0022 is not None
+    assert revision_0022.down_revision == "0021"
+
+    revision_0021 = scripts.get_revision("0021")
+    assert revision_0021 is not None
+    assert revision_0021.down_revision == "0020"
+
+    revision_0020 = scripts.get_revision("0020")
+    assert revision_0020 is not None
+    assert revision_0020.down_revision == "0019"

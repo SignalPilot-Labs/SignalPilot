@@ -1,0 +1,446 @@
+/* Owner: typography agent. Headings, paragraphs, lists, links, inline marks,
+   definition lists, footnotes.
+
+   base.css gives every top-level block one uniform `--md-gap`. That is right
+   for framed evidence (code, tables, diagrams) but wrong for running text: a
+   heading needs far more air above it than below, and a list belongs closer to
+   the sentence that introduces it. Everything below re-cuts that rhythm for
+   prose only; the framed blocks keep the shared gap. */
+
+.chat-markdown {
+  /* Local rhythm scale, in ems of the 15px body so it tracks the font size. */
+  --md-lead: 0.5rem; /* heading -> the thing it introduces */
+  --md-item: 0.32rem; /* list item -> next list item */
+  --md-marker: var(--color-text-dim);
+}
+
+/* ─────────────────────────── Headings ─────────────────────────── */
+
+/* These are headings inside a ~768px chat reply, not page titles. The scale is
+   deliberately compressed: h1 is only ~1.4x the body, and separation is done
+   with space and weight rather than size. */
+.chat-markdown :is(h1, h2, h3, h4, h5, h6) {
+  color: var(--color-text);
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  line-height: 1.3;
+  text-wrap: balance;
+  scroll-margin-top: 1rem;
+  /* Streamdown ships `mt-6 mb-2 text-2xl` on every heading; the space below a
+     heading is set on the following element instead, so zero it here. */
+  margin-bottom: 0;
+}
+
+.chat-markdown h1 {
+  margin-top: 2rem;
+  font-size: 1.5em;
+  letter-spacing: -0.022em;
+}
+.chat-markdown h2 {
+  margin-top: 1.8rem;
+  font-size: 1.28em;
+  letter-spacing: -0.02em;
+}
+.chat-markdown h3 {
+  margin-top: 1.65rem;
+  font-size: 1.1em;
+}
+.chat-markdown h4 {
+  margin-top: 1.45rem;
+  font-size: 0.98em;
+  font-weight: 680;
+  letter-spacing: -0.005em;
+}
+/* h5/h6 are rare enough that models use them as micro-labels; set them so. */
+.chat-markdown :is(h5, h6) {
+  margin-top: 1.25rem;
+  font-family: var(--font-mono);
+  font-size: 0.74em;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+.chat-markdown h6 {
+  color: var(--color-text-dim);
+}
+
+/* The gap belongs above the heading, not below it. */
+.chat-markdown :is(h1, h2, h3, h4, h5, h6) + * {
+  margin-top: var(--md-lead);
+}
+/* Two headings in a row sit as a pair. */
+.chat-markdown :is(h1, h2, h3, h4, h5, h6) + :is(h1, h2, h3, h4, h5, h6) {
+  margin-top: 0.85rem;
+}
+/* A heading that opens the message keeps the wrapper flush. */
+.chat-markdown > :is(h1, h2, h3, h4, h5, h6):first-child {
+  margin-top: 0;
+}
+
+/* ─────────────────────── Paragraphs and rhythm ─────────────────── */
+
+.chat-markdown p {
+  line-height: 1.68;
+  overflow-wrap: break-word;
+}
+
+/* A list is part of the sentence that introduces it: pull it up. Prose after a
+   list gets the full block gap back so the group reads as one unit. */
+.chat-markdown p + :is(ul, ol) {
+  margin-top: 0.55rem;
+}
+.chat-markdown :is(ul, ol) + p {
+  margin-top: 1.05rem;
+}
+/* Two sibling lists (bullets then steps) are separate thoughts. */
+.chat-markdown :is(ul, ol) + :is(ul, ol) {
+  margin-top: 1.05rem;
+}
+
+/* ────────────────────────────── Lists ─────────────────────────── */
+
+.chat-markdown :is(ul, ol) {
+  padding-left: 1.4rem;
+  list-style-position: outside;
+}
+.chat-markdown ul {
+  list-style: disc;
+}
+.chat-markdown ol {
+  list-style: decimal;
+  padding-left: 1.55rem;
+}
+
+.chat-markdown li {
+  /* Streamdown puts `py-1` on every item, which reads as a loose 33px row.
+     Spacing between items is a margin, so nested lists and multi-paragraph
+     items collapse against it correctly. */
+  padding-block: 0;
+  line-height: 1.66;
+  overflow-wrap: break-word;
+}
+.chat-markdown li + li {
+  margin-top: var(--md-item);
+}
+
+/* Markers are chrome: dim them and stop the ordinals from wobbling as the
+   numbers grow. */
+.chat-markdown li::marker {
+  color: var(--md-marker);
+}
+.chat-markdown ol > li::marker {
+  font-size: 0.92em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Nesting: a shallower indent than the first level, and a marker that changes
+   so depth is legible without counting pixels. */
+.chat-markdown li > :is(ul, ol) {
+  margin-top: var(--md-item);
+  padding-left: 1.2rem;
+}
+.chat-markdown ul ul {
+  list-style: circle;
+}
+.chat-markdown ul ul ul {
+  list-style: square;
+}
+.chat-markdown ol ol {
+  list-style: lower-alpha;
+}
+.chat-markdown ol ol ol {
+  list-style: lower-roman;
+}
+
+/* Streamdown sets `[&>p]:inline` on list items so a loose list's paragraph
+   wrapper does not add a line. That is right for the common one-paragraph
+   item and wrong the moment an item has two: they run together into one
+   sentence. Restore block flow only in that case, with an internal break
+   smaller than the gap between items so the list still holds together. */
+.chat-markdown li > p {
+  margin-top: 0;
+}
+.chat-markdown li > p:not(:only-of-type) {
+  display: block;
+}
+.chat-markdown li > p:not(:only-of-type) + p {
+  margin-top: 0.45rem;
+}
+.chat-markdown li > :is(pre, table, blockquote, details, figure) {
+  margin-top: 0.5rem;
+}
+
+/* ──────────────────────────── Task lists ──────────────────────── */
+
+/* GFM checkboxes are native inputs restyled globally. Hang them in the gutter
+   so the item text keeps a single flush left edge when it wraps, instead of
+   indenting under the box. */
+.chat-markdown li:has(> input[type="checkbox"]) {
+  list-style: none;
+  position: relative;
+  margin-left: -1.4rem;
+  padding-left: 1.6rem;
+}
+.chat-markdown li:has(> input[type="checkbox"]) + li:has(> input[type="checkbox"]) {
+  margin-top: 0.4rem;
+}
+.chat-markdown li > input[type="checkbox"] {
+  position: absolute;
+  top: 0.44em;
+  left: 0.06rem;
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  border-radius: 3.5px;
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease;
+}
+/* Re-centre the global tick inside the slightly larger box. */
+.chat-markdown li > input[type="checkbox"]:checked::after {
+  left: 4px;
+  top: 1.5px;
+}
+.chat-markdown li > input[type="checkbox"]:not(:checked):hover {
+  border-color: var(--color-border-active);
+}
+/* A done item is settled, not shouted. */
+.chat-markdown li:has(> input[type="checkbox"]:checked) {
+  color: var(--color-text-muted);
+}
+.chat-markdown li:has(> input[type="checkbox"]:checked)
+  :is(strong, a, [data-streamdown="strong"]) {
+  color: inherit;
+}
+
+/* ────────────────────────────── Links ─────────────────────────── */
+
+.chat-markdown a {
+  color: var(--color-text);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-decoration-color: var(--color-border-active);
+  text-underline-offset: 3px;
+  border-radius: 3px;
+  transition:
+    color 120ms ease,
+    text-decoration-color 120ms ease;
+}
+.chat-markdown a:hover {
+  text-decoration-color: currentColor;
+}
+.chat-markdown a:focus-visible {
+  outline: 1px solid var(--color-border-active);
+  outline-offset: 2px;
+  text-decoration-color: transparent;
+}
+
+/* External links leave the app; mark them, quietly. In-app deep links (the
+   agent's /lineage/<model> references) get no glyph — no glyph means you stay
+   where you are. */
+.chat-markdown a[target="_blank"]::after {
+  content: "↗";
+  display: inline-block;
+  margin-left: 0.18em;
+  color: var(--color-text-dim);
+  font-size: 0.78em;
+  line-height: 1;
+  vertical-align: 0.08em;
+  text-decoration: none;
+}
+.chat-markdown a[target="_blank"]:hover::after {
+  color: var(--color-text-muted);
+}
+/* Streamdown stamps target=_blank on same-document anchors too (footnote refs
+   and backrefs); those go nowhere, so they get no glyph. */
+.chat-markdown a[href^="#"]::after {
+  content: none;
+}
+
+/* Inside a heading the underline competes with the type; keep it lighter. */
+.chat-markdown :is(h1, h2, h3, h4, h5, h6) a {
+  text-decoration-thickness: 1px;
+  text-underline-offset: 4px;
+  text-decoration-color: var(--color-border-hover);
+}
+
+/* ─────────────────────────── Inline marks ─────────────────────── */
+
+/* Everything here sits mid-sentence, so nothing may change the line box:
+   vertical padding on an inline box does not, `line-height` and `inline-block`
+   with a tall box do. */
+
+ /* Streamdown renders `**bold**` as <span data-streamdown="strong">. */
+.chat-markdown strong,
+.chat-markdown b,
+.chat-markdown [data-streamdown="strong"] {
+  font-weight: 650;
+  color: var(--color-text);
+  letter-spacing: -0.005em;
+}
+.chat-markdown em,
+.chat-markdown i {
+  font-style: italic;
+}
+.chat-markdown :is(s, del) {
+  color: var(--color-text-dim);
+  text-decoration-thickness: 1px;
+}
+.chat-markdown small {
+  font-size: 0.86em;
+  color: var(--color-text-muted);
+}
+.chat-markdown time {
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-markdown mark {
+  border-radius: 3px;
+  background: rgba(255, 170, 0, 0.16);
+  box-shadow: 0 0 0 1px rgba(255, 170, 0, 0.14);
+  padding: 0.1em 0.26em;
+  margin-inline: -0.1em;
+  color: var(--color-text);
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
+.chat-markdown kbd {
+  border: 1px solid var(--color-border-hover);
+  border-radius: 5px;
+  box-shadow: inset 0 -1px 0 var(--color-border-hover);
+  background: var(--color-bg-input);
+  padding: 0.16em 0.45em;
+  font-family: var(--font-mono);
+  font-size: 0.82em;
+  line-height: 1;
+  color: var(--color-text);
+  vertical-align: baseline;
+  white-space: nowrap;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
+.chat-markdown abbr[title] {
+  text-decoration: underline dotted;
+  text-decoration-color: var(--color-text-dim);
+  text-underline-offset: 3px;
+  cursor: help;
+}
+
+/* Classic zero-line-height trick: the shifted box adds no height to the line. */
+.chat-markdown sub,
+.chat-markdown sup {
+  position: relative;
+  font-size: 0.72em;
+  line-height: 0;
+  vertical-align: baseline;
+}
+.chat-markdown sup {
+  top: -0.45em;
+}
+.chat-markdown sub {
+  bottom: -0.22em;
+}
+
+/* ───────────────────────── Definition lists ───────────────────── */
+
+/* A metadata block: fixed label column, values on a shared left edge, long
+   values wrapping inside their column instead of widening the grid. */
+.chat-markdown dl {
+  display: grid;
+  grid-template-columns: minmax(6rem, max-content) minmax(0, 1fr);
+  align-items: baseline;
+  column-gap: 1.1rem;
+  row-gap: 0.42rem;
+}
+.chat-markdown dt {
+  grid-column: 1;
+  font-family: var(--font-mono);
+  font-size: 0.72em;
+  font-weight: 500;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+  color: var(--color-text-dim);
+  white-space: nowrap;
+}
+.chat-markdown dd {
+  grid-column: 2;
+  margin: 0;
+  min-width: 0;
+  color: var(--color-text);
+  overflow-wrap: break-word;
+}
+/* A label with several values keeps them stacked under one label. */
+.chat-markdown dd + dd {
+  margin-top: 0.2rem;
+}
+
+/* ────────────────────────── GFM footnotes ─────────────────────── */
+
+/* The reference: a small chip, so a footnote marker never reads as an exponent
+   in a sentence full of numbers. */
+.chat-markdown sup a[href^="#user-content-fn"] {
+  padding: 0.1em 0.3em;
+  border-radius: 4px;
+  background: var(--color-bg-elevated);
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+  text-decoration: none;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+.chat-markdown sup a[href^="#user-content-fn"]:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text);
+}
+
+.chat-markdown section[data-footnotes] {
+  margin-top: var(--md-gap-loose);
+  border-top: 1px solid var(--md-rule);
+  padding-top: 0.8rem;
+  font-size: 0.88em;
+  line-height: 1.6;
+  color: var(--color-text-muted);
+}
+.chat-markdown section[data-footnotes] > ol {
+  margin-top: 0;
+  padding-left: 1.5rem;
+}
+.chat-markdown section[data-footnotes] li + li {
+  margin-top: 0.4rem;
+}
+.chat-markdown section[data-footnotes] li::marker {
+  color: var(--color-text-dim);
+  font-size: 0.92em;
+}
+.chat-markdown section[data-footnotes] p {
+  margin-top: 0;
+  line-height: 1.6;
+}
+.chat-markdown section[data-footnotes] li:target {
+  border-radius: var(--md-radius-sm);
+  background: var(--color-bg-hover);
+  box-shadow: 0 0 0 0.35rem var(--color-bg-hover);
+}
+
+/* Back-reference. The bare ↩ picks up an emoji font on most systems; the text
+   variation selector forces the glyph form, so it stays a hairline arrow. */
+.chat-markdown a[href^="#user-content-fnref"] {
+  margin-left: 0.4em;
+  color: var(--color-text-dim);
+  font-size: 0;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.chat-markdown a[href^="#user-content-fnref"]::after {
+  content: "\21A9\FE0E";
+  font-size: 0.9rem;
+  line-height: 1;
+}
+.chat-markdown a[href^="#user-content-fnref"]:hover {
+  color: var(--color-text);
+}

@@ -30,10 +30,16 @@ from gateway.dashboard.operations import (
     validate_dashboard_semantics,
     validate_time_series_default_windows,
 )
-from gateway.db.models import GatewayBase, GatewayDashboardAuthoringSession, GatewayDashboardResult
+from gateway.db.models import (
+    GatewayBase,
+    GatewayDashboardAuthoringSession,
+    GatewayDashboardResult,
+    GatewayStructuredQueryResult,
+)
 from gateway.models.dashboards import (
     DashboardAuthoringMessageRequest,
     DashboardAuthoringRequest,
+    DashboardRuntimeFilter,
     DashboardSemanticContext,
 )
 
@@ -157,7 +163,14 @@ async def _seed_apply_receipts(
     receipt_dashboard_id = dashboard_id or preview.dashboard_id or f"draft:{preview.id}"
     receipt_version_id = version_id or f"draft:{preview.id}"
     requested_filters = [
-        rule for rule in definition.filters.dimensions if rule.values or rule.operator in {"isNull", "notNull"}
+        DashboardRuntimeFilter(
+            id=rule.id,
+            operator=rule.operator,
+            values=rule.values,
+            settings=rule.settings,
+        )
+        for rule in definition.filters.dimensions
+        if rule.values or rule.operator in {"isNull", "notNull"}
     ]
     rows = []
     for chart in definition.charts:
@@ -813,6 +826,159 @@ async def test_create_authoring_session_canonicalizes_model_filter_targets(
 
 
 @pytest.mark.asyncio
+async def test_chat_dashboard_authoring_streams_real_generation_phases(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_definition = _definition_with_filter()
+    progress_events: list[dict] = []
+
+    class PreviewAgent:
+        model = "test-model"
+
+        async def draft(self, **_kwargs) -> DashboardAgentDraft:
+            return DashboardAgentDraft(
+                summary="Created the governed dashboard preview.",
+                definition=model_definition,
+            )
+
+    async def resolve_context(*_args, **_kwargs) -> DashboardSemanticContext:
+        return _orders_context()
+
+    async def active_chat_run(*_args, **_kwargs):
+        return SimpleNamespace(
+            id="chat-run-1",
+            project_id=model_definition.signalPilot.projectId,
+            conversation_id="conversation-1",
+        )
+
+    async def append_event(_db, **kwargs):
+        assert kwargs["run_id"] == "chat-run-1"
+        assert kwargs["event_type"] == "progress"
+        progress_events.append(kwargs["payload"])
+
+    async def authoring_agent(*_args, **_kwargs):
+        return PreviewAgent(), False
+
+    monkeypatch.setattr(dashboard_api.resolver, "resolve", resolve_context)
+    monkeypatch.setattr(dashboard_api, "_request_chat_run", active_chat_run)
+    monkeypatch.setattr(dashboard_api, "_dashboard_authoring_agent", authoring_agent)
+    monkeypatch.setattr(dashboard_api.chat_store, "append_event", append_event)
+    store = SimpleNamespace(
+        session=db_session,
+        user_id="owner-a",
+        _require_org_id=lambda: "org-a",
+    )
+
+    session = await dashboard_api.create_dashboard_authoring_session(
+        DashboardAuthoringRequest(
+            prompt="Create an executive dashboard",
+            project_id=model_definition.signalPilot.projectId,
+            commit_sha=model_definition.signalPilot.commitSha,
+        ),
+        store,
+    )
+
+    assert [event["phase"] for event in progress_events] == [
+        "resolving_context",
+        "drafting",
+        "validating",
+        "ready",
+    ]
+    assert all(event["scope"] == "dashboard_authoring" for event in progress_events)
+    assert progress_events[-1] == {
+        "scope": "dashboard_authoring",
+        "phase": "ready",
+        "label": f"Preview ready with {len(model_definition.charts)} charts",
+        "authoring_session_id": session.id,
+        "draft_revision": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_chat_dashboard_follow_up_streams_phases_and_ready_revision(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    definition = _definition_with_filter()
+    preview = await dashboard_store.create_authoring_session(
+        db_session,
+        org_id="org-a",
+        user_id="owner-a",
+        dashboard_id=None,
+        base_version_id=None,
+        definition=definition,
+        operations=[],
+        prompt="Create a dashboard",
+        summary="Created the first draft.",
+        agent_run_id="agent-run-1",
+        model="test-model",
+        requires_custom_sql_confirmation=False,
+        custom_sql_confirmed=False,
+        conversation_id="conversation-1",
+    )
+    progress_events: list[dict] = []
+
+    class RefiningAgent:
+        model = "test-model"
+
+        async def draft(self, **_kwargs) -> DashboardAgentDraft:
+            return DashboardAgentDraft(
+                summary="Refined the dashboard.",
+                operations=[
+                    RenameDashboard(
+                        operation="rename_dashboard",
+                        name="Refined dashboard",
+                    )
+                ],
+            )
+
+    async def verified_context(*_args, **_kwargs) -> DashboardSemanticContext:
+        return _orders_context()
+
+    async def active_chat_run(*_args, **_kwargs):
+        return SimpleNamespace(
+            id="chat-run-2",
+            project_id=definition.signalPilot.projectId,
+            conversation_id="conversation-1",
+        )
+
+    async def append_event(_db, **kwargs):
+        progress_events.append(kwargs["payload"])
+
+    async def authoring_agent(*_args, **_kwargs):
+        return RefiningAgent(), False
+
+    monkeypatch.setattr(dashboard_api, "_verified_context", verified_context)
+    monkeypatch.setattr(dashboard_api, "_request_chat_run", active_chat_run)
+    monkeypatch.setattr(dashboard_api, "_dashboard_authoring_agent", authoring_agent)
+    monkeypatch.setattr(dashboard_api.chat_store, "append_event", append_event)
+    monkeypatch.setattr(dashboard_api, "validate_dashboard_semantics", lambda *_args: None)
+    store = SimpleNamespace(
+        session=db_session,
+        user_id="owner-a",
+        _require_org_id=lambda: "org-a",
+    )
+
+    updated = await dashboard_api.continue_dashboard_authoring_session(
+        preview.id,
+        DashboardAuthoringMessageRequest(prompt="Refine the dashboard"),
+        store,
+    )
+
+    assert [event["phase"] for event in progress_events] == [
+        "resolving_context",
+        "drafting",
+        "validating",
+        "ready",
+    ]
+    assert updated.draft_revision == 2
+    assert progress_events[-1]["label"] == (
+        f"Draft 2 ready with {len(updated.definition.charts)} charts"
+    )
+
+
+@pytest.mark.asyncio
 async def test_create_authoring_session_force_oauth_never_resolves_org_api_key(
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
@@ -1107,6 +1273,75 @@ async def test_apply_rejects_any_non_exact_or_incomplete_chart_receipt(
 
 
 @pytest.mark.asyncio
+async def test_apply_accepts_exact_governed_limit_receipt_for_ranked_table(
+    db_session: AsyncSession,
+) -> None:
+    created = await dashboard_store.create_private_dashboard(
+        db_session,
+        org_id="org-a",
+        user_id="owner-a",
+        definition=_definition_with_filter(),
+    )
+    definition = created.version.definition.model_copy(update={"name": "Ranked table preview"})
+    preview = await dashboard_store.create_authoring_session(
+        db_session,
+        org_id="org-a",
+        user_id="owner-a",
+        dashboard_id=created.dashboard.id,
+        base_version_id=created.version.id,
+        definition=definition,
+        operations=[{"operation": "rename_dashboard", "name": "Ranked table preview"}],
+        prompt="Rename this dashboard",
+        summary="Renamed the dashboard.",
+        agent_run_id="agent-run-ranked-table",
+        model="test-model",
+        requires_custom_sql_confirmation=False,
+        custom_sql_confirmed=False,
+    )
+    receipts = await _seed_apply_receipts(
+        db_session,
+        preview=preview,
+        definition=definition,
+    )
+    table_chart = next(chart for chart in definition.charts if chart.visualization.type == "table")
+    table_receipt = next(receipt for receipt in receipts if receipt.chart_id == table_chart.id)
+    table_receipt.completeness = "truncated"
+    table_receipt.structured_result_id = "structured-ranked-table"
+    db_session.add(
+        GatewayStructuredQueryResult(
+            id=table_receipt.structured_result_id,
+            execution_id=table_receipt.execution_id,
+            org_id="org-a",
+            owner_user_id="owner-a",
+            columns_json=[],
+            rows_json=[],
+            preview_rows_json=[],
+            saved_row_count=table_chart.query.limit,
+            source_completeness="unknown",
+            result_completeness="truncated",
+            display_completeness="complete",
+            truncation_reason=(
+                f"result exceeded the {table_chart.query.limit}-row governed limit"
+            ),
+        )
+    )
+    await db_session.commit()
+
+    applied = await dashboard_store.apply_authoring_session(
+        db_session,
+        org_id="org-a",
+        user_id="owner-a",
+        session_id=preview.id,
+        expected_current_version_id=created.version.id,
+        visible_complete_result_ids=[receipt.id for receipt in receipts],
+    )
+
+    assert applied.version.ordinal == 2
+    assert table_receipt.version_id == applied.version.id
+    assert table_receipt.completeness == "truncated"
+
+
+@pytest.mark.asyncio
 async def test_apply_reuses_complete_base_receipts_for_unchanged_charts(
     db_session: AsyncSession,
 ) -> None:
@@ -1188,6 +1423,7 @@ async def test_applied_dashboard_reopens_the_same_authoring_thread_with_a_fresh_
         model="test-model",
         requires_custom_sql_confirmation=False,
         custom_sql_confirmed=False,
+        conversation_id="conversation-1",
     )
     receipts = await _seed_apply_receipts(
         db_session,
@@ -1246,6 +1482,7 @@ async def test_applied_dashboard_reopens_the_same_authoring_thread_with_a_fresh_
     )
     assert second.id != first.id
     assert second.thread_id == first.thread_id
+    assert second.conversation_id == "conversation-1"
     assert second.base_version_id == applied.version.id
     assert second.definition.name == "Second edit"
     assert [event.kind for event in second.events].count("user") == 2

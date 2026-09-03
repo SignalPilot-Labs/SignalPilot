@@ -34,6 +34,7 @@ async def explore_table(connection_name: str, table_name: str) -> str:
             return sanitize_proxy_response(resp.status_code, resp.text)
         data = resp.json()
 
+    # Format parsed by standalone_chat/tool_projection/schema.py; update tests there if you change this
     lines = [f"Table: {data.get('table', table_name)}"]
     row_count = data.get("row_count", 0)
     if row_count:

@@ -3,6 +3,7 @@
 import { ShieldCheck } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { RuntimeBootState } from "~/lib/chat-run-steps";
+import { useElapsedMs } from "~/components/chat/use-elapsed-ms";
 
 /**
  * The sandbox boot experience, rendered ONLY on cold starts (the gateway
@@ -33,27 +34,6 @@ function formatElapsed(ms: number): string {
   const minutes = Math.floor(ms / 60_000);
   const seconds = Math.floor((ms % 60_000) / 1000);
   return `${minutes}m ${seconds.toString().padStart(2, "0")}s`;
-}
-
-/** Live boots tick from the event timestamp; replays and skewed clocks
- * (baseline negative or implausibly old) fall back to time-since-mount. */
-function useElapsedMs(startedAt: string, active: boolean): number {
-  const [anchor] = useState(() => {
-    const parsed = Date.parse(startedAt);
-    const age = Date.now() - parsed;
-    return Number.isFinite(parsed) && age >= 0 && age < 30 * 60_000
-      ? parsed
-      : Date.now();
-  });
-  const [elapsed, setElapsed] = useState(() => Math.max(0, Date.now() - anchor));
-  useEffect(() => {
-    if (!active) return;
-    const tick = () => setElapsed(Math.max(0, Date.now() - anchor));
-    tick();
-    const interval = window.setInterval(tick, 100);
-    return () => window.clearInterval(interval);
-  }, [anchor, active]);
-  return elapsed;
 }
 
 function BootChip({ ready }: { ready: boolean }) {

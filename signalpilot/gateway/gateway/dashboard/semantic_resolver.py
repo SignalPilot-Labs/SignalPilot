@@ -27,6 +27,7 @@ from gateway.models.dashboards import (
 )
 from gateway.store import Store
 from gateway.verification import compare_columns
+from gateway.workspace_store.dbt_detect import resolve_dbt_project_dir
 from gateway.workspace_store.objects import workspace_object_storage
 
 from .project_snapshot import hydrate_github_mirror, materialize_workspace_snapshot
@@ -246,7 +247,24 @@ def resolve_from_authorities(
     )
 
 
-def _scan_commit(project_id: str, commit_sha: str) -> ProjectMap:
+def _scan_materialized_project(checkout_path: Path, settings: dict | None) -> ProjectMap:
+    """Scan the manifest-resolved dbt root inside one materialized workspace."""
+    files = [
+        path.relative_to(checkout_path).as_posix()
+        for path in checkout_path.rglob("*")
+        if path.is_file()
+    ]
+    dbt_project_dir = resolve_dbt_project_dir(settings, files)
+    if dbt_project_dir is None:
+        raise DashboardSemanticError("The pinned project contains no dbt_project.yml")
+    resolved = checkout_path / dbt_project_dir if dbt_project_dir else checkout_path
+    project_map = scan_project(resolved)
+    if not project_map.models and not project_map.sources:
+        raise DashboardSemanticError("The pinned dbt project contains no models or sources")
+    return project_map
+
+
+def _scan_commit(project_id: str, commit_sha: str, settings: dict | None = None) -> ProjectMap:
     """Materialize one immutable bare-repo commit into a temporary scanner root."""
     if len(commit_sha) != 40 or any(ch not in "0123456789abcdef" for ch in commit_sha.lower()):
         raise DashboardSemanticError("A full immutable commit SHA is required")
@@ -266,7 +284,7 @@ def _scan_commit(project_id: str, commit_sha: str) -> ProjectMap:
             raise DashboardSemanticError("The pinned project commit is unavailable")
         with tarfile.open(archive_path) as archive:
             archive.extractall(checkout_path, filter="data")
-        return scan_project(checkout_path)
+        return _scan_materialized_project(checkout_path, settings)
 
 
 async def _scan_pinned_project(
@@ -275,6 +293,7 @@ async def _scan_pinned_project(
     org_id: str,
     project_id: str,
     commit_sha: str,
+    settings: dict | None = None,
 ) -> ProjectMap:
     """Scan a durable workspace snapshot, with git commits kept for compatibility."""
     with tempfile.TemporaryDirectory(prefix="sp-dashboard-workspace-") as temp_dir:
@@ -287,9 +306,9 @@ async def _scan_pinned_project(
             snapshot_ref=commit_sha,
             destination=checkout_path,
         ):
-            return scan_project(checkout_path)
+            return _scan_materialized_project(checkout_path, settings)
     try:
-        return _scan_commit(project_id, commit_sha)
+        return _scan_commit(project_id, commit_sha, settings)
     except DashboardSemanticError as original:
         # Older dashboard versions store a real Git commit rather than a
         # workspace snapshot reference. Rehydrate the replaceable GitHub
@@ -299,7 +318,7 @@ async def _scan_pinned_project(
             org_id=org_id,
             project_id=project_id,
         ):
-            return _scan_commit(project_id, commit_sha)
+            return _scan_commit(project_id, commit_sha, settings)
         raise original
 
 
@@ -359,10 +378,11 @@ class DashboardSemanticResolver:
             org_id=org_id,
             project_id=project_id,
             commit_sha=commit_sha,
+            settings=project.settings,
         )
         from gateway.api.schema._semantic_store import _load_semantic_model
 
-        return resolve_from_authorities(
+        context = resolve_from_authorities(
             project_id=project.id,
             commit_sha=commit_sha,
             connection_name=connection_name,
@@ -371,3 +391,8 @@ class DashboardSemanticResolver:
             semantic_model=_load_semantic_model(connection_name),
             approved_metrics=parse_approved_metrics(project.settings),
         )
+        if not context.explores:
+            raise DashboardSemanticError(
+                "The pinned dbt project has no governed explores for this connection"
+            )
+        return context

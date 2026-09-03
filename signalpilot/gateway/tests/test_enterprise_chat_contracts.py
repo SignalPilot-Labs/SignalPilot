@@ -401,7 +401,19 @@ def test_enterprise_feature_boundaries_are_independent_and_disabled_by_default(m
     ]
     for name in names:
         monkeypatch.delenv(name, raising=False)
-    assert not any(vars(enterprise_chat_feature_flags()).values())
+    monkeypatch.delenv("SP_FEATURE_CHAT_MCP_CONNECTORS", raising=False)
+    opt_in_flags = {k: v for k, v in vars(enterprise_chat_feature_flags()).items() if k != "mcp_connectors"}
+    assert not any(opt_in_flags.values())
+    # Connectors are the one flag that is on in every mode unless explicitly turned off.
+    monkeypatch.setenv("SP_DEPLOYMENT_MODE", "local")
+    assert enterprise_chat_feature_flags().mcp_connectors
+    monkeypatch.setenv("SP_DEPLOYMENT_MODE", "cloud")
+    assert enterprise_chat_feature_flags().mcp_connectors
+    monkeypatch.setenv("SP_FEATURE_CHAT_MCP_CONNECTORS", "false")
+    assert not enterprise_chat_feature_flags().mcp_connectors
+    monkeypatch.setenv("SP_DEPLOYMENT_MODE", "local")
+    assert not enterprise_chat_feature_flags().mcp_connectors
+    monkeypatch.delenv("SP_FEATURE_CHAT_MCP_CONNECTORS", raising=False)
 
     monkeypatch.setenv("SP_FEATURE_CHAT_QUERY_APPROVAL", "true")
     flags = enterprise_chat_feature_flags()

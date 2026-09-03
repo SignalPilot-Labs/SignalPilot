@@ -7,31 +7,36 @@ import {
   ChevronRight,
   CircleStop,
   Copy,
-  FileChartColumn,
   Loader2,
   Play,
   Sparkles,
   Wrench,
 } from "lucide-react";
-import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { ChatMarkdown } from "~/components/chat/chat-markdown";
 import {
   openStandaloneNotebookArchive,
   type StandaloneChatRunStatus,
-  type ChatReportSuggestion,
 } from "~/lib/api";
-import { RunActivityBlocks, RunTimeline } from "~/components/chat/run-timeline";
+import {
+  RunActivityBlocks,
+  RunTimeline,
+  StepArtifactCardsContext,
+  collectStepSequences,
+} from "~/components/chat/run-timeline";
+import { MessageRunContext } from "~/components/chat/message-run-context";
+import { ConnectorSignInCards } from "~/components/chat/connector-signin-card";
 import { RuntimeBootCard } from "~/components/chat/runtime-boot-card";
 import { ReplayControls } from "~/components/chat/replay-controls";
 import {
+  deriveLiveStateFromBlocks,
   extractRunPlan,
   extractRuntimeBoot,
   foldRunBlocks,
   foldRunSteps,
   shouldShowRuntimeBoot,
 } from "~/lib/chat-run-steps";
+import { LivePill } from "~/components/chat/live-pill";
 import { PlanTracker } from "~/components/chat/plan-tracker";
 import { useChatReplay } from "~/lib/chat-replay";
 import { useToast } from "~/components/ui/toast";
@@ -40,129 +45,19 @@ import {
   useChatUi,
   type UiMessage,
 } from "~/components/chat/chat-ui-context";
-import { ArtifactPreview } from "~/components/chat/chat-artifact-preview";
+import {
+  DashboardPreviewCard,
+  messageDashboardPreview,
+} from "~/components/chat/chat-dashboard-preview-card";
+import {
+  deriveArtifactCards,
+  groupCardsByAnchor,
+} from "~/lib/chat-artifact-cards";
 
 function WorkTimeline({ runId }: { runId: string }) {
   const { events } = useChatUi();
   const steps = useMemo(() => foldRunSteps(events, runId), [events, runId]);
   return <RunTimeline steps={steps} />;
-}
-
-function ReportSuggestionCard({
-  messageId,
-  suggestion,
-}: {
-  messageId: string;
-  suggestion: ChatReportSuggestion;
-}) {
-  const router = useRouter();
-  const { toast } = useToast();
-  const { onApproveReportSuggestion } = useChatUi();
-  const [dismissed, setDismissed] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [approvedReportId, setApprovedReportId] = useState(
-    suggestion.approval?.report_id ?? null,
-  );
-  if (dismissed) return null;
-  const reportId = approvedReportId || suggestion.report_id;
-  const openOnly = suggestion.action === "open";
-  const label =
-    suggestion.action === "create"
-      ? "Create report"
-      : suggestion.action === "update"
-        ? "Update existing report"
-        : "Open report";
-
-  const approve = async () => {
-    if (busy) return;
-    if (openOnly && reportId) {
-      router.push(`/reports/${reportId}`);
-      return;
-    }
-    setBusy(true);
-    try {
-      const result = await onApproveReportSuggestion(messageId);
-      setApprovedReportId(result.report_id);
-      toast(
-        suggestion.action === "create" ? "Report created" : "Report updated",
-        "success",
-      );
-    } catch (error) {
-      toast(
-        error instanceof Error
-          ? error.message
-          : "Could not publish the report action",
-        "error",
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <section className="mt-4 rounded-xl border border-[var(--color-success)]/25 bg-[var(--color-bg-card)] p-4">
-      <div className="flex items-start gap-3">
-        <FileChartColumn className="mt-0.5 h-4 w-4 flex-none text-[var(--color-success)]" />
-        <div className="min-w-0 flex-1">
-          <p className="text-sm text-[var(--color-text)]">
-            {suggestion.action === "create"
-              ? `Save “${suggestion.title}” as a durable report?`
-              : `Matched “${suggestion.title}”`}
-          </p>
-          <p className="mt-1 text-xs leading-5 text-[var(--color-text-muted)]">
-            {suggestion.reason}
-          </p>
-          <div className="mt-3 flex flex-wrap gap-2">
-            {approvedReportId ? (
-              <button
-                type="button"
-                onClick={() => router.push(`/reports/${approvedReportId}`)}
-                className="rounded-lg bg-[var(--color-text)] px-3 py-2 text-xs text-[var(--color-bg)]"
-              >
-                Open report
-              </button>
-            ) : (
-              <button
-                type="button"
-                disabled={busy || (!reportId && openOnly)}
-                onClick={() => void approve()}
-                className="inline-flex items-center gap-2 rounded-lg bg-[var(--color-text)] px-3 py-2 text-xs text-[var(--color-bg)] disabled:opacity-50"
-              >
-                {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                {label}
-              </button>
-            )}
-            {!approvedReportId && !openOnly && (
-              <button
-                type="button"
-                onClick={() => setDismissed(true)}
-                className="rounded-lg px-3 py-2 text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)]"
-              >
-                Not now
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function messageReportSuggestion(
-  metadata: Record<string, unknown>,
-): ChatReportSuggestion | null {
-  const value = metadata.report_suggestion;
-  if (!value || typeof value !== "object") return null;
-  const suggestion = value as Partial<ChatReportSuggestion>;
-  if (
-    !["create", "update", "open"].includes(suggestion.action || "") ||
-    typeof suggestion.artifact_id !== "string" ||
-    typeof suggestion.title !== "string" ||
-    typeof suggestion.reason !== "string"
-  ) {
-    return null;
-  }
-  return suggestion as ChatReportSuggestion;
 }
 
 function AssistantMessage({
@@ -185,7 +80,7 @@ function AssistantMessage({
       ? (message.metadata.status as StandaloneChatRunStatus)
       : "completed");
   const [showWork, setShowWork] = useState(false);
-  const { artifacts, events, onRetry, onStop } = useChatUi();
+  const { events, files, onRetry, onStop } = useChatUi();
   const { toast } = useToast();
   const blocks = useMemo(
     () => (runId ? foldRunBlocks(events, runId) : []),
@@ -204,7 +99,8 @@ function AssistantMessage({
     [events, runId],
   );
   const steps = useMemo(
-    () => blocks.flatMap((block) => (block.kind === "steps" ? block.steps : [])),
+    () =>
+      blocks.flatMap((block) => (block.kind === "steps" ? block.steps : [])),
     [blocks],
   );
   const blocksHaveText = blocks.some((block) => block.kind === "text");
@@ -213,16 +109,34 @@ function AssistantMessage({
     runStatus === "failed" &&
     Boolean(runError) &&
     message.content.trim() === runError?.trim();
-  const attachedArtifacts = artifacts.filter(
-    (artifact) =>
-      artifact.assistant_message_id === message.id || artifact.run_id === runId,
-  );
   const successful = runStatus === "completed";
   const running = runStatus === "queued" || runStatus === "running";
+  // What the agent is doing right now: drives the caret, the inline
+  // indicator and the footer pill. Idle whenever the run is not active.
+  const live = useMemo(
+    () => deriveLiveStateFromBlocks(blocks, runtimeBoot, runStatus),
+    [blocks, runtimeBoot, runStatus],
+  );
+  // Artifact cards: every captured file gets one, placed in the timeline
+  // right after the step that produced it (joined on the tool_started
+  // sequence). Files no step claims trail the timeline. Derived from the
+  // persisted events and manifest, so rehydration on refresh is free.
+  const fileCards = useMemo(
+    () => (runId ? deriveArtifactCards(events, files, runId, running) : []),
+    [events, files, runId, running],
+  );
+  const anchoredCards = useMemo(
+    () => groupCardsByAnchor(fileCards, collectStepSequences(steps)),
+    [fileCards, steps],
+  );
+  const messageRun = useMemo(
+    () => ({ runId: runId || null, running }),
+    [runId, running],
+  );
   const runtimeArchiveAvailable =
     message.metadata.runtime_archive_available === true;
-  const reportSuggestion = successful
-    ? messageReportSuggestion(message.metadata)
+  const dashboardPreview = successful
+    ? messageDashboardPreview(message.metadata)
     : null;
   return (
     <article
@@ -239,6 +153,8 @@ function AssistantMessage({
             <Sparkles className="h-3.5 w-3.5 text-[var(--color-text-muted)]" />
           )}
         </div>
+        <MessageRunContext.Provider value={messageRun}>
+        <StepArtifactCardsContext.Provider value={anchoredCards.byStep}>
         <div className="min-w-0 flex-1">
           {shouldShowRuntimeBoot(runtimeBoot, running) && runtimeBoot && (
             <RuntimeBootCard boot={runtimeBoot} />
@@ -248,41 +164,28 @@ function AssistantMessage({
               <PlanTracker plan={runPlan} running={running} />
             </div>
           )}
-          {(running || blocks.length > 0) && (
+          {(running ||
+            blocks.length > 0 ||
+            anchoredCards.trailing.length > 0) && (
             <div role="status" aria-live="polite">
               <RunActivityBlocks
                 blocks={blocks}
+                live={live}
                 running={
                   running &&
                   runtimeBoot?.phase !== "provisioning" &&
                   runtimeBoot?.phase !== "resuming"
                 }
+                trailingCards={anchoredCards.trailing}
               />
             </div>
           )}
+          {runId && <ConnectorSignInCards events={events} runId={runId} />}
           {!blocksHaveText && message.content && !messageRepeatsRunError && (
-            <div className="chat-markdown">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                {message.content}
-              </ReactMarkdown>
-            </div>
+            <ChatMarkdown markdown={message.content} streaming={running} />
           )}
-          {attachedArtifacts.length > 0 && (
-            <div className="mt-5 space-y-4">
-              {attachedArtifacts.map((artifact) => (
-                <ArtifactPreview
-                  key={artifact.id}
-                  artifact={artifact}
-                  canSaveAsReport={successful}
-                />
-              ))}
-            </div>
-          )}
-          {reportSuggestion && (
-            <ReportSuggestionCard
-              messageId={message.id}
-              suggestion={reportSuggestion}
-            />
+          {dashboardPreview && (
+            <DashboardPreviewCard preview={dashboardPreview} />
           )}
           {runStatus === "cancelled" && (
             <p className="mt-3 text-xs text-[var(--color-text-dim)]">
@@ -339,15 +242,23 @@ function AssistantMessage({
                   )}
                 </button>
               )}
+              {running && <LivePill live={live} />}
               {running && runId && (
-                <button
-                  type="button"
-                  onClick={() => void onStop(runId)}
-                  className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] text-[var(--color-text-dim)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-error)]"
-                >
-                  <CircleStop className="h-3 w-3" />
-                  Stop
-                </button>
+                <span className="relative inline-flex rounded-lg">
+                  <span
+                    className="chat-stop-ring absolute -inset-[3px]"
+                    data-state={live.state}
+                    aria-hidden
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void onStop(runId)}
+                    className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] text-[var(--color-text-dim)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-error)]"
+                  >
+                    <CircleStop className="h-3 w-3" />
+                    Stop
+                  </button>
+                </span>
               )}
               {runStatus === "failed" && runId && (
                 <button
@@ -367,6 +278,8 @@ function AssistantMessage({
             </div>
           )}
         </div>
+        </StepArtifactCardsContext.Provider>
+        </MessageRunContext.Provider>
       </div>
     </article>
   );
@@ -424,12 +337,16 @@ function AssistantMessageReplay({
 }) {
   const {
     events,
-    artifacts,
+    conversationId,
+    files,
+    openArtifact,
+    getFileObjectUrl,
+    downloadFile,
+    nowMs,
     onStop,
     onRetry,
-    onApproveReportSuggestion,
   } = useChatUi();
-  const replay = useChatReplay(events, artifacts, runId);
+  const replay = useChatReplay(events, runId);
   // Runs that streamed text carry text_delta events, and the blocks rebuild
   // the message from the replayed deltas. Runs that only produced a final
   // message have no deltas — for those, reveal the persisted content at the
@@ -444,11 +361,7 @@ function AssistantMessageReplay({
   const replayMessage = useMemo<UiMessage>(
     () => ({
       ...message,
-      content: runStreamedText
-        ? ""
-        : replay.finished
-          ? message.content
-          : "",
+      content: runStreamedText ? "" : replay.finished ? message.content : "",
       runId,
       runStatus: replay.finished
         ? (message.runStatus ?? "completed")
@@ -472,10 +385,15 @@ function AssistantMessageReplay({
       <ChatUiContext.Provider
         value={{
           events: replay.visibleEvents,
-          artifacts: replay.visibleArtifacts,
+          conversationId,
+          files,
+          openArtifact,
+          getFileObjectUrl,
+          downloadFile,
+          nowMs,
           onStop,
           onRetry,
-          onApproveReportSuggestion,
+          onOpenDashboardPreview: () => undefined,
         }}
       >
         <AssistantMessage message={replayMessage} replayMode />
@@ -490,9 +408,7 @@ function ReplayableAssistantMessage({ message }: { message: UiMessage }) {
   const runId = messageRunId(message);
   const canReplay =
     Boolean(runId) &&
-    events.some(
-      (event) => event.run_id === runId && event.type !== "status",
-    );
+    events.some((event) => event.run_id === runId && event.type !== "status");
   if (replaying && runId) {
     return (
       <AssistantMessageReplay

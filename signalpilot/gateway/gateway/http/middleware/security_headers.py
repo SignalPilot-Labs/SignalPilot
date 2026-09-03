@@ -37,6 +37,13 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 # inside resolve_proxy_session; this pattern just confirms the shape is correct).
 _NOTEBOOK_PROXY_PATH_RE = re.compile(r"^/notebook/[^/]+/")
 
+# Connector icons are image bytes fetched from the provider host and served under
+# the gateway origin (the web CSP allows img-src only from self/gateway). The route
+# sets its own `Cache-Control: private, max-age=...`; forcing no-store here would
+# re-fetch every icon on every settings render. Only this exact path shape keeps
+# the header it set, and only when it set one.
+_PRIVATE_CACHEABLE_PATH_RE = re.compile(r"^/api/mcp/connectors/[^/]+/icon$")
+
 _CSP_DEFAULT_POLICY = (
     "default-src 'self'; "
     "script-src 'self'; "
@@ -76,7 +83,10 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         # Cache-Control: only set on non-proxy paths. For /notebook/* let upstream's
         # own headers pass through (or leave absent if upstream sets nothing).
-        if not is_proxy:
+        keeps_own_cache_control = bool(
+            _PRIVATE_CACHEABLE_PATH_RE.match(request.url.path) and response.headers.get("Cache-Control")
+        )
+        if not is_proxy and not keeps_own_cache_control:
             response.headers["Cache-Control"] = "no-store"
         # interest-cohort=() is kept for older browser coverage; FLoC is deprecated
         # in modern browsers but the directive is harmless.

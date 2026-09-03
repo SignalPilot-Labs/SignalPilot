@@ -395,3 +395,41 @@ export function ConversationNotFoundScreen({
     </div>
   );
 }
+
+/** Banner above the transcript: the report attached to the next message. */
+export function AttachedReportBanner({
+  title,
+  onRemove,
+}: {
+  title: string;
+  onRemove: () => void;
+}) {
+  return (
+    <div className="flex-none px-6 pt-4">
+      <div className="mx-auto flex max-w-3xl items-center justify-between gap-3 rounded-xl border border-[var(--color-success)]/25 bg-[var(--color-bg-card)] px-4 py-3 text-xs text-[var(--color-text-muted)]">
+        <span>@{title} is attached to your next message.</span>
+        <button
+          type="button"
+          onClick={onRemove}
+          className="text-[var(--color-text-dim)] hover:text-[var(--color-text)]"
+        >
+          Remove
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Placeholder grid while the four starter questions load. */
+export function StarterQuestionsSkeleton() {
+  return (
+    <div className="grid grid-cols-2 gap-3">
+      {[0, 1, 2, 3].map((index) => (
+        <div
+          key={index}
+          className="h-24 animate-pulse rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-card)]"
+        />
+      ))}
+    </div>
+  );
+}

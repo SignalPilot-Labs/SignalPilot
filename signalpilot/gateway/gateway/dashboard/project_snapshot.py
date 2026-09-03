@@ -26,6 +26,7 @@ from gateway.workspace_store.store import RevisionNotFound, WorkspaceStore
 
 _SNAPSHOT_REF_DOMAIN = b"signalpilot-dashboard-workspace-snapshot-v1\0"
 _REVISION_HEX_LENGTH = 8
+_MAX_DATABASE_REVISION = 0x7FFFFFFF
 _hydrate_locks: dict[tuple[str, str], asyncio.Lock] = {}
 logger = logging.getLogger(__name__)
 
@@ -145,9 +146,10 @@ def _snapshot_revision(snapshot_ref: str) -> int | None:
     if len(snapshot_ref) != 40 or any(ch not in "0123456789abcdef" for ch in snapshot_ref.lower()):
         return None
     try:
-        return int(snapshot_ref[:_REVISION_HEX_LENGTH], 16)
+        revision = int(snapshot_ref[:_REVISION_HEX_LENGTH], 16)
     except ValueError:
         return None
+    return revision if revision <= _MAX_DATABASE_REVISION else None
 
 
 async def materialize_workspace_snapshot(
@@ -167,19 +169,22 @@ async def materialize_workspace_snapshot(
     existing export mapping as well.
     """
     revision = _snapshot_revision(snapshot_ref)
-    if revision is None or not storage.enabled:
+    if not storage.enabled:
         return False
 
+    snapshot_match = GatewayWorkspaceRevision.export_commit_sha == snapshot_ref
+    if revision is not None:
+        snapshot_match = or_(
+            GatewayWorkspaceRevision.revision == revision,
+            snapshot_match,
+        )
     rows = list(
         (
             await db.execute(
                 select(GatewayWorkspaceRevision).where(
                     GatewayWorkspaceRevision.org_id == org_id,
                     GatewayWorkspaceRevision.project_id == project_id,
-                    or_(
-                        GatewayWorkspaceRevision.revision == revision,
-                        GatewayWorkspaceRevision.export_commit_sha == snapshot_ref,
-                    ),
+                    snapshot_match,
                 )
             )
         ).scalars()

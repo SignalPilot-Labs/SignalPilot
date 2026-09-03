@@ -8,7 +8,7 @@
  * mirroring dbt's source/model distinction.
  */
 
-import React, { memo } from "react";
+import React, { memo, useEffect, useState } from "react";
 import { Handle, Position, type NodeProps } from "reactflow";
 
 import { LAYER_COLOR, LAYER_LABEL, matGlyph } from "./palette";
@@ -19,25 +19,43 @@ export interface MapNodeData {
   /** null = nothing focused; true = on the focused lineage path; false = dimmed */
   onPath: boolean | null;
   selected: boolean;
+  /** The model whose lineage is being explored in focus mode. */
+  focusRoot?: boolean;
+  /** Node is fading out before removal (focus enter/exit cross-fade). */
+  leaving?: boolean;
 }
 
 export const NODE_W = 232;
 export const NODE_H = 68;
 
 function MapNodeInner({ data }: NodeProps<MapNodeData>) {
-  const { model, onPath, selected } = data;
+  const { model, onPath, selected, focusRoot, leaving } = data;
   const color = LAYER_COLOR[model.layer];
   const dimmed = onPath === false;
+
+  // Entrance cross-fade (focus enter/exit re-mounts the node set). Opacity
+  // only — never animate transform here, reactflow positions with it. The
+  // prefers-reduced-motion media query check skips the fade entirely.
+  const [entered, setEntered] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+  );
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => setEntered(true));
+    return () => cancelAnimationFrame(raf);
+  }, []);
   const isSource = model.layer === "source";
   const failableTests = model.tests.length;
 
   return (
     <div
-      className="group relative transition-opacity duration-150"
+      className="group relative transition-opacity duration-200"
       style={{
         width: NODE_W,
         height: NODE_H,
-        opacity: dimmed ? 0.14 : 1,
+        opacity: leaving || !entered ? 0 : dimmed ? 0.14 : 1,
+        pointerEvents: leaving ? "none" : undefined,
       }}
     >
       <Handle type="target" position={Position.Left} className="!w-1.5 !h-1.5 !border-0" style={{ background: color, opacity: dimmed ? 0 : 0.9 }} />
@@ -46,13 +64,15 @@ function MapNodeInner({ data }: NodeProps<MapNodeData>) {
         style={{
           borderRadius: isSource ? 999 : 10,
           border: `1px ${isSource ? "dashed" : "solid"} ${
-            selected ? color : onPath ? `${color}88` : "var(--color-border)"
+            selected || focusRoot ? color : onPath ? `${color}88` : "var(--color-border)"
           }`,
-          boxShadow: selected
-            ? `0 0 0 1px ${color}, 0 4px 24px ${color}33`
-            : onPath
-              ? `0 2px 12px ${color}22`
-              : "none",
+          boxShadow: focusRoot
+            ? `0 0 0 1px ${color}, 0 0 0 4px ${color}2e, 0 6px 28px ${color}40`
+            : selected
+              ? `0 0 0 1px ${color}, 0 4px 24px ${color}33`
+              : onPath
+                ? `0 2px 12px ${color}22`
+                : "none",
         }}
       >
         <div className="flex h-full items-stretch">

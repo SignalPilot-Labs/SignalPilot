@@ -105,6 +105,7 @@ async def dbt_execute(
                 dbt_dir=dbt_dir,
             )
             result = await run_dbt_command(sandbox_id, argv, dbt_dir)
+            # Format parsed by standalone_chat/tool_projection/ops.py; update tests there if you change this
             header = f"target_schema: {schema}" + (f"\nsync: {sync_note}" if sync_note else "")
             return f"{header}\n{result}"
     except DbtExecutorError as exc:

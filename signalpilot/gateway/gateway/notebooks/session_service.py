@@ -635,7 +635,6 @@ async def ensure_standalone_chat_notebook_session(
         token_connection_name=connection_name,
         token_commit_sha=commit_sha,
         token_capabilities=[
-            "artifact:publish",
             "dbt:read",
             "notebook:analysis",
             "query:read",

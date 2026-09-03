@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import base64
-import io
 import json
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
@@ -15,7 +13,6 @@ from mcp.types import (
     ListToolsRequest,
     TextContent,
 )
-from PIL import Image
 from starlette.exceptions import HTTPException
 
 if TYPE_CHECKING:
@@ -29,17 +26,9 @@ from signalpilot._server.ai.chat_runtime_output import (
     notebook_server_headers,
 )
 from signalpilot._server.ai.claude_agent import _apply_auth_config
-from signalpilot._server.ai.standalone_chat_chart_theme import (
-    CHART_BACKGROUND,
-    CHART_COLORS,
-    MAX_CHART_CATEGORIES,
-    MAX_CHART_SERIES,
-    prepare_signalpilot_chart,
-)
 from signalpilot._server.ai.standalone_chat_tools import (
     StandaloneArtifactCollector,
     StandaloneNotebookLifecycle,
-    _render_chart_png,
     build_standalone_chat_mcp_server,
 )
 from signalpilot._server.api.endpoints.standalone_chat import (
@@ -108,370 +97,109 @@ def test_internal_notebook_http_headers_include_both_auth_tokens():
 
 
 @pytest.mark.asyncio
-async def test_publication_failures_are_mcp_tool_errors():
+async def test_publish_tools_are_gone_and_unknown_tools_are_errors():
     config = build_standalone_chat_mcp_server(StandaloneArtifactCollector())
     server = config["instance"]
-    response = await server.request_handlers[CallToolRequest](
-        CallToolRequest(
-            params=CallToolRequestParams(
-                name="publish_table",
-                arguments={"filename": "revenue.csv", "result_id": "missing"},
+    listed = await server.request_handlers[ListToolsRequest](
+        ListToolsRequest()
+    )
+    names = {tool.name for tool in listed.root.tools}
+    assert names == {"inspect_dbt", "create_dashboard_preview"}
+    assert not any(name.startswith("publish_") for name in names)
+    assert not any("report" in name for name in names)
+
+    for retired in (
+        "publish_table",
+        "publish_chart",
+        "publish_report",
+        "list_saved_report_catalog",
+        "load_report_context",
+        "propose_report_action",
+    ):
+        response = await server.request_handlers[CallToolRequest](
+            CallToolRequest(
+                params=CallToolRequestParams(
+                    name=retired,
+                    arguments={"filename": "revenue.csv"},
+                )
             )
         )
-    )
-
-    assert response.root.isError is True
-    assert (
-        "governed structured result ID is required"
-        in response.root.content[0].text
-    )
+        assert response.root.isError is True
+        assert "Unknown tool" in response.root.content[0].text
 
 
 @pytest.mark.asyncio
-async def test_report_tools_require_a_complete_catalog_scan_and_one_valid_proposal():
-    collector = StandaloneArtifactCollector(
-        artifacts=[
-            {
-                "kind": "table",
-                "filename": "revenue.csv",
-                "payload": {
-                    "columns": [{"name": "revenue"}],
-                    "rows": [{"revenue": 100}],
-                    "completeness": "complete",
-                    "truncated": False,
-                },
-            }
-        ]
-    )
+async def test_dashboard_preview_tool_creates_one_review_only_preview():
+    calls: list[tuple[str, str]] = []
 
-    async def load_catalog(cursor: str | None) -> dict[str, Any]:
+    async def create_preview(
+        request: str, timezone: str, authoring_session_id: str | None
+    ) -> dict[str, Any]:
+        assert authoring_session_id is None
+        calls.append((request, timezone))
         return {
-            "items": [],
-            "next_cursor": "page-2" if cursor is None else None,
-            "catalog_revision": "revision-a",
-            "total_reports": 51,
-            "proactive_creation_allowed": True,
+            "id": "authoring-session-1",
+            "summary": "Created a governed revenue dashboard.",
+            "definition": {
+                "name": "Executive Revenue",
+                "charts": [
+                    {"title": "Total Revenue"},
+                    {"title": "Revenue Trend"},
+                ],
+            },
         }
 
-    config = build_standalone_chat_mcp_server(
-        collector,
-        report_catalog_loader=load_catalog,
-    )
-    server = config["instance"]
-    await server.request_handlers[CallToolRequest](
-        CallToolRequest(
-            params=CallToolRequestParams(
-                name="list_saved_report_catalog",
-                arguments={},
-            )
-        )
-    )
-    incomplete = await server.request_handlers[CallToolRequest](
-        CallToolRequest(
-            params=CallToolRequestParams(
-                name="propose_report_action",
-                arguments={
-                    "action": "create",
-                    "artifact_kind": "table",
-                    "artifact_filename": "revenue.csv",
-                    "title": "Revenue",
-                    "reason": "No semantic match exists.",
-                },
-            )
-        )
-    )
-    assert incomplete.root.isError is True
-    assert "every saved report catalog page" in incomplete.root.content[0].text
-
-    final_page = await server.request_handlers[CallToolRequest](
-        CallToolRequest(
-            params=CallToolRequestParams(
-                name="list_saved_report_catalog",
-                arguments={"cursor": "page-2"},
-            )
-        )
-    )
-    assert final_page.root.isError is False
-    proposed = await server.request_handlers[CallToolRequest](
-        CallToolRequest(
-            params=CallToolRequestParams(
-                name="propose_report_action",
-                arguments={
-                    "action": "create",
-                    "artifact_kind": "table",
-                    "artifact_filename": "revenue.csv",
-                    "title": "Revenue",
-                    "reason": "No semantic match exists.",
-                },
-            )
-        )
-    )
-    assert proposed.root.isError is False
-    assert collector.report_proposal == {
-        "action": "create",
-        "artifact_kind": "table",
-        "artifact_filename": "revenue.csv",
-        "title": "Revenue",
-        "reason": "No semantic match exists.",
-        "existing_report_id": None,
-        "catalog_revision": "revision-a",
-        "catalog_scan_complete": True,
-        "proactive_creation_allowed": True,
-        "loaded_report_ids": [],
-        "attached_report_id": None,
-    }
-    repeated = await server.request_handlers[CallToolRequest](
-        CallToolRequest(
-            params=CallToolRequestParams(
-                name="propose_report_action",
-                arguments={
-                    "action": "create",
-                    "artifact_kind": "table",
-                    "artifact_filename": "revenue.csv",
-                    "title": "Revenue copy",
-                    "reason": "Try again.",
-                },
-            )
-        )
-    )
-    assert repeated.root.isError is True
-    assert "Only one report action outcome" in repeated.root.content[0].text
-
-
-@pytest.mark.asyncio
-async def test_complete_publication_requires_a_catalog_backed_report_outcome():
     collector = StandaloneArtifactCollector()
-
-    async def load_catalog(_cursor: str | None) -> dict[str, Any]:
-        return {
-            "items": [],
-            "next_cursor": None,
-            "catalog_revision": "revision-empty",
-            "total_reports": 0,
-            "proactive_creation_allowed": True,
-        }
-
     server = build_standalone_chat_mcp_server(
         collector,
-        report_catalog_loader=load_catalog,
+        dashboard_preview_creator=create_preview,
     )["instance"]
-    published = await server.request_handlers[CallToolRequest](
-        CallToolRequest(
-            params=CallToolRequestParams(
-                name="publish_report",
-                arguments={
-                    "filename": "revenue.html",
-                    "html": "<html><body>Revenue</body></html>",
-                },
-            )
-        )
-    )
-    publication = json.loads(published.root.content[0].text)
-    assert publication["published"] is True
-    assert publication["next_required_action"].startswith(
-        "REQUIRED BEFORE YOUR FINAL ANSWER"
-    )
-
-    unscanned = await server.request_handlers[CallToolRequest](
-        CallToolRequest(
-            params=CallToolRequestParams(
-                name="propose_report_action",
-                arguments={
-                    "action": "no_suggestion",
-                    "artifact_kind": "report",
-                    "artifact_filename": "revenue.html",
-                    "title": "Revenue",
-                    "reason": "This is a one-off diagnostic.",
-                },
-            )
-        )
-    )
-    assert unscanned.root.isError is True
-    assert "every saved report catalog page" in unscanned.root.content[0].text
-
-    await server.request_handlers[CallToolRequest](
-        CallToolRequest(
-            params=CallToolRequestParams(
-                name="list_saved_report_catalog",
-                arguments={},
-            )
-        )
-    )
-    recorded = await server.request_handlers[CallToolRequest](
-        CallToolRequest(
-            params=CallToolRequestParams(
-                name="propose_report_action",
-                arguments={
-                    "action": "no_suggestion",
-                    "artifact_kind": "report",
-                    "artifact_filename": "revenue.html",
-                    "title": "Revenue",
-                    "reason": "This is a one-off diagnostic.",
-                },
-            )
-        )
-    )
-
-    assert recorded.root.isError is False
-    assert json.loads(recorded.root.content[0].text) == {
-        "recorded": True,
-        "proposed": False,
-        "action": "no_suggestion",
-    }
-    assert collector.report_proposal is None
-    assert collector.report_action_outcome == {
-        "action": "no_suggestion",
-        "artifact_kind": "report",
-        "artifact_filename": "revenue.html",
-        "title": "Revenue",
-        "reason": "This is a one-off diagnostic.",
-        "existing_report_id": None,
-        "catalog_revision": "revision-empty",
-        "catalog_scan_complete": True,
-        "proactive_creation_allowed": True,
-        "loaded_report_ids": [],
-        "attached_report_id": None,
+    listed = await server.request_handlers[ListToolsRequest](ListToolsRequest())
+    assert "create_dashboard_preview" in {
+        tool.name for tool in listed.root.tools
     }
 
-
-@pytest.mark.asyncio
-async def test_report_creation_fails_closed_above_500_catalog_entries():
-    collector = StandaloneArtifactCollector(
-        artifacts=[
-            {
-                "kind": "table",
-                "filename": "revenue.csv",
-                "payload": {
-                    "columns": [{"name": "revenue"}],
-                    "rows": [{"revenue": 100}],
-                    "completeness": "complete",
-                    "truncated": False,
-                },
-            }
-        ]
-    )
-
-    async def load_catalog(_cursor: str | None) -> dict[str, Any]:
-        return {
-            "items": [],
-            "next_cursor": None,
-            "catalog_revision": "revision-large",
-            "total_reports": 501,
-            "proactive_creation_allowed": False,
-        }
-
-    server = build_standalone_chat_mcp_server(
-        collector,
-        report_catalog_loader=load_catalog,
-    )["instance"]
-    scanned = await server.request_handlers[CallToolRequest](
-        CallToolRequest(
-            params=CallToolRequestParams(
-                name="list_saved_report_catalog",
-                arguments={},
-            )
+    request = CallToolRequest(
+        params=CallToolRequestParams(
+            name="create_dashboard_preview",
+            arguments={
+                "request": "Create an executive revenue dashboard",
+                "timezone": "America/New_York",
+            },
         )
     )
-    assert scanned.root.isError is False
+    created = await server.request_handlers[CallToolRequest](request)
+    repeated = await server.request_handlers[CallToolRequest](request)
 
-    blocked = await server.request_handlers[CallToolRequest](
-        CallToolRequest(
-            params=CallToolRequestParams(
-                name="propose_report_action",
-                arguments={
-                    "action": "create",
-                    "artifact_kind": "table",
-                    "artifact_filename": "revenue.csv",
-                    "title": "Revenue",
-                    "reason": "No semantic match exists.",
-                },
-            )
-        )
-    )
-    assert blocked.root.isError is True
-    assert (
-        "Proactive report creation is unavailable"
-        in blocked.root.content[0].text
-    )
-    assert collector.report_proposal is None
-
-
-@pytest.mark.asyncio
-async def test_report_update_requires_loaded_context_unless_the_report_is_attached():
-    artifact = {
-        "kind": "chart",
-        "filename": "revenue.png",
-        "payload": {
-            "source": {"completeness": "complete", "truncated": False},
-        },
+    assert created.root.isError is False
+    assert repeated.root.isError is False
+    assert calls == [
+        ("Create an executive revenue dashboard", "America/New_York")
+    ]
+    payload = json.loads(created.root.content[0].text)
+    assert payload == {
+        "status": "preview_ready",
+        "authoring_session_id": "authoring-session-1",
+        "preview_url": "/dashboards/new?authoring=authoring-session-1",
+        "summary": "Created a governed revenue dashboard.",
+        "dashboard_name": "Executive Revenue",
+        "chart_count": 2,
+        "chart_titles": ["Total Revenue", "Revenue Trend"],
+        "requires_review": True,
+        "apply_required": True,
     }
+    assert collector.dashboard_preview == payload
 
-    async def load_context(report_id: str) -> dict[str, Any]:
-        return {"report_id": report_id, "title": "Revenue"}
-
-    async def load_catalog(_cursor: str | None) -> dict[str, Any]:
-        return {
-            "items": [{"report_id": "report-a", "title": "Revenue"}],
-            "next_cursor": None,
-            "catalog_revision": "revision-a",
-            "total_reports": 1,
-            "proactive_creation_allowed": True,
-        }
-
-    collector = StandaloneArtifactCollector(artifacts=[artifact])
-    server = build_standalone_chat_mcp_server(
-        collector,
-        report_context_loader=load_context,
-        report_catalog_loader=load_catalog,
-    )["instance"]
-    blocked = await server.request_handlers[CallToolRequest](
+    conflicting = await server.request_handlers[CallToolRequest](
         CallToolRequest(
             params=CallToolRequestParams(
-                name="propose_report_action",
-                arguments={
-                    "action": "update",
-                    "artifact_kind": "chart",
-                    "artifact_filename": "revenue.png",
-                    "title": "Revenue",
-                    "reason": "Only the date range changed.",
-                    "existing_report_id": "report-a",
-                },
+                name="create_dashboard_preview",
+                arguments={"request": "Create a different dashboard"},
             )
         )
     )
-    assert blocked.root.isError is True
-    await server.request_handlers[CallToolRequest](
-        CallToolRequest(
-            params=CallToolRequestParams(
-                name="list_saved_report_catalog",
-                arguments={},
-            )
-        )
-    )
-    await server.request_handlers[CallToolRequest](
-        CallToolRequest(
-            params=CallToolRequestParams(
-                name="load_report_context",
-                arguments={"report_id": "report-a"},
-            )
-        )
-    )
-    accepted = await server.request_handlers[CallToolRequest](
-        CallToolRequest(
-            params=CallToolRequestParams(
-                name="propose_report_action",
-                arguments={
-                    "action": "update",
-                    "artifact_kind": "chart",
-                    "artifact_filename": "revenue.png",
-                    "title": "Revenue",
-                    "reason": "Only the date range changed.",
-                    "existing_report_id": "report-a",
-                },
-            )
-        )
-    )
-    assert accepted.root.isError is False
+    assert conflicting.root.isError is True
+    assert "Only one dashboard preview" in conflicting.root.content[0].text
 
 
 @pytest.mark.asyncio
@@ -589,158 +317,45 @@ def test_runtime_auth_is_request_scoped_and_validated():
     assert merged["ANTHROPIC_AUTH_TOKEN"] == ""
 
 
-def test_chart_renderer_produces_a_real_png():
-    encoded = _render_chart_png(
-        {
-            "mark": "bar",
-            "encoding": {
-                "x": {"field": "month"},
-                "y": {"field": "revenue"},
-            },
-        },
-        [{"month": "Jan", "revenue": 10}, {"month": "Feb", "revenue": 14}],
-    )
-    assert encoded is not None
-    assert base64.b64decode(encoded).startswith(b"\x89PNG\r\n\x1a\n")
-
-
-@pytest.mark.parametrize("mark", ["bar", "line", "point"])
-def test_chart_renderer_uses_the_canonical_dark_theme_for_supported_marks(
-    mark,
-):
-    encoded = _render_chart_png(
-        {
-            "title": {"text": f"{mark.title()} chart", "color": "#000000"},
-            "background": "#000000",
-            "mark": {"type": mark, "color": "#000000"},
-            "encoding": {
-                "x": {"field": "month", "type": "nominal"},
-                "y": {"field": "revenue", "type": "quantitative"},
-                "color": {
-                    "field": "region",
-                    "type": "nominal",
-                    "scale": {"range": ["#000000"]},
-                },
-            },
-        },
-        [
-            {
-                "month": "January with a long label",
-                "revenue": -2_000_000,
-                "region": "North",
-            },
-            {
-                "month": "February with a long label",
-                "revenue": None,
-                "region": "North",
-            },
-            {
-                "month": "March with a long label",
-                "revenue": 3_500_000_000,
-                "region": "North",
-            },
-            {
-                "month": "January with a long label",
-                "revenue": 1_200_000,
-                "region": "South",
-            },
-            {
-                "month": "February with a long label",
-                "revenue": 2_400_000,
-                "region": "South",
-            },
-            {
-                "month": "March with a long label",
-                "revenue": 2_900_000,
-                "region": "South",
-            },
-        ],
-    )
-    assert encoded is not None
-    image = Image.open(io.BytesIO(base64.b64decode(encoded))).convert("RGB")
-    colors = {
-        color
-        for _, color in image.getcolors(maxcolors=image.width * image.height)
-        or []
-    }
-    assert tuple(bytes.fromhex(CHART_BACKGROUND.removeprefix("#"))) in colors
-    assert tuple(bytes.fromhex(CHART_COLORS[0].removeprefix("#"))) in colors
-    assert tuple(bytes.fromhex(CHART_COLORS[1].removeprefix("#"))) in colors
-
-
-def test_agent_chart_styles_cannot_override_theme_or_density_limits():
-    rows = [
-        {
-            "category": f"Category {category}",
-            "value": category,
-            "series": f"Series {series}",
-        }
-        for category in range(MAX_CHART_CATEGORIES + 1)
-        for series in range(MAX_CHART_SERIES + 1)
-    ]
-    spec, display_rows, display = prepare_signalpilot_chart(
-        {
-            "background": "#000000",
-            "mark": {"type": "bar", "color": "#000000"},
-            "config": {"axis": {"labelColor": "#000000"}},
-            "encoding": {
-                "x": {"field": "category", "type": "nominal"},
-                "y": {"field": "value", "type": "quantitative"},
-                "color": {
-                    "field": "series",
-                    "type": "nominal",
-                    "scale": {"range": ["#000000"]},
-                },
-            },
-        },
-        rows,
-    )
-
-    assert spec["background"] == CHART_BACKGROUND
-    assert spec["config"]["range"]["category"] == list(CHART_COLORS)
-    assert "#000000" not in str(spec)
-    assert len(display_rows) == MAX_CHART_CATEGORIES * MAX_CHART_SERIES
-    assert display["limited"] is True
-
-
-def test_horizontal_bar_renderer_handles_long_categories_and_negative_values():
-    encoded = _render_chart_png(
-        {
-            "title": "Net revenue by account segment",
-            "mark": "bar",
-            "encoding": {
-                "x": {"field": "revenue", "type": "quantitative"},
-                "y": {"field": "segment", "type": "nominal"},
-            },
-        },
-        [
-            {"segment": "Large enterprise accounts", "revenue": 3_500_000_000},
-            {"segment": "Recently refunded accounts", "revenue": -900_000_000},
-            {"segment": "Accounts without measurements", "revenue": None},
-        ],
-    )
-    assert encoded is not None
-    image = Image.open(io.BytesIO(base64.b64decode(encoded)))
-    assert image.size == (1_200, 750)
-
-
 def test_agent_contract_includes_default_signalpilot_mcp_tools():
     # The prompt file wraps lines; compare against whitespace-collapsed text.
     _prompt_flat = " ".join(STANDALONE_SYSTEM_PROMPT.split())
     assert "Answer data questions with evidence" in _prompt_flat
-    assert "first tool call for any analytics request is the `Skill` tool" in _prompt_flat
+    assert "`TodoWrite`: a first plan" in _prompt_flat
+    assert "Make no other tool call before the skill loads" in _prompt_flat
     assert "`signalpilot-dbt:dbt-workflow`" in _prompt_flat
     assert "SP_CHAT_SCRATCH_DIRECTORY" in _prompt_flat
     assert "analytics-steps.md" in _prompt_flat
     assert "prebuild-state.md" in _prompt_flat
-    assert "list_saved_report_catalog" in _prompt_flat
-    assert "load_report_context" in _prompt_flat
-    assert "propose_report_action" in _prompt_flat
-    assert "publish_table" in _prompt_flat
-    assert "publish_chart" in _prompt_flat
-    assert "publish_report" in _prompt_flat
+    # The filesystem is the artifact API. No publish or report tools.
+    assert "## Files and charts" in STANDALONE_SYSTEM_PROMPT
+    assert "SP_CHAT_ARTIFACTS_DIRECTORY" in _prompt_flat
+    assert "sp.artifact_path(" in _prompt_flat
+    assert "![Revenue by month, 2025](artifacts/revenue_by_month.png)" in (
+        _prompt_flat
+    )
+    assert "Prove findings with a chart saved to `artifacts/`" in _prompt_flat
+    for retired in (
+        "list_saved_report_catalog",
+        "load_report_context",
+        "propose_report_action",
+        "publish_table",
+        "publish_chart",
+        "publish_report",
+        "publish_artifact",
+        "publish_result",
+        "report decision",
+        "result_id",
+    ):
+        assert retired not in _prompt_flat, retired
     assert "GitHub Flavored Markdown" in _prompt_flat
-    assert "HTML tags such as `<details>` do not render" in _prompt_flat
+    assert "raw HTML" in _prompt_flat
+    assert "blank line after an opening HTML tag" in _prompt_flat
+    assert "Link each dbt model to its lineage page" in _prompt_flat
+    assert "/lineage/rpt_customer_retention?project=PROJECT_ID" in _prompt_flat
+    assert "Keep the link root-relative" in _prompt_flat
+    assert "call `create_dashboard_preview` exactly once" in _prompt_flat
+    assert "user must review and Apply" in _prompt_flat
     assert {
         "mcp__signalpilot__get_knowledge",
         "mcp__signalpilot__propose_knowledge",
@@ -748,9 +363,14 @@ def test_agent_contract_includes_default_signalpilot_mcp_tools():
         "mcp__signalpilot__notion_create_page",
         "mcp__signalpilot__sandbox_exec",
         "mcp__signalpilot__dbt_execute",
+        "mcp__standalone-chat__create_dashboard_preview",
     } <= set(STANDALONE_ALLOWED_TOOLS)
     assert all(
         "github" not in tool.lower() for tool in STANDALONE_ALLOWED_TOOLS
+    )
+    assert not any(
+        "publish_" in tool or "_report_" in tool or "report_action" in tool
+        for tool in STANDALONE_ALLOWED_TOOLS
     )
     assert all(
         forbidden not in STANDALONE_ALLOWED_TOOLS
@@ -789,6 +409,7 @@ def test_notebook_workflow_is_always_enabled():
         connection_name="warehouse",
     )
     assert "`signalpilot-dbt:dbt-workflow`" in execution_prompt
+    assert "Lineage link: /lineage/<model_name>?project=project-a" in execution_prompt
     assert "mcp__standalone-chat__start_analysis_notebook" in STANDALONE_ALLOWED_TOOLS
     assert any("signalpilot-notebook" in tool for tool in STANDALONE_ALLOWED_TOOLS)
 
@@ -802,5 +423,6 @@ def test_runtime_publication_sdk_is_exposed_from_top_level_package():
         Path(__file__).parents[3] / "signalpilot" / "__init__.py"
     ).read_text(encoding="utf-8")
     assert '"publish_result"' in package_source
-    assert '"publish_artifact"' in package_source
+    assert '"artifact_path"' in package_source
     assert '"open_dataset"' in package_source
+    assert "publish_artifact" not in package_source

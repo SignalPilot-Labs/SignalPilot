@@ -41,7 +41,7 @@ ENV SP_GATEWAY_INTERNAL_URL=$SP_GATEWAY_INTERNAL_URL
 COPY signalpilot/web/ signalpilot/web/
 
 # Build (standalone output bundles everything needed to run)
-RUN cd signalpilot/web && npm run build
+RUN cd signalpilot/web && npm run build -- --webpack
 
 # ── Production runner ─────────────────────────────────────────────
 FROM node:22-slim AS runner

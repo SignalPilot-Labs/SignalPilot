@@ -1,3 +1,8 @@
+.styleReadinessProbe {
+  --dashboard-runtime-styles-ready: 1;
+  min-height: 100%;
+}
+
 .runtime {
   min-height: 100vh;
   background: var(--color-bg);

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, useMemo } from "react";
 import dynamic from "next/dynamic";
-import { KeyRound, CreditCard, Plug, BarChart3, Shield, Lock, Users, GitBranch, BookOpen, Menu, X } from "lucide-react";
+import { KeyRound, CreditCard, Plug, PlugZap, BarChart3, Shield, Lock, Users, GitBranch, BookOpen, Menu, X } from "lucide-react";
 import { Tooltip } from "~/components/ui/tooltip";
 import { useAppAuth } from "~/lib/auth-context";
 import { getProjects, getWorkspaceProjects } from "~/lib/api";
@@ -375,6 +375,25 @@ function UsageNavLink({ pathname }: { pathname: string }) {
   );
 }
 
+/** Connectors nav link — external tool servers for the chat agent */
+function ConnectorsNavLink({ pathname }: { pathname: string }) {
+  const active = pathname.startsWith("/settings/connectors");
+
+  return (
+    <Link
+      href="/settings/connectors"
+      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 rounded-[10px] text-[12.5px] transition-colors duration-150 ${
+        active
+          ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
+          : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
+      }`}
+    >
+      <PlugZap size={11} className="flex-shrink-0 text-[var(--color-text-dim)]" />
+      <span className="flex-1 tracking-wide text-[12px]">Connectors</span>
+    </Link>
+  );
+}
+
 /** MCP Connect nav link — available in both local and cloud mode */
 function McpConnectNavLink({ pathname }: { pathname: string }) {
   const active = pathname.startsWith("/settings/mcp-connect");
@@ -689,6 +708,8 @@ export default function Sidebar() {
         <UsageNavLink pathname={pathname} />
         {/* Billing sub-link — cloud mode only */}
         <BillingNavLink pathname={pathname} />
+        {/* Connectors sub-link */}
+        <ConnectorsNavLink pathname={pathname} />
         {/* MCP Connect sub-link */}
         <McpConnectNavLink pathname={pathname} />
         {/* Security sub-link */}

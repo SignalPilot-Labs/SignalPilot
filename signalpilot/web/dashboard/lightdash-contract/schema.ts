@@ -237,6 +237,7 @@ const tileSchema = z
         hideTitle: z.boolean().optional(),
         chartName: z.string().nullable().optional(),
         chartSlug: z.string().min(1),
+        sectionTitle: z.string().min(1).max(120).optional(),
       })
       .strict(),
     chartId: z.string().min(1),

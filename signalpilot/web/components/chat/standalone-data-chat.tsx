@@ -1,19 +1,10 @@
 "use client";
 
-// Standalone data chat page container. The message tree, artifact
-// previews, hooks, and rail parts live in sibling modules. This file
-// re-exports the moved names so existing importers do not change.
+// Standalone data chat container; UI details live in sibling modules.
 
-import {
-  Bot,
-  Loader2,
-  NotebookPen,
-  PanelLeft,
-  Share2,
-  Sparkles,
-} from "lucide-react";
+import { Bot, PanelLeft, Share2 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import useSWR from "swr";
 import {
   getSavedChatReport,
@@ -30,7 +21,6 @@ import {
   type OptimisticUserMessage,
 } from "~/lib/standalone-chat-state";
 import { projectSettingsHref } from "~/lib/project-settings-route";
-import { ArtifactsPanel } from "~/components/chat/artifacts-panel";
 import { useConversationArtifacts } from "~/components/chat/use-conversation-notebook";
 import { pickDefaultNotebook } from "~/lib/chat-live-notebook";
 import { hasArtifactsContent } from "~/lib/chat-artifacts";
@@ -41,6 +31,7 @@ import {
   isStreamingStatus,
 } from "~/components/chat/standalone-chat-helpers";
 import {
+  AttachedReportBanner,
   ChatBootstrapSpinner,
   ChatUnavailableScreen,
   ConversationMessagesSkeleton,
@@ -49,6 +40,7 @@ import {
   QueryApprovalCard,
   ReadinessNotice,
   StarterQuestions,
+  StarterQuestionsSkeleton,
 } from "~/components/chat/chat-conversation-parts";
 import { ChatComposerPanel } from "~/components/chat/chat-composer-panel";
 import {
@@ -61,13 +53,23 @@ import {
   useStandaloneUiMessages,
 } from "~/components/chat/use-standalone-chat-run";
 import { useStandaloneChatActions } from "~/components/chat/use-standalone-chat-actions";
+import { ChatEmptyHero } from "~/components/chat/chat-empty-hero";
+import {
+  composerDisabledReason,
+  readinessNotice,
+} from "~/components/chat/standalone-chat-derivations";
+import {
+  ChatPanelToggles,
+  ChatRightPanels,
+} from "~/components/chat/standalone-chat-panels";
+import { useChatRightSlot } from "~/components/chat/use-chat-right-slot";
+import { ConnectorsProvider } from "~/components/connectors/connectors-context";
+import { useChatModelSettings } from "~/components/chat/use-chat-model-settings";
+import { useChatBudgetSettings } from "~/components/chat/use-chat-budget-settings";
 
-// Re-exports for existing importers of this module path.
 export { ChatUiContext, useChatUi } from "~/components/chat/chat-ui-context";
 export type { UiMessage } from "~/components/chat/chat-ui-context";
 export { ChatMessage } from "~/components/chat/chat-message";
-export { ArtifactPreview } from "~/components/chat/chat-artifact-preview";
-export type { ArtifactPreviewData } from "~/components/chat/chat-artifact-preview";
 
 export function StandaloneDataChat({
   conversationId,
@@ -115,6 +117,7 @@ export function StandaloneDataChat({
   );
   const requestedProject = searchParams.get("project");
   const requestedReportId = searchParams.get("report");
+  const requestedPrompt = searchParams.get("prompt");
   const [selectedReport, setSelectedReport] =
     useState<ChatReportMention | null>(null);
   const attachedReportReference = selectedReport
@@ -126,9 +129,10 @@ export function StandaloneDataChat({
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
     null,
   );
-  const [perQueryBudgetUsd, setPerQueryBudgetUsd] = useState(0.25);
-  const [chatBudgetUsd, setChatBudgetUsd] = useState(1);
+  const { perQueryBudgetUsd, chatBudgetUsd, budgetSettings } =
+    useChatBudgetSettings(bootstrap, conversationId);
   const [draft, setDraft] = useChatDraft(conversationId);
+  const promptInitialized = useRef(false);
   const [isConversationRailOpen, setIsConversationRailOpen] =
     useState(!embedded);
   const [pendingSubmission, setPendingSubmission] =
@@ -138,6 +142,12 @@ export function StandaloneDataChat({
     string | null
   >(null);
   const selectedInitialized = useRef(false);
+
+  useEffect(() => {
+    if (!requestedPrompt || promptInitialized.current) return;
+    setDraft(requestedPrompt);
+    promptInitialized.current = true;
+  }, [requestedPrompt, setDraft]);
 
   useEffect(() => {
     if (!bootstrap || selectedInitialized.current) return;
@@ -150,8 +160,6 @@ export function StandaloneDataChat({
         bootstrap.projects[0]?.id ??
         null,
     );
-    setPerQueryBudgetUsd(bootstrap.default_per_query_budget_usd);
-    setChatBudgetUsd(bootstrap.default_chat_budget_usd);
     selectedInitialized.current = true;
   }, [bootstrap, requestedProject]);
 
@@ -237,15 +245,40 @@ export function StandaloneDataChat({
     pendingSubmission,
     setPendingSubmission,
   });
+  // Right-hand slot: artifacts, chat settings, or dashboard — one at a time.
+  const {
+    dashboard: dashboardPanel,
+    settings: settingsPanel,
+    openArtifacts: openArtifactsPanel,
+    openFileRequest,
+    openArtifact,
+  } = useChatRightSlot({
+    conversationId,
+    uiMessages,
+    events,
+    currentRun,
+    artifactsOpen: notebookPanelOpen,
+    setArtifactsOpen: setNotebookPanelOpen,
+  });
 
   const { viewportRef, shouldStickToBottomRef, onViewportScroll } =
     useChatAutoScroll(conversationId, uiMessages);
+  const { selectedModel, selectedEffort, modelSettings } = useChatModelSettings({
+    conversationId,
+    conversationModel: detail?.conversation.model,
+    conversationEffort: detail?.conversation.effort,
+    defaultModel: bootstrap?.default_model,
+    defaultEffort: bootstrap?.default_effort,
+    options: bootstrap?.available_models ?? [],
+    effortOptions: bootstrap?.available_efforts ?? [],
+    runStatus: currentRun?.status,
+    mutateDetail,
+  });
 
   const {
     submitText,
     onStop,
     onRetry,
-    onApproveReportSuggestion,
     prefetchConversation,
     selectConversation,
     renameConversation,
@@ -264,6 +297,8 @@ export function StandaloneDataChat({
     selectedProjectId,
     perQueryBudgetUsd,
     chatBudgetUsd,
+    selectedModel,
+    selectedEffort,
     attachedReportReference,
     mutateDetail,
     mutateHistory,
@@ -281,16 +316,11 @@ export function StandaloneDataChat({
   const runIsStreaming =
     currentRun?.status === "queued" || currentRun?.status === "running";
 
-  // Why the composer is blocked — surfaced under the input, never silent.
-  const disabledReason = !selectedProjectId
-    ? "Choose a project to start."
-    : readiness?.ready === false && currentRun?.status !== "waiting_for_user"
-      ? readiness?.message || "This project isn't ready for chat yet."
-      : currentRun?.status === "queued"
-        ? "Starting your last question…"
-        : currentRun?.status === "waiting_for_query_approval"
-          ? "Approve or decline the proposed query above."
-          : undefined;
+  const disabledReason = composerDisabledReason(
+    selectedProjectId,
+    readiness,
+    currentRun,
+  );
 
   const mentionOptions = useMentionOptions(selectedProjectId);
 
@@ -302,19 +332,8 @@ export function StandaloneDataChat({
       : []) ??
     [];
   const empty = uiMessages.length === 0;
-  const noProjects = bootstrap?.projects.length === 0;
-  const unreadyMessage = noProjects
-    ? bootstrap?.is_admin
-      ? "No accessible project is ready. Set up a project and production connection to begin."
-      : "No project is ready for data chat. Ask an administrator to finish setup."
-    : readiness?.ready === false
-      ? readiness.setup_cta
-        ? `${readiness.message} Open project or connection settings to finish setup.`
-        : readiness.message
-      : null;
-  const showSetupCta =
-    bootstrap?.is_admin === true &&
-    (noProjects || readiness?.setup_cta === true);
+  const { message: unreadyMessage, showSetup: showSetupCta } =
+    readinessNotice(bootstrap, readiness);
 
   if (bootstrapLoading) {
     return <ChatBootstrapSpinner />;
@@ -323,11 +342,15 @@ export function StandaloneDataChat({
     return <ChatUnavailableScreen />;
   }
   if (detailError) {
-    return <ConversationNotFoundScreen onNewChat={() => router.push("/chats")} />;
+    return (
+      <ConversationNotFoundScreen onNewChat={() => router.push("/chats")} />
+    );
   }
 
   const isEmptyNewChat = empty && !conversationId;
-
+  const connectorsEnabled = Boolean(
+    bootstrap.enterprise_features.mcp_connectors,
+  );
   const composerNode = (
     <ChatComposerPanel
       draft={draft}
@@ -347,21 +370,23 @@ export function StandaloneDataChat({
         void setDefaultStandaloneChatProject(projectId);
         router.replace(`/chats?project=${encodeURIComponent(projectId)}`);
       }}
-      perQueryBudgetUsd={perQueryBudgetUsd}
-      setPerQueryBudgetUsd={setPerQueryBudgetUsd}
-      chatBudgetUsd={chatBudgetUsd}
-      setChatBudgetUsd={setChatBudgetUsd}
+      onOpenSettings={settingsPanel.toggle}
+      settingsOpen={settingsPanel.open}
     />
   );
 
   return (
+    <ConnectorsProvider enabled={connectorsEnabled}>
     <ChatUiContext.Provider
       value={{
         events,
-        artifacts: detail?.artifacts ?? [],
+        conversationId: conversationId ?? null,
+        files: conversationFiles,
+        openArtifact,
+        openChatSettings: settingsPanel.openPanel,
         onStop,
         onRetry,
-        onApproveReportSuggestion,
+        onOpenDashboardPreview: dashboardPanel.open,
       }}
     >
       <div
@@ -369,7 +394,11 @@ export function StandaloneDataChat({
           embedded
             ? "h-full min-w-0 overflow-hidden"
             : `h-screen overflow-hidden p-4 ${
-                notebookPanelOpen ? "min-w-[1360px]" : "min-w-[960px]"
+                settingsPanel.open
+                  ? "min-w-[1180px]"
+                  : notebookPanelOpen || dashboardPanel.sessionId
+                    ? "min-w-[1360px]"
+                    : "min-w-[960px]"
               }`
         }
       >
@@ -450,27 +479,17 @@ export function StandaloneDataChat({
               </div>
             )}
             {selectedReport && (
-              <div className="flex-none px-6 pt-4">
-                <div className="mx-auto flex max-w-3xl items-center justify-between gap-3 rounded-xl border border-[var(--color-success)]/25 bg-[var(--color-bg-card)] px-4 py-3 text-xs text-[var(--color-text-muted)]">
-                  <span>
-                    @{selectedReport.title} is attached to your next message.
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSelectedReport(null);
-                      router.replace(
-                        conversationId
-                          ? `/chats/${conversationId}`
-                          : `/chats?project=${encodeURIComponent(selectedProjectId || "")}`,
-                      );
-                    }}
-                    className="text-[var(--color-text-dim)] hover:text-[var(--color-text)]"
-                  >
-                    Remove
-                  </button>
-                </div>
-              </div>
+              <AttachedReportBanner
+                title={selectedReport.title}
+                onRemove={() => {
+                  setSelectedReport(null);
+                  router.replace(
+                    conversationId
+                      ? `/chats/${conversationId}`
+                      : `/chats?project=${encodeURIComponent(selectedProjectId || "")}`,
+                  );
+                }}
+              />
             )}
             <div
               ref={viewportRef}
@@ -481,21 +500,13 @@ export function StandaloneDataChat({
                 <ConversationMessagesSkeleton />
               ) : empty ? (
                 <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col justify-center px-6 py-12">
-                  <div className="mb-6 text-center">
-                    <div className="mx-auto mb-5 flex h-11 w-11 items-center justify-center rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-card)]">
-                      <Sparkles className="h-5 w-5 text-[var(--color-success)]" />
-                    </div>
-                    <h1 className="text-[32px] font-semibold leading-tight tracking-[-0.025em] text-[var(--color-text)]">
-                      What would you like to understand?
-                    </h1>
-                    <p className="mx-auto mt-3 max-w-xl text-[15px] leading-7 text-[var(--color-text-muted)]">
-                      Ask in plain English. SignalPilot will inspect the
-                      project, query governed production data, and choose the
-                      clearest answer format.
-                    </p>
-                  </div>
-                  {/* The input is the focal point in the empty state. */}
-                  {!conversationId && <div className="-mx-6">{composerNode}</div>}
+                  <ChatEmptyHero
+                    composer={
+                      !conversationId && (
+                        <div className="-mx-6 mt-6">{composerNode}</div>
+                      )
+                    }
+                  />
                   {unreadyMessage ? (
                     <ReadinessNotice
                       message={unreadyMessage}
@@ -510,14 +521,7 @@ export function StandaloneDataChat({
                       onSelect={setDraft}
                     />
                   ) : (
-                    <div className="grid grid-cols-2 gap-3">
-                      {[0, 1, 2, 3].map((index) => (
-                        <div
-                          key={index}
-                          className="h-24 animate-pulse rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-card)]"
-                        />
-                      ))}
-                    </div>
+                    <StarterQuestionsSkeleton />
                   )}
                 </div>
               ) : (
@@ -531,56 +535,64 @@ export function StandaloneDataChat({
                 </div>
               )}
               {!isEmptyNewChat && (
-              <div className="sticky bottom-0 bg-gradient-to-t from-[var(--color-bg)] via-[var(--color-bg)] to-transparent pt-3">
-                {approvalEvent && (
-                  <QueryApprovalCard
-                    event={approvalEvent}
-                    onDecision={onQueryDecision}
-                  />
-                )}
-                {composerNode}
-              </div>
-            )}
+                <div className="sticky bottom-0 isolate z-30 bg-gradient-to-t from-[var(--color-bg)] via-[var(--color-bg)] to-transparent pt-3">
+                  {approvalEvent && (
+                    <QueryApprovalCard
+                      event={approvalEvent}
+                      onDecision={onQueryDecision}
+                    />
+                  )}
+                  {composerNode}
+                </div>
+              )}
             </div>
-            {conversationId &&
-              (artifactsLoading ||
-                hasArtifactsContent(
+            {conversationId && (
+              <ChatPanelToggles
+                artifactsAvailable={hasArtifactsContent(
                   conversationNotebooks,
                   conversationFiles,
                   sqlTraceExecutions,
-                )) &&
-              !notebookPanelOpen && (
-              <button
-                type="button"
-                aria-label="Open the artifacts panel"
-                title="Open the artifacts panel"
-                data-testid="live-notebook-toggle"
-                onClick={() => setNotebookPanelOpen(true)}
-                className="absolute right-16 top-4 z-20 flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] text-[var(--color-text-muted)] shadow-lg shadow-black/20 hover:border-[var(--color-border-hover)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
-              >
-                {artifactsLoading ? (
-                  <Loader2
-                    data-testid="artifacts-toggle-loading"
-                    className="h-4 w-4 animate-spin"
-                  />
-                ) : (
-                  <NotebookPen className="h-4 w-4" />
                 )}
-              </button>
+                artifactsLoading={artifactsLoading}
+                artifactsOpen={notebookPanelOpen}
+                onOpenArtifacts={openArtifactsPanel}
+                dashboardSessionId={dashboardPanel.latestSessionId}
+                dashboardOpen={Boolean(dashboardPanel.sessionId)}
+                onOpenDashboard={dashboardPanel.open}
+              />
             )}
           </main>
-          {conversationId && notebookPanelOpen && (
-            <ArtifactsPanel
-              conversationId={conversationId}
-              notebooks={conversationNotebooks}
-              files={conversationFiles}
-              executions={sqlTraceExecutions}
-              loading={artifactsLoading}
-              onClose={() => setNotebookPanelOpen(false)}
+          {settingsPanel.open || conversationId ? (
+            <ChatRightPanels
+              conversationId={conversationId ?? ""}
+              artifacts={{
+                open: Boolean(conversationId) && notebookPanelOpen,
+                notebooks: conversationNotebooks,
+                files: conversationFiles,
+                executions: sqlTraceExecutions,
+                loading: artifactsLoading,
+                openFileRequest,
+                onClose: () => setNotebookPanelOpen(false),
+              }}
+              settings={{
+                open: settingsPanel.open,
+                connectorsEnabled,
+                model: modelSettings,
+                budgets: budgetSettings,
+                onClose: settingsPanel.closePanel,
+              }}
+              dashboard={{
+                sessionId: conversationId ? dashboardPanel.sessionId : null,
+                updateLabel: dashboardPanel.updateLabel,
+                updateRevision: dashboardPanel.updateRevision,
+                queriesEnabled: currentRun?.status !== "cancelled",
+                onClose: dashboardPanel.close,
+              }}
             />
-          )}
+          ) : null}
         </div>
       </div>
     </ChatUiContext.Provider>
+    </ConnectorsProvider>
   );
 }

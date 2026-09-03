@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useEffect, useState, type ReactNode } from "react";
+import { useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   ArrowLeft,
   ExternalLink,
@@ -25,9 +25,12 @@ import type {
   ConversationFileInfo,
   ConversationNotebook,
   SqlTraceExecution,
+  StandaloneChatEvent,
 } from "~/lib/api";
 import { ChatFileViewer } from "~/components/chat/chat-file-viewer";
+import { ChatUiContext } from "~/components/chat/chat-ui-context";
 import { SqlTracePanel } from "~/components/chat/sql-trace-panel";
+import { describeQueryExecutions } from "~/lib/chat-query-descriptions";
 
 // The notebook runtime graph is heavy. Load it only when the panel shows a
 // notebook, so /chats stays light until then.
@@ -45,8 +48,10 @@ const ChatNotebookView = dynamic(
 
 type ArtifactsTab = "notebook" | "files" | "queries";
 
-function kindIcon(kind: string) {
-  const className = "h-3.5 w-3.5 flex-none text-[var(--color-text-dim)]";
+export function kindIcon(
+  kind: string,
+  className = "h-3.5 w-3.5 flex-none text-[var(--color-text-dim)]",
+) {
   switch (kind) {
     case "markdown":
       return <FileText className={className} />;
@@ -114,13 +119,17 @@ function TabButton({
 function FilesTab({
   conversationId,
   files,
+  selectedFileId,
+  onSelectFile,
   fileViewOverride,
 }: {
   conversationId: string;
   files: ConversationFileInfo[];
+  /** Controlled by the panel; null means "show the list". */
+  selectedFileId: string | null;
+  onSelectFile: (fileId: string | null) => void;
   fileViewOverride?: ReactNode;
 }) {
-  const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
   const selected = files.find((file) => file.id === selectedFileId) ?? null;
 
   if (files.length === 0) {
@@ -137,11 +146,15 @@ function FilesTab({
 
   if (selected) {
     return (
-      <div className="flex h-full flex-col overflow-y-auto p-3">
+      <div
+        data-testid="artifacts-file-view"
+        data-file-id={selected.id}
+        className="flex h-full flex-col overflow-y-auto p-3"
+      >
         <button
           type="button"
           data-testid="artifacts-file-back"
-          onClick={() => setSelectedFileId(null)}
+          onClick={() => onSelectFile(null)}
           className="mb-2 inline-flex w-fit items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-[var(--color-text-dim)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
         >
           <ArrowLeft className="h-3 w-3" />
@@ -161,7 +174,7 @@ function FilesTab({
           <button
             type="button"
             data-testid="artifacts-file-row"
-            onClick={() => setSelectedFileId(file.id)}
+            onClick={() => onSelectFile(file.id)}
             className="flex w-full items-center gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] px-3 py-2 text-left text-xs text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]"
           >
             {kindIcon(file.kind)}
@@ -189,6 +202,8 @@ function FilesTab({
  * gateway verified the kernel sandbox is running; anything else renders the
  * saved notebook document with a "Finished" badge.
  */
+const EMPTY_EVENTS: StandaloneChatEvent[] = [];
+
 export function ArtifactsPanel({
   conversationId,
   notebooks,
@@ -196,6 +211,7 @@ export function ArtifactsPanel({
   executions,
   loading = false,
   onClose,
+  openFileRequest,
   liveViewOverride,
   fileViewOverride,
 }: {
@@ -206,11 +222,22 @@ export function ArtifactsPanel({
   /** True while the first resource calls are still in flight. */
   loading?: boolean;
   onClose: () => void;
+  /** External "open this file" request (from an inline artifact card).
+   * A new nonce re-applies the request even for the same file. */
+  openFileRequest?: { fileId: string; nonce: number } | null;
   /** Test-only: rendered instead of the notebook view (the fixture harness has no gateway). */
   liveViewOverride?: ReactNode;
   /** Test-only: rendered instead of the file viewer (the fixture harness has no gateway). */
   fileViewOverride?: ReactNode;
 }) {
+  // The agent's one-line query descriptions live in the run events; the
+  // trace rows come from the gateway without them, so join here.
+  const uiContext = useContext(ChatUiContext);
+  const events = uiContext?.events ?? EMPTY_EVENTS;
+  const queryDescriptions = useMemo(
+    () => describeQueryExecutions(events, executions),
+    [events, executions],
+  );
   // Notebooks that can render: live, or ended with a saved document.
   const showableNotebooks = notebooks.filter(
     (entry) => entry.status === "live" || entry.document !== null,
@@ -235,6 +262,16 @@ export function ArtifactsPanel({
     executions.length === 0;
   // null means "auto": follow the default tab until the user picks one.
   const [selectedTab, setSelectedTab] = useState<ArtifactsTab | null>(null);
+  // null means "show the list" — lifted so an inline card can select a file.
+  const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
+  useEffect(() => {
+    setSelectedFileId(null);
+  }, [conversationId]);
+  useEffect(() => {
+    if (!openFileRequest) return;
+    setSelectedTab("files");
+    setSelectedFileId(openFileRequest.fileId);
+  }, [openFileRequest]);
   const activeTab =
     selectedTab ??
     (showNotebook ? "notebook" : files.length > 0 ? "files" : "queries");
@@ -417,12 +454,17 @@ export function ArtifactsPanel({
           <FilesTab
             conversationId={conversationId}
             files={files}
+            selectedFileId={selectedFileId}
+            onSelectFile={setSelectedFileId}
             fileViewOverride={fileViewOverride}
           />
         )}
         {activeTab === "queries" && (
           <div className="h-full overflow-y-auto p-3">
-            <SqlTracePanel executions={executions} />
+            <SqlTracePanel
+              executions={executions}
+              descriptions={queryDescriptions}
+            />
           </div>
         )}
           </>

@@ -46,7 +46,6 @@ import { ChatComposerPanel } from "~/components/chat/chat-composer-panel";
 import {
   useChatAutoScroll,
   useChatDraft,
-  useMentionOptions,
   useNotebookPanelState,
   useSelectedChatProject,
   useStandaloneQueryApproval,
@@ -308,8 +307,6 @@ export function StandaloneDataChat({
     currentRun,
   );
 
-  const mentionOptions = useMentionOptions(selectedProjectId);
-
   const conversations = historyData?.conversations ?? [];
   const starters =
     readiness?.starter_questions ??
@@ -347,7 +344,6 @@ export function StandaloneDataChat({
       runIsStreaming={runIsStreaming}
       currentRun={currentRun}
       onStop={onStop}
-      mentionOptions={mentionOptions}
       conversationId={conversationId}
       bootstrap={bootstrap}
       selectedProjectId={selectedProjectId}

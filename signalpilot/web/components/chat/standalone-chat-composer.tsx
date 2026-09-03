@@ -1,10 +1,9 @@
 "use client";
 
-import { AtSign, Send, Settings2, Square } from "lucide-react";
+import { Send, Settings2, Square } from "lucide-react";
 import {
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
   type KeyboardEvent,
@@ -30,7 +29,6 @@ function runningHint(liveState: RunLiveState, liveLabel?: string): string {
       return "Enter to queue for the next turn · Shift+Enter for a new line";
   }
 }
-const MENTION_RE = /(?:^|\s)@([\w./-]*)$/;
 
 export function StandaloneChatComposer({
   value,
@@ -42,7 +40,6 @@ export function StandaloneChatComposer({
   onStop,
   placeholder,
   projectPicker,
-  mentionOptions,
   onOpenSettings,
   settingsOpen = false,
   liveState = "idle",
@@ -61,8 +58,6 @@ export function StandaloneChatComposer({
   onStop?: () => void;
   placeholder: string;
   projectPicker?: ReactNode;
-  /** Model/metric/table names for @-mention autocomplete. */
-  mentionOptions?: string[];
   /** Shows the gear; it toggles the right-side Chat settings panel. */
   onOpenSettings?: () => void;
   /** Whether that panel is open (drives aria-expanded on the gear). */
@@ -79,8 +74,6 @@ export function StandaloneChatComposer({
   const canSubmit = Boolean(value.trim()) && !submitDisabled;
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [blockedFlash, setBlockedFlash] = useState(false);
-  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
-  const [mentionIndex, setMentionIndex] = useState(0);
 
   // Autosize: grow with content up to a cap, then scroll.
   useEffect(() => {
@@ -89,45 +82,6 @@ export function StandaloneChatComposer({
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, MAX_TEXTAREA_PX)}px`;
   }, [value]);
-
-  const mentionMatches = useMemo(() => {
-    if (mentionQuery === null || !mentionOptions?.length) return [];
-    const q = mentionQuery.toLowerCase();
-    return mentionOptions
-      .filter((m) => m.toLowerCase().includes(q))
-      .slice(0, 8);
-  }, [mentionQuery, mentionOptions]);
-
-  const refreshMention = useCallback(
-    (nextValue: string) => {
-      const el = textareaRef.current;
-      const caret = el ? el.selectionStart : nextValue.length;
-      const before = nextValue.slice(0, caret ?? nextValue.length);
-      const match = MENTION_RE.exec(before);
-      setMentionQuery(match ? match[1] : null);
-      setMentionIndex(0);
-    },
-    [],
-  );
-
-  const insertMention = useCallback(
-    (name: string) => {
-      const el = textareaRef.current;
-      const caret = el ? el.selectionStart : value.length;
-      const before = value.slice(0, caret ?? value.length);
-      const after = value.slice(caret ?? value.length);
-      const replaced = before.replace(MENTION_RE, (full) =>
-        full.startsWith("@") ? `@${name} ` : `${full[0]}@${name} `,
-      );
-      onValueChange(replaced + after);
-      setMentionQuery(null);
-      requestAnimationFrame(() => {
-        el?.focus();
-        el?.setSelectionRange(replaced.length, replaced.length);
-      });
-    },
-    [onValueChange, value],
-  );
 
   const submit = useCallback(() => {
     const text = value.trim();
@@ -139,32 +93,10 @@ export function StandaloneChatComposer({
       return;
     }
     onValueChange("");
-    setMentionQuery(null);
     onSubmit(text);
   }, [onSubmit, onValueChange, submitDisabled, value]);
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (mentionMatches.length > 0) {
-      if (event.key === "ArrowDown") {
-        event.preventDefault();
-        setMentionIndex((i) => (i + 1) % mentionMatches.length);
-        return;
-      }
-      if (event.key === "ArrowUp") {
-        event.preventDefault();
-        setMentionIndex((i) => (i - 1 + mentionMatches.length) % mentionMatches.length);
-        return;
-      }
-      if (event.key === "Tab" || event.key === "Enter") {
-        event.preventDefault();
-        insertMention(mentionMatches[mentionIndex]);
-        return;
-      }
-      if (event.key === "Escape") {
-        setMentionQuery(null);
-        return;
-      }
-    }
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault();
       submit();
@@ -191,42 +123,13 @@ export function StandaloneChatComposer({
           plan ? "rounded-b-2xl rounded-t-none" : "rounded-2xl"
         }`}
       >
-        {/* @-mention popover */}
-        {mentionMatches.length > 0 && (
-          <div className="absolute bottom-full left-4 z-30 mb-2 w-80 overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-card)] shadow-xl">
-            <div className="flex items-center gap-1.5 border-b border-[var(--color-border)] px-3 py-1.5 text-[10px] uppercase tracking-[0.08em] text-[var(--color-text-dim)]">
-              <AtSign className="h-3 w-3" /> models &amp; metrics
-            </div>
-            {mentionMatches.map((name, i) => (
-              <button
-                key={name}
-                type="button"
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  insertMention(name);
-                }}
-                className={`block w-full truncate px-3 py-1.5 text-left font-mono text-xs ${
-                  i === mentionIndex
-                    ? "bg-[var(--color-bg-hover)] text-[var(--color-text)]"
-                    : "text-[var(--color-text-muted)]"
-                }`}
-              >
-                {name}
-              </button>
-            ))}
-          </div>
-        )}
-
         <textarea
           ref={textareaRef}
           data-chat-composer
           rows={1}
           autoFocus
           value={value}
-          onChange={(event) => {
-            onValueChange(event.target.value);
-            refreshMention(event.target.value);
-          }}
+          onChange={(event) => onValueChange(event.target.value)}
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
           // The global stylesheet paints two rings on a focused textarea: a
@@ -306,7 +209,7 @@ export function StandaloneChatComposer({
         <p className="mt-2.5 text-center text-xs text-[var(--color-text-muted)]">
           {running
             ? runningHint(liveState, liveLabel)
-            : "Enter to send · Shift+Enter for a new line · @ to mention a model"}
+            : "Enter to send · Shift+Enter for a new line"}
         </p>
       )}
     </div>

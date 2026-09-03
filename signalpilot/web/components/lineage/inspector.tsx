@@ -7,7 +7,7 @@
  * exploration) and Copy link (the model's shareable /lineage URL).
  */
 
-import { Crosshair, Link2, X } from "lucide-react";
+import { Crosshair, Link2, Maximize2, Minimize2, X } from "lucide-react";
 import React from "react";
 
 import { Skeleton } from "~/components/ui/skeleton";
@@ -16,6 +16,8 @@ import { LAYER_COLOR, LAYER_LABEL, matGlyph } from "./palette";
 import type { MapColumn, MapModel, ParsedMap } from "./parse-map";
 import { canonicalRef, lineagePath } from "./lineage-nav";
 import { InspectorSql } from "./inspector-sql";
+import { InspectorResizeHandle } from "./inspector-resize-handle";
+import type { InspectorWidthState } from "./use-inspector-width";
 import type { ModelSqlState } from "./use-dbt-map";
 
 export type InspectorTab = "details" | "sql";
@@ -32,6 +34,7 @@ export function Inspector({
   onClose,
   onNavigate,
   onFocus,
+  size,
 }: {
   parsed: ParsedMap;
   model: MapModel;
@@ -44,6 +47,8 @@ export function Inspector({
   onClose: () => void;
   onNavigate: (id: string) => void;
   onFocus: (id: string) => void;
+  /** Width state from use-inspector-width; the host owns it. */
+  size: InspectorWidthState;
 }) {
   const { toast } = useToast();
   const color = LAYER_COLOR[model.layer];
@@ -90,9 +95,21 @@ export function Inspector({
     );
 
   return (
-    <div className="flex h-full w-72 shrink-0 flex-col border-l border-[var(--color-border)] bg-[var(--color-bg-card)]/80 backdrop-blur">
+    <div
+      data-testid="lineage-inspector"
+      data-wide={size.wide ? "1" : "0"}
+      style={{ width: size.width }}
+      className="relative flex h-full shrink-0 flex-col border-l border-[var(--color-border)] bg-[var(--color-bg-card)]/80 backdrop-blur"
+    >
+      <InspectorResizeHandle
+        width={size.width}
+        bounds={size.bounds}
+        onPreview={size.preview}
+        onCommit={size.commit}
+        onReset={size.reset}
+      />
       <div className="flex items-start justify-between gap-2 border-b border-[var(--color-border)] p-3">
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
             <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-[10px]" style={{ color, background: `${color}1f` }} aria-hidden="true">
               {matGlyph(model.materialized, model.layer)}
@@ -109,9 +126,22 @@ export function Inspector({
             ))}
           </div>
         </div>
-        <button type="button" onClick={onClose} className="text-[var(--color-text-dim)] hover:text-[var(--color-text)]" aria-label="Close inspector">
-          <X className="h-3.5 w-3.5" />
-        </button>
+        <div className="flex shrink-0 items-center gap-1">
+          <button
+            type="button"
+            onClick={size.toggleWide}
+            aria-pressed={size.wide}
+            aria-label={size.wide ? "Restore inspector width" : "Expand inspector"}
+            title={size.wide ? "Restore width" : "Expand for SQL"}
+            data-testid="inspector-expand"
+            className="text-[var(--color-text-dim)] hover:text-[var(--color-text)]"
+          >
+            {size.wide ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+          </button>
+          <button type="button" onClick={onClose} className="text-[var(--color-text-dim)] hover:text-[var(--color-text)]" aria-label="Close inspector">
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
 
       {/* Actions */}
@@ -172,7 +202,7 @@ export function Inspector({
           role="tabpanel"
           id="inspector-panel-sql"
           aria-labelledby="inspector-tab-sql"
-          className="min-h-0 flex-1 overflow-y-auto"
+          className="flex min-h-0 flex-1 flex-col overflow-hidden"
         >
           <InspectorSql state={sql} modelName={model.name} />
         </div>
@@ -197,7 +227,7 @@ export function Inspector({
             {/* Name / dimmed type (when the distilled graph carries one —
                 data follow-up for the gateway payload), description visible
                 on its own clamped line instead of tooltip-only. */}
-            <div className="max-h-48 overflow-y-auto rounded-[8px] border border-[var(--color-border)] bg-[var(--color-bg-input)]">
+            <div className="max-h-[40vh] overflow-y-auto rounded-[8px] border border-[var(--color-border)] bg-[var(--color-bg-input)]">
               {columns === null && (
                 <div className="space-y-1.5 px-2 py-1.5" aria-busy="true">
                   {Array.from({ length: Math.min(model.columnCount, 4) }, (_, i) => (

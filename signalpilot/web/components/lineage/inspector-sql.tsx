@@ -71,8 +71,10 @@ export function InspectorSql({ state, modelName }: { state: ModelSqlState; model
   const language = sql.language === "python" ? "python" : "sql";
 
   return (
-    <div className="flex min-h-0 flex-col p-3" data-testid="inspector-sql" data-variant={active}>
-      <div className="mb-2 flex items-center gap-1">
+    <div className="flex min-h-0 flex-1 flex-col p-3" data-testid="inspector-sql" data-variant={active}>
+      {/* One header row: variant toggle, file path, copy. The path gives
+          way first and wraps under the controls when the panel is narrow. */}
+      <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1">
         {hasCompiled && (
           <div role="group" aria-label="SQL variant" className="flex items-center gap-0.5 rounded-[7px] border border-[var(--color-border)] p-0.5">
             {(["raw", "compiled"] as Variant[]).map((v) => (
@@ -92,18 +94,27 @@ export function InspectorSql({ state, modelName }: { state: ModelSqlState; model
             ))}
           </div>
         )}
-        <span className="ml-auto">
+        {path && (
+          <div
+            className="min-w-[10rem] flex-1 truncate font-mono text-[9px] text-[var(--color-text-dim)]"
+            title={path}
+            data-testid="inspector-sql-path"
+          >
+            {path}
+            {sql.truncated && <span className="ml-1 text-[var(--color-warning)]">(truncated)</span>}
+          </div>
+        )}
+        <span className="ml-auto shrink-0">
           <CopyButton text={body} label="Copy" />
         </span>
       </div>
-      {path && (
-        <div className="mb-1.5 truncate font-mono text-[9px] text-[var(--color-text-dim)]" title={path} data-testid="inspector-sql-path">
-          {path}
-          {sql.truncated && <span className="ml-1 text-[var(--color-warning)]">(truncated)</span>}
-        </div>
-      )}
-      <div className="min-h-0 overflow-hidden rounded-[8px] border border-[var(--color-border)] bg-[var(--color-bg-input)]">
-        <ChatCode code={fold.shown} language={language} maxHeightClass="max-h-[60vh]" />
+      {/* Fills the inspector width; grows with the panel height and scrolls
+          inside (both axes) only when the body is bigger than the box. */}
+      <div
+        className="flex min-h-0 w-full shrink flex-col overflow-hidden rounded-[8px] border border-[var(--color-border)] bg-[var(--color-bg-input)] [&>pre]:min-h-0 [&>pre]:max-h-none"
+        data-testid="inspector-sql-code"
+      >
+        <ChatCode code={fold.shown} language={language} maxHeightClass="" />
       </div>
       {(fold.hidden > 0 || (expanded && foldable(body))) && (
         <button

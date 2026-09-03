@@ -15,7 +15,6 @@ import {
 import type { KeyedMutator } from "swr";
 import {
   decideStandaloneQueryProposal,
-  getDbtMap,
   streamStandaloneRunEvents,
   type StandaloneChatEvent,
   type StandaloneChatBootstrap,
@@ -399,39 +398,6 @@ export function useStandaloneQueryApproval({
     [approvalEvent, detail, mutateDetail, mutateHistory, toast],
   );
   return { approvalEvent, onQueryDecision };
-}
-
-/**
- * @-mention names: reuse the compiled dbt map's node names for the selected
- * project (the same graph the Lineage page serves). Best-effort.
- */
-export function useMentionOptions(selectedProjectId: string | null) {
-  const [mentionOptions, setMentionOptions] = useState<string[]>([]);
-  useEffect(() => {
-    let active = true;
-    if (!selectedProjectId) {
-      setMentionOptions([]);
-      return;
-    }
-    void getDbtMap(selectedProjectId, undefined, true)
-      .then((res) => {
-        if (!active) return;
-        const graph = res.graph as { nodes?: Record<string, { name?: string }> } | null;
-        const names = graph?.nodes
-          ? Object.values(graph.nodes)
-              .map((n) => n.name)
-              .filter((n): n is string => Boolean(n))
-          : [];
-        setMentionOptions([...new Set(names)].sort());
-      })
-      .catch(() => {
-        if (active) setMentionOptions([]);
-      });
-    return () => {
-      active = false;
-    };
-  }, [selectedProjectId]);
-  return mentionOptions;
 }
 
 /** Draft persistence: keep per-conversation (or "new") drafts across reloads. */

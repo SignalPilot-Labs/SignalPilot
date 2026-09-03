@@ -26,16 +26,16 @@ def test_health_accepts_the_exact_dashboard_skill_contract(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _plugin(tmp_path, version="1.3.0", contract="2026-09-02.1")
+    _plugin(tmp_path, version="1.1.0", contract="2026-09-02.1")
     monkeypatch.setenv("SP_AGENT_PLUGIN_PATH", str(tmp_path))
-    monkeypatch.setenv("SIGNALPILOT_PLUGIN_VERSION", "1.3.0")
+    monkeypatch.setenv("SIGNALPILOT_PLUGIN_VERSION", "1.1.0")
 
     assert dashboard_authoring_readiness() == (True, None)
 
 
 @pytest.mark.parametrize(
     ("version", "contract"),
-    [("1.2.0", "2026-09-02.1"), ("1.3.0", "2026-01-01.1")],
+    [("1.0.0", "2026-09-02.1"), ("1.1.0", "2026-01-01.1")],
 )
 def test_health_rejects_an_outdated_dashboard_skill(
     tmp_path: Path,
@@ -45,7 +45,7 @@ def test_health_rejects_an_outdated_dashboard_skill(
 ) -> None:
     _plugin(tmp_path, version=version, contract=contract)
     monkeypatch.setenv("SP_AGENT_PLUGIN_PATH", str(tmp_path))
-    monkeypatch.setenv("SIGNALPILOT_PLUGIN_VERSION", "1.3.0")
+    monkeypatch.setenv("SIGNALPILOT_PLUGIN_VERSION", "1.1.0")
 
     assert dashboard_authoring_readiness() == (
         False,

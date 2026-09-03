@@ -21,7 +21,7 @@ def dashboard_authoring_readiness() -> tuple[bool, str | None]:
         skill_text = skill.read_text()
     except (OSError, ValueError, TypeError):
         return False, "dashboard_authoring_skill_unavailable"
-    expected_version = os.getenv("SIGNALPILOT_PLUGIN_VERSION", "1.3.0").strip()
+    expected_version = os.getenv("SIGNALPILOT_PLUGIN_VERSION", "1.1.0").strip()
     if (
         metadata.get("version") != expected_version
         or DASHBOARD_AUTHORING_CONTRACT_VERSION not in skill_text

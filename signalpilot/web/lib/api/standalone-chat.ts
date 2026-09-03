@@ -53,6 +53,8 @@ export type StandaloneChatProject = {
   default_branch: string;
   ready: boolean;
   readiness_message: string;
+  connection_type: string | null;
+  registered: boolean;
 };
 
 export type StandaloneChatModel =
@@ -223,6 +225,8 @@ export const getStandaloneChatProjectReadiness = (projectId: string) =>
     setup_cta: boolean;
     branch: string | null;
     connection_name: string | null;
+    connection_type: string | null;
+    registered: boolean;
     starter_questions: string[];
   }>(`/api/chat/projects/${encodeURIComponent(projectId)}/readiness`);
 export const setDefaultStandaloneChatProject = (projectId: string) =>

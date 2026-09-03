@@ -35,7 +35,13 @@ def test_real_migration_chain_is_the_tracked_head() -> None:
     config = build_alembic_config("postgresql://unused:unused@localhost/unused")
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_current_head() == "0024"
+    assert scripts.get_current_head() == "0025"
+
+    # Top-level dashboard authoring follows the connector and chat settings
+    # migrations introduced on main.
+    revision_0025 = scripts.get_revision("0025")
+    assert revision_0025 is not None
+    assert revision_0025.down_revision == "0024"
 
     # 0024 stores the per-chat thinking effort on top of the connector chain.
     revision_0024 = scripts.get_revision("0024")

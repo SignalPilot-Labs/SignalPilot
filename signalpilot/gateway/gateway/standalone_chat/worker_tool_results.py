@@ -21,6 +21,62 @@ logger = logging.getLogger(__name__)
 
 _REPORT_MAX = 4000
 _STRUCTURED_TEXT_MAX = 2048
+_DASHBOARD_AUTHORING_TOOLS = {
+    "begin_dashboard_authoring",
+    "set_dashboard_plan",
+    "upsert_dashboard_chart",
+    "apply_dashboard_operations",
+    "create_dashboard_preview",
+}
+
+
+def dashboard_authoring_completion(
+    tool_name: str, content: str
+) -> dict[str, Any]:
+    """Return safe progress metadata for a completed authoring tool."""
+    normalized = tool_name.rsplit("__", 1)[-1]
+    if normalized not in _DASHBOARD_AUTHORING_TOOLS:
+        return {}
+    try:
+        result = json.loads(content)
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(result, dict):
+        return {}
+    session_id = str(result.get("authoring_session_id") or "").strip()
+    if not session_id:
+        return {}
+    status = str(result.get("status") or "").strip()
+
+    def count(key: str) -> int:
+        value = result.get(key)
+        return value if isinstance(value, int) and value >= 0 else 0
+
+    ready = count("ready_count")
+    expected = count("expected_count")
+    labels = {
+        "begin_dashboard_authoring": "Preparing dashboard",
+        "set_dashboard_plan": f"Building {expected} dashboard charts",
+        "upsert_dashboard_chart": (
+            f"Building dashboard ({ready} of {expected} charts)"
+            if status == "ready"
+            else "Refining dashboard chart"
+        ),
+        "apply_dashboard_operations": "Updating dashboard",
+        "create_dashboard_preview": "Dashboard preview ready",
+    }
+    return {
+        "dashboard_authoring": {
+            "label": labels[normalized],
+            "phase": normalized,
+            "authoring_session_id": session_id,
+            "draft_revision": count("draft_revision"),
+            "status": status,
+            "ready_count": ready,
+            "failed_count": count("failed_count"),
+            "expected_count": expected,
+        }
+    }
 
 
 def _worker() -> Any:
@@ -158,6 +214,8 @@ async def handle_tool_result(
         "truncated": projected.truncated,
         "v": 1,
     }
+    if not is_error:
+        payload.update(dashboard_authoring_completion(completed_tool, content))
     if projected.result_text is None:
         payload.pop("result_text")
     if parent_tool_call_id:

@@ -147,6 +147,8 @@ async def bootstrap_chat(store: StoreD, role: OrgRole):
                         admin=_is_admin(role),
                     )["message"]
                 ),
+                "connection_type": readiness_by_project[project.id].connection_type,
+                "registered": readiness_by_project[project.id].registered,
             }
             for project in projects
         ],
@@ -188,6 +190,8 @@ async def project_readiness(project_id: str, store: StoreD, role: OrgRole):
         "setup_cta": not readiness.ready and _is_admin(role),
         "branch": readiness.branch,
         "connection_name": readiness.connection_name,
+        "connection_type": readiness.connection_type,
+        "registered": readiness.registered,
         "starter_questions": starters,
     }
 

@@ -3,14 +3,9 @@
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import httpx
-
-if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
-
-    from signalpilot._server.auth.standalone_chat import ExecutionScope
 
 DASHBOARD_AUTHORING_TIMEOUT_SECONDS = 1_200.0
 
@@ -95,82 +90,39 @@ class StandaloneGatewayClient:
             raise ValueError(invalid)
         return value
 
-    async def create_dashboard_preview(
+    async def dashboard_authoring_tool(
         self,
-        *,
-        request: str,
-        project_id: str,
-        branch: str,
-        commit_sha: str,
-        timezone: str,
-        authoring_session_id: str | None = None,
+        tool: str,
+        arguments: dict[str, Any],
     ) -> dict[str, Any]:
-        """Create a private governed dashboard draft bound to this chat scope."""
+        """Execute one model-free authoring mutation through the run token."""
 
-        path = (
-            f"/api/dashboard-authoring/sessions/{authoring_session_id}/messages"
-            if authoring_session_id
-            else "/api/dashboard-authoring/sessions"
-        )
-        payload = (
-            {"prompt": request}
-            if authoring_session_id
-            else {
-                "prompt": request,
-                "project_id": project_id,
-                "branch": branch,
-                "commit_sha": commit_sha,
-                "timezone": timezone,
-            }
-        )
+        payload = dict(arguments)
+        session_id = str(payload.pop("authoring_session_id", "") or "")
+        if tool == "begin_dashboard_authoring":
+            path = "/api/dashboard-authoring/begin"
+            if session_id:
+                payload["authoring_session_id"] = session_id
+        elif tool == "set_dashboard_plan":
+            path = f"/api/dashboard-authoring/sessions/{session_id}/plan"
+        elif tool == "upsert_dashboard_chart":
+            chart_id = str(payload.pop("chart_id", "") or "")
+            path = (
+                f"/api/dashboard-authoring/sessions/{session_id}/charts/"
+                f"{chart_id}"
+            )
+        elif tool == "apply_dashboard_operations":
+            path = f"/api/dashboard-authoring/sessions/{session_id}/operations"
+        elif tool == "create_dashboard_preview":
+            path = f"/api/dashboard-authoring/sessions/{session_id}/finalize"
+        else:
+            raise ValueError("Unknown dashboard authoring tool")
+        if tool != "begin_dashboard_authoring" and not session_id:
+            raise ValueError("Dashboard authoring session is required")
         return await self._post_json(
             path,
             payload=payload,
             timeout=DASHBOARD_AUTHORING_TIMEOUT_SECONDS,
-            invalid="Invalid dashboard authoring preview",
-            failed="Dashboard preview could not be created",
+            invalid="Invalid dashboard authoring result",
+            failed="Dashboard authoring tool failed",
         )
-
-    def dashboard_creator(
-        self,
-        body: dict[str, Any],
-        scope: ExecutionScope,
-    ) -> Callable[[str, str, str | None], Awaitable[dict[str, Any]]]:
-        """Bind `create_dashboard_preview` to one run's frozen scope.
-
-        A follow-up on an existing draft must name the authoring session the
-        run was warmed with; any other session id is rejected.
-        """
-        warm_context = body.get("warm_context") or {}
-        active_session_id = (
-            str(
-                (warm_context.get("dashboard_authoring") or {}).get(
-                    "authoring_session_id"
-                )
-                or ""
-            )
-            or None
-        )
-
-        async def create(
-            request: str,
-            timezone: str,
-            authoring_session_id: str | None,
-        ) -> dict[str, Any]:
-            if (
-                authoring_session_id
-                and authoring_session_id != active_session_id
-            ):
-                raise ValueError(
-                    "Dashboard authoring session is not active in this Data Chat"
-                )
-            return await self.create_dashboard_preview(
-                request=request,
-                project_id=scope.project_id,
-                branch=scope.branch,
-                commit_sha=scope.commit_sha,
-                timezone=timezone,
-                authoring_session_id=authoring_session_id,
-            )
-
-        return create

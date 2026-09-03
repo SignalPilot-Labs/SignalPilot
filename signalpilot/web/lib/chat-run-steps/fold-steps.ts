@@ -95,14 +95,14 @@ export function foldRunSteps(
         status: "running",
         title: isSpawn
           ? (text(input?.description) ?? "Subagent")
-          : (queryDescription(tool, input) ?? humanizeTool(tool)),
+          : tool === "upsert_dashboard_chart"
+            ? `Validating ${text(asRecord(input?.chart)?.title) ?? text(input?.chart_id) ?? "dashboard chart"}`
+            : (queryDescription(tool, input) ?? humanizeTool(tool)),
         tool,
         toolOrigin: origin,
         input,
         sql:
-          category === "sql"
-            ? (text(input?.sql) ?? text(input?.query))
-            : null,
+          category === "sql" ? (text(input?.sql) ?? text(input?.query)) : null,
         code: extractCode(tool, input),
         file: extractFile(tool, category, input),
         sources: extractSources(input),
@@ -147,6 +147,10 @@ export function foldRunSteps(
       if (step.category === "subagent") {
         step.report = text(event.payload.report);
       }
+      const dashboard = asRecord(event.payload.dashboard_authoring);
+      if (step.category === "dashboard" && dashboard) {
+        step.detail = text(dashboard.label);
+      }
       // Structured output (table / schema / dbt run ...) for the tool card;
       // legacy events fold to `kind: "legacy"` with no summary.
       step.result = parseToolResult(event.payload, step.tool ?? "", failed);
@@ -168,7 +172,8 @@ export function foldRunSteps(
           // stat reads `result.summary`, so clear both too.
           step.title = `${step.title} · needs sign-in`;
           step.detail = null;
-          if (step.result) step.result = { ...step.result, summary: null, errorMessage: null };
+          if (step.result)
+            step.result = { ...step.result, summary: null, errorMessage: null };
         } else {
           step.detail = failure;
         }

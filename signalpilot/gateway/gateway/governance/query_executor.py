@@ -20,9 +20,11 @@ from sqlalchemy import select
 from gateway import __version__ as gateway_version
 from gateway.connectors.health_monitor import health_monitor
 from gateway.connectors.pool_manager import pool_manager
+from gateway.connectors.registry import get_dashboard_dialect
 from gateway.db.models import GatewayGovernedQueryExecution, GatewayStructuredQueryResult
 from gateway.engine import inject_limit, sqlglot_dialect, validate_sql
 from gateway.governance.annotations import load_annotations
+from gateway.governance.bindings import BoundQuery, BoundQueryError
 from gateway.governance.cost_estimator import CostEstimate, CostEstimator
 from gateway.governance.pii import PIIRedactor
 from gateway.governance.plan_limits import check_query_limit, get_org_limits, record_query
@@ -142,6 +144,7 @@ class GovernedQueryExecutor:
         timeout_seconds: int,
         context: GovernedQueryContext,
         parameters: list[Any] | None = None,
+        bound_query: BoundQuery | None = None,
     ) -> GovernedQueryResult:
         org_id = store._require_org_id()
         plan = await get_org_limits(org_id)
@@ -157,16 +160,22 @@ class GovernedQueryExecutor:
         if settings.blocked_tables:
             blocked_tables.extend(table for table in settings.blocked_tables if table not in blocked_tables)
 
-        parameters = list(parameters or [])
-        if sql.count("%s") != len(parameters):
-            raise GovernedQueryError("invalid_parameters", "SQL parameter count does not match bound values")
-        # sqlglot and cost estimators cannot parse driver placeholders. Replace
-        # them only for governance analysis; the connector still receives the
-        # original template and separately bound values.
-        governance_sql = sql
-        parameter_sentinels = [f"918273645{i}" for i in range(len(parameters))]
-        for sentinel in parameter_sentinels:
-            governance_sql = governance_sql.replace("%s", sentinel, 1)
+        try:
+            dashboard_dialect = get_dashboard_dialect(info.db_type)
+            connection_db_type = str(getattr(info.db_type, "value", info.db_type)).lower()
+            if bound_query is None:
+                bound_query = BoundQuery.from_legacy(
+                    sql=sql,
+                    parameters=list(parameters or []),
+                    db_type=connection_db_type,
+                    parameter_style=dashboard_dialect.parameter_style,
+                )
+            elif bound_query.db_type != connection_db_type:
+                raise BoundQueryError("Bound query database type does not match the connection")
+            rendered_query = bound_query.render()
+            governance_sql, parameter_sentinels = bound_query.governance_sql()
+        except (BoundQueryError, ValueError) as exc:
+            raise GovernedQueryError("invalid_parameters", str(exc)) from exc
         dialect = sqlglot_dialect(info.db_type)
         validation = validate_sql(governance_sql, blocked_tables=blocked_tables or None, dialect=dialect)
         if not validation.ok:
@@ -175,9 +184,7 @@ class GovernedQueryExecutor:
         normalized_sql = normalize_sql(governance_sql, dialect)
         sql_hash = hashlib.sha256(normalized_sql.encode()).hexdigest()
         persisted_plan = None
-        if context.run_id and (
-            context.plan_id or enterprise_chat_feature_flags().size_router
-        ):
+        if context.run_id and (context.plan_id or enterprise_chat_feature_flags().size_router):
             if not context.plan_id:
                 raise GovernedQueryError("plan_required", "Chat query execution requires a valid plan_id")
             from gateway.governance.query_planner import QueryPlanError, require_execution_plan
@@ -186,7 +193,7 @@ class GovernedQueryExecutor:
                 persisted_plan = await require_execution_plan(
                     store,
                     plan_id=context.plan_id,
-                    sql=sql,
+                    sql=rendered_query.sql,
                     connection_name=connection_name,
                     context=context,
                     allowed_routes={"mcp"} if context.path == "mcp" else {"notebook_sdk"},
@@ -275,12 +282,9 @@ class GovernedQueryExecutor:
         fetch_limit = min(100_001, row_limit + 1)
         try:
             safe_governance_sql = inject_limit(governance_sql, fetch_limit, dialect=dialect)
-            # inject_limit preserves the original expression while adding the
-            # row bound. Restore placeholders in their original order.
-            safe_sql = safe_governance_sql
-            for sentinel in parameter_sentinels:
-                safe_sql = safe_sql.replace(sentinel, "%s", 1)
-        except ValueError as exc:
+            internal_safe_sql = bound_query.restore_after_governance(safe_governance_sql, parameter_sentinels)
+            safe_query = bound_query.render(internal_safe_sql)
+        except (ValueError, BoundQueryError) as exc:
             await self._fail(store, execution, "query_blocked")
             raise GovernedQueryError("query_blocked", str(exc)) from exc
 
@@ -370,7 +374,11 @@ class GovernedQueryExecutor:
                         },
                     )
                 try:
-                    rows = await connector.execute(safe_sql, params=parameters, timeout=timeout_seconds)
+                    rows = await connector.execute(
+                        safe_query.sql,
+                        params=safe_query.parameters,
+                        timeout=timeout_seconds,
+                    )
                 except asyncio.CancelledError:
                     with suppress(Exception):
                         await connector.cancel_current_query()

@@ -12,9 +12,12 @@ pool manager) works transparently.
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import textwrap
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Any
 
 from ..base import BaseConnector
@@ -29,20 +32,58 @@ _SANDBOX_DB_PATH = "data/db.duckdb"  # Relative to workdir (cwd)
 _HARDENED_CONFIG = "{'enable_external_access': False, 'autoinstall_known_extensions': False}"
 
 
-def _build_query_code(sql: str, db_path: str = _SANDBOX_DB_PATH) -> str:
+def _encode_bound_parameters(params: list[Any]) -> str:
+    encoded: list[dict[str, Any]] = []
+    for value in params:
+        if isinstance(value, datetime):
+            encoded.append({"type": "datetime", "value": value.isoformat()})
+        elif isinstance(value, date):
+            encoded.append({"type": "date", "value": value.isoformat()})
+        elif isinstance(value, Decimal):
+            encoded.append({"type": "decimal", "value": str(value)})
+        elif isinstance(value, bytes):
+            encoded.append(
+                {
+                    "type": "bytes",
+                    "value": base64.b64encode(value).decode("ascii"),
+                }
+            )
+        elif value is None or isinstance(value, (bool, int, float, str)):
+            encoded.append({"type": "scalar", "value": value})
+        else:
+            raise TypeError(f"Unsupported DuckDB parameter type: {type(value).__name__}")
+    return base64.b64encode(json.dumps(encoded, separators=(",", ":")).encode()).decode("ascii")
+
+
+def _build_query_code(
+    sql: str,
+    params: list[Any] | None = None,
+    db_path: str = _SANDBOX_DB_PATH,
+) -> str:
     """Build Python code that executes a SQL query and prints JSON results."""
-    escaped_sql = sql.replace("\\", "\\\\").replace("'", "\\'").replace("\n", " ")
+    encoded_sql = base64.b64encode(sql.encode()).decode("ascii")
+    encoded_params = _encode_bound_parameters(list(params or []))
     return (
-        "import duckdb, json, datetime, decimal\n"
+        "import base64, duckdb, json, datetime, decimal\n"
         "def _serialize(obj):\n"
         "    if isinstance(obj, (datetime.datetime, datetime.date, datetime.time)): return obj.isoformat()\n"
         "    if isinstance(obj, datetime.timedelta): return str(obj)\n"
         "    if isinstance(obj, decimal.Decimal): return float(obj)\n"
         "    if isinstance(obj, bytes): return obj.hex()\n"
         "    return str(obj)\n"
+        f"sql = base64.b64decode('{encoded_sql}').decode()\n"
+        f"encoded_params = json.loads(base64.b64decode('{encoded_params}').decode())\n"
+        "params = []\n"
+        "for item in encoded_params:\n"
+        "    kind, value = item['type'], item['value']\n"
+        "    if kind == 'datetime': value = datetime.datetime.fromisoformat(value)\n"
+        "    elif kind == 'date': value = datetime.date.fromisoformat(value)\n"
+        "    elif kind == 'decimal': value = decimal.Decimal(value)\n"
+        "    elif kind == 'bytes': value = base64.b64decode(value)\n"
+        "    params.append(value)\n"
         f"conn = duckdb.connect('{db_path}', read_only=True, config={_HARDENED_CONFIG})\n"
         "try:\n"
-        f"    result = conn.execute('{escaped_sql}')\n"
+        "    result = conn.execute(sql, params) if params else conn.execute(sql)\n"
         "    columns = [desc[0] for desc in result.description]\n"
         "    rows = [dict(zip(columns, row)) for row in result.fetchall()]\n"
         "    print(json.dumps({'columns': columns, 'rows': rows}, default=_serialize))\n"
@@ -194,7 +235,7 @@ class SandboxedDuckDBConnector(BaseConnector):
         self, sql: str, params: list | None = None, timeout: int | None = None
     ) -> list[dict[str, Any]]:
         """Execute a query via sandbox and return rows."""
-        code = _build_query_code(sql)
+        code = _build_query_code(sql, params)
         data = await self._run_sandboxed(code, timeout=timeout or self._query_timeout)
         return data.get("rows", [])
 

@@ -35,18 +35,16 @@ export function activeDashboardAuthoringProgress(
   if (!runId) return null;
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index];
-    if (
-      event.run_id !== runId ||
-      event.type !== "progress" ||
-      event.payload.scope !== "dashboard_authoring"
-    ) {
+    if (event.run_id !== runId || event.type !== "tool_completed") {
       continue;
     }
-    const label = event.payload.label;
+    const dashboard = asRecord(event.payload.dashboard_authoring);
+    if (!dashboard) continue;
+    const label = dashboard.label;
     if (typeof label !== "string" || !label) return null;
-    const phase = event.payload.phase;
-    const sessionId = event.payload.authoring_session_id;
-    const draftRevision = event.payload.draft_revision;
+    const phase = dashboard.phase;
+    const sessionId = dashboard.authoring_session_id;
+    const draftRevision = dashboard.draft_revision;
     return {
       label,
       phase: typeof phase === "string" ? phase : "",
@@ -64,13 +62,8 @@ export function activeDashboardPreviewLabel(
   if (!runId) return null;
   const active = [...foldRunSteps(events, runId)]
     .reverse()
-    .find(
-      (step) =>
-        step.tool === "create_dashboard_preview" && step.status === "running",
-    );
-  return (
-    active?.detail ?? (active ? "Preparing governed dashboard preview" : null)
-  );
+    .find((step) => step.category === "dashboard" && step.status === "running");
+  return active?.detail ?? active?.title ?? null;
 }
 
 /** Never leave an unresolved cold-boot card in a terminal transcript. */
@@ -109,7 +102,12 @@ export function extractRuntimeBoot(
       // original start time but show the latest real phase.
       state.phase = phase;
     } else {
-      state = { phase, startedAt: event.created_at, readyAt: null, bootMs: null };
+      state = {
+        phase,
+        startedAt: event.created_at,
+        readyAt: null,
+        bootMs: null,
+      };
     }
   }
   return state;
@@ -149,9 +147,7 @@ export function extractRunPlan(
       content,
       activeForm: text(record?.activeForm),
       status:
-        status === "completed" || status === "in_progress"
-          ? status
-          : "pending",
+        status === "completed" || status === "in_progress" ? status : "pending",
     });
   }
   if (!items.length) return null;

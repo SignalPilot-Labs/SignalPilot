@@ -223,7 +223,10 @@ class TrinoConnector(BaseConnector):
                 except Exception:
                     pass  # Older Trino versions may not support this
                 cursor = self._conn.cursor()  # Fresh cursor after SET
-            cursor.execute(sql)
+            if params:
+                cursor.execute(sql, params)
+            else:
+                cursor.execute(sql)
             columns = [desc[0] for desc in cursor.description] if cursor.description else []
             rows = cursor.fetchall()
             return [dict(zip(columns, row, strict=False)) for row in rows]

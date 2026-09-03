@@ -390,7 +390,7 @@ async def get_agent_context(
                 commit_sha=dashboard_commit_sha,
             )
         except DashboardSemanticError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+            raise HTTPException(status_code=422, detail={"code": exc.code, "message": str(exc)}) from exc
         if dashboard_context.connection_name != name:
             raise HTTPException(status_code=422, detail="Dashboard project does not use this connection")
         result["dashboard_semantic_context"] = compact_semantic_projection(dashboard_context)

@@ -645,6 +645,29 @@ def standalone_chat_tools(*, notebook_enabled: bool) -> list[Tool]:
             },
         ),
         Tool(
+            name="confirm_dashboard_custom_sql",
+            description=(
+                "Record the user's explicit confirmation of pending custom SQL in the active dashboard draft. "
+                "Call only when the current user message approves custom SQL after the draft reported that confirmation is required."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "authoring_session_id": {"type": "string"},
+                    "authoring_contract_version": {
+                        "const": DASHBOARD_AUTHORING_CONTRACT_VERSION
+                    },
+                    "confirmation": {"const": "confirm"},
+                },
+                "required": [
+                    "authoring_session_id",
+                    "authoring_contract_version",
+                    "confirmation",
+                ],
+                "additionalProperties": False,
+            },
+        ),
+        Tool(
             name="create_dashboard_preview",
             description=(
                 "Deterministically finalize the complete validated private dashboard preview. Makes no model call and "

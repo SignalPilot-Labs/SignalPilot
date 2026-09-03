@@ -718,11 +718,6 @@ async def begin_top_level_dashboard_authoring(body: BeginDashboardAuthoringReque
             status_code=422,
             detail={"code": "no_governed_explores", "message": "The pinned project has no governed explores"},
         )
-    if not any(explore.metrics for explore in context.explores):
-        raise HTTPException(
-            status_code=422,
-            detail={"code": "no_approved_metrics", "message": "The pinned project has no approved dashboard metrics"},
-        )
     created = await dashboard_store.create_top_level_authoring_session(
         store.session,
         org_id=store._require_org_id(),

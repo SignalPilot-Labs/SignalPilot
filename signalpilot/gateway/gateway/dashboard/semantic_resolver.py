@@ -33,7 +33,6 @@ from gateway.workspace_store.objects import workspace_object_storage
 
 from .project_snapshot import hydrate_github_mirror, materialize_workspace_snapshot
 
-SUPPORTED_AGGREGATIONS = {"sum", "count", "count_distinct", "average", "min", "max"}
 SUPPORTED_METRIC_FORMATS = {"integer", "decimal", "compact", "percentage"}
 
 
@@ -61,39 +60,34 @@ def _logical_type(value: str | None) -> str:
     return "string"
 
 
-def parse_approved_metrics(settings: dict | None) -> list[dict[str, Any]]:
-    """Parse only explicit human-approved metric bindings from project settings."""
-    bindings = (settings or {}).get("dashboard_metrics") or []
-    parsed: list[dict[str, Any]] = []
-    for raw in bindings:
-        if not isinstance(raw, dict) or raw.get("approved") is not True:
-            continue
-        required = ("model", "column", "aggregation", "label")
-        if any(not str(raw.get(key) or "").strip() for key in required):
-            raise DashboardSemanticError(
-                "Approved dashboard metric bindings require model, column, aggregation, and label"
-            )
-        aggregation = str(raw["aggregation"]).lower()
-        if aggregation not in SUPPORTED_AGGREGATIONS:
-            raise DashboardSemanticError(f"Unsupported approved metric aggregation: {aggregation}")
-        metric_format = str(raw["format"]) if raw.get("format") else None
-        if metric_format == "number":
-            metric_format = "decimal"
-        if metric_format and metric_format not in SUPPORTED_METRIC_FORMATS:
-            if not (metric_format.startswith("currency:") and len(metric_format) == 12 and metric_format[9:].isupper()):
-                raise DashboardSemanticError(f"Unsupported approved metric format: {metric_format}")
-        parsed.append(
-            {
-                "model": str(raw["model"]),
-                "column": str(raw["column"]),
-                "aggregation": aggregation,
-                "label": str(raw["label"]),
-                "format": metric_format,
-                "field_id": str(raw.get("field_id") or f"{raw['model']}.{raw['column']}"),
-                "approval_source": str(raw.get("approval_source") or "project_settings"),
-            }
-        )
-    return parsed
+def _metric_aggregation(column: str, logical_type: str, semantic_column: dict[str, Any]) -> tuple[str, bool] | None:
+    """Derive a useful aggregation from dbt/semantic metadata without an approval registry."""
+    explicit = str(semantic_column.get("aggregation") or "").lower()
+    if explicit in {"sum", "count", "count_distinct", "average", "min", "max"}:
+        return explicit, False
+    if logical_type != "number":
+        return None
+    normalized = column.lower()
+    identifier_suffixes = ("_id", "_key", "_number", "_year", "_month", "_day")
+    if normalized in {"id", "year", "month", "day"} or normalized.endswith(identifier_suffixes):
+        return None
+    if any(token in normalized for token in ("_pct", "percent", "_rate", "_ratio", "average", "avg_")):
+        return "average", True
+    return "sum", True
+
+
+def _metric_format(column: str, semantic_column: dict[str, Any]) -> str | None:
+    explicit = str(semantic_column.get("format") or "")
+    if explicit == "number":
+        return "decimal"
+    if explicit in SUPPORTED_METRIC_FORMATS or (
+        explicit.startswith("currency:") and len(explicit) == 12 and explicit[9:].isupper()
+    ):
+        return explicit
+    normalized = column.lower()
+    if any(token in normalized for token in ("_pct", "percent", "_rate", "_ratio")):
+        return "percentage"
+    return "decimal"
 
 
 def _project_projection(project_map: ProjectMap) -> dict[str, Any]:
@@ -109,6 +103,7 @@ def _project_projection(project_map: ProjectMap) -> dict[str, Any]:
                         "type": col.data_type,
                         "description": col.description,
                         "tests": sorted(col.tests),
+                        "meta": col.meta,
                     }
                     for col in sorted(model.columns, key=lambda item: item.name)
                 ],
@@ -151,7 +146,6 @@ def resolve_from_authorities(
     project_map: ProjectMap,
     physical_schema: dict[str, Any],
     semantic_model: dict[str, Any],
-    approved_metrics: list[dict[str, Any]],
 ) -> DashboardSemanticContext:
     physical_fingerprint = _schema_fingerprint(physical_schema)
     fingerprint = _canonical_hash(
@@ -160,13 +154,9 @@ def resolve_from_authorities(
             "project_map": _project_projection(project_map),
             "physical_schema_fingerprint": physical_fingerprint,
             "connection_semantic_model": semantic_model,
-            "approved_metrics": approved_metrics,
             "connection_type": connection_type,
         }
     )
-    metrics_by_model: dict[str, list[dict[str, Any]]] = {}
-    for binding in approved_metrics:
-        metrics_by_model.setdefault(str(binding["model"]), []).append(binding)
 
     explores: list[DashboardSemanticExplore] = []
     verification_refs: list[str] = []
@@ -205,21 +195,26 @@ def resolve_from_authorities(
                 )
             )
         metrics: list[DashboardSemanticMetric] = []
-        for binding in metrics_by_model.get(model_name, []):
-            column = next((item for item in dimensions if item.column == binding["column"]), None)
-            if column is None:
-                raise DashboardSemanticError(
-                    f"Approved metric column does not resolve: {model_name}.{binding['column']}"
-                )
+        dbt_columns = {column.name: column for column in model.columns}
+        for column in dimensions:
+            dbt_meta = dbt_columns[column.column].meta
+            dbt_semantic = dbt_meta.get("signalpilot", dbt_meta)
+            semantic_column = {
+                **(dbt_semantic if isinstance(dbt_semantic, dict) else {}),
+                **(semantic_columns.get(column.column) or {}),
+            }
+            aggregation = _metric_aggregation(column.column, column.logical_type, semantic_column)
+            if aggregation is None:
+                continue
+            aggregation_name, inferred = aggregation
             metrics.append(
                 DashboardSemanticMetric(
-                    **column.model_dump(exclude={"field_id", "label"}),
-                    field_id=str(binding["field_id"]),
-                    aggregation=str(binding["aggregation"]),
-                    label=str(binding["label"]),
-                    format=binding.get("format"),
-                    approval_source=str(binding["approval_source"]),
-                    human_verified=True,
+                    **column.model_dump(exclude={"label"}),
+                    aggregation=aggregation_name,
+                    label=column.label or column.column.replace("_", " ").title(),
+                    format=_metric_format(column.column, semantic_column),
+                    semantic_source="dbt_project",
+                    aggregation_inferred=inferred,
                 )
             )
         joins = [
@@ -408,7 +403,6 @@ class DashboardSemanticResolver:
             project_map=project_map,
             physical_schema=physical_schema,
             semantic_model=_load_semantic_model(connection_name),
-            approved_metrics=parse_approved_metrics(project.settings),
         )
         if not context.explores:
             raise DashboardSemanticError("The pinned dbt project has no governed explores for this connection")

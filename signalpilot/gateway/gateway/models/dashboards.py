@@ -214,8 +214,8 @@ class DashboardSemanticMetric(DashboardSemanticField):
     aggregation: str
     label: str
     format: str | None = None
-    approval_source: str
-    human_verified: bool
+    semantic_source: str
+    aggregation_inferred: bool
 
 
 class DashboardSemanticExplore(DashboardModel):

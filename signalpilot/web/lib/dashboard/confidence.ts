@@ -11,8 +11,8 @@ export function chartConfidence(chart: ChartDefinition): DashboardConfidence {
 
 export function confidenceExplanation(chart: ChartDefinition): string {
   return chart.query.kind === "semantic"
-    ? "High confidence: this chart uses approved semantic fields at the dashboard's pinned dbt commit."
-    : "Low confidence: this chart uses explicitly confirmed custom SQL rather than an approved semantic metric.";
+    ? "DBT-backed: this chart uses model fields at the dashboard's pinned dbt commit."
+    : "Direct SQL: this chart uses an explicitly confirmed custom query.";
 }
 
 export function dashboardConfidenceSummary(definition: DashboardDefinition) {

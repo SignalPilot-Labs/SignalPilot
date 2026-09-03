@@ -113,16 +113,29 @@ class StandaloneGatewayClient:
             )
         elif tool == "apply_dashboard_operations":
             path = f"/api/dashboard-authoring/sessions/{session_id}/operations"
+        elif tool == "confirm_dashboard_custom_sql":
+            payload.pop("authoring_contract_version", None)
+            payload.pop("confirmation", None)
+            path = f"/api/dashboard-authoring/sessions/{session_id}/confirm-custom-sql"
         elif tool == "create_dashboard_preview":
             path = f"/api/dashboard-authoring/sessions/{session_id}/finalize"
         else:
             raise ValueError("Unknown dashboard authoring tool")
         if tool != "begin_dashboard_authoring" and not session_id:
             raise ValueError("Dashboard authoring session is required")
-        return await self._post_json(
+        result = await self._post_json(
             path,
             payload=payload,
             timeout=DASHBOARD_AUTHORING_TIMEOUT_SECONDS,
             invalid="Invalid dashboard authoring result",
             failed="Dashboard authoring tool failed",
         )
+        if tool == "confirm_dashboard_custom_sql":
+            return {
+                "status": "custom_sql_confirmed",
+                "authoring_session_id": session_id,
+                "plan_revision": result.get("plan_revision", 0),
+                "draft_revision": result.get("draft_revision", 0),
+                "custom_sql_confirmed": bool(result.get("custom_sql_confirmed")),
+            }
+        return result

@@ -63,8 +63,8 @@ def _context() -> DashboardSemanticContext:
                         logical_type="number",
                         aggregation="sum",
                         label="Revenue",
-                        approval_source="test",
-                        human_verified=True,
+                        semantic_source="dbt_project",
+                        aggregation_inferred=True,
                     )
                 ],
             )

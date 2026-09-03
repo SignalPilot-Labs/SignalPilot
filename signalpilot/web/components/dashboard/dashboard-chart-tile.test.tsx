@@ -156,7 +156,7 @@ describe("DashboardChartTile interactions", () => {
     expect(document.body.textContent).toContain("Complete result");
     expect(document.body.textContent).toContain("View data");
     const verification = container.querySelector<HTMLElement>(
-      "[aria-label^='High confidence']",
+      "[aria-label^='DBT-backed']",
     );
     expect(verification).not.toBeNull();
   });
@@ -200,13 +200,13 @@ describe("DashboardChartTile interactions", () => {
       root.render(<DashboardChartTile chart={chart} result={result} />);
     });
     const confidence = container.querySelector<HTMLElement>(
-      "[aria-label^='High confidence']",
+      "[aria-label^='DBT-backed']",
     );
     await act(async () => confidence?.focus());
 
     const tooltip = Array.from(
       document.body.querySelectorAll<HTMLElement>("[role='tooltip']"),
-    ).find((candidate) => candidate.textContent?.includes("approved semantic"));
+    ).find((candidate) => candidate.textContent?.includes("DBT-backed"));
     expect(tooltip).not.toBeNull();
     expect(container.contains(tooltip ?? null)).toBe(false);
   });

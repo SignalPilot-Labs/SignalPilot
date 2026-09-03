@@ -137,8 +137,8 @@ def _orders_context() -> DashboardSemanticContext:
                             "logical_type": "number",
                             "label": "Revenue",
                             "aggregation": "sum",
-                            "approval_source": "test",
-                            "human_verified": True,
+                            "semantic_source": "dbt_project",
+                            "aggregation_inferred": True,
                         }
                     ],
                 }

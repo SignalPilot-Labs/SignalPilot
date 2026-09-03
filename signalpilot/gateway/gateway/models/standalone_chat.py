@@ -7,6 +7,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from gateway.standalone_chat.config import CHAT_EFFORT_IDS, CHAT_MODEL_IDS
+
 from .chat_reports import ReportReference
 
 ChatRunStatus = Literal[
@@ -54,8 +56,6 @@ ChatEventType = Literal[
     "files_changed",
     "files_archived",
 ]
-ArtifactKind = Literal["table", "chart", "report"]
-
 
 class StrictChatRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -79,6 +79,10 @@ class ChatBootstrapResponse(BaseModel):
     starter_questions: list[str] = Field(default_factory=list, min_length=0, max_length=4)
     default_per_query_budget_usd: float = 0.25
     default_chat_budget_usd: float = 1.0
+    available_models: list[dict[str, str]] = Field(default_factory=list)
+    default_model: str
+    available_efforts: list[dict[str, str]] = Field(default_factory=list)
+    default_effort: str = "medium"
     enterprise_features: dict[str, bool] = Field(default_factory=dict)
 
 
@@ -87,6 +91,8 @@ class StandaloneConversationCreate(StrictChatRequest):
     message: str = Field(..., min_length=1, max_length=50_000)
     per_query_budget_usd: float = Field(default=0.25, ge=0)
     chat_budget_usd: float = Field(default=1.0, ge=0)
+    model: str | None = Field(default=None, max_length=50)
+    effort: str | None = Field(default=None, max_length=20)
     report_reference: ReportReference | None = None
 
     @field_validator("project_id", "message")
@@ -102,6 +108,42 @@ class StandaloneConversationCreate(StrictChatRequest):
         if self.chat_budget_usd < self.per_query_budget_usd:
             raise ValueError("Chat budget must be at least the per-query budget")
         return self
+
+    @field_validator("model")
+    @classmethod
+    def validate_model(cls, value: str | None) -> str | None:
+        if value is not None and value not in CHAT_MODEL_IDS:
+            raise ValueError("Unsupported chat model")
+        return value
+
+    @field_validator("effort")
+    @classmethod
+    def validate_effort(cls, value: str | None) -> str | None:
+        if value is not None and value not in CHAT_EFFORT_IDS:
+            raise ValueError("Unsupported thinking level")
+        return value
+
+
+class StandaloneConversationModelUpdate(StrictChatRequest):
+    model: str = Field(..., min_length=1, max_length=50)
+
+    @field_validator("model")
+    @classmethod
+    def validate_model(cls, value: str) -> str:
+        if value not in CHAT_MODEL_IDS:
+            raise ValueError("Unsupported chat model")
+        return value
+
+
+class StandaloneConversationEffortUpdate(StrictChatRequest):
+    effort: str = Field(..., min_length=1, max_length=20)
+
+    @field_validator("effort")
+    @classmethod
+    def validate_effort(cls, value: str) -> str:
+        if value not in CHAT_EFFORT_IDS:
+            raise ValueError("Unsupported thinking level")
+        return value
 
 
 class QueryApprovalDecision(StrictChatRequest):
@@ -184,28 +226,6 @@ class ChatRunEventInfo(BaseModel):
     created_at: datetime
 
 
-class ChatArtifactInfo(BaseModel):
-    id: str
-    run_id: str
-    assistant_message_id: str | None = None
-    kind: ArtifactKind
-    filename: str
-    mime_type: str
-    snapshot: dict[str, Any]
-    provenance: dict[str, Any] | None = None
-    freshness_at: datetime | None = None
-    assumptions: list[str] = Field(default_factory=list)
-    exclusions: list[str] = Field(default_factory=list)
-    caveats: list[str] = Field(default_factory=list)
-    parent_artifact_id: str | None = None
-    saved_report_id: str | None = None
-    saved_report_version_id: str | None = None
-    saved_report_title: str | None = None
-    report_action: Literal["create", "update", "open"] = "create"
-    created_at: datetime
-    download_formats: list[str]
-
-
 class StandaloneConversationInfo(BaseModel):
     id: str
     project_id: str
@@ -218,6 +238,8 @@ class StandaloneConversationInfo(BaseModel):
     updated_at: float
     run_status: ChatRunStatus | None = None
     commit_sha: str | None = None
+    model: str
+    effort: str = "medium"
     per_query_budget_usd: float = 0.25
     chat_budget_usd: float = 1.0
     estimated_spend_usd: float = 0.0
@@ -228,7 +250,6 @@ class StandaloneConversationInfo(BaseModel):
 class StandaloneConversationDetail(BaseModel):
     conversation: StandaloneConversationInfo
     messages: list[StandaloneMessageInfo]
-    artifacts: list[ChatArtifactInfo]
     current_run: ChatRunInfo | None = None
     run_events: list[ChatRunEventInfo] = Field(default_factory=list)
 
@@ -253,25 +274,9 @@ class SharedMessageInfo(BaseModel):
     created_at: float
 
 
-class SharedChatArtifactInfo(BaseModel):
-    id: str
-    assistant_message_id: str | None = None
-    kind: ArtifactKind
-    filename: str
-    mime_type: str
-    snapshot: dict[str, Any]
-    freshness_at: datetime | None = None
-    assumptions: list[str] = Field(default_factory=list)
-    exclusions: list[str] = Field(default_factory=list)
-    caveats: list[str] = Field(default_factory=list)
-    created_at: datetime
-    download_formats: list[str]
-
-
 class SharedConversationDetail(BaseModel):
     conversation: SharedConversationInfo
     messages: list[SharedMessageInfo]
-    artifacts: list[SharedChatArtifactInfo]
     shared_at: datetime
 
 

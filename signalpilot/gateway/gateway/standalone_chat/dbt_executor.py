@@ -530,6 +530,7 @@ async def run_dbt_command(sandbox_id: str, argv: list[str], dbt_dir: str) -> str
     )
     result = await runtime.exec(sandbox_id, shell, timeout_seconds=_EXEC_TIMEOUT)
 
+    # Format parsed by standalone_chat/tool_projection/ops.py; update tests there if you change this
     sections = [f"exit_code: {result.returncode}"]
     output = (result.stdout or "") + ("\n" + result.stderr if result.stderr else "")
     if len(output) > _MAX_OUTPUT_CHARS:

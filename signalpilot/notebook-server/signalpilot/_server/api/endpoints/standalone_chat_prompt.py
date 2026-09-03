@@ -1,11 +1,16 @@
 """Prompts and tool allowlists for standalone chat execution."""
 
+from __future__ import annotations
+
 import json
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from starlette.exceptions import HTTPException
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 STANDALONE_ALLOWED_TOOLS = [
     "mcp__signalpilot__analyze_grain",
@@ -62,13 +67,7 @@ STANDALONE_ALLOWED_TOOLS = [
     "mcp__signalpilot__validate_model_output",
     "mcp__signalpilot__verify_model_values",
     "mcp__signalpilot__verify_metric_conformance",
-    "mcp__standalone-chat__publish_chart",
     "mcp__standalone-chat__create_dashboard_preview",
-    "mcp__standalone-chat__publish_report",
-    "mcp__standalone-chat__publish_table",
-    "mcp__standalone-chat__list_saved_report_catalog",
-    "mcp__standalone-chat__load_report_context",
-    "mcp__standalone-chat__propose_report_action",
     "mcp__standalone-chat__inspect_dbt",
     "mcp__standalone-chat__start_analysis_notebook",
     "mcp__signalpilot-notebook__edit_notebook",
@@ -120,8 +119,13 @@ def _execution_prompt_values(
     branch: str,
     commit_sha: str,
     connection_name: str,
+    connector_slugs: Sequence[str] = (),
 ) -> tuple[str, list[dict[str, str]], bool, bool, str]:
-    """Validate request text and build the bounded agent prompt context."""
+    """Validate request text and build the bounded agent prompt context.
+
+    ``connector_slugs`` names the external MCP connectors injected into this
+    run. When any exist, the R11 connector-safety section is appended.
+    """
     prompt = str(body.get("prompt") or "").strip()
     if not prompt or len(prompt) > 50_000:
         raise HTTPException(status_code=400, detail="Prompt is empty or too large")
@@ -142,11 +146,16 @@ def _execution_prompt_values(
         prompt_parts.append(_load_prompt("sandbox_dbt_suffix.md"))
     if is_improvement_run:
         prompt_parts.append(_load_prompt("improvement_suffix.md"))
+    if connector_slugs:
+        prompt_parts.append(_load_prompt("connectors_suffix.md"))
+    connectors_line = ", ".join(connector_slugs) if connector_slugs else "none"
     system_prompt = (
         "\n\n".join(prompt_parts)
         + "\n\n"
         + f"Selected project: {project_id}\nFrozen branch: {branch}\n"
-        + f"Frozen commit: {commit_sha}\nSelected connection: {connection_name}\n\n"
+        + f"Frozen commit: {commit_sha}\nSelected connection: {connection_name}\n"
+        + f"Lineage link: /lineage/<model_name>?project={project_id}\n"
+        + f"Connectors: {connectors_line}\n\n"
         + f"<governed_project_context>\n{warm_context}\n</governed_project_context>"
     )
     return (

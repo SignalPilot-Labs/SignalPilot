@@ -196,6 +196,7 @@ async def sandbox_exec(command: str, cwd: str = "", timeout_seconds: int = 0) ->
         return f"Error: {sanitize_mcp_error(str(exc))}"
     except Exception as exc:  # provider/transport errors must never leak internals
         return f"Error executing in sandbox: {sanitize_mcp_error(str(exc))}"
+    # Format parsed by standalone_chat/tool_projection/ops.py; update tests there if you change this
     sections = [f"exit_code: {result.returncode}"]
     if result.stdout:
         sections.append(f"stdout:\n{_clip(result.stdout)}")

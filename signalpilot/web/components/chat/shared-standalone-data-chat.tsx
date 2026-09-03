@@ -11,18 +11,29 @@ import {
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { ChatMarkdown } from "~/components/chat/chat-markdown";
 import useSWR from "swr";
-import { ArtifactPreview } from "~/components/chat/standalone-data-chat";
+import {
+  ChatUiContext,
+  type ChatUiContextValue,
+} from "~/components/chat/chat-ui-context";
+import {
+  SharedFileLightbox,
+  SharedFilesSection,
+} from "~/components/chat/shared-chat-files";
 import { useToast } from "~/components/ui/toast";
 import {
-  downloadSharedStandaloneArtifact,
+  downloadSharedConversationFile,
   forkSharedStandaloneConversation,
+  getSharedConversationFileObjectUrl,
+  getSharedConversationFiles,
   getSharedStandaloneForkPreview,
   getSharedStandaloneConversation,
+  type ConversationFileInfo,
   type StandaloneForkPreview,
 } from "~/lib/api";
+
+const noop = async () => undefined;
 
 export function SharedStandaloneDataChat({ token }: { token: string }) {
   const router = useRouter();
@@ -38,20 +49,59 @@ export function SharedStandaloneDataChat({ token }: { token: string }) {
     () => getSharedStandaloneConversation(token),
     { revalidateOnFocus: false },
   );
-  const messageIds = useMemo(
-    () => new Set(data?.messages.map((message) => message.id) ?? []),
-    [data?.messages],
+  // Files from the conversation's finished runs. A failure here only hides
+  // the file surfaces; the transcript still renders.
+  const { data: fileData } = useSWR(
+    data ? `shared-standalone-chat-files:${token}` : null,
+    () => getSharedConversationFiles(token),
+    { revalidateOnFocus: false, shouldRetryOnError: false },
   );
-  const unattachedArtifacts =
-    data?.artifacts.filter(
-      (artifact) =>
-        !artifact.assistant_message_id ||
-        !messageIds.has(artifact.assistant_message_id),
-    ) ?? [];
-  const downloadArtifact = useCallback(
-    (artifactId: string, format: string, filename: string) =>
-      downloadSharedStandaloneArtifact(token, artifactId, format, filename),
+  const files = useMemo(() => fileData?.files ?? [], [fileData]);
+  const [lightboxFile, setLightboxFile] = useState<ConversationFileInfo | null>(
+    null,
+  );
+  const downloadFile = useCallback(
+    (fileId: string, filename: string) =>
+      downloadSharedConversationFile(token, fileId, filename).catch(() => {
+        toast("This file is no longer available.", "error");
+      }),
+    [toast, token],
+  );
+  // The shared page has no artifacts panel: opening a file shows an image
+  // in the lightbox and downloads anything else.
+  const openFile = useCallback(
+    (file: ConversationFileInfo) => {
+      if (file.kind === "image") setLightboxFile(file);
+      else void downloadFile(file.id, file.filename);
+    },
+    [downloadFile],
+  );
+  const openArtifact = useCallback(
+    (fileId: string) => {
+      const file = files.find((entry) => entry.id === fileId);
+      if (file) openFile(file);
+    },
+    [files, openFile],
+  );
+  const getFileObjectUrl = useCallback(
+    (fileId: string) => getSharedConversationFileObjectUrl(token, fileId),
     [token],
+  );
+  // Read-only: no run events reach this page, so no inline cards derive;
+  // the markdown overrides (figure, chip) resolve against `files`.
+  const ui = useMemo<ChatUiContextValue>(
+    () => ({
+      events: [],
+      conversationId: null,
+      files,
+      openArtifact,
+      getFileObjectUrl,
+      downloadFile,
+      onStop: noop,
+      onRetry: noop,
+      onOpenDashboardPreview: () => undefined,
+    }),
+    [downloadFile, files, getFileObjectUrl, openArtifact],
   );
 
   const prepareFork = async () => {
@@ -248,10 +298,12 @@ export function SharedStandaloneDataChat({ token }: { token: string }) {
           <div className="mx-auto w-full max-w-3xl px-6 py-6">
             <div className="mb-6 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-card)] px-4 py-3 text-xs leading-5 text-[var(--color-text-muted)]">
               This authenticated view includes the business conversation and
-              completed artifacts. SQL, tool traces, and work details are not
-              shared. Fork it to continue privately in your own chat.
+              the files its finished runs produced. SQL, tool traces, and work
+              details are not shared. Fork it to continue privately in your
+              own chat.
             </div>
 
+            <ChatUiContext.Provider value={ui}>
             <div className="space-y-2">
               {data.messages.map((message) =>
                 message.role === "user" ? (
@@ -267,47 +319,25 @@ export function SharedStandaloneDataChat({ token }: { token: string }) {
                       <Sparkles className="h-3.5 w-3.5 text-[var(--color-text-muted)]" />
                     </div>
                     <div className="min-w-0 flex-1">
-                      <div className="chat-markdown">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                          {message.content}
-                        </ReactMarkdown>
-                      </div>
-                      <div className="mt-5 space-y-4">
-                        {data.artifacts
-                          .filter(
-                            (artifact) =>
-                              artifact.assistant_message_id === message.id,
-                          )
-                          .map((artifact) => (
-                            <ArtifactPreview
-                              key={artifact.id}
-                              artifact={artifact}
-                              onDownload={downloadArtifact}
-                            />
-                          ))}
-                      </div>
+                      <ChatMarkdown markdown={message.content} />
                     </div>
                   </div>
                 ),
               )}
             </div>
 
-            {unattachedArtifacts.length > 0 && (
-              <section className="mt-8 border-t border-[var(--color-border)] pt-6">
-                <h2 className="mb-4 text-xs uppercase tracking-[0.14em] text-[var(--color-text-dim)]">
-                  Completed artifacts
-                </h2>
-                <div className="space-y-4">
-                  {unattachedArtifacts.map((artifact) => (
-                    <ArtifactPreview
-                      key={artifact.id}
-                      artifact={artifact}
-                      onDownload={downloadArtifact}
-                    />
-                  ))}
-                </div>
-              </section>
-            )}
+            <SharedFilesSection
+              files={files}
+              actions={{
+                open: openFile,
+                download: (file) => void downloadFile(file.id, file.filename),
+              }}
+            />
+            <SharedFileLightbox
+              file={lightboxFile}
+              onClose={() => setLightboxFile(null)}
+            />
+            </ChatUiContext.Provider>
           </div>
         </main>
       </div>

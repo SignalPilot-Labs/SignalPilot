@@ -4,14 +4,12 @@ from __future__ import annotations
 
 import time
 import uuid
-from contextlib import suppress
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.db.models import (
-    GatewayChatArtifact,
     GatewayChatConversation,
     GatewayChatMessage,
     GatewayChatRun,
@@ -30,15 +28,6 @@ from gateway.store.standalone_chat.helpers import (
 )
 
 
-def _object_storage():
-    """Resolve the storage factory through the package namespace at call time.
-
-    Tests patch chat_object_storage on the package module. Read the name late
-    so the patch takes effect."""
-    from gateway.store import standalone_chat as chat_store
-
-    return chat_store.chat_object_storage()
-
 async def complete_run(
     db: AsyncSession,
     *,
@@ -46,7 +35,6 @@ async def complete_run(
     worker_id: str,
     content: str,
     report_proposal: dict[str, Any] | None = None,
-    report_action_outcome: dict[str, Any] | None = None,
     dashboard_preview: dict[str, Any] | None = None,
 ) -> GatewayChatMessage | None:
     run = (
@@ -127,16 +115,6 @@ async def complete_run(
             report_suggestion = validated.model_dump(mode="json") if validated else None
         except (LookupError, RuntimeError, ValueError):
             report_suggestion = None
-    no_suggestion_outcome = None
-    if isinstance(report_action_outcome, dict) and report_action_outcome.get("action") == "no_suggestion":
-        no_suggestion_outcome = {
-            "action": "no_suggestion",
-            "artifact_kind": report_action_outcome.get("artifact_kind"),
-            "artifact_filename": report_action_outcome.get("artifact_filename"),
-            "reason": str(report_action_outcome.get("reason") or "")[:2000],
-            "source": report_action_outcome.get("source") or "agent",
-            "catalog_scan_complete": bool(report_action_outcome.get("catalog_scan_complete")),
-        }
     safe_dashboard_preview = None
     if isinstance(dashboard_preview, dict):
         session_id = str(dashboard_preview.get("authoring_session_id") or "").strip()
@@ -167,7 +145,6 @@ async def complete_run(
             "status": "completed",
             "runtime_archive_available": bool(run.runtime_archive_id),
             **({"report_suggestion": report_suggestion} if report_suggestion else {}),
-            **({"report_action_outcome": no_suggestion_outcome} if no_suggestion_outcome else {}),
             **({"dashboard_preview": safe_dashboard_preview} if safe_dashboard_preview else {}),
         },
         idempotency_key=f"chat-run:{run.id}:final",
@@ -203,20 +180,6 @@ async def complete_run(
     )
     await _retain_runtime_datasets_after_terminal_run(db, run=run)
     await db.flush()
-    artifacts = (
-        (
-            await db.execute(
-                select(GatewayChatArtifact).where(
-                    GatewayChatArtifact.run_id == run.id,
-                    GatewayChatArtifact.assistant_message_id.is_(None),
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
-    for artifact in artifacts:
-        artifact.assistant_message_id = message.id
     from gateway.store.chat_reports import finalize_refresh_for_run
 
     await finalize_refresh_for_run(db, run=run, succeeded=True)
@@ -334,23 +297,5 @@ async def fail_run(
     from gateway.store.chat_reports import finalize_refresh_for_run
 
     await finalize_refresh_for_run(db, run=run, succeeded=False)
-    artifact_object_keys = list(
-        (
-            await db.execute(
-                select(
-                    GatewayChatArtifact.object_key,
-                    GatewayChatArtifact.source_object_key,
-                ).where(GatewayChatArtifact.run_id == run.id)
-            )
-        ).all()
-    )
-    await db.execute(delete(GatewayChatArtifact).where(GatewayChatArtifact.run_id == run.id))
     await db.commit()
-    if artifact_object_keys:
-        storage = _object_storage()
-        for object_key, source_object_key in artifact_object_keys:
-            for key in (object_key, source_object_key):
-                if key:
-                    with suppress(Exception):
-                        await storage.delete(key)
     return True

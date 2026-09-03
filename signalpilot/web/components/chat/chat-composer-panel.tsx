@@ -1,18 +1,23 @@
 "use client";
 
-// Composer block for the standalone data chat: input, project picker,
-// and optional budget settings.
+// Composer block for the standalone data chat: input, project picker, and
+// the gear that opens the right-side Chat settings panel.
 
-import type { Dispatch, SetStateAction } from "react";
+import { useContext, type Dispatch, type SetStateAction } from "react";
 import type {
   StandaloneChatBootstrap,
+  StandaloneChatEvent,
   StandaloneChatRun,
 } from "~/lib/api";
 import { StandaloneChatComposer } from "~/components/chat/standalone-chat-composer";
+import { ChatUiContext } from "~/components/chat/chat-ui-context";
+import { useRunLiveState } from "~/components/chat/use-run-live-state";
 import {
   ProjectChip,
   ProjectPicker,
 } from "~/components/chat/project-picker";
+
+const EMPTY_EVENTS: StandaloneChatEvent[] = [];
 
 export function ChatComposerPanel({
   draft,
@@ -28,10 +33,8 @@ export function ChatComposerPanel({
   bootstrap,
   selectedProjectId,
   onSelectProject,
-  perQueryBudgetUsd,
-  setPerQueryBudgetUsd,
-  chatBudgetUsd,
-  setChatBudgetUsd,
+  onOpenSettings,
+  settingsOpen,
 }: {
   draft: string;
   setDraft: Dispatch<SetStateAction<string>>;
@@ -46,13 +49,21 @@ export function ChatComposerPanel({
   bootstrap: StandaloneChatBootstrap;
   selectedProjectId: string | null;
   onSelectProject: (projectId: string) => void;
-  perQueryBudgetUsd: number;
-  setPerQueryBudgetUsd: Dispatch<SetStateAction<number>>;
-  chatBudgetUsd: number;
-  setChatBudgetUsd: Dispatch<SetStateAction<number>>;
+  /** Present whenever the chat has settings to show (connectors, budgets). */
+  onOpenSettings?: () => void;
+  settingsOpen?: boolean;
 }) {
   const selectedProject =
     bootstrap.projects.find((p) => p.id === selectedProjectId) ?? null;
+  // The run's live state for the Stop ring and hint. The panel renders
+  // inside the chat UI provider on the live page; without one (harness,
+  // tests) there are no events and the state stays idle.
+  const events = useContext(ChatUiContext)?.events ?? EMPTY_EVENTS;
+  const live = useRunLiveState(
+    events,
+    currentRun?.id,
+    currentRun?.status ?? "completed",
+  );
   return (
     <StandaloneChatComposer
       value={draft}
@@ -83,46 +94,10 @@ export function ChatComposerPanel({
           <ProjectChip project={selectedProject} />
         )
       }
-      settings={
-        !conversationId && bootstrap.enterprise_features.query_approval ? (
-          <div className="space-y-3">
-            <label className="block">
-              <span className="mb-1 block text-[10px] uppercase tracking-[0.08em] text-[var(--color-text-dim)]">
-                Per-query budget (USD)
-              </span>
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                value={perQueryBudgetUsd}
-                onChange={(event) =>
-                  setPerQueryBudgetUsd(Math.max(0, Number(event.target.value)))
-                }
-                aria-label="Per-query budget in USD"
-                className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-input)] px-2 py-1.5 text-xs text-[var(--color-text)]"
-              />
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-[10px] uppercase tracking-[0.08em] text-[var(--color-text-dim)]">
-                Chat budget (USD)
-              </span>
-              <input
-                type="number"
-                min={perQueryBudgetUsd}
-                step="0.01"
-                value={chatBudgetUsd}
-                onChange={(event) =>
-                  setChatBudgetUsd(
-                    Math.max(perQueryBudgetUsd, Number(event.target.value)),
-                  )
-                }
-                aria-label="Chat budget in USD"
-                className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-input)] px-2 py-1.5 text-xs text-[var(--color-text)]"
-              />
-            </label>
-          </div>
-        ) : undefined
-      }
+      onOpenSettings={onOpenSettings}
+      settingsOpen={settingsOpen}
+      liveState={live.state}
+      liveLabel={live.label}
     />
   );
 }

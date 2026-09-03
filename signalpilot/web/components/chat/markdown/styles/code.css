@@ -1,0 +1,359 @@
+/* Owner: code agent. Code frames, inline code, diffs.
+ *
+ * Two rules govern this sheet:
+ *   1. Padding belongs to the scrolling `pre`, never to the frame. If the
+ *      frame held it, a long line would slide under the left inset and the
+ *      trailing gutter would vanish on horizontal scroll.
+ *   2. Everything is sized in `em` so `--md-font-size` on `.chat-markdown`
+ *      stays the single dial (see base.css).
+ */
+
+.chat-markdown {
+  --md-code-size: 0.84em;      /* ≈12.5px at the 15px transcript size */
+  --md-code-leading: 1.6;
+  --md-code-pad-x: 0.9rem;
+  --md-code-pad-y: 0.7rem;
+  --md-code-head-h: 30px;
+  --md-code-max-h: 26rem;
+  --md-code-fg: color-mix(in srgb, var(--color-text) 84%, var(--color-bg));
+  --md-code-inline-bg: rgba(255, 255, 255, 0.05);
+  --md-code-inline-fg: color-mix(in srgb, var(--color-text) 90%, var(--color-bg));
+}
+
+/* ── Inline code ─────────────────────────────────────────────────────────
+   Prose is the primary content; a `table.column` reference inside a sentence
+   is an emphasis, not an object. No border, no pill: a faint tint, tight
+   inset, and a size that keeps the line rhythm intact. */
+
+.chat-markdown code {
+  font-family: var(--font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  /* Mono runs optically larger than the sans at the same size; 0.86 puts
+     the x-heights level so a reference does not bulge out of the line. */
+  font-size: 0.86em;
+  font-weight: 450;
+  letter-spacing: -0.005em;
+  color: var(--md-code-inline-fg);
+  background: var(--md-code-inline-bg);
+  border: 0;
+  border-radius: 4px;
+  padding: 0.08em 0.26em;
+  /* The tint needs inset, but the glyphs must not: without the pull-back the
+     inset lands between the chip and the comma after it and reads as a typo
+     ("`order_id` , filtered"). Net optical gap stays ~0.12em. */
+  margin-inline: -0.14em;
+  /* Padding on an inline box does not grow the line box, so the baseline
+     grid survives even in a paragraph that is dense with references. */
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+/* In chrome-like contexts the tint is noise: the surrounding element already
+   carries the emphasis. Inherit instead of competing with it. */
+.chat-markdown :is(h1, h2, h3, h4, h5, h6, th, dt, summary) code,
+.chat-markdown a code {
+  color: inherit;
+  background: color-mix(in srgb, currentColor 9%, transparent);
+  font-weight: inherit;
+}
+.chat-markdown a code {
+  text-decoration: inherit;
+}
+/* Table cells are already a dense grid; a second tint per cell muddies it. */
+.chat-markdown td code {
+  background: transparent;
+  padding-inline: 0;
+  margin-inline: 0;
+}
+
+/* ── Bare `pre` (raw HTML, not a fenced block) ───────────────────────────── */
+
+.chat-markdown pre {
+  margin: 0;
+  overflow: auto;
+  border: 1px solid var(--md-rule);
+  border-radius: var(--md-radius);
+  background: var(--md-surface);
+  padding: var(--md-code-pad-y) var(--md-code-pad-x);
+  font-size: var(--md-code-size);
+  line-height: var(--md-code-leading);
+  color: var(--md-code-fg);
+}
+.chat-markdown pre code {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font-size: inherit;
+  font-weight: inherit;
+  color: inherit;
+  letter-spacing: 0;
+}
+
+/* ── The fenced-block frame ──────────────────────────────────────────────── */
+
+.chat-markdown .chat-md-code {
+  margin: var(--md-gap) 0;
+  border: 1px solid var(--md-rule);
+  border-radius: var(--md-radius);
+  background: var(--md-surface);
+  overflow: hidden;
+  /* Never widen the transcript column: the body scrolls, the frame does not. */
+  min-width: 0;
+}
+.chat-markdown .chat-md-code:first-child { margin-top: 0; }
+.chat-markdown .chat-md-code:last-child { margin-bottom: 0; }
+
+/* Header band — chrome, so it stays quiet and fixed-height. */
+.chat-markdown .chat-md-code-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  height: var(--md-code-head-h);
+  padding: 0 0.5rem 0 var(--md-code-pad-x);
+  background: var(--md-surface-raised);
+  border-bottom: 1px solid var(--md-rule);
+}
+.chat-markdown .chat-md-code-label {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: 11px;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  color: var(--color-text-dim);
+}
+/* When a metastring title takes the label slot, the language drops back to a
+   secondary chip so the two never read as one string. */
+.chat-markdown .chat-md-code-lang {
+  flex: none;
+  padding: 0.1rem 0.3rem;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.05);
+  font-family: var(--font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: 10px;
+  line-height: 1.4;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--color-text-dim);
+}
+.chat-markdown .chat-md-code-copy {
+  margin-left: auto;
+  display: inline-flex;
+}
+/* CopyButton ships its own utilities; these out-specify them without
+   changing its markup or its accessible name. */
+.chat-markdown .chat-md-code-copy button {
+  gap: 0.3rem;
+  padding: 0.2rem 0.35rem;
+  font-family: var(--font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: 10px;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  color: var(--color-text-dim);
+  opacity: 0.55;
+  transition: opacity 120ms ease, color 120ms ease, background-color 120ms ease;
+}
+.chat-markdown .chat-md-code:hover .chat-md-code-copy button,
+.chat-markdown .chat-md-code-copy button:focus-visible,
+.chat-markdown .chat-md-code-copy button:hover {
+  opacity: 1;
+}
+
+/* Body — the scroll region. */
+.chat-markdown .chat-md-code-body {
+  position: relative;
+  min-width: 0;
+}
+.chat-markdown .chat-md-code pre {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  /* Defect 1: the padding lives here, on the scroller, so it is honoured on
+     both axes and survives horizontal scroll. */
+  padding: var(--md-code-pad-y) var(--md-code-pad-x);
+  max-height: var(--md-code-max-h);
+  overflow: auto;
+  overscroll-behavior: contain;
+  font-size: var(--md-code-size);
+  line-height: var(--md-code-leading);
+  color: var(--md-code-fg);
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border-active) transparent;
+}
+.chat-markdown .chat-md-code pre::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+.chat-markdown .chat-md-code pre::-webkit-scrollbar-track {
+  background: transparent;
+}
+.chat-markdown .chat-md-code pre::-webkit-scrollbar-thumb {
+  background: var(--color-border-hover);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  border-radius: 999px;
+}
+.chat-markdown .chat-md-code pre::-webkit-scrollbar-thumb:hover {
+  background: var(--color-border-active);
+  background-clip: padding-box;
+}
+.chat-markdown .chat-md-code pre code {
+  display: block;
+  /* Rows reach the full scroll width, so nothing clips on the last line. */
+  width: max-content;
+  min-width: 100%;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font-size: inherit;
+  font-weight: inherit;
+  letter-spacing: 0;
+  color: inherit;
+}
+
+/* Defect 7: the height cap and the horizontal overflow announce themselves.
+   `data-edges` is set by ScrollBody, so a short block gets no shade at all. */
+.chat-markdown .chat-md-code-body::before,
+.chat-markdown .chat-md-code-body::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 1.5rem;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.chat-markdown .chat-md-code-body::before {
+  top: 0;
+  background: linear-gradient(
+    to bottom,
+    var(--md-surface),
+    color-mix(in srgb, var(--md-surface) 55%, transparent) 45%,
+    transparent
+  );
+}
+.chat-markdown .chat-md-code-body::after {
+  bottom: 0;
+  background: linear-gradient(
+    to top,
+    var(--md-surface),
+    color-mix(in srgb, var(--md-surface) 55%, transparent) 45%,
+    transparent
+  );
+}
+.chat-markdown .chat-md-code-body[data-edges~="top"]::before,
+.chat-markdown .chat-md-code-body[data-edges~="bottom"]::after {
+  opacity: 1;
+}
+
+.chat-markdown .chat-md-code-fade-x {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: 1.75rem;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 120ms ease;
+  background: linear-gradient(
+    to left,
+    var(--md-surface),
+    color-mix(in srgb, var(--md-surface) 55%, transparent) 45%,
+    transparent
+  );
+}
+.chat-markdown .chat-md-code-body[data-edges~="right"] .chat-md-code-fade-x {
+  opacity: 1;
+}
+
+/* Defect 4: a shell command is one logical line, so wrap it with a hanging
+   indent instead of hiding half of it behind a scrollbar. SQL and Python are
+   laid out by their own indentation and must never reflow. */
+.chat-markdown .chat-md-code[data-lang="bash"] pre,
+.chat-markdown .chat-md-code[data-lang="sh"] pre,
+.chat-markdown .chat-md-code[data-lang="shell"] pre,
+.chat-markdown .chat-md-code[data-lang="zsh"] pre,
+.chat-markdown .chat-md-code[data-lang="console"] pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.chat-markdown .chat-md-code[data-lang="bash"] pre code,
+.chat-markdown .chat-md-code[data-lang="sh"] pre code,
+.chat-markdown .chat-md-code[data-lang="shell"] pre code,
+.chat-markdown .chat-md-code[data-lang="zsh"] pre code,
+.chat-markdown .chat-md-code[data-lang="console"] pre code {
+  width: auto;
+  padding-left: 2ch;
+  text-indent: -2ch;
+}
+
+/* ── Diff ────────────────────────────────────────────────────────────────
+   Padding moves to the row so the tint is full-bleed across the whole scroll
+   width, not just the first viewport. */
+
+.chat-markdown .chat-md-code pre.chat-md-diff {
+  padding-inline: 0;
+}
+.chat-markdown .chat-md-diff-line {
+  display: flex;
+  align-items: baseline;
+  padding-inline: var(--md-code-pad-x);
+  border-left: 2px solid transparent;
+  color: var(--md-code-fg);
+}
+.chat-markdown .chat-md-diff-sign {
+  flex: none;
+  width: 1.5ch;
+  margin-right: 0.5ch;
+  user-select: none;
+  font-weight: 600;
+  opacity: 0.9;
+}
+.chat-markdown .chat-md-diff-text {
+  white-space: pre;
+}
+
+.chat-markdown .chat-md-diff-line[data-kind="add"] {
+  background: color-mix(in srgb, var(--color-success) 7%, transparent);
+  border-left-color: color-mix(in srgb, var(--color-success) 45%, transparent);
+  color: color-mix(in srgb, var(--color-success) 34%, var(--color-text));
+}
+.chat-markdown .chat-md-diff-line[data-kind="del"] {
+  background: color-mix(in srgb, var(--color-error) 7%, transparent);
+  border-left-color: color-mix(in srgb, var(--color-error) 45%, transparent);
+  color: color-mix(in srgb, var(--color-error) 34%, var(--color-text));
+}
+.chat-markdown .chat-md-diff-line[data-kind="ctx"] {
+  color: color-mix(in srgb, var(--color-text) 62%, var(--color-bg));
+}
+/* File headers and `@@` hunks are chrome: they locate the change, they are
+   not part of it. */
+.chat-markdown .chat-md-diff-line[data-kind="meta"] {
+  color: var(--color-text-dim);
+}
+.chat-markdown .chat-md-diff-line[data-kind="hunk"] {
+  margin-block: 0.35rem;
+  padding-block: 0.15rem;
+  background: var(--md-surface-raised);
+  border-top: 1px solid var(--md-rule);
+  border-bottom: 1px solid var(--md-rule);
+  color: var(--color-text-dim);
+}
+.chat-markdown .chat-md-diff-line[data-kind="hunk"]:first-child {
+  margin-top: 0;
+  border-top: 0;
+}
+
+/* ── Fitting inside other chrome ─────────────────────────────────────────
+   Defect 6: `<details>` (owned elsewhere) supplies its own body inset. The
+   frame keeps its own border and never reaches outside that inset. */
+.chat-markdown details .chat-md-code {
+  max-width: 100%;
+}
+.chat-markdown blockquote .chat-md-code {
+  --md-code-max-h: 18rem;
+}

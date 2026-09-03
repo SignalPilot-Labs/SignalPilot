@@ -18,7 +18,7 @@ interface RawNode {
   description?: string | null;
   tags?: string[];
   config?: { materialized?: string | null };
-  columns?: Record<string, { name?: string; description?: string }>;
+  columns?: Record<string, { name?: string; description?: string; data_type?: string | null }>;
   test_metadata?: { name?: string; kwargs?: Record<string, unknown> };
 }
 
@@ -47,7 +47,7 @@ export interface MapModel {
   description: string;
   path: string;
   tags: string[];
-  columns: { name: string; description: string }[];
+  columns: { name: string; description: string; dataType?: string }[];
   tests: MapTest[];
   parents: string[];
   children: string[];
@@ -142,6 +142,7 @@ export function parseMap(raw: RawMapGraph): ParsedMap {
       columns: Object.values(node.columns ?? {}).map((c) => ({
         name: c.name ?? "",
         description: c.description ?? "",
+        dataType: c.data_type ?? undefined,
       })),
       tests: testsFor(id),
       parents: graphRel(parentMap[id]),

@@ -5,7 +5,40 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-from gateway.runtime.mode import is_cloud_mode
+from gateway.runtime.mode import is_cloud_mode, runtime_env
+
+__all__ = ["runtime_env"]
+
+
+CHAT_MODEL_OPTIONS: tuple[tuple[str, str], ...] = (
+    ("claude-opus-4-6", "Opus 4.6"),
+    ("claude-sonnet-4-6", "Sonnet 4.6"),
+    ("claude-opus-5", "Opus 5"),
+    ("claude-fable-5-1", "Fable 5.1"),
+)
+CHAT_MODEL_IDS = frozenset(model_id for model_id, _label in CHAT_MODEL_OPTIONS)
+FALLBACK_CHAT_MODEL = "claude-opus-4-6"
+CHAT_EFFORT_OPTIONS: tuple[tuple[str, str], ...] = (
+    ("low", "Low"),
+    ("medium", "Medium"),
+    ("high", "High"),
+    ("xhigh", "Extra high"),
+    ("max", "Max"),
+)
+CHAT_EFFORT_IDS = frozenset(effort_id for effort_id, _label in CHAT_EFFORT_OPTIONS)
+FALLBACK_CHAT_EFFORT = "medium"
+
+
+def default_chat_model() -> str:
+    """Return the selectable deployment default, ignoring invalid overrides."""
+    configured = os.getenv("SP_CHAT_AGENT_MODEL", "").strip()
+    return configured if configured in CHAT_MODEL_IDS else FALLBACK_CHAT_MODEL
+
+
+def default_chat_effort() -> str:
+    """Return the Agent SDK effort default, ignoring invalid overrides."""
+    configured = os.getenv("SP_AGENT_EFFORT", "").strip().lower()
+    return configured if configured in CHAT_EFFORT_IDS else FALLBACK_CHAT_EFFORT
 
 
 def standalone_chat_enabled() -> bool:
@@ -18,6 +51,14 @@ def standalone_chat_enabled() -> bool:
 def _disabled_by_default_flag(name: str) -> bool:
     """Read an enterprise rollout flag that is always opt-in."""
     return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _enabled_by_default_flag(name: str) -> bool:
+    """Read a flag that is on in every mode unless explicitly turned off."""
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return True
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
 @dataclass(frozen=True)
@@ -34,6 +75,9 @@ class EnterpriseChatFeatureFlags:
     runtime_results: bool
     runtime_artifacts: bool
     dataset_refs: bool
+    # Connectors: external MCP servers for the chat agent. On everywhere; opt out with
+    # SP_FEATURE_CHAT_MCP_CONNECTORS=false.
+    mcp_connectors: bool
 
 
 def enterprise_chat_feature_flags() -> EnterpriseChatFeatureFlags:
@@ -49,17 +93,8 @@ def enterprise_chat_feature_flags() -> EnterpriseChatFeatureFlags:
         runtime_results=_disabled_by_default_flag("SP_FEATURE_CHAT_RUNTIME_RESULTS"),
         runtime_artifacts=_disabled_by_default_flag("SP_FEATURE_CHAT_RUNTIME_ARTIFACTS"),
         dataset_refs=_disabled_by_default_flag("SP_FEATURE_CHAT_DATASET_REFS"),
+        mcp_connectors=_enabled_by_default_flag("SP_FEATURE_CHAT_MCP_CONNECTORS"),
     )
-
-
-def runtime_env() -> str | None:
-    """Environment label stamped on runs and used for worker claim affinity.
-
-    Unset/empty means unpartitioned: runs are stamped NULL and the worker
-    claims every run regardless of label (the pre-partitioning behavior).
-    """
-    value = os.getenv("SP_RUNTIME_ENV", "").strip()
-    return value[:50] or None
 
 
 def worker_concurrency() -> int:
@@ -87,3 +122,42 @@ def worker_poll_seconds() -> float:
     except ValueError:
         return 1.0
     return min(10.0, max(0.1, value))
+
+
+def _bounded_int_env(name: str, default: int, *, minimum: int, maximum: int) -> int:
+    raw = os.getenv(name, "").strip()
+    try:
+        value = int(raw) if raw else default
+    except ValueError:
+        return default
+    return min(maximum, max(minimum, value))
+
+
+def chat_file_max_bytes() -> int:
+    """Largest single runtime file the gateway accepts. Default 25 MB."""
+    return _bounded_int_env(
+        "SP_CHAT_FILE_MAX_BYTES",
+        25 * 1024 * 1024,
+        minimum=1024,
+        maximum=1024 * 1024 * 1024,
+    )
+
+
+def conversation_file_quota_bytes() -> int:
+    """Total active file bytes allowed per conversation. Default 250 MB."""
+    return _bounded_int_env(
+        "SP_CHAT_CONVERSATION_FILE_QUOTA_BYTES",
+        250 * 1024 * 1024,
+        minimum=1024,
+        maximum=100 * 1024 * 1024 * 1024,
+    )
+
+
+def conversation_file_quota_count() -> int:
+    """Active file rows allowed per conversation. Default 500."""
+    return _bounded_int_env(
+        "SP_CHAT_CONVERSATION_FILE_QUOTA_COUNT",
+        500,
+        minimum=1,
+        maximum=100_000,
+    )

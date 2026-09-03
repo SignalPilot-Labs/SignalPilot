@@ -9,11 +9,12 @@ from __future__ import annotations
 
 from pathlib import PurePosixPath
 
-from sqlalchemy import select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from gateway.db.models import GatewayChatFile
+from gateway.db.models import GatewayChatFile, GatewayChatRun
+from gateway.standalone_chat.domain import TERMINAL_RUN_STATUSES
 
 _KIND_BY_EXTENSION = {
     ".md": "markdown",
@@ -73,11 +74,17 @@ async def upsert_conversation_file(
     object_key: str,
     origin_run_id: str | None,
     origin: str,
+    kind: str | None = None,
+    file_id: str | None = None,
 ) -> GatewayChatFile:
-    """Insert or refresh the manifest row for one path. The latest write wins."""
+    """Insert or refresh the manifest row for one path. The latest write wins.
+
+    Pass kind to override the extension-derived kind. Pass file_id to fix the
+    id of a new row. The id is ignored when a row for the path exists.
+    """
     values = {
         "filename": filename,
-        "kind": derive_file_kind(filename, mime_type),
+        "kind": kind or derive_file_kind(filename, mime_type),
         "mime_type": mime_type,
         "byte_size": byte_size,
         "content_hash": content_hash,
@@ -109,6 +116,8 @@ async def upsert_conversation_file(
         path=path,
         **values,
     )
+    if file_id:
+        row.id = file_id
     db.add(row)
     try:
         await db.commit()
@@ -225,3 +234,88 @@ async def mark_conversation_file_deleted(
     )
     await db.commit()
     return bool(result.rowcount)
+
+
+async def conversation_file_usage(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    user_id: str,
+    conversation_id: str,
+) -> tuple[int, int]:
+    """Return (active_row_count, active_byte_total) for quota checks."""
+    row = (
+        await db.execute(
+            select(
+                func.count(GatewayChatFile.id),
+                func.coalesce(func.sum(GatewayChatFile.byte_size), 0),
+            ).where(
+                GatewayChatFile.org_id == org_id,
+                GatewayChatFile.user_id == user_id,
+                GatewayChatFile.conversation_id == conversation_id,
+                GatewayChatFile.status == "active",
+            )
+        )
+    ).one()
+    return int(row[0] or 0), int(row[1] or 0)
+
+
+def _shared_file_query(*, org_id: str, owner_user_id: str, conversation_id: str):
+    """Select active files whose origin run is terminal or absent.
+
+    A file written by a running run is not share-safe yet. A forked copy has
+    no origin run and is always safe.
+    """
+    return (
+        select(GatewayChatFile)
+        .outerjoin(GatewayChatRun, GatewayChatRun.id == GatewayChatFile.origin_run_id)
+        .where(
+            GatewayChatFile.org_id == org_id,
+            GatewayChatFile.user_id == owner_user_id,
+            GatewayChatFile.conversation_id == conversation_id,
+            GatewayChatFile.status == "active",
+            or_(
+                GatewayChatRun.id.is_(None),
+                GatewayChatRun.status.in_(TERMINAL_RUN_STATUSES),
+            ),
+        )
+    )
+
+
+async def list_shared_conversation_files(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    owner_user_id: str,
+    conversation_id: str,
+) -> list[GatewayChatFile]:
+    """Return the share-safe manifest, newest change first."""
+    rows = (
+        await db.execute(
+            _shared_file_query(
+                org_id=org_id,
+                owner_user_id=owner_user_id,
+                conversation_id=conversation_id,
+            ).order_by(GatewayChatFile.updated_at.desc())
+        )
+    ).scalars()
+    return list(rows)
+
+
+async def get_shared_conversation_file(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    owner_user_id: str,
+    conversation_id: str,
+    file_id: str,
+) -> GatewayChatFile | None:
+    return (
+        await db.execute(
+            _shared_file_query(
+                org_id=org_id,
+                owner_user_id=owner_user_id,
+                conversation_id=conversation_id,
+            ).where(GatewayChatFile.id == file_id)
+        )
+    ).scalar_one_or_none()

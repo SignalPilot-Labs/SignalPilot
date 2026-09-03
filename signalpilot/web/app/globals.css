@@ -259,61 +259,6 @@ select {
   padding-right: 24px;
 }
 
-/* Standalone data chat markdown stays business-readable; evidence remains mono. */
-.chat-markdown {
-  color: var(--color-text);
-  font-size: 15.5px;
-  line-height: 1.75;
-}
-.chat-markdown > * + * { margin-top: 0.85rem; }
-.chat-markdown h1,
-.chat-markdown h2,
-.chat-markdown h3 {
-  color: var(--color-text);
-  font-weight: 600;
-  letter-spacing: -0.015em;
-  line-height: 1.3;
-}
-.chat-markdown ul,
-.chat-markdown ol { padding-left: 1.25rem; }
-.chat-markdown ul { list-style: disc; }
-.chat-markdown ol { list-style: decimal; }
-.chat-markdown a {
-  color: var(--color-text);
-  text-decoration: underline;
-  text-underline-offset: 3px;
-}
-.chat-markdown code {
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  background: var(--color-bg-input);
-  padding: 0.1rem 0.3rem;
-  color: var(--color-text-muted);
-  font-size: 0.85em;
-}
-.chat-markdown pre {
-  overflow: auto;
-  border: 1px solid var(--color-border);
-  border-radius: 10px;
-  background: var(--color-bg-input);
-  padding: 0.85rem;
-}
-.chat-markdown pre code {
-  border: 0;
-  background: transparent;
-  padding: 0;
-}
-.chat-markdown table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 12px;
-}
-.chat-markdown th,
-.chat-markdown td {
-  border: 1px solid var(--color-border);
-  padding: 0.5rem 0.65rem;
-  text-align: left;
-}
 
 /* ── Smooth transitions ── */
 a, button, input, select, textarea {
@@ -862,20 +807,23 @@ kbd {
   font-family: var(--font-mono, ui-monospace, "SF Mono", Menlo, monospace);
   tab-size: 4;
 }
-.chat-code .tok-keyword { color: #c792ea; }
+/* Token palette. Tuned on the #121214 code surface: keywords and literals
+   carry the structure, punctuation and identifiers recede toward body text so
+   a long query reads as prose rather than as a colour chart. */
+.chat-code .tok-keyword { color: #b58ce0; font-weight: 500; }
 .chat-code .tok-string,
-.chat-code .tok-string2 { color: #9ece8c; }
-.chat-code .tok-number { color: #f2b96d; }
+.chat-code .tok-string2 { color: #9dcc8b; }
+.chat-code .tok-number { color: #e3ae76; }
 .chat-code .tok-comment { color: var(--color-text-dim); font-style: italic; }
-.chat-code .tok-operator,
-.chat-code .tok-punctuation { color: #8fa3b5; }
-.chat-code .tok-variableName { color: #d6e4f0; }
-.chat-code .tok-propertyName { color: #7fb4e0; }
+.chat-code .tok-operator { color: #9aa6b2; }
+.chat-code .tok-punctuation { color: #6f7883; }
+.chat-code .tok-variableName { color: #cfd2d6; }
+.chat-code .tok-propertyName { color: #86b6de; }
 .chat-code .tok-function,
 .chat-code .tok-typeName,
-.chat-code .tok-className { color: #6fc3df; }
+.chat-code .tok-className { color: #6cc0d4; }
 .chat-code .tok-bool,
-.chat-code .tok-atom { color: #f2b96d; }
+.chat-code .tok-atom { color: #e3ae76; }
 
 @keyframes chat-step-in {
   from { opacity: 0; transform: translateY(4px); }
@@ -1049,3 +997,54 @@ kbd {
   }
   .chat-collapse { transition: none; }
 }
+
+/* ── Inline artifact cards (chat transcript) ─────────────────────────────
+   Appended section: utilities for components/chat/chat-artifact-card.tsx.
+   Keep additions to this file at the end, below this comment. */
+
+/* One-shot border/glow flash when a card's file is updated in place. */
+@keyframes chat-artifact-flash {
+  0% { box-shadow: 0 0 0 0 rgba(0, 255, 136, 0.25); }
+  40% { box-shadow: 0 0 14px 0 rgba(0, 255, 136, 0.18); }
+  100% { box-shadow: 0 0 0 0 rgba(0, 255, 136, 0); }
+}
+.chat-artifact-flash { animation: chat-artifact-flash 1.1s ease-out both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-artifact-flash { animation: none !important; }
+}
+
+/* ── Plan tracker (components/chat/plan-tracker.tsx) ─────────────────────
+   The agent's plan is the one element in the transcript that is NOT a step:
+   it pins to the top while the run streams and summarises everything below.
+   It therefore gets its own surface — a success-tinted, elevated panel with
+   a left rail — so it never reads as one more step-group card, and its
+   header hover is tinted rather than the neutral --color-bg-hover the
+   step cards use. */
+.chat-plan {
+  position: relative;
+  overflow: hidden;
+  border-radius: 0.75rem;
+  border: 1px solid rgba(0, 255, 136, 0.18);
+  background:
+    linear-gradient(180deg, rgba(0, 255, 136, 0.07), rgba(0, 255, 136, 0.02)),
+    var(--color-bg-elevated);
+  box-shadow:
+    0 12px 32px -14px rgba(0, 255, 136, 0.28),
+    0 12px 28px -12px rgba(0, 0, 0, 0.7);
+}
+.chat-plan::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--color-success);
+  opacity: 0.85;
+}
+.chat-plan__header { transition: background-color 0.15s ease; }
+.chat-plan__header:hover { background: rgba(0, 255, 136, 0.06); }
+.chat-plan__eyebrow { color: rgba(0, 255, 136, 0.72); }
+.chat-plan__segment-pending { background: rgba(255, 255, 255, 0.14); }
+.chat-plan__body { border-top: 1px solid rgba(0, 255, 136, 0.14); }

@@ -182,81 +182,6 @@ async function mockReportsApi(
           ],
         });
       }
-      if (path === "/api/chat/conversations/conversation-new") {
-        return json(route, {
-          conversation: {
-            id: "conversation-new",
-            project_id: "project-1",
-            project_name: "Revenue Warehouse",
-            branch: "main",
-            title: "Q2 revenue follow-up",
-            status: "active",
-            created_at: 1,
-            updated_at: 2,
-            run_status: "completed",
-            commit_sha: "b".repeat(40),
-            per_query_budget_usd: 0.25,
-            chat_budget_usd: 1,
-            estimated_spend_usd: 0,
-            actual_spend_usd: 0,
-            reserved_spend_usd: 0,
-          },
-          messages: [
-            {
-              id: "assistant-1",
-              role: "assistant",
-              content: "Q2 revenue is now available.",
-              sequence: 2,
-              created_at: 2,
-              metadata: {
-                run_id: "run-new",
-                status: "completed",
-                report_suggestion: {
-                  action: "update",
-                  artifact_id: "artifact-new",
-                  title: "Saved revenue",
-                  reason:
-                    "The business question and grain match; only the date range changed.",
-                  report_id: "report-1",
-                  expected_current_version_id: "version-1",
-                  catalog_revision: "revision-1",
-                },
-              },
-            },
-          ],
-          artifacts: [
-            {
-              id: "artifact-new",
-              run_id: "run-new",
-              assistant_message_id: "assistant-1",
-              kind: "table",
-              filename: "revenue-q2.csv",
-              mime_type: "text/csv",
-              snapshot: artifact.snapshot,
-              provenance: null,
-              freshness_at: "2026-08-11T12:00:00Z",
-              assumptions: [],
-              exclusions: [],
-              caveats: [],
-              parent_artifact_id: null,
-              created_at: "2026-08-11T12:00:00Z",
-              download_formats: ["csv"],
-            },
-          ],
-          current_run: null,
-          run_events: [],
-        });
-      }
-      if (
-        path === "/api/chat/report-suggestions/assistant-1/approve" &&
-        method === "POST"
-      ) {
-        return json(route, {
-          status: "updated",
-          report_id: "report-1",
-          version_id: "version-2",
-        });
-      }
       if (path === "/api/chat/reports" && method === "POST") {
         return json(
           route,
@@ -456,38 +381,6 @@ test.describe("Data Chat reports", () => {
     expect(requests.some((request) => request.path.includes("/confirm"))).toBe(
       false,
     );
-  });
-
-  test("approves a semantic cross-thread update and reloads the durable report", async ({
-    page,
-  }) => {
-    const requests: Array<{ method: string; path: string; body: unknown }> = [];
-    await mockReportsApi(page, {
-      onRequest: (request) => requests.push(request),
-    });
-    await page.goto("/chats/conversation-new", {
-      waitUntil: "domcontentloaded",
-    });
-
-    await expect(page.getByText("Matched “Saved revenue”")).toBeVisible();
-    await expect(page.getByText(/only the date range changed/)).toBeVisible();
-    await page.getByRole("button", { name: "Update existing report" }).click();
-    await expect(
-      page.getByRole("button", { name: "Open report" }),
-    ).toBeVisible();
-    expect(
-      requests.some(
-        (request) =>
-          request.method === "POST" &&
-          request.path === "/api/chat/report-suggestions/assistant-1/approve",
-      ),
-    ).toBe(true);
-
-    await page.getByRole("button", { name: "Open report" }).click();
-    await expect(page).toHaveURL(/\/reports\/report-1$/);
-    await expect(
-      page.getByRole("heading", { name: "Saved revenue" }),
-    ).toBeVisible();
   });
 
   test("shared recipients see only the pinned view and download action", async ({

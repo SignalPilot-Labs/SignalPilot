@@ -359,6 +359,29 @@ def org_role_from_claims(claims: dict | None) -> str | None:
     return role
 
 
+def org_name_from_claims(claims: dict | None) -> str | None:
+    """Display name of the organization, when the token carries one.
+
+    Clerk's session token has no org name by default: a JWT template may add
+    ``org_name`` (or ``org_slug``); the short claim ``o`` carries ``slg`` and,
+    when templated, ``nam``. Returns None when nothing usable is present.
+    """
+    if not isinstance(claims, dict):
+        return None
+    short = claims.get("o") if isinstance(claims.get("o"), dict) else {}
+    candidates = (
+        claims.get("org_name"),
+        short.get("nam"),
+        short.get("name"),
+        claims.get("org_slug"),
+        short.get("slg"),
+    )
+    for value in candidates:
+        if isinstance(value, str) and value.strip():
+            return value.strip()[:200]
+    return None
+
+
 def is_org_admin_role(role: str | None) -> bool:
     """True for the role strings Clerk uses to denote an organization admin."""
     return role in ("admin", "org:admin")

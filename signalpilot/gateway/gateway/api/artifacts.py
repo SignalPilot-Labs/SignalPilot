@@ -1,8 +1,8 @@
 """Unified artifacts listing API.
 
 One org-scoped endpoint over every artifact source the gateway knows about
-(chat + eval today; see :mod:`gateway.store.artifacts_index` for why notebook
-artifacts are absent). This route only *lists* — each record's
+(eval today; see :mod:`gateway.store.artifacts_index` for why chat and
+notebook artifacts are absent). This route only *lists* — each record's
 ``download.route`` points at the existing kind-specific download endpoint,
 which keeps its own auth and content negotiation.
 """
@@ -24,7 +24,7 @@ router = APIRouter(prefix="/api")
 async def list_artifacts(
     org_id: OrgID,
     db: DBSession,
-    kind: str | None = Query(None, pattern="^(chat|eval|notebook)$"),
+    kind: str | None = Query(None, pattern="^(eval|notebook)$"),
     run_id: str | None = Query(None, max_length=200),
     project_id: str | None = Query(None, max_length=200),
     since: str | None = Query(None, description="ISO-8601 lower bound on created_at"),

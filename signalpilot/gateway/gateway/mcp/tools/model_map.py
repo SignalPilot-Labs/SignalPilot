@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os as _os
 import re
+import time
 from pathlib import Path
 
 from gateway.errors.mcp import sanitize_mcp_error
@@ -765,165 +766,34 @@ async def map_columns(
 
 # ── analyze_project_db — the DB half of the old scan_project, one call, any DB ──
 _MODEL_PREFIXES = ("stg_", "dim_", "fact_", "int_", "obt_", "fct_", "mart_", "auto_")
-# Parent-child orphan detection uses catalog distinct-counts (pigeonhole), so it never
-# scans a large table. Exact COUNT(DISTINCT) is only used as a fallback on small tables
-# whose stats the catalog doesn't carry (e.g. DuckDB).
-_DISTINCT_EXACT_CAP = 200_000
+# The DB-side hint helpers live in model_map_hints.py.
+from gateway.mcp.tools.model_map_hints import (  # noqa: E402
+    ScanBudget,
+    _driving_table_gaps,
+    _staging_gaps,
+)
+
+_ANALYSIS_CACHE_TTL_SECONDS = 3600.0
+_ANALYSIS_CACHE_MAX = 64
+# (org_id, connection, schema fingerprint) -> (monotonic time, report text)
+_analysis_cache: dict[tuple[str, str, str], tuple[float, str]] = {}
 
 
-async def _staging_gaps(schema: _Schema) -> list[str]:
-    """stg_* models that have fewer rows than the raw table they wrap (uses row-count
-    estimates from the catalog — no scans)."""
-    hints: list[str] = []
-    tables = schema.tables()
-    for tbl in sorted(tables):
-        if not tbl.lower().startswith("stg_"):
-            continue
-        raw_name = tbl[4:].rstrip("s").lower()
-        raw_match = next((c for c in tables if c.lower() in (raw_name, raw_name + "s", tbl[4:].lower())), None)
-        if not raw_match:
-            continue
-        sc, rc = schema.row_count(tbl), schema.row_count(raw_match)
-        if rc and sc and sc < rc:
-            hints.append(f"  {tbl}: ~{sc} rows (raw {raw_match}: ~{rc} — staging filters "
-                         f"~{rc - sc}). Use ref('{tbl}') not source().")
-    return hints
-
-
-# Columnar engines do exact COUNT(DISTINCT) cheaply at any size; MPP engines have a
-# fast approximate-distinct function. Everything else is exact only on small tables.
-_COLUMNAR_DISTINCT = {"duckdb", "clickhouse"}
-_APPROX_DISTINCT_FN = {
-    "snowflake": "APPROX_COUNT_DISTINCT", "bigquery": "APPROX_COUNT_DISTINCT",
-    "databricks": "APPROX_COUNT_DISTINCT", "trino": "approx_distinct",
-}
-
-
-def _scan_expr(dialect: str, qc: str, row_count: int) -> str | None:
-    """SQL distinct-count expression for a column the catalog has no stat for, or None when
-    a scan would be too expensive (large row-store without an approximate function).
-    Columnar engines do exact COUNT(DISTINCT) cheaply at any size; MPP engines have a fast
-    approximate-distinct; plain row-stores only scan when small."""
-    if dialect in _COLUMNAR_DISTINCT:
-        return f"COUNT(DISTINCT {qc})"                  # columnar: exact is cheap at any size
-    if dialect in _APPROX_DISTINCT_FN:
-        return f"{_APPROX_DISTINCT_FN[dialect]}({qc})"  # MPP: fast approximate
-    if row_count and row_count <= _DISTINCT_EXACT_CAP:
-        return f"COUNT(DISTINCT {qc})"                  # small row-store: exact ok
-    return None                                        # large row-store w/o stats — don't scan
-
-
-async def _distinct(connector, schema: _Schema, table: str, col: str) -> int | None:
-    """Distinct-count for a column, fast on every engine and never scanning a huge table:
-    catalog stats first (PG/Redshift/MSSQL), then columnar-exact, then MPP-approx, then
-    exact on small tables. None only when none of those is cheaply available."""
-    d = schema.distinct(table, col)
-    if d is not None:
-        return d  # catalog — no scan
-    expr = _scan_expr(schema.dialect, connector._quote_identifier(col), schema.row_count(table))
-    if expr is None:
+def _cached_analysis(key: tuple[str, str, str]) -> str | None:
+    entry = _analysis_cache.get(key)
+    if entry is None:
         return None
-    try:
-        q = connector._quote_table(schema.resolve(table))
-        return (await _q(connector, f"SELECT {expr} FROM {q}"))[0][0]
-    except Exception:
+    if time.monotonic() - entry[0] > _ANALYSIS_CACHE_TTL_SECONDS:
+        _analysis_cache.pop(key, None)
         return None
+    return entry[1]
 
 
-async def _distinct_batch(connector, schema: _Schema, table: str, cols: list[str]) -> dict[str, int | None]:
-    """Distinct-counts for several columns of ONE table, reading the table at most once.
-
-    Catalog stats are used per-column with no scan; every remaining column is folded into a
-    single `SELECT <agg>(c0), <agg>(c1), ... FROM table`, so the table is scanned once
-    instead of once per column. Values are identical to calling _distinct per column — the
-    only difference is round trips, which dominate on MPP engines (Snowflake) where each
-    scan is a separate query.
-    """
-    out: dict[str, int | None] = {col: schema.distinct(table, col) for col in cols}
-    scan_cols = [col for col in cols if out[col] is None]
-    if not scan_cols:
-        return out  # all answered from the catalog — no scan
-    rc = schema.row_count(table)
-    exprs: list[str] = []
-    scanned: list[str] = []
-    for col in scan_cols:
-        expr = _scan_expr(schema.dialect, connector._quote_identifier(col), rc)
-        if expr is not None:
-            exprs.append(expr)
-            scanned.append(col)
-    if not exprs:
-        return out  # large row-store w/o stats — leave as None
-    try:
-        q = connector._quote_table(schema.resolve(table))
-        row = (await _q(connector, f"SELECT {', '.join(exprs)} FROM {q}"))[0]
-        for col, val in zip(scanned, row, strict=False):
-            out[col] = val
-    except Exception:
-        pass  # leave scanned columns as None on failure
-    return out
-
-
-async def _driving_table_gaps(connector, schema: _Schema, cap: int = 10) -> list[str]:
-    """Parent-child pairs where some parents have NO children (drive FROM parent).
-
-    Pigeonhole on catalog distinct-counts — NO table scans, any size: a child can
-    reference at most distinct(child.fk) distinct parents, so if
-    distinct(parent.id) > distinct(child.fk) then at least the difference are orphaned.
-    distinct() reads stats already in get_schema (Postgres/Redshift/etc.) and only falls
-    back to an exact COUNT(DISTINCT) on small tables the catalog can't answer for.
-    """
-    hints: list[str] = []
-    tables = {t: [c for c, _ in schema.columns(t)] for t in schema.tables()}
-    parents = {t: next((c for c in cols if c.lower() == "id"), None) for t, cols in tables.items()}
-    parents = {t: c for t, c in parents.items() if c}
-    checked: set[tuple[str, str, str]] = set()
-
-    # Enumerate candidate (parent, pid, child, fk) pairs up front — pure string work, no I/O
-    # — and record, per table, the columns we may need a distinct-count for. This lets each
-    # table be scanned at most once (all its needed columns in a single query) while the
-    # pair loop below still stops early at `cap` hits. The pair order is identical to the
-    # old nested loop, so the hints produced are byte-for-byte the same.
-    pairs: list[tuple[str, str, str, str]] = []
-    needed: dict[str, set[str]] = {}
-    for child, ccols in tables.items():
-        for fk in [c for c in ccols if c.lower().endswith("_id") and c.lower() != "id"]:
-            prefix = fk.lower().replace("_id", "")
-            for parent, pid in parents.items():
-                if parent == child or (parent, child, fk) in checked:
-                    continue
-                checked.add((parent, child, fk))
-                if prefix not in parent.lower():
-                    continue  # plausibility filter (avoids N^2 work)
-                pairs.append((parent, pid, child, fk))
-                needed.setdefault(parent, set()).add(pid)
-                needed.setdefault(child, set()).add(fk)
-
-    # Distinct-count cache. A table is scanned once, for ALL its needed columns, on first
-    # touch: on MPP engines (Snowflake) one scan computing many APPROX_COUNT_DISTINCT is
-    # several times faster than one scan per column. Tables never reached (because `cap`
-    # hits first) are never scanned.
-    _dcache: dict[tuple[str, str], int | None] = {}
-    _scanned: set[str] = set()
-
-    async def _dist(tbl: str, col: str) -> int | None:
-        if tbl not in _scanned:
-            vals = await _distinct_batch(connector, schema, tbl, sorted(needed.get(tbl, {col})))
-            for c, v in vals.items():
-                _dcache[(tbl, c)] = v
-            _scanned.add(tbl)
-        return _dcache.get((tbl, col))
-
-    for parent, pid, child, fk in pairs:
-        pd = await _dist(parent, pid)
-        cd = await _dist(child, fk)
-        if pd is None or cd is None or pd <= cd:
-            continue
-        hints.append(f"  {parent}.{pid} ↔ {child}.{fk}: ~{pd - cd} of {pd} parent keys are not "
-                     f"referenced by {child} (some parents have no children). "
-                     f"Drive FROM {parent} LEFT JOIN {child}.")
-        if len(hints) >= cap:
-            return hints
-    return hints
+def _remember_analysis(key: tuple[str, str, str], text: str) -> None:
+    if len(_analysis_cache) >= _ANALYSIS_CACHE_MAX:
+        oldest = min(_analysis_cache, key=lambda k: _analysis_cache[k][0])
+        _analysis_cache.pop(oldest, None)
+    _analysis_cache[key] = (time.monotonic(), text)
 
 
 @audited_tool(mcp)
@@ -943,13 +813,13 @@ async def analyze_project_db(connection_name: str) -> str:
         return f"Error: {err}"
 
     from gateway.connectors.pool_manager import pool_manager
-    from gateway.connectors.schema_cache import schema_cache
+    from gateway.connectors.schema_cache import _schema_fingerprint, schema_cache
+    from gateway.governance.context import current_org_id_var
+    from gateway.mcp.context import mcp_org_id_var
 
-    # Stay inside the store session for the whole call: it sets current_org_id_var, which
-    # schema_cache requires (org-scoped keys). The cache is the same one schema_overview /
-    # schema_ddl populate, so a recent introspection is reused instead of re-pulling the
-    # full schema (~seconds on a many-schema warehouse). Staleness is bounded by the
-    # cache's TTL, and it is invalidated on structural change like every other consumer.
+    # Open the store session only to read the connection record. The introspection
+    # and the scans can run for a while; holding a database session open across them
+    # left it idle in a transaction until the server closed it.
     try:
         async with _store_session() as store:
             conn_info = await store.get_connection(connection_name)
@@ -959,20 +829,32 @@ async def analyze_project_db(connection_name: str) -> str:
             if not conn_str:
                 return "Error: No credentials stored for this connection"
             extras = await store.get_credential_extras(connection_name)
-
-            raw = schema_cache.get(connection_name)
-            async with pool_manager.connection(
-                conn_info.db_type, conn_str, credential_extras=extras, connection_name=connection_name
-            ) as connector:
-                if raw is None:
-                    raw = await connector.get_schema()
-                    schema_cache.put(connection_name, raw)
-                schema = _Schema(raw, conn_info.db_type)
-                lookups = _detect_lookups(connector, schema)
-                staging = await _staging_gaps(schema)
-                driving = await _driving_table_gaps(connector, schema)
+            org_id = current_org_id_var.get(None) or mcp_org_id_var.get(None) or ""
     except Exception as e:
         return f"Error: {sanitize_mcp_error(str(e))}"
+
+    # schema_cache keys are org scoped, so keep the org var set while using it.
+    token = current_org_id_var.set(org_id)
+    try:
+        raw = schema_cache.get(connection_name)
+        async with pool_manager.connection(
+            conn_info.db_type, conn_str, credential_extras=extras, connection_name=connection_name
+        ) as connector:
+            if raw is None:
+                raw = await connector.get_schema()
+                schema_cache.put(connection_name, raw)
+            cache_key = (org_id, connection_name, _schema_fingerprint(raw))
+            cached = _cached_analysis(cache_key)
+            if cached is not None:
+                return cached
+            schema = _Schema(raw, conn_info.db_type)
+            lookups = _detect_lookups(connector, schema)
+            staging = await _staging_gaps(schema)
+            driving = await _driving_table_gaps(connector, schema, budget=ScanBudget())
+    except Exception as e:
+        return f"Error: {sanitize_mcp_error(str(e))}"
+    finally:
+        current_org_id_var.reset(token)
 
     out: list[str] = [f"## DB analysis: {connection_name}"]
     if driving:
@@ -985,7 +867,9 @@ async def analyze_project_db(connection_name: str) -> str:
                 for col, (tbl, key, alias) in sorted(lookups.items())]
     if len(out) == 1:
         out.append("  (no lookup, staging-gap, or driving-table signals detected)")
-    return "\n".join(out)
+    report = "\n".join(out)
+    _remember_analysis(cache_key, report)
+    return report
 
 
 # -- find_column_producers - which existing models already produce a column ----

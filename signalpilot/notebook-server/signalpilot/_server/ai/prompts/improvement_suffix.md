@@ -16,11 +16,12 @@ Additional rules for this run only:
   many models reference, dead models with no downstream refs).
 - Rank recommendations by estimated savings and show before/after cost when
   you can estimate both.
-- Publish exactly one HTML report artifact via publish_report titled
-  "Cost optimization report". The report must include: an executive summary,
-  a ranked recommendation table with estimated impact, and the per-model
-  cost estimates you gathered. If you find no meaningful savings, publish
-  the report saying so with the evidence.
+- Save exactly one HTML report to
+  `$SP_CHAT_ARTIFACTS_DIRECTORY/cost_optimization_report.html` and link it
+  in the answer. Title it "Cost optimization report". The report must
+  include: an executive summary, a ranked recommendation table with
+  estimated impact, and the per-model cost estimates you gathered. If you
+  find no meaningful savings, save the report saying so with the evidence.
 - Never modify the database, the project, or any external system. Read-only
   queries and the sandbox only.
 - End with a 3-6 sentence plain-language summary of the findings.

@@ -29,6 +29,7 @@ from .github_bot import router as github_bot_router
 from .health import router as health_router
 from .keys import router as keys_router
 from .knowledge import router as knowledge_router
+from .mcp import router as mcp_connectors_router
 from .metrics import router as metrics_router
 from .notebook_files import router as notebook_files_router
 from .notebook_sessions import router as notebook_sessions_router
@@ -102,6 +103,7 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(uploads_router)
     app.include_router(eval_runs_router)
     app.include_router(user_secrets_router)
+    app.include_router(mcp_connectors_router)
     app.include_router(git_http_router)
     from ..notebook_proxy import router as notebook_proxy_router
 

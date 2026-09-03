@@ -4,6 +4,12 @@ import { expect, test } from "@playwright/test";
  * Exercises the fixture-driven chat UX harness at /chats/test. The replay is
  * frozen at deterministic offsets via ?at=<ms>&paused=1, so no model,
  * gateway, or warehouse is required.
+ *
+ * The fixture timeline has three activity groups: the schema / SQL chain
+ * (9 steps, one failed validation), the code-and-notebook chain (10 steps,
+ * 6 files) after the mid-run narration, and a short discovery chain at
+ * 21.2–24 s (list_tables, explore_columns, dbt run, knowledge search and a
+ * connector tool) that exercises the remaining tool cards.
  */
 
 const BASE = process.env.SP_WEB_BASE_URL ?? "http://localhost:3200";
@@ -39,7 +45,10 @@ test.describe("chat UX test harness", () => {
     // sql-formatter upper-cases keywords in the SQL card.
     await expect(group).toContainText("SELECT");
     // The follow-up warehouse query is still running.
-    await expect(group).toContainText("Queried the warehouse");
+    // The agent's one-line `description` titles the query card.
+    await expect(group).toContainText(
+      "Comparing Q2 and Q3 revenue by region from fct_orders",
+    );
   });
 
   test("mid-run narration splits the run into separate activity groups", async ({
@@ -57,54 +66,52 @@ test.describe("chat UX test harness", () => {
     // The second chain is live with rich cards.
     await expect(groups.nth(1)).toContainText("Generated a file");
     await expect(groups.nth(1)).toContainText("analysis/q3_growth.py");
-    await expect(groups.nth(1)).toContainText("Ran Python calculation");
-    await expect(groups.nth(1)).toContainText('q3 = {"EMEA"');
+    await expect(groups.nth(1)).toContainText("Ran a command");
+    await expect(groups.nth(1)).toContainText(
+      "python analysis/q3_growth.py --check",
+    );
   });
 
-  test("collapses both chains to summaries and shows artifacts when complete", async ({
+  test("collapses all chains to summaries and shows the inline figure when complete", async ({
     page,
   }) => {
-    await page.goto(at(21_200));
+    await page.goto(at(24_800));
     await waitForHydration(page);
     const groups = page.getByTestId("chat-activity-group");
-    await expect(groups).toHaveCount(2);
+    await expect(groups).toHaveCount(3);
     await expect(groups.first()).toContainText(
       "Worked through 9 steps · 2 queries · 1 error",
     );
     await expect(groups.nth(1)).toContainText(
-      "Worked through 8 steps · 2 code runs · 4 files",
+      "Worked through 10 steps · 2 code runs · 6 files",
     );
+    // The trailing discovery chain folds to a plain count with one chip per
+    // card kind (table list, column profile, dbt run, knowledge, connector).
+    await expect(groups.nth(2)).toContainText("Worked through 5 steps");
+    await expect(groups.nth(2)).toContainText("dbt run");
+    await expect(groups.nth(2)).toContainText("47 tables");
+    await expect(
+      groups.nth(2).locator('[data-testid="chat-tool-chip"][data-kind="dbt_run"]').first(),
+    ).toBeVisible();
     await expect(page.getByText("EMEA drove the growth")).toBeVisible();
+    // The chart the notebook cell saved renders inline from the manifest.
+    await expect(page.getByTestId("chat-md-figure")).toBeVisible();
+    // The chart the run never saved is a block "not available" band.
+    await expect(page.getByTestId("chat-md-image-missing")).toBeVisible();
+    // The collapsed code chain keeps its files visible in a footer.
     await expect(
-      page.getByText("q3_revenue_by_region.csv").first(),
-    ).toBeVisible();
-    await expect(page.getByTestId("standalone-chart-artifact")).toBeVisible();
-    // A collapsed chain reopens on demand.
+      groups.nth(1).getByTestId("chat-group-artifact-cards"),
+    ).toContainText("q3_revenue_by_region.csv");
+    // A collapsed chain reopens on demand, and its cards move under the
+    // steps that produced them.
     await groups.nth(1).locator("button").first().click();
-    await expect(groups.nth(1)).toContainText("Published a chart");
-  });
-
-  test("expands charts and reports in a fullscreen viewer", async ({
-    page,
-  }) => {
-    await page.goto(at(21_200));
-    await waitForHydration(page);
-    const expandButtons = page.getByTestId("artifact-expand");
-    // One for the Vega chart, one for the HTML report.
-    await expect(expandButtons).toHaveCount(2);
-    await expandButtons.first().click();
-    const lightbox = page.getByTestId("artifact-lightbox");
-    await expect(lightbox).toBeVisible();
-    await expect(lightbox).toContainText("q3_growth_by_region.vl.json");
-    await page.keyboard.press("Escape");
-    await expect(lightbox).not.toBeVisible();
-    await expandButtons.nth(1).click();
-    await expect(lightbox).toBeVisible();
+    await expect(groups.nth(1)).toContainText("Executed notebook cells");
     await expect(
-      lightbox.locator("iframe[title*='q3_regional_review']"),
-    ).toBeVisible();
-    await page.getByLabel("Close viewer").click();
-    await expect(lightbox).not.toBeVisible();
+      groups.nth(1).getByTestId("chat-group-artifact-cards"),
+    ).toHaveCount(0);
+    await expect(
+      groups.nth(1).getByTestId("chat-step-artifact-cards"),
+    ).toHaveCount(6);
   });
 
   test("shows the agent plan as an always-visible card in the main window", async ({
@@ -119,7 +126,7 @@ test.describe("chat UX test harness", () => {
     await expect(tracker).toContainText(
       "Confirm the revenue model and region join",
     );
-    await expect(tracker).toContainText("Publish a table and comparison chart");
+    await expect(tracker).toContainText("Save the chart and the underlying rows");
     // The header toggle collapses the checklist to the one-line summary.
     const header = tracker.locator("button").first();
     await expect(header).toHaveAttribute("aria-expanded", "true");

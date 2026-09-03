@@ -9,7 +9,6 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.db.models import (
-    GatewayChatArtifact,
     GatewayChatConversation,
     GatewayChatMessage,
     GatewayChatRun,
@@ -164,17 +163,6 @@ async def worker_context(db: AsyncSession, *, run: GatewayChatRun) -> dict[str, 
         .scalars()
         .all()
     )
-    artifacts = (
-        (
-            await db.execute(
-                select(GatewayChatArtifact)
-                .where(GatewayChatArtifact.conversation_id == run.conversation_id)
-                .order_by(GatewayChatArtifact.created_at)
-            )
-        )
-        .scalars()
-        .all()
-    )
     proposals = list(
         (
             await db.execute(
@@ -236,7 +224,6 @@ async def worker_context(db: AsyncSession, *, run: GatewayChatRun) -> dict[str, 
         "conversation": conversation,
         "project": project,
         "messages": messages,
-        "artifacts": artifacts,
         "query_proposals": proposals,
         "query_approvals": approvals,
         "query_executions": executions,

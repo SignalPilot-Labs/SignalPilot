@@ -210,8 +210,15 @@ async def forward_agent_events(
     resume_agent_session: bool,
     max_turns: int,
     analysis_session: Callable[[], str | None],
+    after_tool_result: Callable[[Any, str], AsyncIterator[bytes]]
+    | None = None,
 ) -> AsyncGenerator[bytes, None]:
-    """Forward SDK events as NDJSON and record run state on the way."""
+    """Forward SDK events as NDJSON and record run state on the way.
+
+    `after_tool_result(event, tool_name)` runs after each `tool_result`
+    line. Every NDJSON line it yields is forwarded. It must not raise; the
+    guard here only logs when it does.
+    """
     async for event in events:
         if event.type in {
             "thinking",
@@ -294,10 +301,11 @@ async def forward_agent_events(
             input_session = str(tool_input.get("session_id") or "")
             if input_session:
                 state.tool_sessions_by_id[event.tool_call_id] = input_session
+        completed_tool = ""
         if event.type == "tool_result":
             completed_tool = state.tool_names_by_id.get(
                 event.tool_call_id, ""
-            )
+            ) or str(getattr(event, "tool_name", "") or "")
             # Attribute evidence to the tool call's kernel session. Fall
             # back to the analysis session so the single-notebook flow keeps
             # its exact gate behavior.
@@ -324,6 +332,20 @@ async def forward_agent_events(
             "tool_call_id": event.tool_call_id,
             "is_error": event.is_error,
         }
+        if event.result_chars is not None:
+            payload["result_chars"] = event.result_chars
         if subagent_parent:
             payload["parent_tool_call_id"] = subagent_parent
         yield (json.dumps(payload, default=str) + "\n").encode("utf-8")
+        if event.type == "tool_result" and after_tool_result is not None:
+            try:
+                async for extra in after_tool_result(event, completed_tool):
+                    yield extra
+            except Exception:
+                from signalpilot import _loggers
+
+                _loggers.sp_logger().warning(
+                    "after_tool_result hook failed tool=%s",
+                    completed_tool,
+                    exc_info=True,
+                )

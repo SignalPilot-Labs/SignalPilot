@@ -1,0 +1,504 @@
+/* Owner: media agent. Diagrams, math, images, streaming placeholders. */
+
+/* ---------------------------------------------------------------- diagrams */
+
+/* The diagram frame is the shared framed-block shell: same border, radius,
+   fill and header band as a code frame, so a lineage diagram and the SQL above
+   it line up down the transcript. */
+.chat-markdown .chat-md-diagram {
+  border: 1px solid var(--md-rule);
+  border-radius: var(--md-radius);
+  background: var(--md-surface);
+  overflow: hidden;
+}
+
+.chat-markdown .chat-md-diagram-head {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  height: 30px;
+  padding: 0 var(--md-pad-x);
+  border-bottom: 1px solid var(--md-rule);
+  background: var(--md-surface-raised);
+  color: var(--color-text-dim);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-markdown .chat-md-diagram-body {
+  padding: 0.85rem var(--md-pad-x);
+}
+
+/* Mermaid emits `width="100%"` plus an inline `max-width: <natural>px`, which
+   is exactly the behaviour we want: a small diagram never stretches past its
+   natural size, a large one scales down to the column instead of widening it.
+   Centre what is left over, and keep a scroller as the safety net for
+   diagrams mermaid decides not to shrink. */
+.chat-markdown .chat-md-mermaid {
+  overflow-x: auto;
+  overflow-y: hidden;
+  text-align: center;
+  /* Mermaid already draws a margin inside the viewBox, so the frame adds less
+     of its own than a code body does. */
+  padding-block: 0.6rem;
+}
+.chat-markdown .chat-md-mermaid svg {
+  display: inline-block;
+  vertical-align: middle;
+  height: auto;
+  max-width: 100%;
+}
+/* Mermaid paints its own background colour onto the svg; the frame owns that. */
+.chat-markdown .chat-md-mermaid svg > rect.background,
+.chat-markdown .chat-md-mermaid svg {
+  background: transparent;
+}
+
+.chat-markdown .chat-md-mermaid::-webkit-scrollbar,
+.chat-markdown .katex-display::-webkit-scrollbar {
+  height: 6px;
+}
+.chat-markdown .chat-md-mermaid::-webkit-scrollbar-thumb,
+.chat-markdown .katex-display::-webkit-scrollbar-thumb {
+  border-radius: 3px;
+  background: var(--md-rule-strong);
+}
+
+/* ------------------------------------------------- streaming placeholder */
+
+/* Mid-stream state, on screen in every real run. It keeps the frame chrome and
+   holds a diagram-sized box so the transcript does not jump when the SVG
+   lands, and suggests the shape of a flowchart rather than drawing a dashed
+   "empty" box. */
+.chat-markdown .chat-md-diagram-pending .chat-md-diagram-body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 132px;
+}
+.chat-markdown .chat-md-diagram-ghost {
+  display: flex;
+  align-items: center;
+  width: min(340px, 100%);
+  animation: chat-md-diagram-pulse 1.7s ease-in-out infinite;
+}
+.chat-markdown .chat-md-ghost-node {
+  flex: 0 1 92px;
+  height: 32px;
+  border-radius: var(--md-radius-sm);
+  border: 1px solid var(--md-rule);
+  background: var(--color-bg-hover);
+}
+.chat-markdown .chat-md-ghost-edge {
+  flex: 1 1 22px;
+  height: 1px;
+  background: var(--md-rule-strong);
+}
+
+@keyframes chat-md-diagram-pulse {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 0.8;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-markdown .chat-md-diagram-ghost {
+    animation: none;
+    opacity: 0.55;
+  }
+}
+
+/* ------------------------------------------------------------ diagram error */
+
+/* Honest but designed: the parse error reads as a quiet warning band, the
+   source sits in a recessed well that scrolls rather than growing the frame. */
+.chat-markdown .chat-md-diagram[data-tone="warning"] {
+  border-color: rgba(255, 170, 0, 0.24);
+}
+.chat-markdown .chat-md-diagram[data-tone="warning"] .chat-md-diagram-head {
+  height: auto;
+  min-height: 30px;
+  align-items: flex-start;
+  padding: 0.5rem var(--md-pad-x);
+  border-bottom-color: rgba(255, 170, 0, 0.18);
+  background: rgba(255, 170, 0, 0.05);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 1.5;
+  letter-spacing: 0;
+  white-space: normal;
+  overflow: visible;
+}
+.chat-markdown .chat-md-diagram-icon {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  margin-top: 0.15rem;
+  color: var(--color-warning);
+}
+.chat-markdown .chat-md-diagram-message {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.chat-markdown .chat-md-diagram-well {
+  margin: 0;
+  max-height: 13rem;
+  overflow: auto;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--md-rule);
+  border-radius: var(--md-radius-sm);
+  background: var(--color-bg-input);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.6;
+  white-space: pre;
+  tab-size: 2;
+}
+.chat-markdown .chat-md-diagram-well code {
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font-size: inherit;
+}
+
+/* ------------------------------------------------------------------- math */
+
+/* KaTeX ships its own colour; make it read as body text instead. */
+.chat-markdown .katex {
+  color: inherit;
+  font-size: 1.03em;
+  /* An inline formula must not break mid-expression. */
+  white-space: nowrap;
+}
+.chat-markdown .katex-display {
+  display: block;
+  margin: 0;
+  padding: 0.55rem 0 0.75rem;
+  text-align: center;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.chat-markdown .katex-display > .katex {
+  display: inline-block;
+  text-align: initial;
+  white-space: nowrap;
+}
+/* A display formula on its own line gets the loose block rhythm around it. */
+.chat-markdown > .katex-display,
+.chat-markdown p:has(> .katex-display) {
+  margin-block: var(--md-gap-loose);
+}
+
+/* ----------------------------------------------------------------- images */
+
+/* A transparent PNG (a chart exported from a notebook, usually) has to stay
+   readable on the dark surface, so images get the framed-block treatment. */
+.chat-markdown img {
+  max-width: 100%;
+  height: auto;
+  vertical-align: middle;
+  border: 1px solid var(--md-rule);
+  border-radius: var(--md-radius-sm);
+  background: var(--md-surface-raised);
+}
+/* An image that is the whole paragraph is a block figure, so centre it.
+   Streamdown wraps every image in its own inline-block hover shell, so the
+   wrapper is what has to be centred and de-margined; the vertical rhythm is
+   decided once, by the block spacing in base.css. */
+.chat-markdown p > img:only-child,
+.chat-markdown figure > img {
+  display: block;
+  margin-inline: auto;
+}
+.chat-markdown [data-streamdown="image-wrapper"] {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  margin-block: 0;
+  margin-inline: auto;
+}
+
+/* ------------------------------------------------------- inline figures */
+
+/* A conversation file the agent referenced with `![caption](artifacts/x.png)`.
+   Block even inside a paragraph, centred, capped at the column, and framed
+   like every other media block so a chart sits level with the SQL above it. */
+.chat-markdown .chat-md-figure {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  margin: var(--md-gap) auto;
+}
+.chat-markdown .chat-md-figure-frame {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  border: 1px solid var(--md-rule);
+  border-radius: var(--md-radius);
+  background: var(--md-surface-raised);
+}
+.chat-markdown .chat-md-figure-button {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: zoom-in;
+}
+.chat-markdown .chat-md-figure-button:active {
+  transform: none;
+}
+.chat-markdown .chat-md-figure-img {
+  display: block;
+  max-width: 100%;
+  max-height: 520px;
+  height: auto;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  animation: chat-md-figure-in 220ms ease-out;
+}
+.chat-markdown .chat-md-figcaption {
+  margin: 0.5rem auto 0;
+  max-width: 60ch;
+  text-align: center;
+  color: var(--color-text-muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+/* Actions sit in a slim footer strip under the image, never over it: an
+   overlay would cover a small chart and steal its click. They stay quiet
+   until the figure is hovered or focused within. */
+.chat-markdown .chat-md-figure-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.25rem;
+  padding: 0.25rem 0.4rem;
+  border-top: 1px solid var(--md-rule);
+  background: var(--md-surface);
+}
+.chat-markdown .chat-md-figure-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  height: 24px;
+  padding: 0 0.5rem;
+  border: 1px solid transparent;
+  border-radius: var(--md-radius-sm);
+  background: transparent;
+  color: var(--color-text-dim);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  line-height: 1;
+  transition: color 120ms ease, background-color 120ms ease;
+}
+.chat-markdown .chat-md-figure-frame:hover .chat-md-figure-action,
+.chat-markdown .chat-md-figure-frame:focus-within .chat-md-figure-action {
+  color: var(--color-text-muted);
+}
+.chat-markdown .chat-md-figure-action:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text);
+}
+.chat-markdown .chat-md-figure-action-icon {
+  width: 12px;
+  height: 12px;
+}
+
+@keyframes chat-md-figure-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* ------------------------------------------------ figure placeholder */
+
+/* A reference the manifest has not confirmed yet: a 16:10 shimmer with the
+   file name, so the transcript does not jump when the image lands. */
+.chat-markdown .chat-md-figure-pending {
+  position: relative;
+  display: block;
+  width: min(560px, 100%);
+  aspect-ratio: 16 / 10;
+  margin: var(--md-gap) auto;
+  overflow: hidden;
+  border: 1px solid var(--md-rule);
+  border-radius: var(--md-radius);
+  background: var(--md-surface);
+}
+.chat-markdown .chat-md-figure-shimmer {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    100deg,
+    transparent 30%,
+    var(--color-bg-hover) 50%,
+    transparent 70%
+  );
+  background-size: 250% 100%;
+  animation: chat-md-figure-shimmer 1.8s ease-in-out infinite;
+}
+.chat-markdown .chat-md-figure-pending-name {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  color: var(--color-text-dim);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+@keyframes chat-md-figure-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -50% 0;
+  }
+}
+
+/* ------------------------------------------------- missing image band */
+
+/* An image reference that never resolved: a full-width warning band on
+   its own line, never inline in the sentence. */
+.chat-markdown .chat-md-image-missing {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  margin: var(--md-gap) 0;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid rgba(255, 170, 0, 0.28);
+  border-radius: var(--md-radius);
+  background: rgba(255, 170, 0, 0.06);
+  color: var(--color-text-muted);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 1.3;
+}
+.chat-markdown .chat-md-image-missing-icon {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  color: var(--color-warning);
+}
+.chat-markdown .chat-md-image-missing-label {
+  flex: none;
+  font-weight: 500;
+}
+.chat-markdown .chat-md-image-missing-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-dim);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+
+/* ------------------------------------------------------------ file chips */
+
+/* A linked conversation file: inline-block so it sits inside a sentence. */
+.chat-markdown .chat-md-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  max-width: 100%;
+  height: 28px;
+  margin: 0.1rem 0;
+  padding: 0 0.6rem 0 0.5rem;
+  border: 1px solid var(--md-rule);
+  border-radius: 999px;
+  background: var(--md-surface-raised);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 1;
+  vertical-align: middle;
+  text-decoration: none;
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+.chat-markdown button.chat-md-chip {
+  cursor: pointer;
+}
+.chat-markdown button.chat-md-chip:hover {
+  border-color: var(--md-rule-strong);
+  background: var(--color-bg-hover);
+}
+.chat-markdown .chat-md-chip-icon {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  color: var(--color-text-dim);
+}
+.chat-markdown .chat-md-chip-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+.chat-markdown .chat-md-chip-meta {
+  flex: none;
+  color: var(--color-text-dim);
+  font-size: 11px;
+}
+.chat-markdown .chat-md-chip-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex: none;
+  padding-left: 0.45rem;
+  border-left: 1px solid var(--md-rule);
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+.chat-markdown .chat-md-chip-action-icon {
+  width: 11px;
+  height: 11px;
+}
+.chat-markdown .chat-md-chip-shimmer {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--md-rule) 0, var(--color-bg-hover) 50%, var(--md-rule) 100%);
+  background-size: 200% 100%;
+  animation: chat-md-figure-shimmer 1.6s ease-in-out infinite;
+}
+.chat-markdown .chat-md-chip-pending .chat-md-chip-name {
+  color: var(--color-text-muted);
+}
+.chat-markdown .chat-md-chip-missing {
+  border-color: rgba(255, 170, 0, 0.24);
+  color: var(--color-text-muted);
+}
+.chat-markdown .chat-md-chip-missing .chat-md-chip-icon {
+  color: var(--color-warning);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-markdown .chat-md-figure-shimmer,
+  .chat-markdown .chat-md-chip-shimmer {
+    animation: none;
+    opacity: 0.55;
+  }
+  .chat-markdown .chat-md-figure-img {
+    animation: none;
+  }
+}

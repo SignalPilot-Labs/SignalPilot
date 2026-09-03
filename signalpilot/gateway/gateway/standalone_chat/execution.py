@@ -30,6 +30,7 @@ from gateway.notebooks.session_service import (
     ensure_standalone_chat_notebook_session,
     runtime_for_session,
 )
+from gateway.standalone_chat import config as chat_config
 from gateway.standalone_chat.agent_sessions import agent_session_transfer
 from gateway.standalone_chat.config import enterprise_chat_feature_flags
 from gateway.standalone_chat.object_storage import chat_object_storage
@@ -196,7 +197,6 @@ async def prepare_execution(
         on_cold_boot=on_cold_boot,
     )
     capabilities = [
-        "artifact:publish",
         "dbt:read",
         "notebook:analysis",
         "query:read",
@@ -207,6 +207,23 @@ async def prepare_execution(
     # client. Tool implementations still enforce their own frozen-project,
     # connection, SQL-governance, and dev-database boundaries.
     capabilities.extend(["sandbox:execute", "dbt:execute"])
+    run_origin = "improvement" if is_improvement_run else "user"
+    # Connectors (external MCP servers). Remote entries point at the gateway
+    # proxy, which authenticates the run's session token below (capability
+    # mcp_proxy) and enforces tool policy per call. Sandbox entries carry
+    # their decrypted per-run env like runtime_auth does.
+    mcp_connectors: list[dict[str, Any]] = []
+    if enterprise_chat_feature_flags().mcp_connectors:
+        capabilities.append("mcp_proxy")
+        from gateway.mcp_connectors.policy import proxy_base_url, resolve_injection
+
+        mcp_connectors = await resolve_injection(
+            db,
+            org_id=run.org_id,
+            user_id=run.user_id,
+            run_origin=run_origin,
+            proxy_base_url=proxy_base_url(),
+        )
     payload = {
         "run_id": run.id,
         "conversation_id": run.conversation_id,
@@ -236,17 +253,33 @@ async def prepare_execution(
         "prompt": prompt,
         "messages": messages,
         "warm_context": warm_context,
-        "run_origin": "improvement" if is_improvement_run else "user",
-        # Optional model override. When SP_CHAT_AGENT_MODEL is set (local/staging)
-        # the notebook agent uses it; unset -> the notebook keeps its own default.
-        **({"model": _chat_model} if (_chat_model := os.getenv("SP_CHAT_AGENT_MODEL")) else {}),
+        "run_origin": run_origin,
+        "mcp_connectors": mcp_connectors,
+        # A conversation pins its selected model across warm and cold resumes.
+        # Legacy rows fall back to the deployment override, then the notebook's
+        # own default when neither is present.
+        **(
+            {"model": _chat_model}
+            if (
+                _chat_model := (
+                    conversation.model if conversation is not None else None
+                )
+                or os.getenv("SP_CHAT_AGENT_MODEL")
+            )
+            else {}
+        ),
+        "effort": (
+            conversation.effort
+            if conversation is not None and conversation.effort
+            else chat_config.default_chat_effort()
+        ),
         "features": {
             "sandbox_runtime": enterprise_chat_feature_flags().sandbox_runtime,
             "size_router": enterprise_chat_feature_flags().size_router,
             "size_router_shadow": enterprise_chat_feature_flags().size_router_shadow,
             "runtime_results": enterprise_chat_feature_flags().runtime_results,
-            "runtime_artifacts": enterprise_chat_feature_flags().runtime_artifacts,
             "dataset_refs": enterprise_chat_feature_flags().dataset_refs,
+            "mcp_connectors": enterprise_chat_feature_flags().mcp_connectors,
         },
         # Native Claude Agent SDK continuity. The sandbox restores this archive
         # before a cold resume and saves it after every run. Database history

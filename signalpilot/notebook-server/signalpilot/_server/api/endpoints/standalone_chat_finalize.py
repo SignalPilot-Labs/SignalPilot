@@ -5,9 +5,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from signalpilot import _loggers
-from signalpilot._server.ai.standalone_chat_tools import (
-    _collected_artifact_is_complete,
-)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -218,38 +215,6 @@ async def archive_run_notebooks(
     return archive_id, None
 
 
-def resolve_report_outcome(collector: Any, *, run_id: str) -> None:
-    """Backfill a no_suggestion outcome when the agent skipped the decision."""
-    complete_artifacts = [
-        artifact
-        for artifact in collector.artifacts
-        if _collected_artifact_is_complete(artifact)
-    ]
-    if not complete_artifacts or collector.report_action_outcome is not None:
-        return
-    artifact = complete_artifacts[-1]
-    LOGGER.warning(
-        "Completed standalone artifact had no report action outcome "
-        "run_id=%s kind=%s filename=%s",
-        run_id,
-        artifact.get("kind"),
-        artifact.get("filename"),
-    )
-    collector.report_action_outcome = {
-        "action": "no_suggestion",
-        "artifact_kind": artifact.get("kind"),
-        "artifact_filename": artifact.get("filename"),
-        "title": artifact.get("filename"),
-        "reason": (
-            "The analysis agent completed without recording the required "
-            "catalog-backed report decision."
-        ),
-        "source": "completion_check",
-        "catalog_revision": collector.report_catalog_revision,
-        "catalog_scan_complete": collector.report_catalog_scan_complete,
-    }
-
-
 def build_final_payload(
     collector: Any,
     *,
@@ -262,20 +227,13 @@ def build_final_payload(
     final_payload: dict[str, Any] = {
         "type": "final",
         "content": accepted_text,
-        "artifacts": collector.artifacts,
     }
     if agent_cost_usd is not None:
         final_payload["cost_usd"] = agent_cost_usd
     if agent_usage is not None:
         final_payload["usage"] = agent_usage
-    if collector.report_proposal is not None:
-        final_payload["report_proposal"] = collector.report_proposal
     if collector.dashboard_preview is not None:
         final_payload["dashboard_preview"] = collector.dashboard_preview
-    if collector.report_action_outcome is not None:
-        final_payload["report_action_outcome"] = (
-            collector.report_action_outcome
-        )
     if archive_id is not None:
         final_payload["archive_id"] = archive_id
         final_payload["kernel_stopped"] = kernel_stopped

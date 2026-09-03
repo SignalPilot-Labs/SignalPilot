@@ -2,11 +2,30 @@
 
 from __future__ import annotations
 
-from typing import Any
+import os
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
+    from signalpilot._server.auth.standalone_chat import ExecutionScope
+
 DASHBOARD_AUTHORING_TIMEOUT_SECONDS = 1_200.0
+
+
+def gateway_api_base_url() -> str:
+    """The gateway REST base for this sandbox, without any `/mcp` suffix."""
+    return (
+        str(
+            os.getenv("SP_GATEWAY_INTERNAL_URL")
+            or os.getenv("SP_GATEWAY_URL")
+            or "http://gateway:3300"
+        )
+        .rstrip("/")
+        .removesuffix("/mcp")
+    )
 
 
 class StandaloneGatewayClient:
@@ -76,44 +95,6 @@ class StandaloneGatewayClient:
             raise ValueError(invalid)
         return value
 
-    async def load_result(self, result_id: str) -> dict[str, Any]:
-        return await self._get_json(
-            f"/api/query/results/{result_id}",
-            missing="Governed structured result not found",
-            invalid="Invalid governed structured result",
-        )
-
-    async def load_report_catalog(self, cursor: str | None) -> dict[str, Any]:
-        params = {"limit": "50"}
-        if cursor:
-            params["cursor"] = cursor
-        return await self._get_json(
-            f"/api/chat/runs/{self.run_id}/report-catalog",
-            params=params,
-            invalid="Invalid saved report catalog",
-        )
-
-    async def load_report_context(self, report_id: str) -> dict[str, Any]:
-        return await self._get_json(
-            f"/api/chat/runs/{self.run_id}/report-context/{report_id}",
-            missing="Saved report not found",
-            invalid="Invalid saved report context",
-        )
-
-    async def check_published_artifact(
-        self,
-        artifact_kind: str,
-        artifact_filename: str,
-    ) -> dict[str, Any]:
-        return await self._get_json(
-            f"/api/chat/runs/{self.run_id}/published-report-artifact",
-            params={
-                "artifact_kind": artifact_kind,
-                "artifact_filename": artifact_filename,
-            },
-            invalid="Invalid published artifact state",
-        )
-
     async def create_dashboard_preview(
         self,
         *,
@@ -149,3 +130,47 @@ class StandaloneGatewayClient:
             invalid="Invalid dashboard authoring preview",
             failed="Dashboard preview could not be created",
         )
+
+    def dashboard_creator(
+        self,
+        body: dict[str, Any],
+        scope: ExecutionScope,
+    ) -> Callable[[str, str, str | None], Awaitable[dict[str, Any]]]:
+        """Bind `create_dashboard_preview` to one run's frozen scope.
+
+        A follow-up on an existing draft must name the authoring session the
+        run was warmed with; any other session id is rejected.
+        """
+        warm_context = body.get("warm_context") or {}
+        active_session_id = (
+            str(
+                (warm_context.get("dashboard_authoring") or {}).get(
+                    "authoring_session_id"
+                )
+                or ""
+            )
+            or None
+        )
+
+        async def create(
+            request: str,
+            timezone: str,
+            authoring_session_id: str | None,
+        ) -> dict[str, Any]:
+            if (
+                authoring_session_id
+                and authoring_session_id != active_session_id
+            ):
+                raise ValueError(
+                    "Dashboard authoring session is not active in this Data Chat"
+                )
+            return await self.create_dashboard_preview(
+                request=request,
+                project_id=scope.project_id,
+                branch=scope.branch,
+                commit_sha=scope.commit_sha,
+                timezone=timezone,
+                authoring_session_id=authoring_session_id,
+            )
+
+        return create

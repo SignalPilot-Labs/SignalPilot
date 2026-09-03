@@ -47,6 +47,7 @@ const sidebars: SidebarsConfig = {
         'product/schema-explorer',
         'product/audit',
         'product/activity',
+        'product/chat-files',
         'product/demo-warehouse',
       ],
     },

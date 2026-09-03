@@ -6,9 +6,10 @@ import {
   Pause,
   Play,
   RotateCcw,
+  Settings2,
 } from "lucide-react";
 import { useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ChatMessage,
   ChatUiContext,
@@ -21,18 +22,35 @@ import {
   FIXTURE_RUN_ID,
   FIXTURE_TOTAL_MS,
   FIXTURE_USER_PROMPT,
-  fixtureArtifacts,
   fixtureAssembledText,
   fixtureConversationFiles,
   fixtureConversationNotebooks,
+  fixtureFileContent,
+  fixtureNowMs,
   fixtureRunStatus,
   fixtureSqlTrace,
   materializeFixtureEvents,
 } from "~/lib/chat-test-fixture";
 import { NotebookPen } from "lucide-react";
+import { useOpenArtifact } from "~/components/chat/use-open-artifact";
+import { ChatSettingsPanel } from "~/components/chat/chat-settings-panel";
+import { useChatSettingsPanel } from "~/components/chat/use-chat-settings-panel";
+import { ConnectorsProvider } from "~/components/connectors/connectors-context";
+import { createFixtureConnectorsApi } from "~/lib/mcp-connectors-fixture-client";
+import { FIXTURE_ME } from "~/lib/mcp-connectors-fixture";
+import { connectorSignInFixtureEvents } from "~/lib/chat-connector-signin-fixture";
+import type { StandaloneChatModel } from "~/lib/api";
+import type { StandaloneChatEffort } from "~/lib/api";
+import {
+  FIXTURE_QUERY_RESULT_ID,
+  fixtureQueryResultPage,
+} from "~/lib/chat-test-fixture-tools";
 
 const SPEEDS = [1, 2, 4] as const;
 const TICK_MS = 50;
+/** Second turn for ?followup=1: a run with no events yet. */
+const FIXTURE_FOLLOW_UP_RUN_ID = "run-fixture-0002";
+const FIXTURE_FOLLOW_UP_PROMPT = "Project Q4 from these growth rates.";
 
 /**
  * Replays the scripted fixture run through the real chat message components,
@@ -46,6 +64,17 @@ export function StandaloneChatTestHarness() {
     FIXTURE_TOTAL_MS,
   );
   const initiallyPaused = searchParams.get("paused") === "1";
+  // Connectors: ?signin=1 adds a connector sign-in failure to the replay;
+  // ?settings=1 opens the Chat settings panel; both run on fixture connectors.
+  const withSignIn = searchParams.get("signin") === "1";
+  const settingsInitiallyOpen = searchParams.get("settings") === "1";
+  // ?followup=1 appends a second turn whose run is still queued, so the
+  // first message's unresolved references must stay "missing".
+  const withFollowUp = searchParams.get("followup") === "1";
+  const connectorsApi = useMemo(
+    () => createFixtureConnectorsApi({ latencyMs: 120 }),
+    [],
+  );
   const [elapsed, setElapsed] = useState(initialAt);
   const [playing, setPlaying] = useState(!initiallyPaused);
   // Flipped by an effect, so it is observable only after React has hydrated
@@ -54,6 +83,10 @@ export function StandaloneChatTestHarness() {
   const [hydrated, setHydrated] = useState(false);
   useEffect(() => setHydrated(true), []);
   const [speed, setSpeed] = useState<(typeof SPEEDS)[number]>(1);
+  const [selectedModel, setSelectedModel] =
+    useState<StandaloneChatModel>("claude-opus-5");
+  const [selectedEffort, setSelectedEffort] =
+    useState<StandaloneChatEffort>("medium");
   const speedRef = useRef(speed);
   speedRef.current = speed;
 
@@ -75,7 +108,14 @@ export function StandaloneChatTestHarness() {
     if (elapsed >= FIXTURE_TOTAL_MS && playing) setPlaying(false);
   }, [elapsed, playing]);
 
-  const events = useMemo(() => materializeFixtureEvents(elapsed), [elapsed]);
+  const events = useMemo(
+    () =>
+      materializeFixtureEvents(
+        elapsed,
+        withSignIn ? connectorSignInFixtureEvents : [],
+      ),
+    [elapsed, withSignIn],
+  );
 
   // Notebook panel: the harness has no gateway, so it simulates the
   // conversation notebook resource from the replayed events. Auto-open
@@ -92,6 +132,39 @@ export function StandaloneChatTestHarness() {
   );
   const sqlTraceExecutions = useMemo(() => fixtureSqlTrace(events), [events]);
   const [notebookPanelOpen, setNotebookPanelOpen] = useState(false);
+  const settingsPanel = useChatSettingsPanel(
+    notebookPanelOpen,
+    setNotebookPanelOpen,
+  );
+  const { openPanel: openSettingsPanel } = settingsPanel;
+  useEffect(() => {
+    if (settingsInitiallyOpen) openSettingsPanel();
+  }, [settingsInitiallyOpen, openSettingsPanel]);
+  // Inline artifact cards open the panel focused on their file, as on the
+  // real chat page.
+  const { openFileRequest, openArtifact } = useOpenArtifact(() =>
+    setNotebookPanelOpen(true),
+  );
+  // File-content stub: the harness has no gateway, so it serves the fixture
+  // files' literal contents as object URLs. This keeps the image-card
+  // thumbnail path (and any future content-dependent card UI) verifiable
+  // at /chats/test.
+  const getFileObjectUrl = useCallback(async (fileId: string) => {
+    const content = fixtureFileContent(fileId);
+    if (!content) throw new Error(`No fixture content for file ${fileId}`);
+    return URL.createObjectURL(new Blob([content.body], { type: content.mime }));
+  }, []);
+  // Full-rows stub for the governed query result: the table card's "Load
+  // all rows" pages the same deterministic 1,204 rows the gateway would.
+  const getToolResultRows = useCallback(
+    async (resultId: string, opts?: { offset?: number; limit?: number }) => {
+      if (resultId !== FIXTURE_QUERY_RESULT_ID) {
+        throw new Error(`No fixture result for ${resultId}`);
+      }
+      return fixtureQueryResultPage(opts?.offset, opts?.limit);
+    },
+    [],
+  );
   const notebookPanelAutoOpenedRunRef = useRef<string | null>(null);
   useEffect(() => {
     if (
@@ -108,13 +181,6 @@ export function StandaloneChatTestHarness() {
       setNotebookPanelOpen(false);
     }
   }, [defaultNotebook]);
-  const artifacts = useMemo(
-    () =>
-      fixtureArtifacts
-        .filter((artifact) => artifact.at <= elapsed)
-        .map(({ at, ...artifact }) => artifact),
-    [elapsed],
-  );
   const status = fixtureRunStatus(elapsed);
   const messages = useMemo<UiMessage[]>(
     () => [
@@ -136,8 +202,30 @@ export function StandaloneChatTestHarness() {
         runId: FIXTURE_RUN_ID,
         runStatus: status,
       },
+      ...(withFollowUp
+        ? ([
+            {
+              id: "fixture-user-2",
+              role: "user",
+              content: FIXTURE_FOLLOW_UP_PROMPT,
+              sequence: 3,
+              created_at: 0,
+              metadata: {},
+            },
+            {
+              id: `run-${FIXTURE_FOLLOW_UP_RUN_ID}`,
+              role: "assistant",
+              content: "",
+              sequence: 4,
+              created_at: 0,
+              metadata: { run_id: FIXTURE_FOLLOW_UP_RUN_ID },
+              runId: FIXTURE_FOLLOW_UP_RUN_ID,
+              runStatus: "running",
+            },
+          ] satisfies UiMessage[])
+        : []),
     ],
-    [elapsed, status],
+    [elapsed, status, withFollowUp],
   );
 
   const progress = Math.round((elapsed / FIXTURE_TOTAL_MS) * 100);
@@ -227,7 +315,22 @@ export function StandaloneChatTestHarness() {
         <span className="w-20 text-right text-[11px] tabular-nums text-[var(--color-text-dim)]">
           {(elapsed / 1000).toFixed(1)}s · {progress}%
         </span>
+        <button
+          type="button"
+          aria-label="Chat settings"
+          aria-expanded={settingsPanel.open}
+          data-testid="chat-settings-gear"
+          onClick={settingsPanel.toggle}
+          className={`flex h-7 w-7 items-center justify-center rounded-lg border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] ${
+            settingsPanel.open
+              ? "bg-[var(--color-bg-hover)] text-[var(--color-text)]"
+              : "bg-[var(--color-bg-input)] text-[var(--color-text-muted)]"
+          }`}
+        >
+          <Settings2 className="h-3.5 w-3.5" />
+        </button>
       </header>
+      <ConnectorsProvider api={connectorsApi} fixture currentUserId={FIXTURE_ME}>
       <div className="relative flex min-h-0 flex-1 overflow-hidden">
         <div
           className="min-h-0 min-w-0 flex-1 overflow-y-auto"
@@ -236,12 +339,17 @@ export function StandaloneChatTestHarness() {
           <ChatUiContext.Provider
             value={{
               events,
-              artifacts,
+              conversationId: "conversation-fixture-1",
+              files: conversationFiles,
+              openArtifact,
+              getFileObjectUrl,
+              getToolResultRows,
+              // Frozen replay clock, so relative timestamps are honest on
+              // every frame instead of measuring from the real wall clock.
+              nowMs: fixtureNowMs(elapsed),
+              openChatSettings: settingsPanel.openPanel,
               onStop: async () => undefined,
               onRetry: async () => undefined,
-              onApproveReportSuggestion: async () => ({
-                report_id: "test-harness-report",
-              }),
               onOpenDashboardPreview: () => undefined,
             }}
           >
@@ -257,7 +365,8 @@ export function StandaloneChatTestHarness() {
           conversationFiles,
           sqlTraceExecutions,
         ) &&
-          !notebookPanelOpen && (
+          !notebookPanelOpen &&
+          !settingsPanel.open && (
           <button
             type="button"
             aria-label="Open the artifacts panel"
@@ -269,12 +378,40 @@ export function StandaloneChatTestHarness() {
             <NotebookPen className="h-4 w-4" />
           </button>
         )}
-        {notebookPanelOpen && (
+        {settingsPanel.open && (
+          <ChatSettingsPanel
+            onClose={settingsPanel.closePanel}
+            connectorsEnabled
+            model={{
+              value: selectedModel,
+              options: [
+                { id: "claude-opus-4-6", label: "Opus 4.6" },
+                { id: "claude-sonnet-4-6", label: "Sonnet 4.6" },
+                { id: "claude-opus-5", label: "Opus 5" },
+                { id: "claude-fable-5-1", label: "Fable 5.1" },
+              ],
+              disabled: false,
+              onChange: setSelectedModel,
+              effort: selectedEffort,
+              effortOptions: [
+                { id: "low", label: "Low" },
+                { id: "medium", label: "Medium" },
+                { id: "high", label: "High" },
+                { id: "xhigh", label: "Extra high" },
+                { id: "max", label: "Max" },
+              ],
+              onEffortChange: setSelectedEffort,
+            }}
+            manageHref="/settings/connectors?fixture=1"
+          />
+        )}
+        {notebookPanelOpen && !settingsPanel.open && (
           <ArtifactsPanel
             conversationId="conversation-fixture-1"
             notebooks={conversationNotebooks}
             files={conversationFiles}
             executions={sqlTraceExecutions}
+            openFileRequest={openFileRequest}
             onClose={() => setNotebookPanelOpen(false)}
             liveViewOverride={
               <div
@@ -295,6 +432,7 @@ export function StandaloneChatTestHarness() {
           />
         )}
       </div>
+      </ConnectorsProvider>
     </div>
   );
 }

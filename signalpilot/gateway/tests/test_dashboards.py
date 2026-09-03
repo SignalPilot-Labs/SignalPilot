@@ -28,7 +28,7 @@ from gateway.dashboard.cache import dashboard_query_cache_key
 from gateway.dashboard.compiler import compile_custom_sql_query, compile_metric_query
 from gateway.dashboard.confidence import dashboard_confidence_counts, semantic_query_signature
 from gateway.dashboard.domain import AdHocSqlQuery, DashboardDefinition, FieldTarget, FilterRule, SemanticChartQuery
-from gateway.dashboard.semantic_resolver import parse_approved_metrics, resolve_from_authorities
+from gateway.dashboard.semantic_resolver import resolve_from_authorities
 from gateway.db.models import GatewayBase, GatewayDashboardResult, GatewayStructuredQueryResult
 from gateway.dbt.types import ColumnSpec, ModelInfo, ModelStatus, ProjectMap
 from gateway.governance.query_executor import GovernedQueryError
@@ -58,7 +58,15 @@ def _authorities():
             ColumnSpec(name="region", data_type="varchar", description="Sales region"),
             ColumnSpec(name="customer", data_type="varchar", description="Customer"),
             ColumnSpec(name="ordered_at", data_type="datetime", description="Order timestamp"),
-            ColumnSpec(name="revenue", data_type="decimal", description="Net revenue", tests=["not_null"]),
+            ColumnSpec(name="order_id", data_type="bigint", description="Order identifier"),
+            ColumnSpec(
+                name="revenue",
+                data_type="decimal",
+                description="Net revenue",
+                tests=["not_null"],
+                meta={"signalpilot": {"aggregation": "sum", "format": "currency:USD"}},
+            ),
+            ColumnSpec(name="conversion_rate", data_type="decimal", description="Order conversion rate"),
         ],
     )
     schema = {
@@ -69,33 +77,13 @@ def _authorities():
                 {"name": "region", "type": "varchar", "nullable": False},
                 {"name": "customer", "type": "varchar", "nullable": False},
                 {"name": "ordered_at", "type": "datetime", "nullable": False},
+                {"name": "order_id", "type": "bigint", "nullable": False},
                 {"name": "revenue", "type": "decimal", "nullable": False},
+                {"name": "conversion_rate", "type": "decimal", "nullable": False},
             ],
             "foreign_keys": [],
         }
     }
-    metrics = parse_approved_metrics(
-        {
-            "dashboard_metrics": [
-                {
-                    "model": "orders",
-                    "column": "revenue",
-                    "aggregation": "sum",
-                    "label": "Revenue",
-                    "format": "currency:USD",
-                    "approved": True,
-                    "approval_source": "pilot-owner",
-                },
-                {
-                    "model": "orders",
-                    "column": "revenue",
-                    "aggregation": "average",
-                    "label": "Unapproved average",
-                    "approved": False,
-                },
-            ]
-        }
-    )
     return resolve_from_authorities(
         project_id="project-a",
         commit_sha="a" * 40,
@@ -108,27 +96,7 @@ def _authorities():
             "joins": [],
             "glossary": {},
         },
-        approved_metrics=metrics,
     )
-
-
-def test_approved_metric_number_format_is_canonicalized_for_dashboard_rendering() -> None:
-    metrics = parse_approved_metrics(
-        {
-            "dashboard_metrics": [
-                {
-                    "model": "orders",
-                    "column": "quantity",
-                    "aggregation": "sum",
-                    "label": "Orders",
-                    "format": "number",
-                    "approved": True,
-                }
-            ]
-        }
-    )
-
-    assert metrics[0]["format"] == "decimal"
 
 
 def _fixture_definition() -> DashboardDefinition:
@@ -146,13 +114,19 @@ def _fixture_definition() -> DashboardDefinition:
     )
 
 
-def test_resolver_projects_existing_authorities_and_only_explicit_metrics() -> None:
+def test_resolver_projects_dbt_models_and_derives_aggregatable_metrics() -> None:
     context = _authorities()
     assert context.connection_type == "mssql"
     assert len(context.semantic_fingerprint) == 64
     assert context.explores[0].relation == "dbo.orders"
-    assert [metric.label for metric in context.explores[0].metrics] == ["Revenue"]
-    assert context.explores[0].metrics[0].human_verified is True
+    metrics = {metric.column: metric for metric in context.explores[0].metrics}
+    assert set(metrics) == {"revenue", "conversion_rate"}
+    assert metrics["revenue"].aggregation == "sum"
+    assert metrics["revenue"].format == "currency:USD"
+    assert metrics["revenue"].semantic_source == "dbt_project"
+    assert metrics["revenue"].aggregation_inferred is False
+    assert metrics["conversion_rate"].aggregation == "average"
+    assert metrics["conversion_rate"].format == "percentage"
     assert context.verification_refs == ["schema:orders:verified"]
 
 

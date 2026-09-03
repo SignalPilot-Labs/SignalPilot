@@ -139,7 +139,7 @@ export default function DashboardsPage() {
                 </div>
                 <p>{item.description || "No description"}</p>
                 <div className={styles.cardMeta}>
-                  <span title="High-confidence semantic charts">
+                  <span title="DBT-backed semantic charts">
                     <BadgeCheck size={14} aria-hidden="true" />
                     {item.high_confidence_charts}
                   </span>

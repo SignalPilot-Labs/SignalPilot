@@ -107,7 +107,7 @@ export function dashboardRepairPrompt(issues: DashboardRepairIssue[]): string {
     "Repair only the failing charts in this dashboard:",
     errorList,
     "Preserve every healthy chart, the dashboard layout, filters, names, and descriptions unless a listed repair requires a binding change.",
-    "Use approved semantic fields and return a governed preview for review before Apply.",
+    "Use the pinned dbt models and their documented fields. Prefer one model that already answers the request, then return a governed preview for review before Apply.",
   ].join("\n\n");
 }
 

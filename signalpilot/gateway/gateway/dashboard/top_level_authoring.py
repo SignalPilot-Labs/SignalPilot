@@ -380,12 +380,21 @@ async def finalize_preview(
                 "required_charts_incomplete",
                 "Every required dashboard chart must validate before finalization",
             )
-        definition = assemble_dashboard_definition(
-            plan=plan,
-            charts=ready_charts,
-            context=context,
-            timezone=plan.timezone,
-            deterministic_fallback=True,
+        # Chart upserts keep definition_json synchronized with the validated
+        # plan, and follow-up operations mutate that definition directly. Use
+        # the current draft when present so refinements (including added custom
+        # SQL charts) survive finalization instead of being rebuilt away from
+        # the original plan/chart drafts.
+        definition = (
+            DashboardDefinition.model_validate(session.definition_json)
+            if session.definition_json
+            else assemble_dashboard_definition(
+                plan=plan,
+                charts=ready_charts,
+                context=context,
+                timezone=plan.timezone,
+                deterministic_fallback=True,
+            )
         )
     elif session.definition_json:
         definition = DashboardDefinition.model_validate(session.definition_json)
@@ -399,6 +408,8 @@ async def finalize_preview(
         session.pending_custom_sql_chart_ids_json = [
             chart.id for chart in definition.charts if chart.query.kind == "sql"
         ]
+    else:
+        session.pending_custom_sql_chart_ids_json = []
     updated = await dashboard_store.finalize_progressive_authoring_session(
         db,
         org_id=session.org_id,

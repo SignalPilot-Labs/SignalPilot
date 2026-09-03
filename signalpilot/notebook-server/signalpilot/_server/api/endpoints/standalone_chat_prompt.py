@@ -71,6 +71,7 @@ STANDALONE_ALLOWED_TOOLS = [
     "mcp__standalone-chat__set_dashboard_plan",
     "mcp__standalone-chat__upsert_dashboard_chart",
     "mcp__standalone-chat__apply_dashboard_operations",
+    "mcp__standalone-chat__confirm_dashboard_custom_sql",
     "mcp__standalone-chat__create_dashboard_preview",
     "mcp__standalone-chat__inspect_dbt",
     "mcp__standalone-chat__start_analysis_notebook",

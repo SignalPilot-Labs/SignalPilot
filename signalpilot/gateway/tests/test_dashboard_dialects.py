@@ -77,8 +77,8 @@ def _context(db_type: str) -> DashboardSemanticContext:
                         logical_type="number",
                         aggregation="sum",
                         label="Revenue",
-                        approval_source="test",
-                        human_verified=True,
+                        semantic_source="dbt_project",
+                        aggregation_inferred=True,
                     )
                 ],
             )
@@ -402,17 +402,6 @@ def test_semantic_context_uses_connection_type_in_every_registered_fingerprint()
             project_map=project_map,
             physical_schema=physical_schema,
             semantic_model={},
-            approved_metrics=[
-                {
-                    "model": "orders",
-                    "column": "revenue",
-                    "aggregation": "sum",
-                    "label": "Revenue",
-                    "field_id": "orders.revenue",
-                    "approval_source": "test",
-                    "format": None,
-                }
-            ],
         )
         for db_type in registered_connector_types()
     ]

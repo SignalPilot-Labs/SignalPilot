@@ -37,6 +37,7 @@ _DASHBOARD_AUTHORING_TOOLS = {
     "set_dashboard_plan",
     "upsert_dashboard_chart",
     "apply_dashboard_operations",
+    "confirm_dashboard_custom_sql",
     "create_dashboard_preview",
 }
 

@@ -14,14 +14,15 @@ Use authoring contract `2026-09-02.1`. If the skill or matching tools are unavai
 Write concise user-visible progress only for context resolution, chart drafting, and final assembly. Validation and schema correction are internal work: never narrate individual validation calls or retries.
 
 1. Call `begin_dashboard_authoring` first with the complete request and timezone. For a refinement, pass the exact active `authoring_session_id` from warm context.
-2. Use only the returned semantic projection, stable IDs, limits, contract version, and revisions. Never invent explores, fields, metrics, filters, or bindings.
-3. For a new dashboard, submit one complete typed plan with `set_dashboard_plan`. Use stable chart, tile, and filter IDs; approved metrics; exact semantic fields; explicit filter mappings; required flags; and non-overlapping layout intent. `visualization` is a string. Filters belong only in `plan.filters`; intents reference them through `shared_filter_ids`.
+2. Use only the returned dbt semantic projection, stable IDs, limits, contract version, and revisions. Never invent models, fields, metrics, filters, or bindings. Treat each explore as a dbt model at its documented grain. When one model contains the dimensions and measures needed for a chart, use that model instead of reconstructing its logic from lower-level models.
+3. For a new dashboard, submit one complete typed plan with `set_dashboard_plan`. Use stable chart, tile, and filter IDs; exact dbt-backed semantic fields; explicit filter mappings; required flags; and non-overlapping layout intent. Metrics are aggregatable dbt model columns; `aggregation_inferred` tells you whether SignalPilot derived the aggregation from the column type/name instead of explicit semantic metadata. `visualization` is a string. Filters belong only in `plan.filters`; intents reference them through `shared_filter_ids`.
    Before submitting the plan, inspect every `line` or `area` intent. Each one must include a governed date/timestamp dimension and reference an applicable bounded date filter through `shared_filter_ids`. The filter must target that intent's explore directly or through its `tileTargets` entry. Never submit a time-series plan first and add its required window in a repair call.
 4. Construct chart payloads from the exact tool schema and canonical shapes below before calling any chart tool. Never use tool failures to discover the payload shape. Once every chart has the same proven structural contract, up to five independent initial `upsert_dashboard_chart` calls may run concurrently. Completion order must not change IDs, plan order, or the final result.
 5. When governed semantic validation rejects one chart, preserve every ready chart, use only the returned safe issues and allowed alternatives, then retry that chart once without user-visible narration. Do not retry it a second time. An input-schema error means the loaded contract was not followed: correct the exact JSON path once and never fan out that invalid shape.
 6. Use `apply_dashboard_operations` for bounded stable-ID refinements, shared filters, layout, names, descriptions, or interaction wiring. On follow-up turns, change only what the user requested and leave unrelated charts intact.
-7. Call `create_dashboard_preview` only after every required chart is ready and any requested operations validate. Pass the exact current plan and draft revisions.
-8. Tell the user the private preview is ready for review and requires explicit Apply. Never claim it was saved, applied, shared, published, archived, or deployed.
+7. Call `create_dashboard_preview` after every required chart is ready and requested operations validate. Pass the exact current plan and draft revisions. A preview containing new or changed custom SQL remains execution-gated and reports that confirmation is required.
+8. When the preview reports pending custom SQL, disclose that requirement and stop. On a later turn, call `confirm_dashboard_custom_sql` only when the current user message explicitly approves that pending custom SQL, then call `create_dashboard_preview` again with the current revisions. The original request for a custom query is not the separate confirmation. Never infer approval from prior messages or confirm on the user's behalf.
+9. Tell the user the private preview is ready for review and requires explicit Apply. Never claim it was saved, applied, shared, published, archived, or deployed.
 
 ## Exact payload shapes
 
@@ -100,7 +101,7 @@ Do not emit Vega-Lite `mark` or `encoding`, nested `semantic`, nested `big_numbe
 ## Fail closed
 
 - A partial draft may remain visible, but do not finalize it while a required chart is missing or failed.
-- Custom SQL is low confidence. It requires the existing explicit user confirmation before preview execution.
+- Prefer dbt-model semantic queries. Custom SQL remains available only when the requested result cannot be expressed from one suitable dbt model, and requires the existing explicit user confirmation before preview execution.
 - Never bypass a validation issue by changing the contract version, session, project binding, commit, connection, or stable ID.
 - Never apply or discard a dashboard through these tools. Those actions belong to the user-facing preview UI.
 - Do not automatically load `dbt-workflow` or run exploratory queries. Use governed schema or dbt tools only when the user explicitly asks for investigation that the bounded projection cannot answer.

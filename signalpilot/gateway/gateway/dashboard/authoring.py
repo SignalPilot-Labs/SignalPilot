@@ -133,7 +133,8 @@ def compact_semantic_projection(context: DashboardSemanticContext) -> dict[str, 
                         "label": metric.label,
                         "aggregation": metric.aggregation,
                         "format": metric.format,
-                        "human_verified": metric.human_verified,
+                        "semantic_source": metric.semantic_source,
+                        "aggregation_inferred": metric.aggregation_inferred,
                     }
                     for metric in explore.metrics
                 ],

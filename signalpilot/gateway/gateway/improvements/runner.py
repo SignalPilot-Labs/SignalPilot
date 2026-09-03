@@ -26,8 +26,9 @@ IMPROVEMENT_PER_QUERY_BUDGET_USD = 0.25
 _IMPROVEMENT_MESSAGE = (
     "Run the scheduled cost-optimization analysis for this project. Analyze "
     "the dbt models for warehouse cost-saving opportunities using the query "
-    "cost estimator, rank the findings by estimated savings, and publish the "
-    "\"Cost optimization report\" HTML artifact with your recommendations."
+    "cost estimator, rank the findings by estimated savings, and save the "
+    "\"Cost optimization report\" as an HTML file in the artifacts directory "
+    "with your recommendations. Link it in the answer."
 )
 
 

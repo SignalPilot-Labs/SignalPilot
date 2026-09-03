@@ -99,3 +99,61 @@ describe("Standalone Data Chat composer mentions", () => {
     ).toBe(false);
   });
 });
+
+describe("Standalone Data Chat composer live state", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(async () => {
+    await act(async () => root.unmount());
+    container.remove();
+  });
+
+  const renderRunning = async (
+    props: Partial<Parameters<typeof StandaloneChatComposer>[0]>,
+  ) => {
+    await act(async () => {
+      root.render(
+        <StandaloneChatComposer
+          value=""
+          onValueChange={vi.fn()}
+          onSubmit={vi.fn()}
+          submitDisabled={false}
+          placeholder="Ask"
+          running
+          onStop={vi.fn()}
+          {...props}
+        />,
+      );
+    });
+  };
+
+  it("rings the stop button and names the state while writing", async () => {
+    await renderRunning({ liveState: "writing" });
+    const ring = container.querySelector(".chat-stop-ring");
+    expect(ring?.getAttribute("data-state")).toBe("writing");
+    expect(container.textContent).toContain(
+      "Writing the answer · Enter to queue a follow-up",
+    );
+  });
+
+  it("names the running tool in the hint", async () => {
+    await renderRunning({ liveState: "tool", liveLabel: "Querying fct_orders" });
+    expect(container.textContent).toContain("Running Querying fct_orders");
+  });
+
+  it("has no ring when the live state is idle", async () => {
+    await renderRunning({});
+    expect(container.querySelector(".chat-stop-ring")).toBeNull();
+    expect(
+      container.querySelector('button[aria-label="Stop the running analysis"]'),
+    ).not.toBeNull();
+    expect(container.textContent).toContain("Enter to queue for the next turn");
+  });
+});

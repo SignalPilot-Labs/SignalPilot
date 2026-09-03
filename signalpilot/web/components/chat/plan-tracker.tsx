@@ -10,6 +10,10 @@ import type { PlanItem, RunPlan } from "~/lib/chat-run-steps";
  * it to the top of the viewport); once the run finishes it stays in the
  * transcript folded to its one-line summary. Purely presentational — state
  * comes from the event stream so it survives reloads and replays for free.
+ *
+ * Surface styling lives in `.chat-plan*` (globals.css): the plan is the only
+ * non-step element in the run, so it deliberately does NOT share the
+ * border/bg-card/bg-hover treatment of the step-group and tool cards.
  */
 
 function SegmentBar({ items }: { items: PlanItem[] }) {
@@ -26,7 +30,7 @@ function SegmentBar({ items }: { items: PlanItem[] }) {
               ? "bg-[var(--color-success)]"
               : item.status === "in_progress"
                 ? "chat-dot-live bg-[var(--color-success)]/45"
-                : "bg-[var(--color-border-active)]"
+                : "chat-plan__segment-pending"
           }`}
         />
       ))}
@@ -72,16 +76,16 @@ export const PlanTracker = memo(function PlanTracker({
     <section
       data-testid="chat-plan-tracker"
       aria-label="Agent plan"
-      className="chat-boot-in overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-card)]/95 shadow-lg shadow-black/20 backdrop-blur"
+      className="chat-plan chat-boot-in"
     >
       <button
         type="button"
         aria-expanded={open}
         onClick={() => setUserToggle(!open)}
-        className="flex w-full items-center gap-2.5 px-3 py-2 text-left hover:bg-[var(--color-bg-hover)]"
+        className="chat-plan__header flex w-full items-center gap-2.5 px-3 py-2 text-left"
       >
         <ListTodo className="h-3.5 w-3.5 flex-none text-[var(--color-text-dim)]" />
-        <span className="flex-none text-[10px] font-medium uppercase tracking-[0.14em] text-[var(--color-text-dim)]">
+        <span className="chat-plan__eyebrow flex-none text-[10px] font-semibold uppercase tracking-[0.14em]">
           Plan
         </span>
         <span className="flex-none text-[11px] tabular-nums text-[var(--color-text-muted)]">
@@ -106,7 +110,7 @@ export const PlanTracker = memo(function PlanTracker({
       </button>
       <div className="chat-collapse" data-open={open}>
         <div>
-          <ul className="space-y-1 border-t border-[var(--color-border)]/60 px-3 py-2.5">
+          <ul className="chat-plan__body space-y-1 px-3 py-2.5">
             {plan.items.map((item, index) => (
               <li
                 key={`${index}-${item.status}`}

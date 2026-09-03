@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { StandaloneChatArtifact, StandaloneChatEvent } from "~/lib/api";
+import type { StandaloneChatEvent } from "~/lib/api";
 
 /**
  * Replay of a recorded run: events are rescheduled onto a compressed clock
@@ -90,7 +90,6 @@ export type ChatReplayState = {
   playing: boolean;
   finished: boolean;
   visibleEvents: StandaloneChatEvent[];
-  visibleArtifacts: StandaloneChatArtifact[];
   togglePlay: () => void;
   restart: () => void;
   scrub: (ms: number) => void;
@@ -100,7 +99,6 @@ const TICK_MS = 50;
 
 export function useChatReplay(
   events: StandaloneChatEvent[],
-  artifacts: StandaloneChatArtifact[],
   runId: string,
 ): ChatReplayState {
   const schedule = useMemo(
@@ -138,31 +136,12 @@ export function useChatReplay(
         .map((item) => item.event),
     [schedule, elapsed],
   );
-  const artifactTimes = useMemo(
-    () =>
-      artifacts
-        .filter((artifact) => artifact.run_id === runId)
-        .map((artifact) => ({
-          artifact,
-          at: replayOffsetFor(schedule, Date.parse(artifact.created_at)),
-        })),
-    [artifacts, runId, schedule],
-  );
-  const visibleArtifacts = useMemo(
-    () =>
-      artifactTimes
-        .filter((item) => item.at <= elapsed)
-        .map((item) => item.artifact),
-    [artifactTimes, elapsed],
-  );
-
   return {
     elapsed,
     totalMs: schedule.totalMs,
     playing,
     finished,
     visibleEvents,
-    visibleArtifacts,
     togglePlay: () => {
       if (elapsed >= totalRef.current) setElapsed(0);
       setPlaying((value) => !value);

@@ -61,7 +61,7 @@ def runtime(monkeypatch: pytest.MonkeyPatch) -> FakeRuntime:
 @pytest.fixture()
 def improvement_identity():
     scope_token = mcp_scopes_var.set(["read", "query", "execute"])
-    cap_token = mcp_capabilities_var.set([SANDBOX_CAPABILITY, "artifact:publish"])
+    cap_token = mcp_capabilities_var.set([SANDBOX_CAPABILITY, "query:read"])
     id_token = mcp_execution_identity_var.set("chat:run-42")
     yield
     mcp_scopes_var.reset(scope_token)
@@ -73,7 +73,7 @@ def improvement_identity():
 class TestCapabilityGate:
     async def test_denied_without_capability(self, runtime: FakeRuntime) -> None:
         scope_token = mcp_scopes_var.set(["read", "query", "execute"])
-        cap_token = mcp_capabilities_var.set(["artifact:publish"])
+        cap_token = mcp_capabilities_var.set(["query:read"])
         id_token = mcp_execution_identity_var.set("chat:run-42")
         try:
             for call in (

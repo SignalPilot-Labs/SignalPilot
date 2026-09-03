@@ -106,3 +106,10 @@ async def test_query_database_uses_connection_dialect_for_governance(monkeypatch
 
     assert result.startswith("Query error:")
     assert "read_csv_auto" in result.lower()
+
+
+def test_query_database_accepts_a_display_only_description() -> None:
+    """The chat UI titles the query card with `description`; execution ignores it."""
+    signature = inspect.signature(query_tools.query_database.__wrapped__)
+    assert signature.parameters["description"].default == ""
+    assert "description" in (query_tools.query_database.__wrapped__.__doc__ or "")

@@ -85,7 +85,7 @@ test.describe("live notebook panel (fixture harness)", () => {
   test("a finished run deep-link keeps the panel closed but reachable", async ({
     page,
   }) => {
-    await page.goto(at(21_200));
+    await page.goto(at(24_800));
     await waitForHydration(page);
     // The link is not live on arrival, so nothing auto-opens...
     await expect(page.getByTestId("live-notebook-panel")).toHaveCount(0);

@@ -58,6 +58,7 @@ class GatewayChatConversation(GatewayBase):
     notebook_kernel_session_id: Mapped[str | None] = mapped_column(String)
     notebook_path: Mapped[str | None] = mapped_column(Text)
     model: Mapped[str | None] = mapped_column(String(50))
+    effort: Mapped[str | None] = mapped_column(String(20))
     message_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     total_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     total_cost_usd: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)

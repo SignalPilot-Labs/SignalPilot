@@ -85,8 +85,10 @@ describe("foldRunSteps", () => {
           sequence: 1,
           type: "error" as const,
           payload: {
-            message: "You've hit your session limit · resets 2:50pm (America/Los_Angeles)",
-            full_trace: "CLIConnectionError: authentication failed\n[traceback]",
+            message:
+              "You've hit your session limit · resets 2:50pm (America/Los_Angeles)",
+            full_trace:
+              "CLIConnectionError: authentication failed\n[traceback]",
             diagnostic_context: {
               auth_mode: "oauth",
               credential_present: true,
@@ -406,19 +408,41 @@ describe("foldRunBlocks", () => {
       "text",
       "steps",
       "text",
+      "steps",
+      "text",
     ]);
-    const [thinking, chain1, narration, chain2, answer] = blocks;
+    const [thinking, chain1, narration, chain2, answer, chain3, tail] = blocks;
     if (thinking.kind !== "thinking") throw new Error();
     if (chain1.kind !== "steps" || chain2.kind !== "steps") throw new Error();
     if (narration.kind !== "text" || answer.kind !== "text") throw new Error();
+    if (chain3.kind !== "steps" || tail.kind !== "text") throw new Error();
     expect(thinking.text).toContain("fct_orders looks right");
     expect(chain1.steps).toHaveLength(6); // progress → todo → schema → validate → query → subagent
     expect(chain1.steps.at(-1)?.tool).toBe("Agent");
     expect(chain1.steps.at(-2)?.tool).toBe("query_database");
     expect(narration.text).toContain("analysis runtime");
-    expect(chain2.steps).toHaveLength(7); // notebook → write → bash → todo → edit → 2 publishes
+    // notebook → write → bash → 3 export writes → edit → md write → todo →
+    // run_cells
+    expect(chain2.steps).toHaveLength(10);
     expect(chain2.steps[0]?.tool).toBe("start_analysis_notebook");
     expect(answer.text).toContain("EMEA drove the growth");
+    // Follow-up verification chain: list_tables → explore_columns →
+    // dbt_execute → search_knowledge → hubspot connector, then a short tail.
+    expect(chain3.steps.map((step) => step.tool)).toEqual([
+      "list_tables",
+      "explore_columns",
+      "dbt_execute",
+      "search_knowledge",
+      "search_contacts",
+    ]);
+    expect(chain3.steps.map((step) => step.result?.kind)).toEqual([
+      "table_list",
+      "column_profile",
+      "dbt_run",
+      "knowledge",
+      "json",
+    ]);
+    expect(tail.text).toContain("rpt_region_rollup");
   });
 
   it("keeps a mid-stream narration attached to no group while the next chain runs", () => {
@@ -466,7 +490,9 @@ describe("shouldShowAgentThinking", () => {
   });
 
   it("stays hidden after the run finishes", () => {
-    expect(shouldShowAgentThinking(foldRunBlocks(allEvents, FIXTURE_RUN_ID), false)).toBe(false);
+    expect(
+      shouldShowAgentThinking(foldRunBlocks(allEvents, FIXTURE_RUN_ID), false),
+    ).toBe(false);
   });
 });
 
@@ -513,8 +539,9 @@ describe("summarizeRunSteps", () => {
   it("counts queries, code runs, files and errors", () => {
     const summary = summarizeRunSteps(foldRunSteps(allEvents, FIXTURE_RUN_ID));
     expect(summary.queries).toBe(2); // validate_sql + query_database
-    expect(summary.codeRuns).toBe(1); // Bash
-    expect(summary.files).toBe(4); // Write + Edit + publish_table + publish_chart
+    expect(summary.codeRuns).toBe(2); // Bash + run_cells
+    // 5 Writes (py + html + svg + csv + md) + Edit
+    expect(summary.files).toBe(6);
     expect(summary.errors).toBe(1);
     expect(summary.running).toBe(false);
   });
@@ -531,12 +558,17 @@ describe("formatStepDuration", () => {
 
 describe("extractRunPlan", () => {
   it("returns null before any TodoWrite is published", () => {
-    expect(extractRunPlan(materializeFixtureEvents(500), FIXTURE_RUN_ID)).toBeNull();
+    expect(
+      extractRunPlan(materializeFixtureEvents(500), FIXTURE_RUN_ID),
+    ).toBeNull();
     expect(extractRunPlan(allEvents, "some-other-run")).toBeNull();
   });
 
   it("reads the first published plan mid-run", () => {
-    const plan = extractRunPlan(materializeFixtureEvents(2_000), FIXTURE_RUN_ID);
+    const plan = extractRunPlan(
+      materializeFixtureEvents(2_000),
+      FIXTURE_RUN_ID,
+    );
     expect(plan).not.toBeNull();
     expect(plan!.items).toHaveLength(4);
     expect(plan!.completed).toBe(0);
@@ -550,7 +582,7 @@ describe("extractRunPlan", () => {
     expect(plan).not.toBeNull();
     expect(plan!.completed).toBe(3);
     expect(plan!.items[3].status).toBe("in_progress");
-    expect(plan!.currentLabel).toBe("Publish a table and comparison chart");
+    expect(plan!.currentLabel).toBe("Save the chart and the underlying rows");
   });
 
   it("ignores TodoWrites published inside subagents", () => {
@@ -567,7 +599,9 @@ describe("extractRunPlan", () => {
         payload: {
           tool: "TodoWrite",
           parent_tool_call_id: "toolu_subagent",
-          input: { todos: [{ content: "Subagent-only step", status: "pending" }] },
+          input: {
+            todos: [{ content: "Subagent-only step", status: "pending" }],
+          },
         },
       },
     ];

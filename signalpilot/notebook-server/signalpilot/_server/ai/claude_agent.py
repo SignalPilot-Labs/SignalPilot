@@ -7,6 +7,15 @@ messages resume the conversation via the SDK's `resume` option.
 
 On Windows, the SDK spawns subprocesses which requires a ProactorEventLoop.
 We run the agent in a separate thread with its own event loop.
+
+This module is the public entry point and the thread/event-loop
+orchestrator. The pieces live in sibling modules:
+
+- ``claude_agent_options``: ClaudeAgentOptions kwargs, env, tool policy
+- ``claude_agent_events``: SDK message -> AgentEvent translation
+- ``claude_agent_context``: system-prompt context injection
+- ``claude_agent_state``: session/agent registries and event buffers
+- ``claude_agent_config``: auth, MCP and system-prompt configuration
 """
 
 from __future__ import annotations
@@ -17,7 +26,6 @@ import queue
 import sys
 import threading
 import traceback
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from signalpilot import _loggers
@@ -29,6 +37,24 @@ from signalpilot._server.ai.claude_agent_config import (
     _get_system_prompt,
     _normalized_sp_api_key,
 )
+from signalpilot._server.ai.claude_agent_context import (
+    _build_context_file_block,
+    _extend_system_prompt,
+)
+from signalpilot._server.ai.claude_agent_events import (
+    _rate_limit_diagnostic,
+    _relay_sdk_messages,
+    _result_message_content,
+    _SdkStreamState,
+)
+from signalpilot._server.ai.claude_agent_options import (
+    _EFFORT_LEVELS,
+    FILE_EDIT_TOOLS,
+    _agent_effort,
+    _build_agent_env,
+    _build_agent_options_kwargs,
+    _build_disallowed_tools,
+)
 from signalpilot._server.ai.claude_agent_state import (
     AgentEvent,
     _active_agents,
@@ -39,7 +65,9 @@ from signalpilot._server.ai.claude_agent_state import (
     buffer_event,
     clear_chat_session,
     clear_event_buffer,
+    clip_tool_result_for_event,
     get_buffered_events,
+    tool_result_text,
 )
 
 if TYPE_CHECKING:
@@ -50,71 +78,43 @@ if TYPE_CHECKING:
 LOGGER = _loggers.sp_logger()
 
 __all__ = [
+    "FILE_EDIT_TOOLS",
+    "_EFFORT_LEVELS",
     "AgentEvent",
+    "_agent_effort",
     "_apply_auth_config",
+    "_build_context_file_block",
+    "_build_disallowed_tools",
     "_chat_sessions",
+    "_extend_system_prompt",
     "_get_auth_config",
+    "_get_dbt_project_context",
+    "_get_mcp_servers_config",
     "_get_or_create_chat_session",
+    "_get_system_prompt",
+    "_normalized_sp_api_key",
+    "_rate_limit_diagnostic",
+    "_result_message_content",
     "_save_chat_sessions",
     "buffer_event",
     "clear_chat_session",
     "clear_event_buffer",
+    "clip_tool_result_for_event",
     "get_buffered_events",
     "run_notebook_agent",
     "steer_agent",
     "stop_agent",
+    "tool_result_text",
 ]
 
 _DONE = object()
-FILE_EDIT_TOOLS = ["Write", "Edit", "MultiEdit", "NotebookEdit", "Bash"]
-_EFFORT_LEVELS = {"low", "medium", "high", "xhigh", "max"}
-
-
-def _result_message_content(message: Any) -> str:
-    """Return the SDK's error text without replacing or paraphrasing it."""
-    result = getattr(message, "result", None)
-    if result is not None and str(result):
-        return str(result)
-
-    errors = getattr(message, "errors", None)
-    if isinstance(errors, (list, tuple)):
-        details = [str(error) for error in errors if error is not None]
-        if details:
-            return "\n".join(details)
-    elif errors:
-        return str(errors)
-
-    # An SDK result with no textual error still has an exact structured
-    # representation. Surface it instead of inventing a human-friendly cause.
-    return repr(message)
-
-
-def _rate_limit_diagnostic(info: Any) -> dict[str, Any]:
-    """Copy the SDK rate-limit payload without interpreting its meaning."""
-    return {
-        "status": getattr(info, "status", None),
-        "resets_at": getattr(info, "resets_at", None),
-        "rate_limit_type": getattr(info, "rate_limit_type", None),
-        "utilization": getattr(info, "utilization", None),
-        "overage_status": getattr(info, "overage_status", None),
-        "overage_resets_at": getattr(info, "overage_resets_at", None),
-        "overage_disabled_reason": getattr(
-            info, "overage_disabled_reason", None
-        ),
-        "raw": getattr(info, "raw", None),
-    }
-
-
-def _agent_effort() -> str:
-    """Reasoning effort for the agent CLI. Defaults to medium."""
-    effort = os.getenv("SP_AGENT_EFFORT", "medium").strip().lower()
-    return effort if effort in _EFFORT_LEVELS else "medium"
 
 
 def _run_agent_in_thread(
     agent_state: _ActiveAgent,
     message: str,
     model: str,
+    effort: str | None,
     max_turns: int,
     mcp_servers: dict[str, Any],
     system_prompt: str,
@@ -132,7 +132,10 @@ def _run_agent_in_thread(
     event_queue = agent_state.event_queue
 
     try:
-        from claude_agent_sdk import (
+        # Import every SDK symbol the relay loop needs up front so a missing
+        # or incompatible SDK is reported as a single install error rather
+        # than surfacing mid-run inside claude_agent_events.
+        from claude_agent_sdk import (  # noqa: F401
             AssistantMessage,
             ClaudeAgentOptions,
             ClaudeSDKClient,
@@ -144,7 +147,7 @@ def _run_agent_in_thread(
             ToolUseBlock,
             UserMessage,
         )
-        from claude_agent_sdk.types import RateLimitEvent
+        from claude_agent_sdk.types import RateLimitEvent  # noqa: F401
     except ImportError:
         event_queue.put(
             AgentEvent(
@@ -158,285 +161,33 @@ def _run_agent_in_thread(
 
     async def _run() -> None:
         agent_state.task = asyncio.current_task()
-        turn_count = 0
-        latest_rate_limit_info: dict[str, Any] | None = None
+        stream = _SdkStreamState()
 
-        agent_env = dict(os.environ)
-        _apply_auth_config(agent_env, auth_config)
-        if agent_env_overrides:
-            agent_env.update(agent_env_overrides)
-        if _normalized_sp_api_key(agent_env.get("SP_API_KEY", "")) == "":
-            agent_env.pop("SP_API_KEY", None)
-        # On Windows, python3 doesn't exist — create a shim so skills work
-        if sys.platform == "win32":
-            python_dir = os.path.dirname(sys.executable)
-            agent_env["PATH"] = (
-                python_dir + os.pathsep + agent_env.get("PATH", "")
-            )
-            # Set PYENV_VERSION so pyenv doesn't complain
-            if "PYENV_VERSION" not in agent_env:
-                agent_env["PYENV_VERSION"] = (
-                    f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
-                )
-
-        agent_options_kwargs: dict[str, Any] = {
-            "model": model,
-            "max_turns": max_turns,
-            "permission_mode": "bypassPermissions",
-            # Load ONLY user-scope settings. Without this the SDK defaults to
-            # user+project+local; because cwd is the user's project directory,
-            # the CLI reads that repo's .claude/settings*.json. If such a file
-            # defines `apiKeyHelper` (or a settings `env` ANTHROPIC_API_KEY), the
-            # CLI silently switches OAuth-subscription billing to x-api-key
-            # billing and fails with "Credit balance is too low" (and would run
-            # an arbitrary key-helper command from the user's repo). NOTE: an
-            # empty list emits `--setting-sources=` which the CLI treats as
-            # "default/all", so it does NOT isolate — use ["user"], matching the
-            # benchmark's working SDK usage (benchmark/agent/sdk_runner.py).
-            "setting_sources": ["user"],
-            # Keep the Claude Code preset and APPEND our instructions, rather than
-            # replacing the system prompt with a plain string. A plain string
-            # drops the Claude Code identity, which is what OAuth-token billing
-            # (Claude subscription) requires — without it the request bills to the
-            # token's API credits and fails with "credit balance too low". This
-            # mirrors the benchmark's SDK usage (claude_code preset, never a bare
-            # string). See benchmark/agent/sdk_runner_baseline.py.
-            "system_prompt": {
-                "type": "preset",
-                "preset": "claude_code",
-                "append": system_prompt,
-            },
-            "cwd": cwd or os.getcwd(),
-            "env": agent_env,
-            # Reasoning effort. Medium keeps extended thinking useful without
-            # long stalls before the first tool call. Override with
-            # SP_AGENT_EFFORT (low|medium|high|xhigh|max).
-            "effort": _agent_effort(),
-        }
-        plugin_path = os.getenv("SP_AGENT_PLUGIN_PATH", "").strip()
-        if plugin_path:
-            if Path(plugin_path).is_dir():  # noqa: ASYNC240 - agent runs in a worker thread
-                # MCP servers provide tools; the local plugin independently
-                # provides SignalPilot's workflow skills and verifier agents.
-                # The SDK's skills option also enables the Skill tool without
-                # weakening the explicit allowed-tool policy below.
-                agent_options_kwargs["plugins"] = [
-                    {"type": "local", "path": plugin_path}
-                ]
-                agent_options_kwargs["skills"] = "all"
-            else:
-                LOGGER.warning(
-                    "SignalPilot agent plugin path does not exist: %s", plugin_path
-                )
-        if disallowed_tools:
-            agent_options_kwargs["disallowed_tools"] = disallowed_tools
-        if allowed_tools:
-            agent_options_kwargs["allowed_tools"] = allowed_tools
-
-        # MCP servers: external (SignalPilot gateway) + notebook tools
-        all_mcp = dict(mcp_servers) if mcp_servers else {}
-
-        if app is not None:
-            try:
-                from signalpilot._server.ai.notebook_mcp import (
-                    build_notebook_mcp_server,
-                )
-                from signalpilot._server.ai.tools.base import ToolContext
-
-                tool_context = ToolContext(app=app)
-                notebook_mcp = build_notebook_mcp_server(
-                    tool_context,
-                    session_authorizer=notebook_session_authorizer,
-                )
-                all_mcp["signalpilot-notebook"] = notebook_mcp
-                LOGGER.info("Notebook MCP server attached to agent")
-            except Exception as e:
-                LOGGER.warning(f"Could not build notebook MCP server: {e}")
-
-        if all_mcp:
-            agent_options_kwargs["mcp_servers"] = all_mcp
-
-        # Session continuity: resume existing session or start new with known ID
-        if is_resume:
-            agent_options_kwargs["resume"] = chat_session_id
-        else:
-            agent_options_kwargs["session_id"] = chat_session_id
-
-        agent_options_kwargs["include_partial_messages"] = True
-
+        agent_env = _build_agent_env(auth_config, agent_env_overrides)
+        agent_options_kwargs = _build_agent_options_kwargs(
+            model=model,
+            effort=effort,
+            max_turns=max_turns,
+            system_prompt=system_prompt,
+            cwd=cwd,
+            agent_env=agent_env,
+            disallowed_tools=disallowed_tools,
+            allowed_tools=allowed_tools,
+            mcp_servers=mcp_servers,
+            app=app,
+            notebook_session_authorizer=notebook_session_authorizer,
+            chat_session_id=chat_session_id,
+            is_resume=is_resume,
+        )
         options = ClaudeAgentOptions(**agent_options_kwargs)
 
         try:
             async with ClaudeSDKClient(options=options) as client:
                 agent_state.client = client
                 await client.query(message)
-                async for msg in client.receive_messages():
-                    if isinstance(msg, AssistantMessage):
-                        turn_count += 1
-                        # Set when this message was produced inside a subagent
-                        # (an Agent tool spawn) — used to group its work.
-                        parent_id = getattr(msg, "parent_tool_use_id", None) or ""
-                        for block in msg.content:
-                            if isinstance(block, ThinkingBlock):
-                                # Final authoritative thinking — replaces accumulated deltas
-                                event_queue.put(
-                                    AgentEvent(
-                                        type="thinking",
-                                        content=block.thinking,
-                                        parent_tool_call_id=parent_id,
-                                        turn=turn_count,
-                                    )
-                                )
-                            elif isinstance(block, TextBlock):
-                                # Final authoritative text — replaces accumulated deltas
-                                event_queue.put(
-                                    AgentEvent(
-                                        type="text",
-                                        content=block.text,
-                                        parent_tool_call_id=parent_id,
-                                        turn=turn_count,
-                                    )
-                                )
-                            elif isinstance(block, ToolUseBlock):
-                                event_queue.put(
-                                    AgentEvent(
-                                        type="tool_use",
-                                        tool_name=block.name,
-                                        tool_input=block.input,
-                                        tool_call_id=getattr(block, "id", ""),
-                                        parent_tool_call_id=parent_id,
-                                        turn=turn_count,
-                                    )
-                                )
-
-                    elif isinstance(msg, UserMessage):
-                        content = msg.content
-                        parent_id = getattr(msg, "parent_tool_use_id", None) or ""
-                        if isinstance(content, list):
-                            for block in content:
-                                if isinstance(block, ToolResultBlock):
-                                    result_str = (
-                                        str(block.content)
-                                        if hasattr(block, "content")
-                                        else str(block)
-                                    )
-                                    event_queue.put(
-                                        AgentEvent(
-                                            type="tool_result",
-                                            content=result_str[:5000],
-                                            tool_call_id=getattr(
-                                                block, "tool_use_id", ""
-                                            ),
-                                            is_error=getattr(
-                                                block, "is_error", False
-                                            ),
-                                            parent_tool_call_id=parent_id,
-                                            turn=turn_count,
-                                        )
-                                    )
-
-                    elif isinstance(msg, ResultMessage):
-                        cost = getattr(msg, "total_cost_usd", None)
-                        usage = getattr(msg, "usage", None)
-                        subtype = str(getattr(msg, "subtype", "") or "")
-                        result_is_error = bool(getattr(msg, "is_error", False))
-                        event_queue.put(
-                            AgentEvent(
-                                type="error" if result_is_error else "done",
-                                content=(
-                                    _result_message_content(msg)
-                                    if result_is_error
-                                    else ""
-                                ),
-                                is_error=result_is_error,
-                                cost_usd=cost,
-                                usage=usage if isinstance(usage, dict) else None,
-                                turn=turn_count,
-                                result_subtype=subtype,
-                                stop_reason=str(
-                                    getattr(msg, "stop_reason", "") or ""
-                                ),
-                                num_turns=int(
-                                    getattr(msg, "num_turns", turn_count) or 0
-                                ),
-                                diagnostic_context={
-                                    "result_subtype": subtype,
-                                    "stop_reason": str(
-                                        getattr(msg, "stop_reason", "") or ""
-                                    ),
-                                    "api_error_status": getattr(
-                                        msg, "api_error_status", None
-                                    ),
-                                    "duration_ms": getattr(msg, "duration_ms", None),
-                                    "duration_api_ms": getattr(
-                                        msg, "duration_api_ms", None
-                                    ),
-                                    "sdk_session_id": str(
-                                        getattr(msg, "session_id", "") or ""
-                                    ),
-                                    **(
-                                        {"rate_limit": latest_rate_limit_info}
-                                        if latest_rate_limit_info
-                                        else {}
-                                    ),
-                                },
-                            )
-                        )
-                        # A ResultMessage terminates one SDK query, not
-                        # necessarily this live client. Give the durable
-                        # gateway queue a brief chance to deliver an
-                        # interjection that was accepted while the run was
-                        # still marked running, then consume its next result.
-                        await asyncio.sleep(1.0)
-                        if agent_state.pending_steering_turns > 0:
-                            agent_state.pending_steering_turns -= 1
-                            continue
-                        break  # Session complete for this query
-
-                    elif isinstance(msg, RateLimitEvent):
-                        # This is state, not an error message. A rejected event
-                        # is followed by the SDK ResultMessage containing the
-                        # provider's actual text. Retain the raw state for the
-                        # diagnostic panel and do not pre-empt that result.
-                        latest_rate_limit_info = _rate_limit_diagnostic(
-                            msg.rate_limit_info
-                        )
-
-                    elif isinstance(msg, StreamEvent):
-                        event = msg.event
-                        event_type = event.get("type", "")
-                        delta = event.get("delta", {})
-                        text = delta.get("text", "")
-                        thinking = delta.get("thinking", "")
-                        parent_id = getattr(msg, "parent_tool_use_id", None) or ""
-
-                        if text:
-                            event_queue.put(
-                                AgentEvent(
-                                    type="text_delta",
-                                    content=text,
-                                    parent_tool_call_id=parent_id,
-                                    turn=turn_count,
-                                )
-                            )
-                        elif thinking:
-                            event_queue.put(
-                                AgentEvent(
-                                    type="thinking_delta",
-                                    content=thinking,
-                                    parent_tool_call_id=parent_id,
-                                    turn=turn_count,
-                                )
-                            )
-                        elif event_type == "content_block_start":
-                            block = event.get("content_block", {})
-                            event_queue.put(
-                                AgentEvent(
-                                    type="block_start",
-                                    content=block.get("type", ""),
-                                    turn=turn_count,
-                                )
-                            )
+                await _relay_sdk_messages(
+                    client, agent_state, event_queue, stream
+                )
 
         except asyncio.CancelledError:
             LOGGER.info("Agent task cancelled by user")
@@ -453,7 +204,7 @@ def _run_agent_in_thread(
                     full_trace=full_error,
                     diagnostic_context={"error_type": type(e).__name__},
                     is_error=True,
-                    turn=turn_count,
+                    turn=stream.turn_count,
                 )
             )
 
@@ -538,24 +289,11 @@ async def steer_agent(session_id: str, message: str, steering_id: str) -> bool:
     return True
 
 
-def _build_disallowed_tools(
-    *,
-    disallow_file_edits: bool,
-    additional_disallowed_tools: list[str] | None = None,
-) -> list[str] | None:
-    disallowed = [
-        *(FILE_EDIT_TOOLS if disallow_file_edits else []),
-        *(additional_disallowed_tools or []),
-    ]
-    if not disallowed:
-        return None
-    return list(dict.fromkeys(disallowed))
-
-
 async def run_notebook_agent(
     message: str,
     session_id: SessionId,
     model: str = "claude-opus-4-6",
+    effort: str | None = None,
     max_turns: int = 50,
     new_chat: bool = False,
     message_history: list[dict[str, str]] | None = None,
@@ -612,99 +350,14 @@ async def run_notebook_agent(
         additional_disallowed_tools=additional_disallowed_tools,
     )
 
-    # Reconstruct context from message history if session was lost
-    if not is_resume and message_history and len(message_history) > 1:
-        history_lines = []
-        for msg in message_history[:-1]:
-            role = msg.get("role", "user").upper()
-            content = msg.get("content", "")
-            if content.strip():
-                history_lines.append(f"[{role}]: {content}")
-        if history_lines:
-            history_text = "\n\n".join(history_lines)
-            system_prompt += f"\n\n<previous_conversation>\n{history_text}\n</previous_conversation>\n"
-
-    # Add dbt project context on first message
-    if not is_resume:
-        dbt_context = _get_dbt_project_context(effective_cwd)
-        if dbt_context:
-            system_prompt += f"\n\n{dbt_context}\n"
-
-    # Inject active file context so the agent knows what the user is viewing
-    if context_file:
-        context_block = f"\n\n## Current File Context\nThe user is currently viewing: `{context_file}`\n"
-        matched_session = False
-        if effective_app is not None:
-            try:
-                from signalpilot._server.ai.tools.base import ToolContext
-
-                tc = ToolContext(app=effective_app)
-                cf_normalized = context_file.replace("\\", "/").strip("/")
-                LOGGER.info(
-                    f"[Agent Context] Looking for file: {cf_normalized}"
-                )
-                for sid, sess in tc.session_manager.sessions.items():
-                    file_path = sess.app_file_manager.path
-                    if not file_path:
-                        continue
-                    fp_str = str(file_path).replace("\\", "/")
-                    LOGGER.info(f"[Agent Context] Session {sid} -> {fp_str}")
-                    if (
-                        fp_str == cf_normalized
-                        or fp_str.endswith(
-                            ("/" + cf_normalized, cf_normalized)
-                        )
-                        or os.path.basename(fp_str)
-                        == os.path.basename(cf_normalized)
-                    ):
-                        context_block += (
-                            f"This notebook's session_id is: `{sid}`\n"
-                        )
-                        context_block += "Use this session_id with notebook tools (edit_notebook, run_cells, get_cell_runtime_data, etc.) to modify this notebook directly.\n"
-                        LOGGER.info(
-                            f"[Agent Context] Matched session {sid} for {context_file}"
-                        )
-                        matched_session = True
-                        break
-            except Exception as e:
-                LOGGER.warning(
-                    f"Could not resolve session for context file: {e}"
-                )
-
-        # For non-notebook files (.sql, .yml, etc.), include the file contents
-        if not matched_session:
-            try:
-                resolved = Path(context_file)
-                if not resolved.is_absolute() and effective_app is not None:
-                    from signalpilot._server.ai.tools.base import ToolContext
-
-                    tc = ToolContext(app=effective_app)
-                    workspace_dir = getattr(
-                        tc.session_manager.workspace, "directory", None
-                    )
-                    if workspace_dir:
-                        resolved = Path(workspace_dir) / context_file
-                if not resolved.is_absolute():
-                    resolved = Path(effective_cwd) / context_file
-                if resolved.is_file():
-                    contents = resolved.read_text(
-                        encoding="utf-8", errors="replace"
-                    )
-                    if len(contents) > 20000:
-                        contents = contents[:20000] + "\n... (truncated)"
-                    ext = resolved.suffix.lower()
-                    lang = {
-                        "sql": "sql",
-                        "yml": "yaml",
-                        "yaml": "yaml",
-                        "json": "json",
-                        "toml": "toml",
-                    }.get(ext.lstrip("."), "")
-                    context_block += f"\n```{lang}\n{contents}\n```\n"
-            except Exception as e:
-                LOGGER.debug(f"Could not read context file contents: {e}")
-
-        system_prompt += context_block
+    system_prompt = _extend_system_prompt(
+        system_prompt,
+        is_resume=is_resume,
+        message_history=message_history,
+        effective_cwd=effective_cwd,
+        context_file=context_file,
+        effective_app=effective_app,
+    )
 
     agent = _ActiveAgent()
     _active_agents[str(session_id)] = agent
@@ -715,6 +368,7 @@ async def run_notebook_agent(
             agent,
             message,
             model,
+            effort,
             max_turns,
             mcp_servers,
             system_prompt,

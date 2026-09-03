@@ -2,11 +2,25 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import httpx
 
 DASHBOARD_AUTHORING_TIMEOUT_SECONDS = 1_200.0
+
+
+def gateway_api_base_url() -> str:
+    """The gateway REST base for this sandbox, without any `/mcp` suffix."""
+    return (
+        str(
+            os.getenv("SP_GATEWAY_INTERNAL_URL")
+            or os.getenv("SP_GATEWAY_URL")
+            or "http://gateway:3300"
+        )
+        .rstrip("/")
+        .removesuffix("/mcp")
+    )
 
 
 class StandaloneGatewayClient:
@@ -76,50 +90,12 @@ class StandaloneGatewayClient:
             raise ValueError(invalid)
         return value
 
-    async def load_result(self, result_id: str) -> dict[str, Any]:
-        return await self._get_json(
-            f"/api/query/results/{result_id}",
-            missing="Governed structured result not found",
-            invalid="Invalid governed structured result",
-        )
-
-    async def load_report_catalog(self, cursor: str | None) -> dict[str, Any]:
-        params = {"limit": "50"}
-        if cursor:
-            params["cursor"] = cursor
-        return await self._get_json(
-            f"/api/chat/runs/{self.run_id}/report-catalog",
-            params=params,
-            invalid="Invalid saved report catalog",
-        )
-
-    async def load_report_context(self, report_id: str) -> dict[str, Any]:
-        return await self._get_json(
-            f"/api/chat/runs/{self.run_id}/report-context/{report_id}",
-            missing="Saved report not found",
-            invalid="Invalid saved report context",
-        )
-
-    async def check_published_artifact(
-        self,
-        artifact_kind: str,
-        artifact_filename: str,
-    ) -> dict[str, Any]:
-        return await self._get_json(
-            f"/api/chat/runs/{self.run_id}/published-report-artifact",
-            params={
-                "artifact_kind": artifact_kind,
-                "artifact_filename": artifact_filename,
-            },
-            invalid="Invalid published artifact state",
-        )
-
     async def dashboard_authoring_tool(
         self,
         tool: str,
         arguments: dict[str, Any],
     ) -> dict[str, Any]:
-        """Execute one model-free authoring mutation through the run-scoped gateway token."""
+        """Execute one model-free authoring mutation through the run token."""
 
         payload = dict(arguments)
         session_id = str(payload.pop("authoring_session_id", "") or "")
@@ -131,7 +107,10 @@ class StandaloneGatewayClient:
             path = f"/api/dashboard-authoring/sessions/{session_id}/plan"
         elif tool == "upsert_dashboard_chart":
             chart_id = str(payload.pop("chart_id", "") or "")
-            path = f"/api/dashboard-authoring/sessions/{session_id}/charts/{chart_id}"
+            path = (
+                f"/api/dashboard-authoring/sessions/{session_id}/charts/"
+                f"{chart_id}"
+            )
         elif tool == "apply_dashboard_operations":
             path = f"/api/dashboard-authoring/sessions/{session_id}/operations"
         elif tool == "create_dashboard_preview":

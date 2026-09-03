@@ -107,9 +107,16 @@ async def query_database(
     sql: str,
     row_limit: int = 1000,
     connection_name: str | None = None,
+    description: str = "",
 ) -> str:
     """
     Execute a governed, read-only SQL query against a connected database.
+
+    Always pass `description`: one short sentence, in plain words, that says what
+    this query finds out. It is shown to the user as the title of the query card
+    while the query runs, so name the mart or table and the question, for
+    example "Checking the date range of the rpt_daily_profitability mart" or
+    "Counting orders per region for Q3". Do not repeat the SQL.
 
     All queries are validated through the SignalPilot governance pipeline:
     - SQL is parsed to AST and checked for DDL/DML (blocked)
@@ -121,10 +128,14 @@ async def query_database(
         sql: SQL query (SELECT only)
         row_limit: Max rows to return (default 1000, max 10000)
         connection_name: Optional outside a connection-bound chat session
+        description: One sentence, max 140 characters, naming what the query
+            finds out. Shown to the user as the card title; not used for
+            execution.
 
     Returns:
         Query results as formatted text, or an error message.
     """
+    del description  # Display-only: the chat UI reads it from the tool input.
     connection_name, scope_error = _selected_connection(connection_name)
     if scope_error:
         return f"Error: {scope_error}"
@@ -164,6 +175,7 @@ async def query_database(
         except (GovernedQueryError, QueryPlanError) as exc:
             return f"Query error: {sanitize_mcp_error(str(exc), cap=300)}"
 
+    # Format parsed by standalone_chat/tool_projection/query.py; update tests there if you change this
     # Build status footer
     meta_parts = [
         f"{result.row_count} rows",
@@ -338,6 +350,7 @@ async def validate_sql(connection_name: str, sql: str) -> str:
             )
         if r.status_code == 200:
             data = r.json()
+            # Format parsed by standalone_chat/tool_projection/query.py; update tests there if you change this
             parts = ["VALID ✓"]
             if data.get("estimated_rows"):
                 parts.append(f"Estimated rows: {data['estimated_rows']:,}")

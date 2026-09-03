@@ -297,7 +297,8 @@ async def test_content_route_verifies_the_hash(db_session, enabled, monkeypatch)
     response = await files_routes.get_conversation_file_content(conversation.id, row.id, _store(db_session))
     assert response.body == b"hello"
     assert response.media_type == "application/octet-stream"
-    assert response.headers["Cache-Control"] == "private, no-store"
+    assert response.headers["Cache-Control"] == "private, max-age=0, must-revalidate"
+    assert response.headers["ETag"] == f'"{row.content_hash}"'
     assert response.headers["X-Content-Type-Options"] == "nosniff"
     assert response.headers["Referrer-Policy"] == "no-referrer"
     assert "Content-Disposition" not in response.headers
@@ -488,3 +489,89 @@ async def test_mirror_event_types_pass_response_model_validation():
             created_at=datetime.now(UTC),
         )
         assert info.type == event_type
+
+
+# ── ETag revalidation ────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_if_none_match_returns_304_without_reading_the_object(db_session, enabled, monkeypatch):
+    conversation = await _conversation(db_session)
+    row = await _upsert(db_session, conversation.id, "artifacts/spec.md", b"hello")
+    reads: list[str] = []
+
+    class _CountingStorage(_FakeStorage):
+        async def get_bytes(self, key: str, *, max_bytes: int | None = None) -> bytes:
+            reads.append(key)
+            return await super().get_bytes(key, max_bytes=max_bytes)
+
+    monkeypatch.setattr(
+        files_routes, "chat_object_storage", lambda: _CountingStorage({row.object_key: b"hello"})
+    )
+    etag = f'"{row.content_hash}"'
+    for header in (etag, f"W/{etag}", f'"stale", {etag}', "*"):
+        response = await files_routes.get_conversation_file_content(
+            conversation.id, row.id, _store(db_session), if_none_match=header
+        )
+        assert response.status_code == 304
+        assert response.body == b""
+        assert response.headers["ETag"] == etag
+        assert response.headers["Cache-Control"] == "private, max-age=0, must-revalidate"
+    assert reads == []
+
+    response = await files_routes.get_conversation_file_content(
+        conversation.id, row.id, _store(db_session), if_none_match='"other"'
+    )
+    assert response.status_code == 200
+    assert response.body == b"hello"
+    assert reads == [row.object_key]
+
+
+# ── Shared routes ────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_shared_routes_require_the_sharing_flag_and_an_active_grant(
+    db_session, enabled, monkeypatch
+):
+    conversation = await _conversation(db_session)
+    row = await _upsert(db_session, conversation.id, "artifacts/spec.md", b"v1")
+    monkeypatch.delenv("SP_FEATURE_CHAT_ORG_SHARING", raising=False)
+    with pytest.raises(HTTPException) as exc:
+        await files_routes.list_shared_conversation_files("x" * 40, _store(db_session, "user-b"))
+    assert exc.value.status_code == 404
+    monkeypatch.setenv("SP_FEATURE_CHAT_ORG_SHARING", "1")
+    with pytest.raises(HTTPException) as exc:
+        await files_routes.list_shared_conversation_files("x" * 40, _store(db_session, "user-b"))
+    assert exc.value.status_code == 404
+    with pytest.raises(HTTPException) as exc:
+        await files_routes.get_shared_conversation_file_content(
+            "x" * 40, row.id, _store(db_session, "user-b")
+        )
+    assert exc.value.status_code == 404
+
+    shared = await chat_store.create_share_grant(
+        db_session, org_id=ORG, user_id=USER, conversation_id=conversation.id
+    )
+    assert shared is not None
+    _, token = shared
+    # The seeded row points at run-1, which does not exist, so it is share-safe.
+    listed = await files_routes.list_shared_conversation_files(token, _store(db_session, "user-b"))
+    assert [item["id"] for item in listed["files"]] == [row.id]
+    monkeypatch.setattr(
+        files_routes, "chat_object_storage", lambda: _FakeStorage({row.object_key: b"v1"})
+    )
+    response = await files_routes.get_shared_conversation_file_content(
+        token, row.id, _store(db_session, "user-b"), download=1
+    )
+    assert response.body == b"v1"
+    assert response.headers["Cache-Control"] == "private, max-age=0, must-revalidate"
+    assert response.headers["ETag"] == f'"{row.content_hash}"'
+    assert response.headers["X-Content-Type-Options"] == "nosniff"
+    assert response.headers["Content-Disposition"].startswith('attachment; filename="spec.md"')
+
+    # Cross-org viewers see nothing.
+    foreign = SimpleNamespace(session=db_session, user_id="user-b", _require_org_id=lambda: "org-b")
+    with pytest.raises(HTTPException) as exc:
+        await files_routes.list_shared_conversation_files(token, foreign)
+    assert exc.value.status_code == 404

@@ -38,12 +38,6 @@ def warm_context(
 ) -> dict[str, Any]:
     conversation = context["conversation"]
     project = context["project"]
-    artifacts = context["artifacts"]
-    artifact_refs = [
-        _artifact_reference(artifact, include_snapshot=index >= max(0, len(artifacts) - 5))
-        for index, artifact in enumerate(artifacts)
-    ]
-    artifact_refs.reverse()
 
     approvals = {
         approval.proposal_id: approval
@@ -100,7 +94,6 @@ def warm_context(
             ),
         },
         "conversation_summary": summary_override or conversation.internal_summary,
-        "prior_artifacts": artifact_refs,
         "query_decisions": query_decisions,
         "structured_results": result_refs,
         "report_reference": _latest_message_reference(context, "report_reference"),
@@ -124,46 +117,6 @@ def warm_context(
             "plugin_version": os.getenv("SIGNALPILOT_PLUGIN_VERSION", "deployed"),
         },
     }
-
-
-def _artifact_reference(artifact: Any, *, include_snapshot: bool) -> dict[str, Any]:
-    snapshot = artifact.snapshot_json or {}
-    reference: dict[str, Any] = {
-        "id": artifact.id,
-        "kind": artifact.kind,
-        "filename": artifact.filename,
-        "parent_artifact_id": artifact.parent_artifact_id,
-        "schema": {
-            "columns": snapshot.get("columns")
-            or (snapshot.get("source") or {}).get("columns"),
-            "truncated": snapshot.get("truncated", False),
-        },
-        "provenance": artifact.provenance_json,
-        "freshness_at": (
-            artifact.freshness_at.isoformat() if artifact.freshness_at else None
-        ),
-        "assumptions": artifact.assumptions,
-        "exclusions": artifact.exclusions,
-        "caveats": artifact.caveats,
-    }
-    if not include_snapshot:
-        return reference
-    if artifact.kind == "report":
-        reference["snapshot"] = {
-            "html_excerpt": str(snapshot.get("html") or "")[:20_000]
-        }
-        return reference
-    rows = (
-        (snapshot.get("source") or {}).get("rows")
-        if artifact.kind == "chart"
-        else snapshot.get("rows")
-    )
-    reference["snapshot"] = {
-        "spec": snapshot.get("spec") if artifact.kind == "chart" else None,
-        "rows": list(rows or [])[:200],
-        "snapshot_row_count": len(rows or []),
-    }
-    return reference
 
 
 def _latest_message_reference(

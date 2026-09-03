@@ -1,4 +1,17 @@
 import type { StandaloneChatEvent } from "~/lib/api";
+import {
+  artifactFileEvents,
+  lateArtifactFileEvents,
+  runCellsEvents,
+  runtimeFilesChangedEvents,
+} from "./chat-test-fixture-artifact-files";
+import {
+  fixtureSchemaCompletion,
+  fixtureTableCompletion,
+  fixtureTerminalCompletion,
+  fixtureValidationFailureCompletion,
+  followUpToolEvents,
+} from "./chat-test-fixture-tools";
 
 /**
  * Raw fixture data for /chats/test: the scripted event timeline and the
@@ -70,8 +83,13 @@ const ANSWER_CHUNKS: { at: number; delta: string }[] = [
   { at: 19_150, delta: "- **EMEA** grew **17.3%** to $4.81M — the largest swing, concentrated in the enterprise tier\n" },
   { at: 19_500, delta: "- **APAC** grew **31.5%** to $2.12M from a smaller base, led by two new marketplace launches\n" },
   { at: 19_850, delta: "- **AMER** grew a steady **3.1%** to $9.20M and still contributes 57% of total revenue\n\n" },
-  { at: 20_200, delta: "The published table has the full per-region breakdown, and the chart compares Q2 vs Q3 side by side. " },
+  // An inline reference to the chart the notebook cell saved. Its manifest
+  // row lands at 20.6s, so the figure is a pending placeholder until then.
+  { at: 20_000, delta: "![Revenue by month](artifacts/revenue_by_month.png)\n\n" },
+  { at: 20_200, delta: "The chart above plots monthly revenue by region, and the CSV below carries the full per-region breakdown. " },
   { at: 20_500, delta: "Growth percentages were computed in the sandboxed Python runtime from the exact query snapshot, so the numbers match the table to the cent." },
+  // A link to the CSV the same cell saved; renders as a file chip.
+  { at: 20_650, delta: "\n\n[Download revenue_by_month.csv](artifacts/revenue_by_month.csv)" },
 ];
 
 /**
@@ -82,14 +100,24 @@ const ANSWER_CHUNKS: { at: number; delta: string }[] = [
 const MID_RUN_CHUNKS: { at: number; delta: string }[] = [
   { at: 7_460, delta: "The governed query came back clean — **AMER leads in absolute revenue**, " },
   { at: 7_620, delta: "but the growth stories differ sharply by region.\n\n" },
-  { at: 7_780, delta: "I'll spin up the analysis runtime to compute exact growth rates from the query snapshot, then publish a table and a Q2-vs-Q3 comparison chart." },
+  { at: 7_780, delta: "I'll spin up the analysis runtime to compute exact growth rates from the query snapshot, then save a monthly revenue chart and the underlying rows." },
 ];
 
 /** Extended-thinking stretch before the first tool chain. */
 const THINKING_CHUNKS: { at: number; delta: string }[] = [
   { at: 240, delta: "The user wants Q3 vs Q2 revenue growth by region. " },
   { at: 300, delta: "I should confirm which model carries net revenue first — fct_orders looks right, but regions may live on a dimension table. " },
-  { at: 360, delta: "Plan: check the schema, query both quarters in one governed pass, then compute growth rates in the sandbox so the numbers match the published table exactly." },
+  { at: 360, delta: "Plan: check the schema, query both quarters in one governed pass, then compute growth rates in the sandbox so the numbers match the query snapshot exactly." },
+];
+
+/** Short narration after the follow-up tool chain, before the run ends. */
+const TAIL_CHUNKS: { at: number; delta: string }[] = [
+  { at: 24_050, delta: "\n\nOne caveat from the verification pass: " },
+  { at: 24_250, delta: "`rpt_region_rollup` failed to rebuild because it still references `region_name`; " },
+  { at: 24_450, delta: "the numbers above come straight from `fct_orders`, so they are unaffected." },
+  // A reference to a chart the run never saved: pending until the run ends
+  // at 24.6s, then the block "Image not available" band.
+  { at: 24_500, delta: "\n\nThe Q4 projection chart did not save:\n\n![Q4 forecast by region](artifacts/q4_forecast.png)" },
 ];
 
 const RAW_EVENTS: FixtureEvent[] = [
@@ -135,7 +163,7 @@ const RAW_EVENTS: FixtureEvent[] = [
           { content: "Confirm the revenue model and region join", status: "in_progress" },
           { content: "Query Q2 vs Q3 revenue by region", status: "pending" },
           { content: "Compute growth in the analysis runtime", status: "pending" },
-          { content: "Publish a table and comparison chart", status: "pending" },
+          { content: "Save the chart and the underlying rows", status: "pending" },
         ],
       },
     },
@@ -173,7 +201,7 @@ const RAW_EVENTS: FixtureEvent[] = [
     run_id: FIXTURE_RUN_ID,
     sequence: 6,
     type: "tool_completed",
-    payload: { tool_call_id: "t2", summary: "The tool completed.", error: false },
+    payload: fixtureSchemaCompletion("t2"),
   },
   {
     at: 3_200,
@@ -197,14 +225,10 @@ const RAW_EVENTS: FixtureEvent[] = [
     run_id: FIXTURE_RUN_ID,
     sequence: 9,
     type: "tool_completed",
-    payload: {
-      tool_call_id: "t3",
-      // The worker writes the failure text as `summary` (chat-run-steps reads
-      // summary first, message only as a legacy fallback).
-      summary:
-        'column "region_name" does not exist on analytics.fct_orders — regions live on dim_regions',
-      error: true,
-    },
+    // The worker writes the failure text as `summary` (chat-run-steps reads
+    // summary first, message only as a legacy fallback) next to the parsed
+    // validation result.
+    payload: fixtureValidationFailureCompletion("t3"),
   },
   {
     at: 4_700,
@@ -213,7 +237,10 @@ const RAW_EVENTS: FixtureEvent[] = [
     type: "tool_started",
     payload: {
       tool: "mcp__signalpilot__query_database",
-      input: { sql: GOOD_SQL },
+      input: {
+        sql: GOOD_SQL,
+        description: "Comparing Q2 and Q3 revenue by region from fct_orders",
+      },
     },
   },
   {
@@ -334,7 +361,7 @@ const RAW_EVENTS: FixtureEvent[] = [
     run_id: FIXTURE_RUN_ID,
     sequence: 13,
     type: "tool_completed",
-    payload: { tool_call_id: "t4", summary: "The tool completed.", error: false },
+    payload: fixtureTableCompletion("t4"),
   },
   ...MID_RUN_CHUNKS.map((chunk) => ({
     at: chunk.at,
@@ -413,8 +440,11 @@ const RAW_EVENTS: FixtureEvent[] = [
     run_id: FIXTURE_RUN_ID,
     sequence: 20,
     type: "tool_completed",
-    payload: { tool_call_id: "t7", summary: "The tool completed.", error: false },
+    payload: fixtureTerminalCompletion("t7"),
   },
+  // Export files (HTML report, SVG chart, CSV) — the inline artifact card
+  // variants. Defined in chat-test-fixture-artifact-files.ts.
+  ...artifactFileEvents(FIXTURE_RUN_ID),
   {
     at: 14_300,
     run_id: FIXTURE_RUN_ID,
@@ -436,6 +466,8 @@ const RAW_EVENTS: FixtureEvent[] = [
     type: "tool_completed",
     payload: { tool_call_id: "t9", summary: "The tool completed.", error: false },
   },
+  // Fifth file (markdown summary) — exercises the ≥2-overflow collapse.
+  ...lateArtifactFileEvents(FIXTURE_RUN_ID),
   {
     at: 15_500,
     run_id: FIXTURE_RUN_ID,
@@ -448,7 +480,7 @@ const RAW_EVENTS: FixtureEvent[] = [
           { content: "Confirm the revenue model and region join", status: "completed" },
           { content: "Query Q2 vs Q3 revenue by region", status: "completed" },
           { content: "Compute growth in the analysis runtime", status: "completed" },
-          { content: "Publish a table and comparison chart", status: "in_progress" },
+          { content: "Save the chart and the underlying rows", status: "in_progress" },
         ],
       },
     },
@@ -460,47 +492,19 @@ const RAW_EVENTS: FixtureEvent[] = [
     type: "tool_completed",
     payload: { tool_call_id: "t10", summary: "The tool completed.", error: false },
   },
-  {
-    at: 16_000,
-    run_id: FIXTURE_RUN_ID,
-    sequence: 27,
-    type: "tool_started",
-    payload: {
-      tool: "mcp__standalone-chat__publish_table",
-      input: { filename: "q3_revenue_by_region.csv", result_id: "res-31" },
-    },
-  },
-  {
-    at: 16_700,
-    run_id: FIXTURE_RUN_ID,
-    sequence: 28,
-    type: "tool_completed",
-    payload: { tool_call_id: "t11", summary: "The tool completed.", error: false },
-  },
-  {
-    at: 17_100,
-    run_id: FIXTURE_RUN_ID,
-    sequence: 29,
-    type: "tool_started",
-    payload: {
-      tool: "mcp__standalone-chat__publish_chart",
-      input: { filename: "q3_growth_by_region.vl.json", result_id: "res-31" },
-    },
-  },
-  {
-    at: 17_900,
-    run_id: FIXTURE_RUN_ID,
-    sequence: 30,
-    type: "tool_completed",
-    payload: { tool_call_id: "t12", summary: "The tool completed.", error: false },
-  },
+  // The notebook cell that saves the chart and CSV under artifacts/. The
+  // sandbox capture announces them later (runtimeFilesChangedEvents).
+  ...runCellsEvents(FIXTURE_RUN_ID),
   ...ANSWER_CHUNKS.map((chunk, index) => ({
     at: chunk.at,
     run_id: FIXTURE_RUN_ID,
-    sequence: 31 + index,
+    sequence: 27 + index,
     type: "text_delta" as const,
     payload: { delta: chunk.delta },
   })),
+  // Runtime file capture for the chart (20.6s) and the CSV (20.7s), after
+  // the answer referenced them inline.
+  ...runtimeFilesChangedEvents(FIXTURE_RUN_ID),
   {
     at: 20_800,
     run_id: FIXTURE_RUN_ID,
@@ -515,10 +519,21 @@ const RAW_EVENTS: FixtureEvent[] = [
     type: "kernel_stopped",
     payload: { status: "stopped" },
   },
-  {
-    at: 21_000,
+  // A follow-up tool chain after the answer: the agent double-checks the
+  // marts it queried. Exercises every structured tool result kind
+  // (table_list, column_profile, dbt_run, knowledge, connector json).
+  ...followUpToolEvents(FIXTURE_RUN_ID),
+  ...TAIL_CHUNKS.map((chunk) => ({
+    at: chunk.at,
     run_id: FIXTURE_RUN_ID,
-    sequence: 31 + ANSWER_CHUNKS.length,
+    sequence: 0,
+    type: "text_delta" as const,
+    payload: { delta: chunk.delta },
+  })),
+  {
+    at: 24_600,
+    run_id: FIXTURE_RUN_ID,
+    sequence: 0,
     type: "status",
     payload: { status: "completed" },
   },

@@ -1,11 +1,6 @@
 // Chat traces and the standalone data chat.
 
-import {
-  GATEWAY_URL,
-  downloadChatArtifact,
-  getAuthHeaders,
-  request,
-} from "./client";
+import { GATEWAY_URL, getAuthHeaders, request } from "./client";
 
 // The following functions support chat traces on the /chats page.
 export type ChatTraceThread = {
@@ -62,6 +57,24 @@ export type StandaloneChatProject = {
   registered: boolean;
 };
 
+export type StandaloneChatModel =
+  | "claude-opus-4-6"
+  | "claude-sonnet-4-6"
+  | "claude-opus-5"
+  | "claude-fable-5-1";
+
+export type StandaloneChatModelOption = {
+  id: StandaloneChatModel;
+  label: string;
+};
+
+export type StandaloneChatEffort = "low" | "medium" | "high" | "xhigh" | "max";
+
+export type StandaloneChatEffortOption = {
+  id: StandaloneChatEffort;
+  label: string;
+};
+
 export type StandaloneChatBootstrap = {
   enabled: boolean;
   projects: StandaloneChatProject[];
@@ -70,11 +83,17 @@ export type StandaloneChatBootstrap = {
   starter_questions: string[];
   default_per_query_budget_usd: number;
   default_chat_budget_usd: number;
+  available_models: StandaloneChatModelOption[];
+  default_model: StandaloneChatModel;
+  available_efforts: StandaloneChatEffortOption[];
+  default_effort: StandaloneChatEffort;
   enterprise_features: {
     query_approval?: boolean;
     structured_results?: boolean;
     organization_sharing?: boolean;
     forking?: boolean;
+    /** Connectors (external MCP servers) for the chat agent. */
+    mcp_connectors?: boolean;
   };
 };
 
@@ -135,28 +154,6 @@ export type StandaloneChatEvent = {
   created_at: string;
 };
 
-export type StandaloneChatArtifact = {
-  id: string;
-  run_id: string;
-  assistant_message_id: string | null;
-  kind: "table" | "chart" | "report";
-  filename: string;
-  mime_type: string;
-  snapshot: Record<string, unknown>;
-  provenance: Record<string, unknown> | null;
-  freshness_at: string | null;
-  assumptions: string[];
-  exclusions: string[];
-  caveats: string[];
-  parent_artifact_id: string | null;
-  saved_report_id?: string | null;
-  saved_report_version_id?: string | null;
-  saved_report_title?: string | null;
-  report_action?: "create" | "update" | "open";
-  created_at: string;
-  download_formats: string[];
-};
-
 export type StandaloneChatMessage = {
   id: string;
   role: "user" | "assistant";
@@ -177,6 +174,8 @@ export type StandaloneConversation = {
   updated_at: number;
   run_status: StandaloneChatRunStatus | null;
   commit_sha: string | null;
+  model: StandaloneChatModel;
+  effort: StandaloneChatEffort;
   per_query_budget_usd: number;
   chat_budget_usd: number;
   estimated_spend_usd: number;
@@ -189,15 +188,9 @@ export type StandaloneConversation = {
 export type StandaloneConversationDetail = {
   conversation: StandaloneConversation;
   messages: StandaloneChatMessage[];
-  artifacts: StandaloneChatArtifact[];
   current_run: StandaloneChatRun | null;
   run_events: StandaloneChatEvent[];
 };
-
-export type SharedChatArtifact = Omit<
-  StandaloneChatArtifact,
-  "run_id" | "provenance" | "parent_artifact_id"
->;
 
 export type SharedConversationDetail = {
   conversation: {
@@ -209,7 +202,6 @@ export type SharedConversationDetail = {
     origin?: string;
   };
   messages: Array<Omit<StandaloneChatMessage, "metadata">>;
-  artifacts: SharedChatArtifact[];
   shared_at: string;
 };
 
@@ -251,6 +243,8 @@ export const createStandaloneConversation = (
   message: string,
   perQueryBudgetUsd = 0.25,
   chatBudgetUsd = 1,
+  model: StandaloneChatModel = "claude-opus-4-6",
+  effort: StandaloneChatEffort = "medium",
   reportReference?: { report_id: string; version_id: string },
 ) =>
   request<StandaloneConversationDetail>("/api/chat/conversations", {
@@ -260,9 +254,27 @@ export const createStandaloneConversation = (
       message,
       per_query_budget_usd: perQueryBudgetUsd,
       chat_budget_usd: chatBudgetUsd,
+      model,
+      effort,
       report_reference: reportReference,
     }),
   });
+export const updateStandaloneConversationModel = (
+  conversationId: string,
+  model: StandaloneChatModel,
+) =>
+  request<{ id: string; model: StandaloneChatModel }>(
+    `/api/chat/conversations/${encodeURIComponent(conversationId)}/model`,
+    { method: "PUT", body: JSON.stringify({ model }) },
+  );
+export const updateStandaloneConversationEffort = (
+  conversationId: string,
+  effort: StandaloneChatEffort,
+) =>
+  request<{ id: string; effort: StandaloneChatEffort }>(
+    `/api/chat/conversations/${encodeURIComponent(conversationId)}/effort`,
+    { method: "PUT", body: JSON.stringify({ effort }) },
+  );
 export const decideStandaloneQueryProposal = (
   proposalId: string,
   decision: "approve" | "decline",
@@ -410,32 +422,6 @@ export async function streamStandaloneRunEvents(
   }
 }
 
-export async function downloadStandaloneArtifact(
-  artifactId: string,
-  format: string,
-  filename: string,
-): Promise<void> {
-  return downloadChatArtifact(
-    `/api/chat/artifacts/${encodeURIComponent(artifactId)}/download?format=${encodeURIComponent(format)}`,
-    format,
-    filename,
-  );
-}
-
-export async function getStandaloneArtifactObjectUrl(
-  artifactId: string,
-  format: string,
-): Promise<string> {
-  const headers = await getAuthHeaders();
-  const response = await fetch(
-    `${GATEWAY_URL}/api/chat/artifacts/${encodeURIComponent(artifactId)}/download?format=${encodeURIComponent(format)}`,
-    { headers },
-  );
-  if (!response.ok)
-    throw new Error(`Artifact preview failed (${response.status})`);
-  return URL.createObjectURL(await response.blob());
-}
-
 export async function getSavedReportVersionObjectUrl(
   versionId: string,
   format: string,
@@ -512,15 +498,5 @@ export async function openStandaloneNotebookArchive(
   window.setTimeout(() => URL.revokeObjectURL(url), 5 * 60_000);
 }
 
-export async function downloadSharedStandaloneArtifact(
-  token: string,
-  artifactId: string,
-  format: string,
-  filename: string,
-): Promise<void> {
-  return downloadChatArtifact(
-    `/api/chat/shared/${encodeURIComponent(token)}/artifacts/${encodeURIComponent(artifactId)}/download?format=${encodeURIComponent(format)}`,
-    format,
-    filename,
-  );
-}
+// Wire types for the tool result carried on `tool_completed.payload`.
+export * from "./standalone-chat-tool-results";

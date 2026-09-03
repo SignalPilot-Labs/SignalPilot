@@ -16,6 +16,12 @@ def is_local_mode() -> bool:
     return not is_cloud_mode()
 
 
+def runtime_env() -> str | None:
+    """Return the deployment label used to isolate shared runtime resources."""
+    value = os.getenv("SP_RUNTIME_ENV", "").strip()
+    return value[:50] or None
+
+
 def byok_custom_endpoint_allowed() -> bool:
     """Return True when custom endpoint_url is permitted for BYOK providers.
 

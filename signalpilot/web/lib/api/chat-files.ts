@@ -108,7 +108,11 @@ export async function downloadConversationFile(
     fileId,
     true,
   );
-  const url = URL.createObjectURL(await response.blob());
+  saveBlobAs(await response.blob(), filename);
+}
+
+function saveBlobAs(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
   anchor.download = filename;
@@ -118,4 +122,48 @@ export async function downloadConversationFile(
   // Delay the revoke one tick. Some browsers abort the download when the
   // URL is revoked synchronously after the click.
   setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+// Shared (read-only) conversations. The gateway lists files from terminal
+// runs only and gates both routes on the sharing grant.
+
+export const getSharedConversationFiles = (token: string) =>
+  request<{ files: ConversationFileInfo[] }>(
+    `/api/chat/shared/${encodeURIComponent(token)}/files`,
+  );
+
+async function fetchSharedConversationFileContent(
+  token: string,
+  fileId: string,
+  download = false,
+): Promise<Response> {
+  const headers = await getAuthHeaders();
+  const suffix = download ? "?download=1" : "";
+  const response = await fetch(
+    `${GATEWAY_URL}/api/chat/shared/${encodeURIComponent(token)}/files/${encodeURIComponent(fileId)}/content${suffix}`,
+    { headers },
+  );
+  if (!response.ok) {
+    throw new Error(`File content unavailable (${response.status})`);
+  }
+  return response;
+}
+
+/** Object URL for a shared file's bytes. The caller revokes it. */
+export async function getSharedConversationFileObjectUrl(
+  token: string,
+  fileId: string,
+): Promise<string> {
+  const response = await fetchSharedConversationFileContent(token, fileId);
+  return URL.createObjectURL(await response.blob());
+}
+
+/** Download a shared conversation file through an authenticated fetch. */
+export async function downloadSharedConversationFile(
+  token: string,
+  fileId: string,
+  filename: string,
+): Promise<void> {
+  const response = await fetchSharedConversationFileContent(token, fileId, true);
+  saveBlobAs(await response.blob(), filename);
 }

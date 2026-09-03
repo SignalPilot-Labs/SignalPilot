@@ -1,7 +1,7 @@
 "use client";
 
 // Imperative actions for the standalone data chat: submit, stop, retry,
-// report approval, conversation load/select, and rail management.
+// conversation load/select, and rail management.
 
 import { useRouter } from "next/navigation";
 import {
@@ -14,7 +14,6 @@ import {
 import { useSWRConfig } from "swr";
 import {
   archiveStandaloneConversation,
-  approveChatReportSuggestion,
   cancelStandaloneRun,
   clarifyStandaloneRun,
   createStandaloneConversation,
@@ -26,7 +25,9 @@ import {
   shareStandaloneConversation,
   steerStandaloneRun,
   type ChatReportMention,
+  type StandaloneChatEffort,
   type StandaloneChatRun,
+  type StandaloneChatModel,
   type StandaloneConversation,
   type StandaloneConversationDetail,
 } from "~/lib/api";
@@ -54,6 +55,8 @@ export function useStandaloneChatActions({
   selectedProjectId,
   perQueryBudgetUsd,
   chatBudgetUsd,
+  selectedModel,
+  selectedEffort,
   attachedReportReference,
   mutateDetail,
   mutateHistory,
@@ -70,6 +73,8 @@ export function useStandaloneChatActions({
   selectedProjectId: string | null;
   perQueryBudgetUsd: number;
   chatBudgetUsd: number;
+  selectedModel: StandaloneChatModel;
+  selectedEffort: StandaloneChatEffort;
   attachedReportReference:
     | { report_id: string; version_id: string }
     | undefined;
@@ -104,6 +109,8 @@ export function useStandaloneChatActions({
             text,
             perQueryBudgetUsd,
             chatBudgetUsd,
+            selectedModel,
+            selectedEffort,
             attachedReportReference,
           );
           setSelectedReport(null);
@@ -246,6 +253,8 @@ export function useStandaloneChatActions({
       selectedProjectId,
       perQueryBudgetUsd,
       chatBudgetUsd,
+      selectedModel,
+      selectedEffort,
       attachedReportReference,
       toast,
       setDraft,
@@ -322,20 +331,6 @@ export function useStandaloneChatActions({
       }
     },
     [mutateDetail, mutateHistory, toast],
-  );
-  const onApproveReportSuggestion = useCallback(
-    async (messageId: string) => {
-      const result = await approveChatReportSuggestion(messageId);
-      await mutateDetail();
-      await mutateCache(
-        (key) =>
-          typeof key === "string" &&
-          (key.startsWith("chat-report-library:") ||
-            key.startsWith("saved-chat-report:")),
-      );
-      return { report_id: result.report_id };
-    },
-    [mutateCache, mutateDetail],
   );
 
   const loadConversation = useCallback(
@@ -463,7 +458,6 @@ export function useStandaloneChatActions({
     submitText,
     onStop,
     onRetry,
-    onApproveReportSuggestion,
     loadConversation,
     prefetchConversation,
     selectConversation,

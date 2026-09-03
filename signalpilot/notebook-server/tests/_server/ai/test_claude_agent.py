@@ -80,3 +80,58 @@ def test_rate_limit_diagnostic_preserves_raw_sdk_fields() -> None:
         "overage_disabled_reason": "not_enabled",
         "raw": raw,
     }
+
+
+class TestToolResultText:
+    """claude_agent_state.tool_result_text flattens SDK result content."""
+
+    def test_none_and_str_pass_through(self) -> None:
+        from signalpilot._server.ai.claude_agent_state import tool_result_text
+
+        assert tool_result_text(None) == ""
+        assert tool_result_text("plain") == "plain"
+
+    def test_dict_blocks_join_text_and_mark_images(self) -> None:
+        from signalpilot._server.ai.claude_agent_state import tool_result_text
+
+        text = tool_result_text(
+            [
+                {"type": "text", "text": "line one"},
+                {"type": "image", "source": {"data": "zzz"}},
+                {"type": "text", "text": "line two"},
+            ]
+        )
+        assert text == "line one\n[image]\nline two"
+        assert "zzz" not in text
+
+    def test_object_blocks_use_text_attribute(self) -> None:
+        from signalpilot._server.ai.claude_agent_state import tool_result_text
+
+        blocks = [SimpleNamespace(type="text", text='{"a": 1}')]
+        assert tool_result_text(blocks) == '{"a": 1}'
+
+    def test_other_dict_blocks_become_json_not_repr(self) -> None:
+        from signalpilot._server.ai.claude_agent_state import tool_result_text
+
+        text = tool_result_text([{"type": "tool_use", "name": "x"}])
+        assert text == '{"type": "tool_use", "name": "x"}'
+        assert "'type'" not in text
+
+    def test_event_copy_is_capped_with_marker(self) -> None:
+        from signalpilot._server.ai.claude_agent_state import (
+            TOOL_RESULT_EVENT_MAX_CHARS,
+            clip_tool_result_for_event,
+        )
+
+        raw = "x" * 100_000
+        clipped = clip_tool_result_for_event(raw)
+        marker = "…[event copy truncated: 34464 more chars]"
+        assert clipped.endswith(marker)
+        assert clipped[:TOOL_RESULT_EVENT_MAX_CHARS] == "x" * 65_536
+        assert clip_tool_result_for_event("short") == "short"
+
+    def test_agent_event_carries_result_chars(self) -> None:
+        from signalpilot._server.ai.claude_agent_state import AgentEvent
+
+        assert AgentEvent(type="tool_result").result_chars is None
+        assert AgentEvent(type="tool_result", result_chars=7).result_chars == 7

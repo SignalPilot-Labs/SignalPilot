@@ -23,8 +23,16 @@ from signalpilot._server.ai.claude_session_archive import (
 from signalpilot._server.ai.standalone_chat_tools import (
     StandaloneArtifactCollector,
     StandaloneNotebookLifecycle,
-    _collected_artifact_is_complete,
     build_standalone_chat_mcp_server,
+)
+from signalpilot._server.api.endpoints.chat_files import (
+    RuntimeFileUploader,
+    ScratchFileCapture,
+    build_after_tool_result_hook,
+    capture_at_run_end,
+)
+from signalpilot._server.api.endpoints.standalone_chat_agent_options import (
+    build_agent_options,
 )
 from signalpilot._server.api.endpoints.standalone_chat_finalize import (
     _notebook_edit_requires_successful_run,
@@ -33,14 +41,13 @@ from signalpilot._server.api.endpoints.standalone_chat_finalize import (
     continuity_injection,
     evaluate_notebook_failure,
     recovery_injection,
-    resolve_report_outcome,
 )
 from signalpilot._server.api.endpoints.standalone_chat_gateway import (
     StandaloneGatewayClient,
+    gateway_api_base_url,
 )
 from signalpilot._server.api.endpoints.standalone_chat_prompt import (
     STANDALONE_ALLOWED_TOOLS,
-    STANDALONE_DISALLOWED_MCP_TOOLS,
     _execution_prompt_values,
 )
 from signalpilot._server.api.endpoints.standalone_chat_response import (
@@ -76,6 +83,12 @@ from signalpilot._server.auth.standalone_chat import (
     authorize_execution,
     gateway_mcp_config,
 )
+from signalpilot._server.auth.standalone_chat_connectors import (
+    connector_allowed_tools,
+    connector_secret_values,
+    connector_slugs,
+    parse_mcp_connectors,
+)
 from signalpilot._server.router import APIRouter
 from signalpilot._types.ids import SessionId
 
@@ -88,7 +101,6 @@ if TYPE_CHECKING:
 
 __all__ = [
     "MAX_ANALYSIS_AGENT_TURNS",
-    "_collected_artifact_is_complete",
     "_notebook_edit_requires_successful_run",
     "execute",
     "router",
@@ -114,7 +126,14 @@ async def execute(*, request: Request) -> StreamingResponse:
     branch = scope.branch
     connection_name = scope.connection_name
     commit_sha = scope.commit_sha
-    mcp_config = gateway_mcp_config(authorization)
+    # Sandbox connector env values are per-run secrets: they live only in
+    # mcp_config and the redaction list below, never in the process env.
+    connectors = parse_mcp_connectors(body)
+    mcp_config = gateway_mcp_config(authorization, connectors)
+    allowed_tools = [
+        *STANDALONE_ALLOWED_TOOLS,
+        *connector_allowed_tools(connectors),
+    ]
     runtime_app = request.scope.get("app")
     (
         prompt,
@@ -128,26 +147,16 @@ async def execute(*, request: Request) -> StreamingResponse:
         branch=branch,
         commit_sha=commit_sha,
         connection_name=connection_name,
+        connector_slugs=connector_slugs(connectors),
     )
     scoped_token = authorization.gateway_token
-    gateway_api_url = str(
-        os.getenv("SP_GATEWAY_INTERNAL_URL")
-        or os.getenv("SP_GATEWAY_URL")
-        or "http://gateway:3300"
-    ).rstrip("/")
-    if gateway_api_url.endswith("/mcp"):
-        gateway_api_url = gateway_api_url.removesuffix("/mcp")
-
+    runtime_redactions = (scoped_token, *connector_secret_values(connectors))
+    gateway_api_url = gateway_api_base_url()
     gateway = StandaloneGatewayClient(
         gateway_url=gateway_api_url,
         token=scoped_token,
         run_id=run_id,
     )
-    load_result = gateway.load_result
-    load_report_catalog = gateway.load_report_catalog
-    load_report_context = gateway.load_report_context
-    check_published_artifact = gateway.check_published_artifact
-
     active_authoring_session_id = (
         str(
             (
@@ -187,6 +196,7 @@ async def execute(*, request: Request) -> StreamingResponse:
         or os.getenv("SIGNALPILOT_ANALYSIS_AGENT_MODEL")
         or "claude-sonnet-4-5-20250929"
     )
+    agent_effort = str(body.get("effort") or "medium").strip().lower()
     session_id = SessionId(f"standalone-{run_id}")
 
     def seed_notebook(scratch_dir: Path, notebook_name: str) -> Path:
@@ -227,9 +237,6 @@ async def execute(*, request: Request) -> StreamingResponse:
         gateway_url=gateway_api_url,
         gateway_token=scoped_token,
     )
-    # The agent writes user-facing files here. The env override below points
-    # SP_CHAT_ARTIFACTS_DIRECTORY at it.
-    (scratch / "artifacts").mkdir(exist_ok=True)
     if adopted is not None:
         # Continue in the previous turn's shared scratch and notebooks.
         analysis_notebook_path = adopted[0] / "analysis.py"
@@ -237,6 +244,23 @@ async def execute(*, request: Request) -> StreamingResponse:
             # The analysis kernel died between turns while a named notebook
             # survived. Reseed the analysis file so the agent can restart it.
             seed_notebook(adopted[0], "analysis")
+    # The scratch the agent works in: this run's own on a first turn, the
+    # ADOPTED one on later turns. Env, artifacts, and capture point here.
+    working_scratch = analysis_notebook_path.parent
+    (working_scratch / "artifacts").mkdir(exist_ok=True)
+    capture = ScratchFileCapture(
+        scratch=working_scratch,
+        run_id=run_id,
+        redactions=runtime_redactions,
+    )
+    uploader = RuntimeFileUploader(
+        gateway_api_url=gateway_api_url,
+        scoped_token=scoped_token,
+        run_id=run_id,
+    )
+    after_tool_result = build_after_tool_result_hook(
+        capture=capture, uploader=uploader
+    )
     try:
         agent_session = await prepare_claude_session(
             conversation_id=conversation_id,
@@ -261,6 +285,7 @@ async def execute(*, request: Request) -> StreamingResponse:
         # for the live notebook panel, so the scratch dir must survive too.
         keep_workspace = False
         resume_agent_session = agent_session.resume
+        run_end_captured = False
 
         async def save_agent_session() -> None:
             try:
@@ -272,7 +297,24 @@ async def execute(*, request: Request) -> StreamingResponse:
                     exc_info=True,
                 )
 
+        async def final_capture() -> list[bytes]:
+            # Runs once: before the final payload, or from `finally`.
+            nonlocal run_end_captured
+            if run_end_captured:
+                return []
+            run_end_captured = True
+            return await capture_at_run_end(capture=capture, uploader=uploader)
+
         try:
+            # Files present before the agent starts are not this run's.
+            try:
+                await capture.baseline()
+            except Exception:
+                LOGGER.warning(
+                    "Chat file baseline failed run_id=%s",
+                    run_id,
+                    exc_info=True,
+                )
             recovery_failure: dict[str, Any] | None = None
             previous_notebook_session_id: str | None = None
             # Non-analysis kernels survive a recovery restart untouched.
@@ -322,7 +364,7 @@ async def execute(*, request: Request) -> StreamingResponse:
                     async for chunk in announce_adopted_sessions(
                         runtime_app,
                         adopted_sessions=adopted_sessions,
-                        scratch=analysis_notebook_path.parent,
+                        scratch=working_scratch,
                         scoped_token=scoped_token,
                         session_resolver=_analysis_session,
                         lifecycle_event=lifecycle_event,
@@ -349,33 +391,19 @@ async def execute(*, request: Request) -> StreamingResponse:
 
                 artifact_server = build_standalone_chat_mcp_server(
                     collector,
-                    result_loader=load_result,
                     project_directory=project_directory,
                     scratch_directory=scratch,
                     notebook_mcp_app=runtime_app,
                     analysis_notebook_path=analysis_notebook_path,
                     event_sink=lifecycle_event,
                     notebook_lifecycle=lifecycle,
-                    runtime_redactions=(scoped_token,),
+                    runtime_redactions=runtime_redactions,
                     notebook_seeder=(
                         lambda notebook_name: seed_notebook(
-                            analysis_notebook_path.parent, notebook_name
+                            working_scratch, notebook_name
                         )
                     ),
-                    report_catalog_loader=load_report_catalog,
-                    report_context_loader=load_report_context,
-                    published_artifact_checker=check_published_artifact,
                     dashboard_authoring_handler=dashboard_authoring_tool,
-                    attached_report_id=str(
-                        (
-                            (body.get("warm_context") or {}).get(
-                                "report_reference"
-                            )
-                            or {}
-                        ).get("report_id")
-                        or ""
-                    )
-                    or None,
                 )
                 attempt_prompt = prompt
                 if recovery_failure is not None:
@@ -395,47 +423,23 @@ async def execute(*, request: Request) -> StreamingResponse:
                     run_notebook_agent(
                         attempt_prompt,
                         session_id,
-                        model=agent_model,
-                        max_turns=MAX_ANALYSIS_AGENT_TURNS,
-                        new_chat=False,
-                        message_history=history,
-                        system_prompt_override=system_prompt,
-                        mcp_config=mcp_config,
-                        thread_id=f"standalone:{run_id}",
-                        notebook_mcp_app=runtime_app,
-                        cwd=str(project_directory),
-                        # Expose the normal SignalPilot workflow. Xata branch
-                        # control stays denied because this run is already
-                        # pinned to a frozen project branch and database
-                        # connection.
-                        disallow_file_edits=False,
-                        additional_disallowed_tools=(
-                            STANDALONE_DISALLOWED_MCP_TOOLS
-                        ),
-                        allowed_tools=list(STANDALONE_ALLOWED_TOOLS),
-                        additional_mcp_servers={
-                            "standalone-chat": artifact_server
-                        },
-                        persist_session_mapping=False,
-                        auth_config_override=auth_config_override,
-                        chat_session_id_override=agent_session.session_id,
-                        resume_session_override=resume_agent_session,
-                        agent_env_overrides={
-                            "CLAUDE_CONFIG_DIR": str(agent_session.config_dir),
-                            # The system prompt directs every scratch file
-                            # here. Without this the agent's shell resolves
-                            # the path to an empty string and files land
-                            # outside the mirrored scratch root, invisible to
-                            # the artifacts panel.
-                            "SP_CHAT_SCRATCH_DIRECTORY": str(scratch),
-                            "SP_CHAT_ARTIFACTS_DIRECTORY": str(
-                                scratch / "artifacts"
-                            ),
-                        },
-                        notebook_session_authorizer=(
-                            lambda candidate, lifecycle=lifecycle: (
-                                candidate in lifecycle.sessions.values()
-                            )
+                        **build_agent_options(
+                            agent_model=agent_model,
+                            agent_effort=agent_effort,
+                            max_turns=MAX_ANALYSIS_AGENT_TURNS,
+                            history=history,
+                            system_prompt=system_prompt,
+                            mcp_config=mcp_config,
+                            run_id=run_id,
+                            runtime_app=runtime_app,
+                            project_directory=project_directory,
+                            allowed_tools=allowed_tools,
+                            artifact_server=artifact_server,
+                            auth_config_override=auth_config_override,
+                            agent_session=agent_session,
+                            resume_agent_session=resume_agent_session,
+                            scratch=working_scratch,
+                            lifecycle=lifecycle,
                         ),
                     ),
                     state=state,
@@ -446,6 +450,7 @@ async def execute(*, request: Request) -> StreamingResponse:
                     analysis_session=lambda lifecycle=lifecycle: (
                         lifecycle.session_id
                     ),
+                    after_tool_result=after_tool_result,
                 ):
                     yield chunk
                 await save_agent_session()
@@ -523,9 +528,7 @@ async def execute(*, request: Request) -> StreamingResponse:
                         # Reseed IN PLACE. On an adopted turn the notebook
                         # lives in the previous scratch; the cached fresh
                         # source would embed the wrong token and env paths.
-                        seed_notebook(
-                            analysis_notebook_path.parent, "analysis"
-                        )
+                        seed_notebook(working_scratch, "analysis")
                         recovery_failure = notebook_failure
                         yield _ndjson(
                             {
@@ -572,9 +575,9 @@ async def execute(*, request: Request) -> StreamingResponse:
                         # The notebooks may live in an ADOPTED scratch from
                         # an earlier turn — register the directory that
                         # actually contains them.
-                        scratch=analysis_notebook_path.parent,
+                        scratch=working_scratch,
                     )
-                    if analysis_notebook_path.parent != scratch:
+                    if working_scratch != scratch:
                         # Adopted turn: this run's unused seeded scratch
                         # still holds a token copy — remove it.
                         try:
@@ -590,7 +593,9 @@ async def execute(*, request: Request) -> StreamingResponse:
                 accepted_text = (
                     state.final_text or state.streamed_text
                 ).strip()
-                resolve_report_outcome(collector, run_id=run_id)
+                # Push missed files before the gateway closes the run.
+                for line in await final_capture():
+                    yield line
                 final_payload = build_final_payload(
                     collector,
                     accepted_text=accepted_text,
@@ -604,6 +609,8 @@ async def execute(*, request: Request) -> StreamingResponse:
                 )
                 return
         finally:
+            # Rejection and error paths still push the agent's files.
+            await final_capture()
             await save_agent_session()
             if current_lifecycle:
                 # Close every kernel the run still owns.

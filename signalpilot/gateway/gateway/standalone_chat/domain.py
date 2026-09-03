@@ -154,7 +154,6 @@ def redact_error_text(raw: str) -> str:
 def select_context_for_summary(
     messages: list[dict[str, Any]],
     *,
-    artifact_refs: list[dict[str, Any]],
     usable_context_chars: int,
     threshold: float = 0.60,
     recent_exchange_count: int = 8,
@@ -178,5 +177,4 @@ def select_context_for_summary(
     return {
         "summary": summary,
         "recent_messages": recent,
-        "artifact_refs": artifact_refs,
     }

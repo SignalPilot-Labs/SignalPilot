@@ -1,0 +1,108 @@
+/* ── Tool cards (components/chat/tool-cards) ─────────────────────────────
+   Motion and accent tokens for the per-tool result cards. Loaded from
+   tool-card.tsx the way markdown/chat-markdown.tsx loads its sheets, so the
+   rules ship only with the chat bundle. Every class is prefixed `chat-tool-`
+   and switched off in the reduced-motion block at the bottom. */
+
+/* Accent per card family, consumed as `var(--chat-tool-accent)`. */
+[data-accent="data"] { --chat-tool-accent: var(--color-accent); }
+[data-accent="schema"] { --chat-tool-accent: #b58ce0; }
+[data-accent="check"] { --chat-tool-accent: var(--color-success); }
+[data-accent="dbt"] { --chat-tool-accent: #e3ae76; }
+[data-accent="shell"] { --chat-tool-accent: var(--color-text-muted); }
+[data-accent="knowledge"] { --chat-tool-accent: #86b6de; }
+[data-accent="artifact"] { --chat-tool-accent: var(--color-success); }
+[data-accent="neutral"] { --chat-tool-accent: var(--color-text-dim); }
+
+.chat-tool-accent-text { color: var(--chat-tool-accent, var(--color-text-dim)); }
+.chat-tool-accent-border { border-color: var(--chat-tool-accent, var(--color-border)); }
+
+/* Running frame: a slow breathing halo in the success colour at ~10%. */
+@keyframes chat-tool-glow {
+  0%, 100% { box-shadow: 0 0 0 1px rgba(0, 255, 136, 0.06), 0 0 14px -6px rgba(0, 255, 136, 0.1); }
+  50% { box-shadow: 0 0 0 1px rgba(0, 255, 136, 0.14), 0 0 22px -4px rgba(0, 255, 136, 0.18); }
+}
+.chat-tool-glow { animation: chat-tool-glow 2.4s ease-in-out infinite; }
+
+/* Card → chip: the pill settles in from slightly above with a fade. */
+@keyframes chat-tool-collapse-in {
+  from { opacity: 0; transform: translateY(-3px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.chat-tool-collapse-in { animation: chat-tool-collapse-in 0.22s ease-out both; }
+
+/* A count that just changed: a quick lift and settle. */
+@keyframes chat-tool-count-tick {
+  0% { transform: translateY(2px); opacity: 0.4; }
+  100% { transform: translateY(0); opacity: 1; }
+}
+.chat-tool-count-tick { animation: chat-tool-count-tick 0.18s ease-out both; }
+
+/* Staggered list entry: set `--i` per row; the delay is 28 ms × index.
+   Callers cap the index (24) so a long list never waits on its tail. */
+@keyframes chat-tool-cascade-in {
+  from { opacity: 0; transform: translateX(-4px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+.chat-tool-cascade-in {
+  animation: chat-tool-cascade-in 0.22s ease-out both;
+  animation-delay: calc(var(--i, 0) * 28ms);
+}
+
+/* Table rows: fade + rise, the same `--i` stagger (cap 12). */
+@keyframes chat-tool-rows-in {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.chat-tool-rows-in {
+  animation: chat-tool-rows-in 0.2s ease-out both;
+  animation-delay: calc(var(--i, 0) * 28ms);
+}
+
+/* Proportion bars grow from the left once. */
+@keyframes chat-tool-bar-grow {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+.chat-tool-bar-grow {
+  transform-origin: left;
+  animation: chat-tool-bar-grow 0.45s cubic-bezier(0.2, 0.8, 0.3, 1) both;
+}
+
+/* Error entry: one short shake, never repeated. */
+@keyframes chat-tool-shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-2px); }
+  40% { transform: translateX(2px); }
+  60% { transform: translateX(-1px); }
+  80% { transform: translateX(1px); }
+}
+.chat-tool-shake { animation: chat-tool-shake 0.32s ease-out 1 both; }
+
+/* Terminal prompt cursor. */
+@keyframes chat-tool-cursor-blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+.chat-tool-cursor-blink { animation: chat-tool-cursor-blink 1s steps(1, end) infinite; }
+
+/* A chip that was just picked from the strip: brief border flash. */
+@keyframes chat-tool-chip-flash {
+  0% { border-color: rgba(0, 255, 136, 0.55); }
+  100% { border-color: var(--color-border); }
+}
+.chat-tool-chip-flash { animation: chat-tool-chip-flash 0.9s ease-out both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-tool-glow,
+  .chat-tool-collapse-in,
+  .chat-tool-count-tick,
+  .chat-tool-cascade-in,
+  .chat-tool-rows-in,
+  .chat-tool-bar-grow,
+  .chat-tool-shake,
+  .chat-tool-cursor-blink,
+  .chat-tool-chip-flash {
+    animation: none !important;
+  }
+}

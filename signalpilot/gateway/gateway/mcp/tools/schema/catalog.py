@@ -75,6 +75,7 @@ async def describe_table(connection_name: str, table_name: str) -> str:
     annotations = load_annotations(tool_org_id, connection_name)
     table_ann = annotations.get_table(table_name)
 
+    # Format parsed by standalone_chat/tool_projection/schema.py; update tests there if you change this
     lines = [f"Table: {table_data['schema']}.{table_data['name']}"]
     if table_ann and table_ann.description:
         lines.append(f"Description: {table_ann.description}")
@@ -167,6 +168,7 @@ async def list_tables(connection_name: str, database: str | None = None) -> str:
             if db_name:
                 databases[db_name] = databases.get(db_name, 0) + 1
 
+        # Format parsed by standalone_chat/tool_projection/schema.py; update tests there if you change this
         if databases:
             if database is None:
                 db_lines = [

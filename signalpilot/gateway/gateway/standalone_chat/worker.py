@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import time
@@ -13,7 +12,6 @@ from typing import Any
 import httpx
 
 from gateway.db.engine import get_session_factory, init_db
-from gateway.standalone_chat import worker_files
 from gateway.standalone_chat.config import (
     lease_seconds,
     standalone_chat_enabled,
@@ -55,69 +53,22 @@ from gateway.standalone_chat.worker_errors import (
 from gateway.standalone_chat.worker_events import (
     _cancellation_monitor,
     _lease_renewer,
-    _notebook_started_payload,
-    _persist_artifacts,
+    _notebook_started_payload,  # noqa: F401 — re-exported for tests
     _steering_monitor,
     _update_summary,
     _worker_id,
+)
+from gateway.standalone_chat.worker_tool_results import (
+    cache_tool_input,
+    handle_tool_result,
+)
+from gateway.standalone_chat.worker_tool_results import (
+    dashboard_authoring_completion as _dashboard_authoring_completion,  # noqa: F401
 )
 from gateway.store import standalone_chat as chat_store
 
 logger = logging.getLogger(__name__)
 _CLARIFICATION_PREFIX = "CLARIFICATION_REQUESTED:"
-_DASHBOARD_AUTHORING_TOOLS = {
-    "begin_dashboard_authoring",
-    "set_dashboard_plan",
-    "upsert_dashboard_chart",
-    "apply_dashboard_operations",
-    "create_dashboard_preview",
-}
-
-
-def _dashboard_authoring_completion(tool_name: str, content: str) -> dict[str, Any]:
-    normalized = tool_name.rsplit("__", 1)[-1]
-    if normalized not in _DASHBOARD_AUTHORING_TOOLS:
-        return {}
-    try:
-        result = json.loads(content)
-    except (TypeError, ValueError):
-        return {}
-    if not isinstance(result, dict):
-        return {}
-    session_id = str(result.get("authoring_session_id") or "").strip()
-    if not session_id:
-        return {}
-    status = str(result.get("status") or "").strip()
-
-    def count(key: str) -> int:
-        value = result.get(key)
-        return value if isinstance(value, int) and value >= 0 else 0
-
-    ready = count("ready_count")
-    expected = count("expected_count")
-    labels = {
-        "begin_dashboard_authoring": "Preparing dashboard",
-        "set_dashboard_plan": f"Building {expected} dashboard charts",
-        "upsert_dashboard_chart": (
-            f"Building dashboard ({ready} of {expected} charts)"
-            if status == "ready"
-            else "Refining dashboard chart"
-        ),
-        "apply_dashboard_operations": "Updating dashboard",
-        "create_dashboard_preview": "Dashboard preview ready",
-    }
-    return {
-        "dashboard_authoring": {
-            "label": labels[normalized],
-            "phase": normalized,
-            "authoring_session_id": session_id,
-            "draft_revision": count("draft_revision"),
-            "status": status,
-            "ready_count": ready,
-            "failed_count": count("failed_count"),
-            "expected_count": expected,
-        }
-    }
 
 
 async def _append(run_id: str, event_type: str, payload: dict[str, Any]) -> None:
@@ -167,19 +118,18 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
     final_text = ""
     streamed_text = ""
     report_proposal: dict[str, Any] | None = None
-    report_action_outcome: dict[str, Any] | None = None
     dashboard_preview: dict[str, Any] | None = None
     starts_new_text_block = False
     tool_names_by_id: dict[str, str] = {}
+    tool_inputs_by_id: dict[str, dict[str, Any]] = {}
     try:
         factory = get_session_factory()
         async with factory() as db:
             run = await chat_store.get_worker_run(db, run_id=run_id, worker_id=worker_id)
             if run is None:
                 return
-            # Captured for the file mirror; avoids re-querying per event.
-            run_org_id, run_user_id = run.org_id, run.user_id
-            run_conversation_id = run.conversation_id
+            # Tool result handling runs after this session closes.
+            run_org_id = run.org_id
             recovering = run.execution_attempt > 1
             context = await chat_store.worker_context(db, run=run)
             project = context["project"]
@@ -193,7 +143,6 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
             all_messages = _message_context(context)
             selection = select_context_for_summary(
                 all_messages,
-                artifact_refs=[],
                 usable_context_chars=400_000,
             )
             messages = list(selection["recent_messages"]) if selection is not None else all_messages
@@ -338,6 +287,9 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                         tool_call_id = str(event.get("tool_call_id") or "")
                         if tool_call_id:
                             tool_names_by_id[tool_call_id] = tool_name
+                            cached_input = cache_tool_input(tool_input)
+                            if cached_input is not None:
+                                tool_inputs_by_id[tool_call_id] = cached_input
                         await _append(
                             run_id,
                             "tool_started",
@@ -350,16 +302,6 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                                 "tool_call_id": tool_call_id or None,
                                 **({"parent_tool_call_id": parent_tool_call_id} if parent_tool_call_id else {}),
                             },
-                        )
-                        # Mirror file writes with the raw tool input. Never raises.
-                        await worker_files.mirror_file_tool(
-                            run_id=run_id,
-                            org_id=run_org_id,
-                            user_id=run_user_id,
-                            conversation_id=run_conversation_id,
-                            tool_name=tool_name,
-                            tool_input=tool_input,
-                            secrets=worker_files.execution_secrets(execution),
                         )
                         # Side events (sql/source) attach to the latest OPEN
                         # top-level step in the UI — suppress them for
@@ -392,52 +334,18 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                     elif event_type == "tool_result":
                         if not parent_tool_call_id:
                             starts_new_text_block = bool(streamed_text)
-                        is_error = bool(event.get("is_error"))
-                        tool_call_id = str(event.get("tool_call_id") or "")
-                        completed_tool = tool_names_by_id.get(tool_call_id, "")
-                        if is_error:
-                            # Author-visible events redact tool errors. Log the raw
-                            # error text here (server-side only) so operators can see
-                            # exactly why a tool failed.
-                            logger.warning(
-                                "standalone-chat tool error tool=%s run=%s raw=%s",
-                                completed_tool or "unknown",
-                                run_id,
-                                (content or "")[:2000],
-                            )
-                        completed_payload: dict[str, Any] = {
-                            "tool_call_id": event.get("tool_call_id"),
-                            "summary": ("The tool returned an error." if is_error else "The tool completed."),
-                            "error": is_error,
-                        }
-                        if not is_error:
-                            completed_payload.update(_dashboard_authoring_completion(completed_tool, content))
-                        if parent_tool_call_id:
-                            completed_payload["parent_tool_call_id"] = parent_tool_call_id
-                        if completed_tool == "Agent" and not is_error and content:
-                            # The Agent tool result IS the subagent's final
-                            # report — surfaced in its card, same disclosure
-                            # level as the agent's own streamed narration.
-                            completed_payload["report"] = content[:4000]
-                        await _append(
-                            run_id,
-                            "tool_completed",
-                            completed_payload,
+                        # Projects the result into the tool_completed card
+                        # payload and emits the notebook/cell side events.
+                        await handle_tool_result(
+                            run_id=run_id,
+                            event=event,
+                            content=content,
+                            parent_tool_call_id=parent_tool_call_id,
+                            tool_names_by_id=tool_names_by_id,
+                            tool_inputs_by_id=tool_inputs_by_id,
+                            execution=execution,
+                            org_id=run_org_id,
                         )
-                        if not is_error and completed_tool.endswith("start_analysis_notebook"):
-                            await _announce_notebook(
-                                run_id,
-                                _notebook_started_payload(
-                                    tool_result_content=content,
-                                    gateway_session_id=execution.session_id,
-                                ),
-                            )
-                        if completed_tool.endswith("run_cells"):
-                            await _append(
-                                run_id,
-                                "cell_executed",
-                                {"status": "failed" if is_error else "completed"},
-                            )
                     elif event_type == "notebook_started":
                         # Emitted by the runtime when it starts a replacement
                         # kernel (notebook recovery). The normal path derives
@@ -476,17 +384,8 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                                     )
                         raw_report_proposal = event.get("report_proposal")
                         report_proposal = raw_report_proposal if isinstance(raw_report_proposal, dict) else None
-                        raw_report_action_outcome = event.get("report_action_outcome")
-                        report_action_outcome = (
-                            raw_report_action_outcome if isinstance(raw_report_action_outcome, dict) else None
-                        )
                         raw_dashboard_preview = event.get("dashboard_preview")
                         dashboard_preview = raw_dashboard_preview if isinstance(raw_dashboard_preview, dict) else None
-                        await _persist_artifacts(
-                            run_id=run_id,
-                            worker_id=worker_id,
-                            artifacts=[item for item in event.get("artifacts") or [] if isinstance(item, dict)],
-                        )
                         if event.get("kernel_stopped"):
                             await _append(run_id, "kernel_stopped", {"status": "stopped"})
                 last_error = None
@@ -533,7 +432,6 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                 worker_id=worker_id,
                 content=answer,
                 report_proposal=report_proposal,
-                report_action_outcome=report_action_outcome,
                 dashboard_preview=dashboard_preview,
             )
         if message is not None:

@@ -7,32 +7,36 @@ import {
   ChevronRight,
   CircleStop,
   Copy,
-  LayoutDashboard,
-  FileChartColumn,
   Loader2,
   Play,
   Sparkles,
   Wrench,
 } from "lucide-react";
-import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { ChatMarkdown } from "~/components/chat/chat-markdown";
 import {
   openStandaloneNotebookArchive,
   type StandaloneChatRunStatus,
-  type ChatReportSuggestion,
 } from "~/lib/api";
-import { RunActivityBlocks, RunTimeline } from "~/components/chat/run-timeline";
+import {
+  RunActivityBlocks,
+  RunTimeline,
+  StepArtifactCardsContext,
+  collectStepSequences,
+} from "~/components/chat/run-timeline";
+import { MessageRunContext } from "~/components/chat/message-run-context";
+import { ConnectorSignInCards } from "~/components/chat/connector-signin-card";
 import { RuntimeBootCard } from "~/components/chat/runtime-boot-card";
 import { ReplayControls } from "~/components/chat/replay-controls";
 import {
+  deriveLiveStateFromBlocks,
   extractRunPlan,
   extractRuntimeBoot,
   foldRunBlocks,
   foldRunSteps,
   shouldShowRuntimeBoot,
 } from "~/lib/chat-run-steps";
+import { LivePill } from "~/components/chat/live-pill";
 import { PlanTracker } from "~/components/chat/plan-tracker";
 import { useChatReplay } from "~/lib/chat-replay";
 import { useToast } from "~/components/ui/toast";
@@ -41,197 +45,19 @@ import {
   useChatUi,
   type UiMessage,
 } from "~/components/chat/chat-ui-context";
-import { ArtifactPreview } from "~/components/chat/chat-artifact-preview";
+import {
+  DashboardPreviewCard,
+  messageDashboardPreview,
+} from "~/components/chat/chat-dashboard-preview-card";
+import {
+  deriveArtifactCards,
+  groupCardsByAnchor,
+} from "~/lib/chat-artifact-cards";
 
 function WorkTimeline({ runId }: { runId: string }) {
   const { events } = useChatUi();
   const steps = useMemo(() => foldRunSteps(events, runId), [events, runId]);
   return <RunTimeline steps={steps} />;
-}
-
-function ReportSuggestionCard({
-  messageId,
-  suggestion,
-}: {
-  messageId: string;
-  suggestion: ChatReportSuggestion;
-}) {
-  const router = useRouter();
-  const { toast } = useToast();
-  const { onApproveReportSuggestion } = useChatUi();
-  const [dismissed, setDismissed] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [approvedReportId, setApprovedReportId] = useState(
-    suggestion.approval?.report_id ?? null,
-  );
-  if (dismissed) return null;
-  const reportId = approvedReportId || suggestion.report_id;
-  const openOnly = suggestion.action === "open";
-  const label =
-    suggestion.action === "create"
-      ? "Create report"
-      : suggestion.action === "update"
-        ? "Update existing report"
-        : "Open report";
-
-  const approve = async () => {
-    if (busy) return;
-    if (openOnly && reportId) {
-      router.push(`/reports/${reportId}`);
-      return;
-    }
-    setBusy(true);
-    try {
-      const result = await onApproveReportSuggestion(messageId);
-      setApprovedReportId(result.report_id);
-      toast(
-        suggestion.action === "create" ? "Report created" : "Report updated",
-        "success",
-      );
-    } catch (error) {
-      toast(
-        error instanceof Error
-          ? error.message
-          : "Could not publish the report action",
-        "error",
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <section className="mt-4 rounded-xl border border-[var(--color-success)]/25 bg-[var(--color-bg-card)] p-4">
-      <div className="flex items-start gap-3">
-        <FileChartColumn className="mt-0.5 h-4 w-4 flex-none text-[var(--color-success)]" />
-        <div className="min-w-0 flex-1">
-          <p className="text-sm text-[var(--color-text)]">
-            {suggestion.action === "create"
-              ? `Save “${suggestion.title}” as a durable report?`
-              : `Matched “${suggestion.title}”`}
-          </p>
-          <p className="mt-1 text-xs leading-5 text-[var(--color-text-muted)]">
-            {suggestion.reason}
-          </p>
-          <div className="mt-3 flex flex-wrap gap-2">
-            {approvedReportId ? (
-              <button
-                type="button"
-                onClick={() => router.push(`/reports/${approvedReportId}`)}
-                className="rounded-lg bg-[var(--color-text)] px-3 py-2 text-xs text-[var(--color-bg)]"
-              >
-                Open report
-              </button>
-            ) : (
-              <button
-                type="button"
-                disabled={busy || (!reportId && openOnly)}
-                onClick={() => void approve()}
-                className="inline-flex items-center gap-2 rounded-lg bg-[var(--color-text)] px-3 py-2 text-xs text-[var(--color-bg)] disabled:opacity-50"
-              >
-                {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                {label}
-              </button>
-            )}
-            {!approvedReportId && !openOnly && (
-              <button
-                type="button"
-                onClick={() => setDismissed(true)}
-                className="rounded-lg px-3 py-2 text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)]"
-              >
-                Not now
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function messageReportSuggestion(
-  metadata: Record<string, unknown>,
-): ChatReportSuggestion | null {
-  const value = metadata.report_suggestion;
-  if (!value || typeof value !== "object") return null;
-  const suggestion = value as Partial<ChatReportSuggestion>;
-  if (
-    !["create", "update", "open"].includes(suggestion.action || "") ||
-    typeof suggestion.artifact_id !== "string" ||
-    typeof suggestion.title !== "string" ||
-    typeof suggestion.reason !== "string"
-  ) {
-    return null;
-  }
-  return suggestion as ChatReportSuggestion;
-}
-
-type DashboardPreview = {
-  authoring_session_id: string;
-  dashboard_name: string;
-  summary: string;
-  chart_count: number;
-};
-
-function messageDashboardPreview(
-  metadata: Record<string, unknown>,
-): DashboardPreview | null {
-  const value = metadata.dashboard_preview;
-  if (!value || typeof value !== "object") return null;
-  const preview = value as Record<string, unknown>;
-  if (
-    typeof preview.authoring_session_id !== "string" ||
-    !preview.authoring_session_id ||
-    typeof preview.dashboard_name !== "string"
-  ) {
-    return null;
-  }
-  return {
-    authoring_session_id: String(preview.authoring_session_id || ""),
-    dashboard_name: preview.dashboard_name,
-    summary: typeof preview.summary === "string" ? preview.summary : "",
-    chart_count:
-      typeof preview.chart_count === "number" ? preview.chart_count : 0,
-  };
-}
-
-function DashboardPreviewCard({ preview }: { preview: DashboardPreview }) {
-  const { onOpenDashboardPreview } = useChatUi();
-  const chartLabel = `${preview.chart_count} chart${
-    preview.chart_count === 1 ? "" : "s"
-  }`;
-  return (
-    <section
-      data-testid="dashboard-artifact-card"
-      className="mt-4 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-card)] p-3"
-    >
-      <div className="flex min-w-0 items-center gap-3">
-        <div className="flex h-14 w-14 flex-none items-center justify-center rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-input)]">
-          <LayoutDashboard className="h-5 w-5 text-[var(--color-text-muted)]" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-[var(--color-text-dim)]">
-            Dashboard
-          </p>
-          <p className="mt-1 truncate text-sm font-medium text-[var(--color-text)]">
-            {preview.dashboard_name}
-          </p>
-          <p className="mt-1 truncate text-xs text-[var(--color-text-dim)]">
-            {chartLabel} · Draft ready for review
-          </p>
-        </div>
-        <button
-          type="button"
-          aria-label={`View ${preview.dashboard_name}`}
-          title={preview.summary || `View ${preview.dashboard_name}`}
-          onClick={() => onOpenDashboardPreview(preview.authoring_session_id)}
-          className="flex-none rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-input)] px-4 py-2 text-xs font-medium text-[var(--color-text)] hover:border-[var(--color-border-hover)] hover:bg-[var(--color-bg-hover)]"
-        >
-          View
-        </button>
-      </div>
-    </section>
-  );
 }
 
 function AssistantMessage({
@@ -254,7 +80,7 @@ function AssistantMessage({
       ? (message.metadata.status as StandaloneChatRunStatus)
       : "completed");
   const [showWork, setShowWork] = useState(false);
-  const { artifacts, events, onRetry, onStop } = useChatUi();
+  const { events, files, onRetry, onStop } = useChatUi();
   const { toast } = useToast();
   const blocks = useMemo(
     () => (runId ? foldRunBlocks(events, runId) : []),
@@ -283,17 +109,32 @@ function AssistantMessage({
     runStatus === "failed" &&
     Boolean(runError) &&
     message.content.trim() === runError?.trim();
-  const attachedArtifacts = artifacts.filter(
-    (artifact) =>
-      artifact.assistant_message_id === message.id || artifact.run_id === runId,
-  );
   const successful = runStatus === "completed";
   const running = runStatus === "queued" || runStatus === "running";
+  // What the agent is doing right now: drives the caret, the inline
+  // indicator and the footer pill. Idle whenever the run is not active.
+  const live = useMemo(
+    () => deriveLiveStateFromBlocks(blocks, runtimeBoot, runStatus),
+    [blocks, runtimeBoot, runStatus],
+  );
+  // Artifact cards: every captured file gets one, placed in the timeline
+  // right after the step that produced it (joined on the tool_started
+  // sequence). Files no step claims trail the timeline. Derived from the
+  // persisted events and manifest, so rehydration on refresh is free.
+  const fileCards = useMemo(
+    () => (runId ? deriveArtifactCards(events, files, runId, running) : []),
+    [events, files, runId, running],
+  );
+  const anchoredCards = useMemo(
+    () => groupCardsByAnchor(fileCards, collectStepSequences(steps)),
+    [fileCards, steps],
+  );
+  const messageRun = useMemo(
+    () => ({ runId: runId || null, running }),
+    [runId, running],
+  );
   const runtimeArchiveAvailable =
     message.metadata.runtime_archive_available === true;
-  const reportSuggestion = successful
-    ? messageReportSuggestion(message.metadata)
-    : null;
   const dashboardPreview = successful
     ? messageDashboardPreview(message.metadata)
     : null;
@@ -312,6 +153,8 @@ function AssistantMessage({
             <Sparkles className="h-3.5 w-3.5 text-[var(--color-text-muted)]" />
           )}
         </div>
+        <MessageRunContext.Provider value={messageRun}>
+        <StepArtifactCardsContext.Provider value={anchoredCards.byStep}>
         <div className="min-w-0 flex-1">
           {shouldShowRuntimeBoot(runtimeBoot, running) && runtimeBoot && (
             <RuntimeBootCard boot={runtimeBoot} />
@@ -321,41 +164,25 @@ function AssistantMessage({
               <PlanTracker plan={runPlan} running={running} />
             </div>
           )}
-          {(running || blocks.length > 0) && (
+          {(running ||
+            blocks.length > 0 ||
+            anchoredCards.trailing.length > 0) && (
             <div role="status" aria-live="polite">
               <RunActivityBlocks
                 blocks={blocks}
+                live={live}
                 running={
                   running &&
                   runtimeBoot?.phase !== "provisioning" &&
                   runtimeBoot?.phase !== "resuming"
                 }
+                trailingCards={anchoredCards.trailing}
               />
             </div>
           )}
+          {runId && <ConnectorSignInCards events={events} runId={runId} />}
           {!blocksHaveText && message.content && !messageRepeatsRunError && (
-            <div className="chat-markdown">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                {message.content}
-              </ReactMarkdown>
-            </div>
-          )}
-          {attachedArtifacts.length > 0 && (
-            <div className="mt-5 space-y-4">
-              {attachedArtifacts.map((artifact) => (
-                <ArtifactPreview
-                  key={artifact.id}
-                  artifact={artifact}
-                  canSaveAsReport={successful}
-                />
-              ))}
-            </div>
-          )}
-          {reportSuggestion && (
-            <ReportSuggestionCard
-              messageId={message.id}
-              suggestion={reportSuggestion}
-            />
+            <ChatMarkdown markdown={message.content} streaming={running} />
           )}
           {dashboardPreview && (
             <DashboardPreviewCard preview={dashboardPreview} />
@@ -415,15 +242,23 @@ function AssistantMessage({
                   )}
                 </button>
               )}
+              {running && <LivePill live={live} />}
               {running && runId && (
-                <button
-                  type="button"
-                  onClick={() => void onStop(runId)}
-                  className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] text-[var(--color-text-dim)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-error)]"
-                >
-                  <CircleStop className="h-3 w-3" />
-                  Stop
-                </button>
+                <span className="relative inline-flex rounded-lg">
+                  <span
+                    className="chat-stop-ring absolute -inset-[3px]"
+                    data-state={live.state}
+                    aria-hidden
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void onStop(runId)}
+                    className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] text-[var(--color-text-dim)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-error)]"
+                  >
+                    <CircleStop className="h-3 w-3" />
+                    Stop
+                  </button>
+                </span>
               )}
               {runStatus === "failed" && runId && (
                 <button
@@ -443,6 +278,8 @@ function AssistantMessage({
             </div>
           )}
         </div>
+        </StepArtifactCardsContext.Provider>
+        </MessageRunContext.Provider>
       </div>
     </article>
   );
@@ -498,9 +335,18 @@ function AssistantMessageReplay({
   runId: string;
   onExit: () => void;
 }) {
-  const { events, artifacts, onStop, onRetry, onApproveReportSuggestion } =
-    useChatUi();
-  const replay = useChatReplay(events, artifacts, runId);
+  const {
+    events,
+    conversationId,
+    files,
+    openArtifact,
+    getFileObjectUrl,
+    downloadFile,
+    nowMs,
+    onStop,
+    onRetry,
+  } = useChatUi();
+  const replay = useChatReplay(events, runId);
   // Runs that streamed text carry text_delta events, and the blocks rebuild
   // the message from the replayed deltas. Runs that only produced a final
   // message have no deltas — for those, reveal the persisted content at the
@@ -539,10 +385,14 @@ function AssistantMessageReplay({
       <ChatUiContext.Provider
         value={{
           events: replay.visibleEvents,
-          artifacts: replay.visibleArtifacts,
+          conversationId,
+          files,
+          openArtifact,
+          getFileObjectUrl,
+          downloadFile,
+          nowMs,
           onStop,
           onRetry,
-          onApproveReportSuggestion,
           onOpenDashboardPreview: () => undefined,
         }}
       >

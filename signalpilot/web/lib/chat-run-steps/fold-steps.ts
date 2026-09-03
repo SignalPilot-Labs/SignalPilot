@@ -38,6 +38,28 @@ function emptyStepExtras(): Pick<
   };
 }
 
+/** Longest agent-written query description shown as a step title. */
+const QUERY_DESCRIPTION_MAX = 140;
+
+/**
+ * The agent's one-sentence `description` for a query becomes the step title,
+ * so the running card, the chip and the live pill say what the query is for
+ * ("Checking the date range of the rpt_daily_profitability mart") instead of
+ * the generic "Queried the warehouse".
+ */
+function queryDescription(
+  tool: string,
+  input: Record<string, unknown> | null,
+): string | null {
+  if (tool !== "query_database") return null;
+  const raw = text(input?.description)?.trim().replace(/\s+/g, " ");
+  if (!raw) return null;
+  const sentence = raw.replace(/[.\s]+$/, "");
+  return sentence.length > QUERY_DESCRIPTION_MAX
+    ? `${sentence.slice(0, QUERY_DESCRIPTION_MAX - 1)}…`
+    : sentence;
+}
+
 export function foldRunSteps(
   events: StandaloneChatEvent[],
   runId: string,
@@ -73,7 +95,7 @@ export function foldRunSteps(
         status: "running",
         title: isSpawn
           ? (text(input?.description) ?? "Subagent")
-          : humanizeTool(tool),
+          : (queryDescription(tool, input) ?? humanizeTool(tool)),
         tool,
         toolOrigin: origin,
         input,

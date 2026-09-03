@@ -50,7 +50,13 @@ function DetailRow({ execution }: { execution: SqlTraceExecution }) {
   );
 }
 
-function TraceRow({ execution }: { execution: SqlTraceExecution }) {
+function TraceRow({
+  execution,
+  description,
+}: {
+  execution: SqlTraceExecution;
+  description: string | null;
+}) {
   const [expanded, setExpanded] = useState(false);
   const duration = formatDuration(execution.execution_ms);
   return (
@@ -71,9 +77,23 @@ function TraceRow({ execution }: { execution: SqlTraceExecution }) {
           aria-label={`Status: ${execution.status}`}
           className={`h-2 w-2 flex-none rounded-full ${statusDotClass(execution.status)}`}
         />
-        <span className="truncate font-mono text-[11px] text-[var(--color-text)]">
-          {execution.connection_name}
-        </span>
+        {description ? (
+          <span className="flex min-w-0 flex-col">
+            <span
+              data-testid="sql-trace-description"
+              className="truncate text-[12px] text-[var(--color-text)]"
+            >
+              {description}
+            </span>
+            <span className="truncate font-mono text-[10px] text-[var(--color-text-dim)]">
+              {execution.connection_name}
+            </span>
+          </span>
+        ) : (
+          <span className="truncate font-mono text-[11px] text-[var(--color-text)]">
+            {execution.connection_name}
+          </span>
+        )}
         <span className="ml-auto flex flex-none items-center gap-3 text-[10px] text-[var(--color-text-dim)]">
           {duration && <span>{duration}</span>}
           {execution.row_count !== null && (
@@ -94,12 +114,16 @@ function TraceRow({ execution }: { execution: SqlTraceExecution }) {
 
 /**
  * Read-only list of the conversation's governed query executions, in the
- * order the gateway returns them.
+ * order the gateway returns them. `descriptions` (execution_id → the agent's
+ * one-line query description, see lib/chat-query-descriptions.ts) turns the
+ * bare connection name into "Comparing Q2 and Q3 revenue by region".
  */
 export function SqlTracePanel({
   executions,
+  descriptions,
 }: {
   executions: SqlTraceExecution[];
+  descriptions?: Map<string, string>;
 }) {
   return (
     <div data-testid="sql-trace-panel" className="space-y-2">
@@ -110,7 +134,11 @@ export function SqlTracePanel({
       ) : (
         <ul className="space-y-2">
           {executions.map((execution) => (
-            <TraceRow key={execution.execution_id} execution={execution} />
+            <TraceRow
+              key={execution.execution_id}
+              execution={execution}
+              description={descriptions?.get(execution.execution_id) ?? null}
+            />
           ))}
         </ul>
       )}

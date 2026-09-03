@@ -66,6 +66,13 @@ export type StandaloneChatModelOption = {
   label: string;
 };
 
+export type StandaloneChatEffort = "low" | "medium" | "high" | "xhigh" | "max";
+
+export type StandaloneChatEffortOption = {
+  id: StandaloneChatEffort;
+  label: string;
+};
+
 export type StandaloneChatBootstrap = {
   enabled: boolean;
   projects: StandaloneChatProject[];
@@ -76,6 +83,8 @@ export type StandaloneChatBootstrap = {
   default_chat_budget_usd: number;
   available_models: StandaloneChatModelOption[];
   default_model: StandaloneChatModel;
+  available_efforts: StandaloneChatEffortOption[];
+  default_effort: StandaloneChatEffort;
   enterprise_features: {
     query_approval?: boolean;
     structured_results?: boolean;
@@ -164,6 +173,7 @@ export type StandaloneConversation = {
   run_status: StandaloneChatRunStatus | null;
   commit_sha: string | null;
   model: StandaloneChatModel;
+  effort: StandaloneChatEffort;
   per_query_budget_usd: number;
   chat_budget_usd: number;
   estimated_spend_usd: number;
@@ -230,6 +240,7 @@ export const createStandaloneConversation = (
   perQueryBudgetUsd = 0.25,
   chatBudgetUsd = 1,
   model: StandaloneChatModel = "claude-opus-4-6",
+  effort: StandaloneChatEffort = "medium",
   reportReference?: { report_id: string; version_id: string },
 ) =>
   request<StandaloneConversationDetail>("/api/chat/conversations", {
@@ -240,6 +251,7 @@ export const createStandaloneConversation = (
       per_query_budget_usd: perQueryBudgetUsd,
       chat_budget_usd: chatBudgetUsd,
       model,
+      effort,
       report_reference: reportReference,
     }),
   });
@@ -250,6 +262,14 @@ export const updateStandaloneConversationModel = (
   request<{ id: string; model: StandaloneChatModel }>(
     `/api/chat/conversations/${encodeURIComponent(conversationId)}/model`,
     { method: "PUT", body: JSON.stringify({ model }) },
+  );
+export const updateStandaloneConversationEffort = (
+  conversationId: string,
+  effort: StandaloneChatEffort,
+) =>
+  request<{ id: string; effort: StandaloneChatEffort }>(
+    `/api/chat/conversations/${encodeURIComponent(conversationId)}/effort`,
+    { method: "PUT", body: JSON.stringify({ effort }) },
   );
 export const decideStandaloneQueryProposal = (
   proposalId: string,

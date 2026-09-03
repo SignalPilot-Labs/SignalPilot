@@ -7,7 +7,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from gateway.standalone_chat.config import CHAT_MODEL_IDS
+from gateway.standalone_chat.config import CHAT_EFFORT_IDS, CHAT_MODEL_IDS
 
 from .chat_reports import ReportReference
 
@@ -81,6 +81,8 @@ class ChatBootstrapResponse(BaseModel):
     default_chat_budget_usd: float = 1.0
     available_models: list[dict[str, str]] = Field(default_factory=list)
     default_model: str
+    available_efforts: list[dict[str, str]] = Field(default_factory=list)
+    default_effort: str = "medium"
     enterprise_features: dict[str, bool] = Field(default_factory=dict)
 
 
@@ -90,6 +92,7 @@ class StandaloneConversationCreate(StrictChatRequest):
     per_query_budget_usd: float = Field(default=0.25, ge=0)
     chat_budget_usd: float = Field(default=1.0, ge=0)
     model: str | None = Field(default=None, max_length=50)
+    effort: str | None = Field(default=None, max_length=20)
     report_reference: ReportReference | None = None
 
     @field_validator("project_id", "message")
@@ -113,6 +116,13 @@ class StandaloneConversationCreate(StrictChatRequest):
             raise ValueError("Unsupported chat model")
         return value
 
+    @field_validator("effort")
+    @classmethod
+    def validate_effort(cls, value: str | None) -> str | None:
+        if value is not None and value not in CHAT_EFFORT_IDS:
+            raise ValueError("Unsupported thinking level")
+        return value
+
 
 class StandaloneConversationModelUpdate(StrictChatRequest):
     model: str = Field(..., min_length=1, max_length=50)
@@ -122,6 +132,17 @@ class StandaloneConversationModelUpdate(StrictChatRequest):
     def validate_model(cls, value: str) -> str:
         if value not in CHAT_MODEL_IDS:
             raise ValueError("Unsupported chat model")
+        return value
+
+
+class StandaloneConversationEffortUpdate(StrictChatRequest):
+    effort: str = Field(..., min_length=1, max_length=20)
+
+    @field_validator("effort")
+    @classmethod
+    def validate_effort(cls, value: str) -> str:
+        if value not in CHAT_EFFORT_IDS:
+            raise ValueError("Unsupported thinking level")
         return value
 
 
@@ -218,6 +239,7 @@ class StandaloneConversationInfo(BaseModel):
     run_status: ChatRunStatus | None = None
     commit_sha: str | None = None
     model: str
+    effort: str = "medium"
     per_query_budget_usd: float = 0.25
     chat_budget_usd: float = 1.0
     estimated_spend_usd: float = 0.0

@@ -37,6 +37,7 @@ def agent_env_overrides(
 def build_agent_options(
     *,
     agent_model: str,
+    agent_effort: str,
     max_turns: int,
     history: list[dict[str, str]],
     system_prompt: str,
@@ -55,6 +56,7 @@ def build_agent_options(
     """Assemble the keyword arguments for one `run_notebook_agent` call."""
     return {
         "model": agent_model,
+        "effort": agent_effort,
         "max_turns": max_turns,
         "new_chat": False,
         "message_history": history,

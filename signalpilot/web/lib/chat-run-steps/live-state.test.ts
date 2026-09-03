@@ -27,7 +27,7 @@ describe("deriveLiveState on the fixture replay", () => {
     const query = liveAt(4_800);
     expect(query.state).toBe("tool");
     expect(query.step?.tool).toBe("query_database");
-    expect(query.label).toBe("Queried the warehouse");
+    expect(query.label).toBe("Comparing Q2 and Q3 revenue by region from fct_orders");
     const child = liveAt(5_200);
     expect(child.state).toBe("tool");
     expect(child.step?.tool).toBe("Glob");

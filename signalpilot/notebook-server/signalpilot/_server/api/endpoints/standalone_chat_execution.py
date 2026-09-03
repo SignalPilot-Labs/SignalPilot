@@ -165,6 +165,7 @@ async def execute(*, request: Request) -> StreamingResponse:
         or os.getenv("SIGNALPILOT_ANALYSIS_AGENT_MODEL")
         or "claude-sonnet-4-5-20250929"
     )
+    agent_effort = str(body.get("effort") or "medium").strip().lower()
     session_id = SessionId(f"standalone-{run_id}")
 
     def seed_notebook(scratch_dir: Path, notebook_name: str) -> Path:
@@ -395,6 +396,7 @@ async def execute(*, request: Request) -> StreamingResponse:
                         session_id,
                         **build_agent_options(
                             agent_model=agent_model,
+                            agent_effort=agent_effort,
                             max_turns=MAX_ANALYSIS_AGENT_TURNS,
                             history=history,
                             system_prompt=system_prompt,

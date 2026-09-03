@@ -201,3 +201,57 @@ describe("foldRunSteps tool results", () => {
     expect(steps[0].result).toBeNull();
   });
 });
+
+describe("query_database description titles", () => {
+  it("uses the agent's one-sentence description as the step title", () => {
+    const [step] = foldRunSteps(
+      [
+        started(1, "mcp__signalpilot__query_database", {
+          input: {
+            sql: "select 1",
+            description: "Checking the date range of the rpt_daily_profitability mart.",
+          },
+        }),
+      ],
+      RUN,
+    );
+    expect(step.title).toBe(
+      "Checking the date range of the rpt_daily_profitability mart",
+    );
+  });
+
+  it("falls back to the humanized tool name without a description", () => {
+    const [step] = foldRunSteps(
+      [started(1, "mcp__signalpilot__query_database", { input: { sql: "select 1" } })],
+      RUN,
+    );
+    expect(step.title).toBe("Queried the warehouse");
+    const [blank] = foldRunSteps(
+      [started(2, "mcp__signalpilot__query_database", { input: { sql: "x", description: "   " } })],
+      RUN,
+    );
+    expect(blank.title).toBe("Queried the warehouse");
+  });
+
+  it("collapses whitespace and truncates long descriptions", () => {
+    const long = `Counting ${"orders ".repeat(40)}per region`;
+    const [step] = foldRunSteps(
+      [
+        started(1, "mcp__signalpilot__query_database", {
+          input: { sql: "x", description: `  Checking
+
+ the   mart  ` },
+        }),
+        started(2, "mcp__signalpilot__query_database", { input: { sql: "x", description: long } }),
+      ],
+      RUN,
+    );
+    expect(step.title).toBe("Checking the mart");
+    const [longStep] = foldRunSteps(
+      [started(2, "mcp__signalpilot__query_database", { input: { sql: "x", description: long } })],
+      RUN,
+    );
+    expect(longStep.title.length).toBe(140);
+    expect(longStep.title.endsWith("…")).toBe(true);
+  });
+});

@@ -30,6 +30,7 @@ from gateway.notebooks.session_service import (
     ensure_standalone_chat_notebook_session,
     runtime_for_session,
 )
+from gateway.standalone_chat import config as chat_config
 from gateway.standalone_chat.agent_sessions import agent_session_transfer
 from gateway.standalone_chat.config import enterprise_chat_feature_flags
 from gateway.standalone_chat.object_storage import chat_object_storage
@@ -266,6 +267,11 @@ async def prepare_execution(
                 or os.getenv("SP_CHAT_AGENT_MODEL")
             )
             else {}
+        ),
+        "effort": (
+            conversation.effort
+            if conversation is not None and conversation.effort
+            else chat_config.default_chat_effort()
         ),
         "features": {
             "sandbox_runtime": enterprise_chat_feature_flags().sandbox_runtime,

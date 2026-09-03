@@ -40,6 +40,17 @@ test.describe("chat settings panel (fixture harness)", () => {
     ]);
     await model.selectOption("claude-fable-5-1");
     await expect(model).toHaveValue("claude-fable-5-1");
+    const effort = panel.getByTestId("chat-settings-effort-select");
+    await expect(effort).toHaveValue("medium");
+    await expect(effort.locator("option")).toHaveText([
+      "Low",
+      "Medium",
+      "High",
+      "Extra high",
+      "Max",
+    ]);
+    await effort.selectOption("max");
+    await expect(effort).toHaveValue("max");
     await expect(panel).toContainText("Available in all your chats");
     await expect(panel.getByTestId("chat-settings-connector-row")).toHaveCount(5);
     await expect(panel.getByTestId("chat-settings-manage")).toHaveAttribute("href", /\/settings\/connectors/);

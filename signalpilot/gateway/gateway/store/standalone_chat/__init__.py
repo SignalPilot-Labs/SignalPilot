@@ -72,6 +72,7 @@ from gateway.store.standalone_chat.conversations import (
     get_conversation_detail,
     list_conversations,
     rename_conversation,
+    update_conversation_effort,
     update_conversation_model,
     update_internal_summary,
 )
@@ -235,6 +236,7 @@ __all__ = [
     "record_run_usage",
     "redact_public_payload",
     "rename_conversation",
+    "update_conversation_effort",
     "update_conversation_model",
     "renew_lease",
     "request_cancellation",

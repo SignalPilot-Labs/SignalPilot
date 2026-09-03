@@ -36,6 +36,7 @@ from gateway.mcp.context import (
 )
 from gateway.models.standalone_chat import (
     StandaloneConversationCreate,
+    StandaloneConversationEffortUpdate,
     StandaloneConversationModelUpdate,
     StandaloneConversationPatch,
     StandaloneRunCreate,
@@ -213,6 +214,7 @@ def test_state_machine_and_title_contracts():
     with pytest.raises(ValueError):
         StandaloneConversationPatch(title="Renamed", project_id="another-project")
     assert StandaloneConversationModelUpdate(model="claude-fable-5-1").model == "claude-fable-5-1"
+    assert StandaloneConversationEffortUpdate(effort="max").effort == "max"
     with pytest.raises(ValueError, match="Unsupported chat model"):
         StandaloneConversationModelUpdate(model="claude-imaginary-9")
     with pytest.raises(ValueError, match="Unsupported chat model"):
@@ -221,6 +223,8 @@ def test_state_machine_and_title_contracts():
             message="Analyze revenue",
             model="claude-imaginary-9",
         )
+    with pytest.raises(ValueError, match="Unsupported thinking level"):
+        StandaloneConversationEffortUpdate(effort="unlimited")
     messages = [{"role": "user" if index % 2 == 0 else "assistant", "content": "x" * 100} for index in range(20)]
     selection = select_context_for_summary(
         messages,
@@ -867,6 +871,7 @@ async def test_execution_uses_org_anthropic_key_as_request_scoped_auth(
     conversation = await db_session.get(GatewayChatConversation, run.conversation_id)
     assert conversation is not None
     conversation.model = "claude-fable-5-1"
+    conversation.effort = "max"
     await db_session.commit()
     monkeypatch.setenv("SP_CHAT_AGENT_MODEL", "claude-opus-5")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-server")
@@ -911,6 +916,7 @@ async def test_execution_uses_org_anthropic_key_as_request_scoped_auth(
     }
     assert prepared.payload["conversation_id"] == run.conversation_id
     assert prepared.payload["model"] == "claude-fable-5-1"
+    assert prepared.payload["effort"] == "max"
     assert prepared.payload["agent_session"] == {
         "session_id": run.conversation_id,
         "storage": "unavailable",
@@ -1028,7 +1034,7 @@ async def test_execution_force_oauth_fails_before_starting_runtime_when_missing(
 
 
 @pytest.mark.asyncio
-async def test_conversation_model_is_persisted_and_can_be_updated(db_session):
+async def test_conversation_model_and_effort_are_persisted_and_can_be_updated(db_session):
     project = await _project(db_session)
     conversation, _run = await chat_store.create_conversation_with_run(
         db_session,
@@ -1038,6 +1044,7 @@ async def test_conversation_model_is_persisted_and_can_be_updated(db_session):
         branch="main",
         message="Analyze revenue",
         model="claude-sonnet-4-6",
+        effort="high",
     )
     detail = await chat_store.get_conversation_detail(
         db_session,
@@ -1047,6 +1054,7 @@ async def test_conversation_model_is_persisted_and_can_be_updated(db_session):
     )
     assert detail is not None
     assert detail.conversation.model == "claude-sonnet-4-6"
+    assert detail.conversation.effort == "high"
 
     assert await chat_store.update_conversation_model(
         db_session,
@@ -1057,6 +1065,16 @@ async def test_conversation_model_is_persisted_and_can_be_updated(db_session):
     )
     await db_session.refresh(conversation)
     assert conversation.model == "claude-opus-5"
+
+    assert await chat_store.update_conversation_effort(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        conversation_id=conversation.id,
+        effort="max",
+    )
+    await db_session.refresh(conversation)
+    assert conversation.effort == "max"
 
 
 @pytest.mark.asyncio

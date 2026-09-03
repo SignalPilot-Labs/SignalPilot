@@ -38,9 +38,9 @@ FILE_EDIT_TOOLS = ["Write", "Edit", "MultiEdit", "NotebookEdit", "Bash"]
 _EFFORT_LEVELS = {"low", "medium", "high", "xhigh", "max"}
 
 
-def _agent_effort() -> str:
+def _agent_effort(override: str | None = None) -> str:
     """Reasoning effort for the agent CLI. Defaults to medium."""
-    effort = os.getenv("SP_AGENT_EFFORT", "medium").strip().lower()
+    effort = (override or os.getenv("SP_AGENT_EFFORT", "medium")).strip().lower()
     return effort if effort in _EFFORT_LEVELS else "medium"
 
 
@@ -72,6 +72,7 @@ def _build_agent_env(
 def _build_agent_options_kwargs(
     *,
     model: str,
+    effort: str | None,
     max_turns: int,
     system_prompt: str,
     cwd: str | None,
@@ -117,7 +118,7 @@ def _build_agent_options_kwargs(
         # Reasoning effort. Medium keeps extended thinking useful without
         # long stalls before the first tool call. Override with
         # SP_AGENT_EFFORT (low|medium|high|xhigh|max).
-        "effort": _agent_effort(),
+        "effort": _agent_effort(effort),
     }
     plugin_path = os.getenv("SP_AGENT_PLUGIN_PATH", "").strip()
     if plugin_path:

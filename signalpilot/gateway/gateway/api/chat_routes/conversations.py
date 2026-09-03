@@ -14,6 +14,7 @@ from gateway.models.standalone_chat import (
     SharedConversationDetail,
     StandaloneConversationCreate,
     StandaloneConversationDetail,
+    StandaloneConversationEffortUpdate,
     StandaloneConversationModelUpdate,
     StandaloneConversationPatch,
 )
@@ -91,6 +92,7 @@ async def create_conversation(body: StandaloneConversationCreate, store: StoreD,
         per_query_budget_usd=body.per_query_budget_usd,
         chat_budget_usd=body.chat_budget_usd,
         model=body.model,
+        effort=body.effort,
         message_metadata={"report_reference": report_reference} if report_reference else None,
     )
     detail = await chat_store.get_conversation_detail(
@@ -212,6 +214,28 @@ async def update_conversation_model(
     if not changed:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return {"id": conversation_id, "model": body.model}
+
+
+@router.put(
+    "/conversations/{conversation_id}/effort",
+    dependencies=[RequireScope("write")],
+)
+async def update_conversation_effort(
+    conversation_id: str,
+    body: StandaloneConversationEffortUpdate,
+    store: StoreD,
+):
+    _require_enabled()
+    changed = await chat_store.update_conversation_effort(
+        store.session,
+        org_id=store._require_org_id(),
+        user_id=store.user_id or "local",
+        conversation_id=conversation_id,
+        effort=body.effort,
+    )
+    if not changed:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return {"id": conversation_id, "effort": body.effort}
 
 
 @router.delete(

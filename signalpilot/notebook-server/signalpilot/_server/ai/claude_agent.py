@@ -114,6 +114,7 @@ def _run_agent_in_thread(
     agent_state: _ActiveAgent,
     message: str,
     model: str,
+    effort: str | None,
     max_turns: int,
     mcp_servers: dict[str, Any],
     system_prompt: str,
@@ -165,6 +166,7 @@ def _run_agent_in_thread(
         agent_env = _build_agent_env(auth_config, agent_env_overrides)
         agent_options_kwargs = _build_agent_options_kwargs(
             model=model,
+            effort=effort,
             max_turns=max_turns,
             system_prompt=system_prompt,
             cwd=cwd,
@@ -291,6 +293,7 @@ async def run_notebook_agent(
     message: str,
     session_id: SessionId,
     model: str = "claude-opus-4-6",
+    effort: str | None = None,
     max_turns: int = 50,
     new_chat: bool = False,
     message_history: list[dict[str, str]] | None = None,
@@ -365,6 +368,7 @@ async def run_notebook_agent(
             agent,
             message,
             model,
+            effort,
             max_turns,
             mcp_servers,
             system_prompt,

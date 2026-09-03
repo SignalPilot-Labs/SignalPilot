@@ -25,6 +25,7 @@ import {
   shareStandaloneConversation,
   steerStandaloneRun,
   type ChatReportMention,
+  type StandaloneChatEffort,
   type StandaloneChatRun,
   type StandaloneChatModel,
   type StandaloneConversation,
@@ -55,6 +56,7 @@ export function useStandaloneChatActions({
   perQueryBudgetUsd,
   chatBudgetUsd,
   selectedModel,
+  selectedEffort,
   attachedReportReference,
   mutateDetail,
   mutateHistory,
@@ -72,6 +74,7 @@ export function useStandaloneChatActions({
   perQueryBudgetUsd: number;
   chatBudgetUsd: number;
   selectedModel: StandaloneChatModel;
+  selectedEffort: StandaloneChatEffort;
   attachedReportReference:
     | { report_id: string; version_id: string }
     | undefined;
@@ -107,6 +110,7 @@ export function useStandaloneChatActions({
             perQueryBudgetUsd,
             chatBudgetUsd,
             selectedModel,
+            selectedEffort,
             attachedReportReference,
           );
           setSelectedReport(null);
@@ -250,6 +254,7 @@ export function useStandaloneChatActions({
       perQueryBudgetUsd,
       chatBudgetUsd,
       selectedModel,
+      selectedEffort,
       attachedReportReference,
       toast,
       setDraft,

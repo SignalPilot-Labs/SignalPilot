@@ -303,6 +303,7 @@ async def fork_shared_conversation(
         per_query_budget_usd=per_query_budget_usd,
         chat_budget_usd=chat_budget_usd,
         model=source.model,
+        effort=source.effort,
         forked_from_conversation_id=source.id,
         status="active",
         title=(source.title or "New chat")[:200],

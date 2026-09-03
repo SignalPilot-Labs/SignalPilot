@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useEffect, useState, type ReactNode } from "react";
+import { useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   ArrowLeft,
   ExternalLink,
@@ -25,9 +25,12 @@ import type {
   ConversationFileInfo,
   ConversationNotebook,
   SqlTraceExecution,
+  StandaloneChatEvent,
 } from "~/lib/api";
 import { ChatFileViewer } from "~/components/chat/chat-file-viewer";
+import { ChatUiContext } from "~/components/chat/chat-ui-context";
 import { SqlTracePanel } from "~/components/chat/sql-trace-panel";
+import { describeQueryExecutions } from "~/lib/chat-query-descriptions";
 
 // The notebook runtime graph is heavy. Load it only when the panel shows a
 // notebook, so /chats stays light until then.
@@ -199,6 +202,8 @@ function FilesTab({
  * gateway verified the kernel sandbox is running; anything else renders the
  * saved notebook document with a "Finished" badge.
  */
+const EMPTY_EVENTS: StandaloneChatEvent[] = [];
+
 export function ArtifactsPanel({
   conversationId,
   notebooks,
@@ -225,6 +230,14 @@ export function ArtifactsPanel({
   /** Test-only: rendered instead of the file viewer (the fixture harness has no gateway). */
   fileViewOverride?: ReactNode;
 }) {
+  // The agent's one-line query descriptions live in the run events; the
+  // trace rows come from the gateway without them, so join here.
+  const uiContext = useContext(ChatUiContext);
+  const events = uiContext?.events ?? EMPTY_EVENTS;
+  const queryDescriptions = useMemo(
+    () => describeQueryExecutions(events, executions),
+    [events, executions],
+  );
   // Notebooks that can render: live, or ended with a saved document.
   const showableNotebooks = notebooks.filter(
     (entry) => entry.status === "live" || entry.document !== null,
@@ -448,7 +461,10 @@ export function ArtifactsPanel({
         )}
         {activeTab === "queries" && (
           <div className="h-full overflow-y-auto p-3">
-            <SqlTracePanel executions={executions} />
+            <SqlTracePanel
+              executions={executions}
+              descriptions={queryDescriptions}
+            />
           </div>
         )}
           </>

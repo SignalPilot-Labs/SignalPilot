@@ -9,7 +9,9 @@ from gateway.db.models import GatewayChatUserPreference, GatewayWorkspaceProject
 from gateway.models.standalone_chat import ChatBootstrapResponse
 from gateway.security.scope_guard import RequireScope
 from gateway.standalone_chat.config import (
+    CHAT_EFFORT_OPTIONS,
     CHAT_MODEL_OPTIONS,
+    default_chat_effort,
     default_chat_model,
     enterprise_chat_feature_flags,
     standalone_chat_enabled,
@@ -53,6 +55,8 @@ async def bootstrap_chat(store: StoreD, role: OrgRole):
     }
     model_options = [{"id": model_id, "label": label} for model_id, label in CHAT_MODEL_OPTIONS]
     selected_model = default_chat_model()
+    effort_options = [{"id": effort_id, "label": label} for effort_id, label in CHAT_EFFORT_OPTIONS]
+    selected_effort = default_chat_effort()
     if not standalone_chat_enabled():
         return ChatBootstrapResponse(
             enabled=False,
@@ -62,6 +66,8 @@ async def bootstrap_chat(store: StoreD, role: OrgRole):
             starter_questions=[],
             available_models=model_options,
             default_model=selected_model,
+            available_efforts=effort_options,
+            default_effort=selected_effort,
             enterprise_features=exposed_flags,
         )
     org_id = store._require_org_id()
@@ -151,6 +157,8 @@ async def bootstrap_chat(store: StoreD, role: OrgRole):
         default_chat_budget_usd=(preference.default_chat_budget_usd if preference else 1.0),
         available_models=model_options,
         default_model=selected_model,
+        available_efforts=effort_options,
+        default_effort=selected_effort,
         enterprise_features=exposed_flags,
     )
 

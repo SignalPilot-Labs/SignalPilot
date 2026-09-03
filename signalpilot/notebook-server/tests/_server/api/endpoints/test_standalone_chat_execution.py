@@ -460,6 +460,7 @@ async def test_execute_materializes_the_frozen_project_before_starting_the_agent
         # Capture while the run is live: the disposable checkout is removed
         # when the stream finishes, so nothing can be read after the fact.
         captured["max_turns"] = str(kwargs["max_turns"])
+        captured["effort"] = str(kwargs["effort"])
         captured["chat_session_id"] = str(kwargs["chat_session_id_override"])
         captured["resume_session"] = str(kwargs["resume_session_override"])
         captured["claude_config_dir"] = str(
@@ -490,6 +491,7 @@ async def test_execute_materializes_the_frozen_project_before_starting_the_agent
                 "commit_sha": commit_sha,
                 "gateway_session_token": token,
                 "prompt": "Yo",
+                "effort": "max",
             }
         )
     )
@@ -505,6 +507,7 @@ async def test_execute_materializes_the_frozen_project_before_starting_the_agent
     assert captured["dbt_project_yml"] == "name: test_project\n"
     assert captured["snapshot_auth"] == f"Bearer {token}"
     assert captured["max_turns"] == "200"
+    assert captured["effort"] == "max"
     assert captured["chat_session_id"] == conversation_id
     assert captured["resume_session"] == "False"
     assert Path(captured["claude_config_dir"]).name == conversation_id

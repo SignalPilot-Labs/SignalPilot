@@ -5,6 +5,8 @@ import Link from "next/link";
 import { useId, type Dispatch, type SetStateAction } from "react";
 import type { Connector } from "~/lib/api/mcp-connectors";
 import type {
+  StandaloneChatEffort,
+  StandaloneChatEffortOption,
   StandaloneChatModel,
   StandaloneChatModelOption,
 } from "~/lib/api";
@@ -36,6 +38,9 @@ export type ChatModelSettings = {
   options: StandaloneChatModelOption[];
   disabled: boolean;
   onChange: (model: StandaloneChatModel) => void;
+  effort: StandaloneChatEffort;
+  effortOptions: StandaloneChatEffortOption[];
+  onEffortChange: (effort: StandaloneChatEffort) => void;
 };
 
 const MANAGE_HREF = "/settings/connectors";
@@ -238,6 +243,7 @@ function BudgetsSection({ budgets }: { budgets: ChatBudgetSettings }) {
 
 function ModelSection({ model }: { model: ChatModelSettings }) {
   const selectId = useId();
+  const effortSelectId = useId();
   return (
     <section aria-labelledby="chat-settings-model" className="space-y-3">
       <div>
@@ -266,6 +272,30 @@ function ModelSection({ model }: { model: ChatModelSettings }) {
             </option>
           ))}
         </select>
+      </label>
+      <label htmlFor={effortSelectId} className="block">
+        <span className="mb-1 block text-[11.5px] text-[var(--color-text-muted)]">
+          Thinking level
+        </span>
+        <select
+          id={effortSelectId}
+          data-testid="chat-settings-effort-select"
+          value={model.effort}
+          disabled={model.disabled}
+          onChange={(event) =>
+            model.onEffortChange(event.target.value as StandaloneChatEffort)
+          }
+          className="min-h-[38px] w-full rounded-[var(--radius-ctl)] border border-[var(--color-border)] bg-[var(--color-bg-input)] px-2.5 text-[12.5px] text-[var(--color-text)] focus:border-[var(--color-border-active)] focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {model.effortOptions.map((option) => (
+            <option key={option.id} value={option.id}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+        <span className="mt-1 block text-[11px] leading-4 text-[var(--color-text-dim)]">
+          Higher levels spend longer reasoning before acting. Medium is the default.
+        </span>
       </label>
       {model.disabled && (
         <p className="text-[11px] text-[var(--color-text-dim)]">

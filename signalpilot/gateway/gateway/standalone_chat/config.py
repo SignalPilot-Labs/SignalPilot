@@ -18,12 +18,27 @@ CHAT_MODEL_OPTIONS: tuple[tuple[str, str], ...] = (
 )
 CHAT_MODEL_IDS = frozenset(model_id for model_id, _label in CHAT_MODEL_OPTIONS)
 FALLBACK_CHAT_MODEL = "claude-opus-4-6"
+CHAT_EFFORT_OPTIONS: tuple[tuple[str, str], ...] = (
+    ("low", "Low"),
+    ("medium", "Medium"),
+    ("high", "High"),
+    ("xhigh", "Extra high"),
+    ("max", "Max"),
+)
+CHAT_EFFORT_IDS = frozenset(effort_id for effort_id, _label in CHAT_EFFORT_OPTIONS)
+FALLBACK_CHAT_EFFORT = "medium"
 
 
 def default_chat_model() -> str:
     """Return the selectable deployment default, ignoring invalid overrides."""
     configured = os.getenv("SP_CHAT_AGENT_MODEL", "").strip()
     return configured if configured in CHAT_MODEL_IDS else FALLBACK_CHAT_MODEL
+
+
+def default_chat_effort() -> str:
+    """Return the Agent SDK effort default, ignoring invalid overrides."""
+    configured = os.getenv("SP_AGENT_EFFORT", "").strip().lower()
+    return configured if configured in CHAT_EFFORT_IDS else FALLBACK_CHAT_EFFORT
 
 
 def standalone_chat_enabled() -> bool:

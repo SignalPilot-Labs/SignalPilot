@@ -48,10 +48,21 @@ export default function NotebookBoot({
   children,
   onPhaseChange,
   onReady,
+  view,
+  readShowCode,
 }: {
   children?: React.ReactNode;
   onPhaseChange?: (phase: string) => void;
   onReady?: () => void;
+  /**
+   * Page mode override forwarded to the editor embed. "read" mounts the run
+   * view (cells + live outputs, no editing chrome) regardless of the host
+   * URL — used by the chat page's live notebook panel. Omit for the normal
+   * URL-derived edit surface.
+   */
+  view?: "edit" | "read";
+  /** Read view only: code + outputs (true, default) or outputs-only app view. */
+  readShowCode?: boolean;
 }) {
   const config = useNotebookConfig();
   const router = useRouter();
@@ -59,7 +70,9 @@ export default function NotebookBoot({
   const clientRef = useRef<SignalpilotClient | null>(null);
   const staticDataRef = useRef<NotebookStaticData | null>(null);
   const [ready, setReady] = useState(false);
-  const [phase, setPhase] = useState<string>("health");
+  // Viewer embeds never gate on runtime health. Their first visible phase
+  // must read as document loading, not runtime startup.
+  const [phase, setPhase] = useState<string>(view ? "ready" : "health");
   const [EditorComponent, setEditorComponent] =
     useState<SignalpilotEditorComponent | null>(null);
 
@@ -193,6 +206,9 @@ export default function NotebookBoot({
     <>
       <EditorComponent
         client={clientRef.current}
+        mode={view}
+        readShowCode={readShowCode}
+        kernelSessionId={view ? config.kernelSessionId : undefined}
         config={{
           gatewayUrl: config.gatewayUrl,
           gatewayApiKey: staticData.gatewayToken,

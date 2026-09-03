@@ -183,6 +183,91 @@ def pull_branch(project_id: str, remote_url: str, branch: str) -> dict:
     }
 
 
+async def ensure_repo_mirror(session, *, org_id: str, project_id: str, default_branch: str | None = None) -> bool:
+    """Reconcile the bare git mirror against the durable DB link.
+
+    The mirror lives on an ephemeral volume while the project + GitHub-link rows
+    are durable in the database, so the two can drift: a fresh/reset volume, an
+    import whose clone failed after the rows were written, or a container
+    remounted on a different volume all leave a linked project with no mirror —
+    which otherwise dead-ends readiness at "production branch is not available"
+    with no recovery.
+
+    This is the single self-heal primitive. If the mirror is missing OR has no
+    head for the default branch, and a GitHub link exists, it re-clones from the
+    link's remote (idempotent: clone when absent, fetch+materialize when
+    present). Returns True if the mirror is healthy afterward, False if it cannot
+    be healed (no link / installation) — callers decide how to surface that.
+
+    Safe to call from any path that needs the mirror; a healthy mirror is a
+    couple of cheap checks and no network.
+    """
+    import asyncio as _asyncio
+
+    from ..store import github as gh_store
+    from .repos import branch_head_sha, clone_from_remote, materialize_local_branches
+
+    link = await gh_store.get_repo_link_for_project(session, org_id=org_id, project_id=project_id)
+    branch = default_branch or (link.default_branch if link else None) or "main"
+
+    def _healthy() -> bool:
+        return repo_exists(project_id) and bool(branch_head_sha(project_id, branch))
+
+    if _healthy():
+        return True
+    if not link:
+        # No remote to rebuild from — a managed/upload project's mirror IS the
+        # source of truth and cannot be reconstructed here.
+        return False
+
+    installation = await gh_store.get_installation(session, org_id=org_id, installation_id=link.installation_id)
+    if not installation:
+        logger.warning("ensure_repo_mirror: installation missing for project %s", project_id)
+        return False
+    token = await gh_store.get_valid_token(session, installation)
+    remote_url = f"https://x-access-token:{token}@github.com/{link.repo_full_name}.git"
+    try:
+        await _asyncio.to_thread(clone_from_remote, project_id, remote_url)
+        await _asyncio.to_thread(materialize_local_branches, project_id, branch)
+    except Exception:
+        logger.warning("ensure_repo_mirror: reclone failed for project %s", project_id, exc_info=True)
+        return False
+    healed = _healthy()
+    if healed:
+        logger.info("ensure_repo_mirror: re-cloned missing mirror for project %s (%s)", project_id, link.repo_full_name)
+    return healed
+
+
+async def reconcile_all_repo_mirrors() -> int:
+    """Best-effort startup reconciliation: ensure every active GitHub-linked
+    project has its mirror, healing volume-reset/drift wholesale so users never
+    hit a missing mirror. Returns the number of mirrors healed."""
+    from ..db.engine import get_session_factory
+    from ..store import github as gh_store
+
+    factory = get_session_factory()
+    healed = 0
+    async with factory() as session:
+        try:
+            links = await gh_store.list_all_active_repo_links(session)
+        except Exception:
+            logger.warning("reconcile_all_repo_mirrors: could not list repo links", exc_info=True)
+            return 0
+    for link in links:
+        try:
+            async with factory() as session:
+                if await ensure_repo_mirror(
+                    session, org_id=link.org_id, project_id=link.project_id,
+                    default_branch=link.default_branch,
+                ) and not repo_exists(link.project_id):
+                    healed += 1
+        except Exception:
+            logger.warning("reconcile: heal failed for project %s", link.project_id, exc_info=True)
+    if healed:
+        logger.info("reconcile_all_repo_mirrors: healed %d missing mirror(s)", healed)
+    return healed
+
+
 async def sync_project_with_github(project_id: str, org_id: str) -> dict:
     """Sync all branches with GitHub.
 
@@ -201,6 +286,12 @@ async def sync_project_with_github(project_id: str, org_id: str) -> dict:
         installation = await gh_store.get_installation(session, org_id=org_id, installation_id=link.installation_id)
         if not installation:
             return {"error": "GitHub installation not found"}
+
+        # Self-heal a missing/empty mirror before syncing: the re-sync action is
+        # the user's recovery path, so it must rebuild, not assume the mirror.
+        await ensure_repo_mirror(
+            session, org_id=org_id, project_id=project_id, default_branch=link.default_branch
+        )
 
         token = await gh_store.get_valid_token(session, installation)
         remote_url = f"https://x-access-token:{token}@github.com/{link.repo_full_name}.git"

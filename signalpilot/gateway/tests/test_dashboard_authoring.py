@@ -10,28 +10,33 @@ from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
+from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from gateway.api import dashboards as dashboard_api
 from gateway.dashboard import store as dashboard_store
-from gateway.dashboard.authoring import DashboardAgentDraft, DashboardAuthoringAgent, materialize_agent_draft
 from gateway.dashboard.cache import dashboard_query_cache_key
 from gateway.dashboard.domain import DashboardDefinition
 from gateway.dashboard.operations import (
     DashboardTimeSeriesWindowError,
     RenameDashboard,
     apply_dashboard_operations,
+    canonicalize_dashboard_explore_names,
     canonicalize_dashboard_filter_targets,
+    canonicalize_dashboard_time_series_defaults,
     validate_dashboard_semantics,
     validate_time_series_default_windows,
 )
-from gateway.db.models import GatewayBase, GatewayDashboardAuthoringSession, GatewayDashboardResult
-from gateway.models.dashboards import (
-    DashboardAuthoringMessageRequest,
-    DashboardAuthoringRequest,
-    DashboardSemanticContext,
+from gateway.db.models import (
+    GatewayBase,
+    GatewayChatConversation,
+    GatewayChatMessage,
+    GatewayDashboardAuthoringSession,
+    GatewayDashboardResult,
+    GatewayStructuredQueryResult,
 )
+from gateway.models.dashboards import DashboardRuntimeFilter, DashboardSemanticContext
 
 FIXTURE = Path(__file__).parents[2] / "web/dashboard/lightdash-contract/fixtures/five-components.json"
 
@@ -153,7 +158,12 @@ async def _seed_apply_receipts(
     receipt_dashboard_id = dashboard_id or preview.dashboard_id or f"draft:{preview.id}"
     receipt_version_id = version_id or f"draft:{preview.id}"
     requested_filters = [
-        rule
+        DashboardRuntimeFilter(
+            id=rule.id,
+            operator=rule.operator,
+            values=rule.values,
+            settings=rule.settings,
+        )
         for rule in definition.filters.dimensions
         if rule.values or rule.operator in {"isNull", "notNull"}
     ]
@@ -188,6 +198,26 @@ async def _seed_apply_receipts(
     db.add_all(rows)
     await db.commit()
     return rows
+
+
+def _chat_conversation(conversation_id: str, *, created_at: float) -> GatewayChatConversation:
+    return GatewayChatConversation(
+        id=conversation_id,
+        org_id="org-a",
+        user_id="owner-a",
+        project_id="project-phase-1",
+        surface="standalone",
+        origin="user",
+        branch="main",
+        commit_sha="1" * 40,
+        status="active",
+        title="Dashboard chat",
+        message_count=0,
+        total_tokens=0,
+        total_cost_usd=0,
+        created_at=created_at,
+        updated_at=created_at,
+    )
 
 
 @pytest_asyncio.fixture
@@ -272,11 +302,56 @@ def test_unknown_dashboard_filter_target_still_fails_after_canonicalization() ->
         validate_dashboard_semantics(definition, _orders_context())
 
 
+def test_unknown_filter_explore_is_recovered_from_an_exact_field_id() -> None:
+    payload = _definition_with_filter().model_dump(mode="json", by_alias=True)
+    payload["filters"]["dimensions"][0]["target"]["tableName"] = "<UNKNOWN>"
+    payload["filters"]["dimensions"][0]["tileTargets"] = {
+        "tile-bar": {"tableName": "<UNKNOWN>", "fieldId": "orders.order_date"}
+    }
+
+    canonical = canonicalize_dashboard_filter_targets(
+        DashboardDefinition.model_validate(payload),
+        _orders_context(),
+    )
+
+    rule = canonical.filters.dimensions[0]
+    assert rule.target.tableName == "orders"
+    assert rule.tileTargets is not None
+    assert rule.tileTargets["tile-bar"] is not False
+    assert rule.tileTargets["tile-bar"].tableName == "orders"
+    validate_dashboard_semantics(canonical, _orders_context())
+
+
+def test_unknown_explore_is_recovered_from_exact_unambiguous_field_ids() -> None:
+    payload = _single_bar_definition(drill_dimensions=["orders.customer"]).model_dump(mode="json", by_alias=True)
+    payload["charts"][0]["query"]["exploreName"] = "<UNKNOWN>"
+
+    canonical = canonicalize_dashboard_explore_names(
+        DashboardDefinition.model_validate(payload),
+        _orders_context(),
+    )
+
+    assert canonical.charts[0].query.exploreName == "orders"
+    validate_dashboard_semantics(canonical, _orders_context())
+
+
+def test_unknown_explore_is_not_recovered_from_invented_fields() -> None:
+    payload = _single_bar_definition(drill_dimensions=["orders.customer"]).model_dump(mode="json", by_alias=True)
+    payload["charts"][0]["query"].update({"exploreName": "<UNKNOWN>", "metrics": ["unknown.revenue"]})
+    payload["charts"][0]["visualization"]["config"]["layout"]["yField"] = ["unknown.revenue"]
+    definition = canonicalize_dashboard_explore_names(
+        DashboardDefinition.model_validate(payload),
+        _orders_context(),
+    )
+
+    assert definition.charts[0].query.exploreName == "<UNKNOWN>"
+    with pytest.raises(ValueError, match="Unknown explore: <UNKNOWN>"):
+        validate_dashboard_semantics(definition, _orders_context())
+
+
 def test_time_series_authoring_rejects_an_empty_applicable_date_window() -> None:
     payload = _definition_with_filter().model_dump(mode="json", by_alias=True)
-    payload["filters"]["dimensions"][0].update(
-        {"operator": "inBetween", "values": []}
-    )
+    payload["filters"]["dimensions"][0].update({"operator": "inBetween", "values": []})
 
     with pytest.raises(
         DashboardTimeSeriesWindowError,
@@ -290,6 +365,23 @@ def test_time_series_authoring_rejects_an_empty_applicable_date_window() -> None
 
 def test_time_series_authoring_accepts_a_bounded_relative_date_window() -> None:
     validate_time_series_default_windows(_definition_with_filter(), _orders_context())
+
+
+def test_time_series_authoring_canonicalizes_an_unbounded_governed_date_filter() -> None:
+    payload = _definition_with_filter().model_dump(mode="json", by_alias=True)
+    payload["filters"]["dimensions"][0].update({"operator": "inBetween", "values": []})
+
+    canonical = canonicalize_dashboard_time_series_defaults(
+        DashboardDefinition.model_validate(payload),
+        _orders_context(),
+    )
+
+    rule = canonical.filters.dimensions[0]
+    assert rule.operator == "inThePast"
+    assert rule.values == [30]
+    assert rule.settings is not None
+    assert rule.settings.unitOfTime == "days"
+    validate_time_series_default_windows(canonical, _orders_context())
 
 
 @pytest.mark.parametrize(
@@ -309,246 +401,104 @@ def test_dashboard_semantics_rejects_duplicate_or_self_drill_levels(
         validate_dashboard_semantics(definition, _orders_context())
 
 
-class _ModelClient:
-    def __init__(self, payload: dict | list[dict]) -> None:
-        self.payloads = payload if isinstance(payload, list) else [payload]
-        self.request: dict | None = None
-        self.requests: list[dict] = []
-
-    async def create_message(self, request_body: dict) -> dict:
-        self.request = request_body
-        self.requests.append(request_body)
-        payload = self.payloads[min(len(self.requests) - 1, len(self.payloads) - 1)]
-        return {
-            "content": [
-                {
-                    "type": "tool_use",
-                    "name": "submit_dashboard_draft",
-                    "input": payload,
-                }
-            ]
-        }
-
-
 @pytest.mark.asyncio
-async def test_agent_update_is_forced_through_typed_operations() -> None:
-    client = _ModelClient(
-        {
-            "summary": "Renamed the dashboard.",
-            "operations": [{"operation": "rename_dashboard", "name": "Executive revenue"}],
-        }
-    )
-    agent = DashboardAuthoringAgent(api_key="test", model_client=client)
-    draft = await agent.draft(
-        prompt="Rename this dashboard",
-        context=_orders_context(),
-        base_definition=_definition_with_filter(),
-    )
-    materialized = materialize_agent_draft(draft, base_definition=_definition_with_filter())
-    assert materialized.name == "Executive revenue"
-    assert client.request is not None
-    assert client.request["tool_choice"] == {"type": "tool", "name": "submit_dashboard_draft"}
-    assert "question is a concise natural-language question" in client.request["system"]
-    assert "Copy each filter target exactly" in client.request["system"]
-    assert "meaningful lower-grain drill hierarchy" in client.request["system"]
-    request_payload = json.loads(client.request["messages"][0]["content"])
-    assert request_payload["semantic_context"]["explores"][0]["dimensions"][3]["filter_target"] == {
-        "tableName": "orders",
-        "fieldId": "orders.order_date",
-    }
-    chart_schema = client.request["tools"][0]["input_schema"]["$defs"]["ChartDefinition"]
-    assert "question" in chart_schema["properties"]
-
-
-@pytest.mark.asyncio
-async def test_agent_repairs_filterless_creation_before_returning_the_draft() -> None:
-    empty = _definition()
-    repaired = _definition_with_filter()
-    client = _ModelClient(
-        [
-            {"summary": "Created the dashboard.", "definition": empty.model_dump(mode="json", by_alias=True)},
-            {
-                "summary": "Created the dashboard with filters.",
-                "definition": repaired.model_dump(mode="json", by_alias=True),
-            },
-        ]
-    )
-    agent = DashboardAuthoringAgent(api_key="test", model_client=client)
-    draft = await agent.draft(
-        prompt="Create an executive revenue dashboard",
-        context=_context(),
-        base_definition=None,
-    )
-    assert draft.definition is not None
-    assert [rule.id for rule in draft.definition.filters.dimensions] == ["date-filter"]
-    assert len(client.requests) == 2
-    repair_payload = json.loads(client.requests[1]["messages"][0]["content"])
-    assert "validation_feedback" in repair_payload
-    assert "rejected_draft" in repair_payload
-
-
-@pytest.mark.asyncio
-async def test_agent_repairs_creation_without_usable_drills() -> None:
-    missing = _single_bar_definition(drill_dimensions=None)
-    repaired = _single_bar_definition(drill_dimensions=["orders.customer"])
-    client = _ModelClient(
-        [
-            {"summary": "Created the dashboard.", "definition": missing.model_dump(mode="json", by_alias=True)},
-            {
-                "summary": "Created the dashboard with a region-to-customer drill.",
-                "definition": repaired.model_dump(mode="json", by_alias=True),
-            },
-        ]
-    )
-    agent = DashboardAuthoringAgent(api_key="test", model_client=client)
-
-    draft = await agent.draft(
-        prompt="Create an executive revenue dashboard",
-        context=_orders_context(),
-        base_definition=None,
-    )
-
-    assert draft.definition is not None
-    assert draft.definition.charts[0].signalPilot.drillDimensions == ["orders.customer"]
-    assert len(client.requests) == 2
-    repair_payload = json.loads(client.requests[1]["messages"][0]["content"])
-    assert "chart-bar" in repair_payload["validation_feedback"]
-    assert "lower-grain drill hierarchy" in repair_payload["validation_feedback"]
-
-
-@pytest.mark.asyncio
-async def test_agent_rejects_a_second_creation_without_usable_drills() -> None:
-    missing = _single_bar_definition(drill_dimensions=None)
-    client = _ModelClient(
-        {"summary": "Created the dashboard.", "definition": missing.model_dump(mode="json", by_alias=True)}
-    )
-    agent = DashboardAuthoringAgent(api_key="test", model_client=client)
-
-    with pytest.raises(ValueError, match="requires usable drill hierarchies for applicable charts"):
-        await agent.draft(
-            prompt="Create an executive revenue dashboard",
-            context=_orders_context(),
-            base_definition=None,
-        )
-
-    assert len(client.requests) == 2
-
-
-@pytest.mark.asyncio
-async def test_agent_repairs_filterless_follow_up_with_typed_filter_operation() -> None:
-    filter_operation = {
-        "operation": "add_filter_control",
-        "filter": _definition_with_filter().filters.dimensions[0].model_dump(mode="json", by_alias=True),
-    }
-    client = _ModelClient(
-        [
-            {
-                "summary": "Renamed the dashboard.",
-                "operations": [{"operation": "rename_dashboard", "name": "Executive revenue"}],
-            },
-            {
-                "summary": "Renamed the dashboard and added a date filter.",
-                "operations": [
-                    {"operation": "rename_dashboard", "name": "Executive revenue"},
-                    filter_operation,
-                ],
-            },
-        ]
-    )
-    agent = DashboardAuthoringAgent(api_key="test", model_client=client)
-    draft = await agent.draft(
-        prompt="Rename this dashboard",
-        context=_context(),
-        base_definition=_definition(),
-    )
-    materialized = materialize_agent_draft(draft, base_definition=_definition())
-    assert materialized.name == "Executive revenue"
-    assert [rule.id for rule in materialized.filters.dimensions] == ["date-filter"]
-    assert len(client.requests) == 2
-
-
-@pytest.mark.asyncio
-async def test_explicit_filter_opt_out_allows_a_filterless_draft() -> None:
-    empty = _definition()
-    client = _ModelClient(
-        {
-            "summary": "Created the dashboard without filters.",
-            "definition": empty.model_dump(mode="json", by_alias=True),
-        }
-    )
-    agent = DashboardAuthoringAgent(api_key="test", model_client=client)
-    draft = await agent.draft(
-        prompt="Create an executive revenue dashboard without filters",
-        context=_context(),
-        base_definition=None,
-    )
-    assert draft.definition is not None
-    assert draft.definition.filters.dimensions == []
-    assert len(client.requests) == 1
-
-
-@pytest.mark.asyncio
-async def test_agent_rejects_a_second_filterless_response() -> None:
-    empty = _definition()
-    client = _ModelClient(
-        {"summary": "Created the dashboard.", "definition": empty.model_dump(mode="json", by_alias=True)}
-    )
-    agent = DashboardAuthoringAgent(api_key="test", model_client=client)
-    with pytest.raises(ValueError, match="requires at least one governed filter control"):
-        await agent.draft(
-            prompt="Create an executive revenue dashboard",
-            context=_context(),
-            base_definition=None,
-        )
-    assert len(client.requests) == 2
-
-
-@pytest.mark.asyncio
-async def test_create_authoring_session_canonicalizes_model_filter_targets(
+async def test_edit_reopens_the_chat_that_created_the_dashboard(
     db_session: AsyncSession,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    payload = _definition_with_filter().model_dump(mode="json", by_alias=True)
-    payload["filters"]["dimensions"][0]["target"]["fieldId"] = "order_date"
-    model_definition = DashboardDefinition.model_validate(payload)
-
-    class ShorthandFilterAgent:
-        model = "test-model"
-
-        def __init__(self, *, api_key: str) -> None:
-            assert api_key == "test-key"
-
-        async def draft(self, **_kwargs) -> DashboardAgentDraft:
-            return DashboardAgentDraft(
-                summary="Created a dashboard with a date filter.",
-                definition=model_definition,
-            )
-
-    async def resolve_context(*_args, **_kwargs) -> DashboardSemanticContext:
-        return _orders_context()
-
-    async def resolve_key(*_args, **_kwargs) -> str:
-        return "test-key"
-
-    monkeypatch.setattr(dashboard_api.resolver, "resolve", resolve_context)
-    monkeypatch.setattr(dashboard_api, "DashboardAuthoringAgent", ShorthandFilterAgent)
-    monkeypatch.setattr(dashboard_api.org_secrets_store, "resolve_anthropic_key", resolve_key)
-    store = SimpleNamespace(
-        session=db_session,
+    created = await dashboard_store.create_private_dashboard(
+        db_session,
+        org_id="org-a",
         user_id="owner-a",
-        _require_org_id=lambda: "org-a",
+        definition=_definition_with_filter(),
     )
+    creation = await dashboard_store.create_authoring_session(
+        db_session,
+        org_id="org-a",
+        user_id="owner-a",
+        dashboard_id=created.dashboard.id,
+        base_version_id=None,
+        definition=created.version.definition,
+        operations=[],
+        prompt="Create this dashboard",
+        summary="Created the dashboard.",
+        agent_run_id="creation-run",
+        model="test-model",
+        requires_custom_sql_confirmation=False,
+        custom_sql_confirmed=False,
+    )
+    origin = _chat_conversation("conversation-origin", created_at=1.0)
+    empty_edit = _chat_conversation("conversation-empty-edit", created_at=2.0)
+    db_session.add_all(
+        [
+            origin,
+            empty_edit,
+            GatewayChatMessage(
+                id="dashboard-created-message",
+                org_id="org-a",
+                user_id="owner-a",
+                project_id=created.dashboard.project_id,
+                conversation_id=origin.id,
+                role="assistant",
+                content="Your dashboard is ready.",
+                metadata_json={
+                    "dashboard_preview": {
+                        "authoring_session_id": creation.id,
+                        "dashboard_name": created.version.definition.name,
+                    }
+                },
+                sequence=2,
+                created_at=1.5,
+            ),
+        ]
+    )
+    creation.status = "applied"
+    creation.applied_version_id = created.version.id
+    creation.created_at = datetime(2026, 1, 1, tzinfo=UTC)
+    creation.updated_at = datetime(2026, 1, 1, tzinfo=UTC)
+    await db_session.commit()
 
-    session = await dashboard_api.create_dashboard_authoring_session(
-        DashboardAuthoringRequest(
-            prompt="Create an executive dashboard",
-            project_id=model_definition.signalPilot.projectId,
-            commit_sha=model_definition.signalPilot.commitSha,
+    active_edit = await dashboard_store.create_authoring_session(
+        db_session,
+        org_id="org-a",
+        user_id="owner-a",
+        dashboard_id=created.dashboard.id,
+        base_version_id=created.version.id,
+        definition=created.version.definition,
+        operations=[],
+        prompt="Open this dashboard for editing",
+        summary="Ready to edit.",
+        agent_run_id="edit-run",
+        model="data-chat",
+        requires_custom_sql_confirmation=False,
+        custom_sql_confirmed=True,
+        conversation_id=empty_edit.id,
+    )
+    active_row = await dashboard_store.get_authoring_session(
+        db_session,
+        org_id="org-a",
+        user_id="owner-a",
+        session_id=active_edit.id,
+    )
+    assert active_row is not None
+    active_row.created_at = datetime(2099, 1, 2, tzinfo=UTC)
+    active_row.updated_at = datetime(2099, 1, 2, tzinfo=UTC)
+    await db_session.commit()
+
+    target = await dashboard_api.open_dashboard_authoring_chat(
+        created.dashboard.id,
+        SimpleNamespace(
+            session=db_session,
+            user_id="owner-a",
+            _require_org_id=lambda: "org-a",
         ),
-        store,
     )
 
-    assert session.definition.filters.dimensions[0].target.fieldId == "orders.order_date"
+    assert target == {
+        "conversation_id": origin.id,
+        "authoring_session_id": active_edit.id,
+    }
+    await db_session.refresh(active_row)
+    assert active_row.conversation_id == origin.id
 
 
 @pytest.mark.asyncio
@@ -685,6 +635,73 @@ async def test_apply_rejects_any_non_exact_or_incomplete_chart_receipt(
 
 
 @pytest.mark.asyncio
+async def test_apply_accepts_exact_governed_limit_receipt_for_ranked_table(
+    db_session: AsyncSession,
+) -> None:
+    created = await dashboard_store.create_private_dashboard(
+        db_session,
+        org_id="org-a",
+        user_id="owner-a",
+        definition=_definition_with_filter(),
+    )
+    definition = created.version.definition.model_copy(update={"name": "Ranked table preview"})
+    preview = await dashboard_store.create_authoring_session(
+        db_session,
+        org_id="org-a",
+        user_id="owner-a",
+        dashboard_id=created.dashboard.id,
+        base_version_id=created.version.id,
+        definition=definition,
+        operations=[{"operation": "rename_dashboard", "name": "Ranked table preview"}],
+        prompt="Rename this dashboard",
+        summary="Renamed the dashboard.",
+        agent_run_id="agent-run-ranked-table",
+        model="test-model",
+        requires_custom_sql_confirmation=False,
+        custom_sql_confirmed=False,
+    )
+    receipts = await _seed_apply_receipts(
+        db_session,
+        preview=preview,
+        definition=definition,
+    )
+    table_chart = next(chart for chart in definition.charts if chart.visualization.type == "table")
+    table_receipt = next(receipt for receipt in receipts if receipt.chart_id == table_chart.id)
+    table_receipt.completeness = "truncated"
+    table_receipt.structured_result_id = "structured-ranked-table"
+    db_session.add(
+        GatewayStructuredQueryResult(
+            id=table_receipt.structured_result_id,
+            execution_id=table_receipt.execution_id,
+            org_id="org-a",
+            owner_user_id="owner-a",
+            columns_json=[],
+            rows_json=[],
+            preview_rows_json=[],
+            saved_row_count=table_chart.query.limit,
+            source_completeness="unknown",
+            result_completeness="truncated",
+            display_completeness="complete",
+            truncation_reason=(f"result exceeded the {table_chart.query.limit}-row governed limit"),
+        )
+    )
+    await db_session.commit()
+
+    applied = await dashboard_store.apply_authoring_session(
+        db_session,
+        org_id="org-a",
+        user_id="owner-a",
+        session_id=preview.id,
+        expected_current_version_id=created.version.id,
+        visible_complete_result_ids=[receipt.id for receipt in receipts],
+    )
+
+    assert applied.version.ordinal == 2
+    assert table_receipt.version_id == applied.version.id
+    assert table_receipt.completeness == "truncated"
+
+
+@pytest.mark.asyncio
 async def test_apply_reuses_complete_base_receipts_for_unchanged_charts(
     db_session: AsyncSession,
 ) -> None:
@@ -728,105 +745,16 @@ async def test_apply_reuses_complete_base_receipts_for_unchanged_charts(
     )
 
     all_results = (
-        await db_session.execute(
-            select(GatewayDashboardResult).where(
-                GatewayDashboardResult.dashboard_id == created.dashboard.id
+        (
+            await db_session.execute(
+                select(GatewayDashboardResult).where(GatewayDashboardResult.dashboard_id == created.dashboard.id)
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert {row.version_id for row in base_receipts} == {created.version.id}
     assert sum(row.version_id == applied.version.id for row in all_results) == len(definition.charts)
-
-
-@pytest.mark.asyncio
-async def test_applied_dashboard_reopens_the_same_authoring_thread_with_a_fresh_draft(
-    db_session: AsyncSession,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    created = await dashboard_store.create_private_dashboard(
-        db_session,
-        org_id="org-a",
-        user_id="owner-a",
-        definition=_definition_with_filter(),
-    )
-    first_definition = created.version.definition.model_copy(update={"name": "First edit"})
-    first = await dashboard_store.create_authoring_session(
-        db_session,
-        org_id="org-a",
-        user_id="owner-a",
-        dashboard_id=created.dashboard.id,
-        base_version_id=created.version.id,
-        definition=first_definition,
-        operations=[{"operation": "rename_dashboard", "name": "First edit"}],
-        prompt="Rename the dashboard",
-        summary="Renamed the dashboard.",
-        agent_run_id="run-1",
-        model="test-model",
-        requires_custom_sql_confirmation=False,
-        custom_sql_confirmed=False,
-    )
-    receipts = await _seed_apply_receipts(
-        db_session,
-        preview=first,
-        definition=first_definition,
-    )
-    applied = await dashboard_store.apply_authoring_session(
-        db_session,
-        org_id="org-a",
-        user_id="owner-a",
-        session_id=first.id,
-        expected_current_version_id=created.version.id,
-        visible_complete_result_ids=[row.id for row in receipts],
-    )
-    reopened = await dashboard_store.get_active_authoring_session(
-        db_session,
-        org_id="org-a",
-        user_id="owner-a",
-        dashboard_id=created.dashboard.id,
-    )
-    assert reopened is not None
-    assert reopened.status == "applied"
-    assert reopened.events_json[-1]["message"] == "Applied dashboard version 2"
-
-    class ResumedAgent:
-        model = "test-model"
-
-        def __init__(self, *, api_key: str) -> None:
-            assert api_key == "test-key"
-
-        async def draft(self, **_kwargs) -> DashboardAgentDraft:
-            return DashboardAgentDraft(
-                summary="Renamed the dashboard again.",
-                operations=[RenameDashboard(operation="rename_dashboard", name="Second edit")],
-            )
-
-    async def verified_context(*_args, **_kwargs) -> DashboardSemanticContext:
-        return _orders_context()
-
-    async def resolve_key(*_args, **_kwargs) -> str:
-        return "test-key"
-
-    monkeypatch.setattr(dashboard_api, "DashboardAuthoringAgent", ResumedAgent)
-    monkeypatch.setattr(dashboard_api, "_verified_context", verified_context)
-    monkeypatch.setattr(dashboard_api, "validate_dashboard_semantics", lambda *_args: None)
-    monkeypatch.setattr(dashboard_api.org_secrets_store, "resolve_anthropic_key", resolve_key)
-    store = SimpleNamespace(
-        session=db_session,
-        user_id="owner-a",
-        _require_org_id=lambda: "org-a",
-    )
-    second = await dashboard_api.continue_dashboard_authoring_session(
-        first.id,
-        DashboardAuthoringMessageRequest(prompt="Rename it again"),
-        store,
-    )
-    assert second.id != first.id
-    assert second.thread_id == first.thread_id
-    assert second.base_version_id == applied.version.id
-    assert second.definition.name == "Second edit"
-    assert [event.kind for event in second.events].count("user") == 2
-    assert [event.kind for event in second.events].count("assistant") == 2
-    assert any("latest saved dashboard version" in event.message for event in second.events)
 
 
 @pytest.mark.asyncio
@@ -863,12 +791,14 @@ async def test_new_dashboard_apply_promotes_only_the_exact_complete_preview_resu
         visible_complete_result_ids=[result.id for result in results],
     )
     promoted = (
-        await db_session.execute(
-            select(GatewayDashboardResult).where(
-                GatewayDashboardResult.id.in_([result.id for result in results])
+        (
+            await db_session.execute(
+                select(GatewayDashboardResult).where(GatewayDashboardResult.id.in_([result.id for result in results]))
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert {row.dashboard_id for row in promoted} == {applied.dashboard.id}
     assert {row.version_id for row in promoted} == {applied.version.id}
     assert {row.chart_id for row in promoted} == {chart.id for chart in applied.version.definition.charts}

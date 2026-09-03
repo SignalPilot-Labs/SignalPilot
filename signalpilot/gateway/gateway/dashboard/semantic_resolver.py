@@ -14,6 +14,7 @@ from typing import Any
 from sqlalchemy import select
 
 from gateway.connectors.pool_manager import pool_manager
+from gateway.connectors.registry import get_connector_registration
 from gateway.connectors.schema_cache import _schema_fingerprint, schema_cache
 from gateway.db.models import GatewayConnection, GatewayWorkspaceProject
 from gateway.dbt.inventory import scan_project
@@ -27,15 +28,19 @@ from gateway.models.dashboards import (
 )
 from gateway.store import Store
 from gateway.verification import compare_columns
+from gateway.workspace_store.dbt_detect import resolve_dbt_project_dir
 from gateway.workspace_store.objects import workspace_object_storage
 
 from .project_snapshot import hydrate_github_mirror, materialize_workspace_snapshot
 
 SUPPORTED_AGGREGATIONS = {"sum", "count", "count_distinct", "average", "min", "max"}
+SUPPORTED_METRIC_FORMATS = {"integer", "decimal", "compact", "percentage"}
 
 
 class DashboardSemanticError(ValueError):
-    pass
+    def __init__(self, message: str, *, code: str = "semantic_context_unavailable"):
+        super().__init__(message)
+        self.code = code
 
 
 def _canonical_hash(value: Any) -> str:
@@ -71,13 +76,19 @@ def parse_approved_metrics(settings: dict | None) -> list[dict[str, Any]]:
         aggregation = str(raw["aggregation"]).lower()
         if aggregation not in SUPPORTED_AGGREGATIONS:
             raise DashboardSemanticError(f"Unsupported approved metric aggregation: {aggregation}")
+        metric_format = str(raw["format"]) if raw.get("format") else None
+        if metric_format == "number":
+            metric_format = "decimal"
+        if metric_format and metric_format not in SUPPORTED_METRIC_FORMATS:
+            if not (metric_format.startswith("currency:") and len(metric_format) == 12 and metric_format[9:].isupper()):
+                raise DashboardSemanticError(f"Unsupported approved metric format: {metric_format}")
         parsed.append(
             {
                 "model": str(raw["model"]),
                 "column": str(raw["column"]),
                 "aggregation": aggregation,
                 "label": str(raw["label"]),
-                "format": str(raw["format"]) if raw.get("format") else None,
+                "format": metric_format,
                 "field_id": str(raw.get("field_id") or f"{raw['model']}.{raw['column']}"),
                 "approval_source": str(raw.get("approval_source") or "project_settings"),
             }
@@ -136,6 +147,7 @@ def resolve_from_authorities(
     project_id: str,
     commit_sha: str,
     connection_name: str,
+    connection_type: str,
     project_map: ProjectMap,
     physical_schema: dict[str, Any],
     semantic_model: dict[str, Any],
@@ -149,6 +161,7 @@ def resolve_from_authorities(
             "physical_schema_fingerprint": physical_fingerprint,
             "connection_semantic_model": semantic_model,
             "approved_metrics": approved_metrics,
+            "connection_type": connection_type,
         }
     )
     metrics_by_model: dict[str, list[dict[str, Any]]] = {}
@@ -227,7 +240,7 @@ def resolve_from_authorities(
         project_id=project_id,
         commit_sha=commit_sha,
         connection_name=connection_name,
-        connection_type="mssql",
+        connection_type=connection_type,
         physical_schema_fingerprint=physical_fingerprint,
         semantic_fingerprint=fingerprint,
         explores=explores,
@@ -235,7 +248,20 @@ def resolve_from_authorities(
     )
 
 
-def _scan_commit(project_id: str, commit_sha: str) -> ProjectMap:
+def _scan_materialized_project(checkout_path: Path, settings: dict | None) -> ProjectMap:
+    """Scan the manifest-resolved dbt root inside one materialized workspace."""
+    files = [path.relative_to(checkout_path).as_posix() for path in checkout_path.rglob("*") if path.is_file()]
+    dbt_project_dir = resolve_dbt_project_dir(settings, files)
+    if dbt_project_dir is None:
+        raise DashboardSemanticError("The pinned project contains no dbt_project.yml")
+    resolved = checkout_path / dbt_project_dir if dbt_project_dir else checkout_path
+    project_map = scan_project(resolved)
+    if not project_map.models and not project_map.sources:
+        raise DashboardSemanticError("The pinned dbt project contains no models or sources")
+    return project_map
+
+
+def _scan_commit(project_id: str, commit_sha: str, settings: dict | None = None) -> ProjectMap:
     """Materialize one immutable bare-repo commit into a temporary scanner root."""
     if len(commit_sha) != 40 or any(ch not in "0123456789abcdef" for ch in commit_sha.lower()):
         raise DashboardSemanticError("A full immutable commit SHA is required")
@@ -255,7 +281,7 @@ def _scan_commit(project_id: str, commit_sha: str) -> ProjectMap:
             raise DashboardSemanticError("The pinned project commit is unavailable")
         with tarfile.open(archive_path) as archive:
             archive.extractall(checkout_path, filter="data")
-        return scan_project(checkout_path)
+        return _scan_materialized_project(checkout_path, settings)
 
 
 async def _scan_pinned_project(
@@ -264,6 +290,7 @@ async def _scan_pinned_project(
     org_id: str,
     project_id: str,
     commit_sha: str,
+    settings: dict | None = None,
 ) -> ProjectMap:
     """Scan a durable workspace snapshot, with git commits kept for compatibility."""
     with tempfile.TemporaryDirectory(prefix="sp-dashboard-workspace-") as temp_dir:
@@ -276,9 +303,9 @@ async def _scan_pinned_project(
             snapshot_ref=commit_sha,
             destination=checkout_path,
         ):
-            return scan_project(checkout_path)
+            return _scan_materialized_project(checkout_path, settings)
     try:
-        return _scan_commit(project_id, commit_sha)
+        return _scan_commit(project_id, commit_sha, settings)
     except DashboardSemanticError as original:
         # Older dashboard versions store a real Git commit rather than a
         # workspace snapshot reference. Rehydrate the replaceable GitHub
@@ -288,7 +315,7 @@ async def _scan_pinned_project(
             org_id=org_id,
             project_id=project_id,
         ):
-            return _scan_commit(project_id, commit_sha)
+            return _scan_commit(project_id, commit_sha, settings)
         raise original
 
 
@@ -315,21 +342,42 @@ class DashboardSemanticResolver:
                 )
             )
         ).scalar_one_or_none()
-        if connection is None or connection.db_type != "mssql":
-            raise DashboardSemanticError("Dashboard Phase 1 requires the project's MSSQL connection")
+        if connection is None:
+            raise DashboardSemanticError(
+                "The project connection is unavailable",
+                code="connection_missing",
+            )
+        try:
+            get_connector_registration(connection.db_type)
+        except ValueError as exc:
+            raise DashboardSemanticError(
+                "The project uses an unknown database connection type",
+                code="connection_type_unknown",
+            ) from exc
+        # Credential readiness must be rechecked even when schema metadata is
+        # cached; an open authoring session cannot outlive credential removal.
+        connection_string = await store.get_connection_string(connection_name)
+        if not connection_string:
+            raise DashboardSemanticError(
+                "The project connection credentials are unavailable",
+                code="credentials_missing",
+            )
         physical_schema = schema_cache.get(connection_name)
         if physical_schema is None:
-            connection_string = await store.get_connection_string(connection_name)
-            if not connection_string:
-                raise DashboardSemanticError("MSSQL connection credentials are unavailable")
             extras = await store.get_credential_extras(connection_name)
-            async with pool_manager.connection(
-                connection.db_type,
-                connection_string,
-                credential_extras=extras,
-                connection_name=connection_name,
-            ) as connector:
-                physical_schema = await connector.get_schema()
+            try:
+                async with pool_manager.connection(
+                    connection.db_type,
+                    connection_string,
+                    credential_extras=extras,
+                    connection_name=connection_name,
+                ) as connector:
+                    physical_schema = await connector.get_schema()
+            except Exception as exc:
+                raise DashboardSemanticError(
+                    "The project database schema is unavailable",
+                    code="schema_unavailable",
+                ) from exc
             schema_cache.put(connection_name, physical_schema)
         physical_schema = await store.apply_endorsement_filter(connection_name, physical_schema)
         includes = connection.schema_filter_include or []
@@ -348,15 +396,20 @@ class DashboardSemanticResolver:
             org_id=org_id,
             project_id=project_id,
             commit_sha=commit_sha,
+            settings=project.settings,
         )
         from gateway.api.schema._semantic_store import _load_semantic_model
 
-        return resolve_from_authorities(
+        context = resolve_from_authorities(
             project_id=project.id,
             commit_sha=commit_sha,
             connection_name=connection_name,
+            connection_type=connection.db_type,
             project_map=project_map,
             physical_schema=physical_schema,
             semantic_model=_load_semantic_model(connection_name),
             approved_metrics=parse_approved_metrics(project.settings),
         )
+        if not context.explores:
+            raise DashboardSemanticError("The pinned dbt project has no governed explores for this connection")
+        return context

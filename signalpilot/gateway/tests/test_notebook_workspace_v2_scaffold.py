@@ -857,7 +857,7 @@ class TestSessionLifecycle:
         resumed route URL replaces the cleared upstream."""
         from unittest.mock import AsyncMock
 
-        from gateway.notebooks.backends import VercelNotebookBackend
+        from gateway.notebooks.backends import LaunchRequest, VercelNotebookBackend
 
         runtime = AsyncMock()
         runtime.routes.return_value = {2718: "https://sbx-idle.vercel.run"}
@@ -865,8 +865,23 @@ class TestSessionLifecycle:
         from gateway.config.notebooks import NotebookSettings
 
         backend = VercelNotebookBackend(NotebookSettings(), runtime=runtime)
-        upstream = await backend.resume("sbx-idle")
+        request = LaunchRequest(
+            org_id="org-1",
+            user_id="user-1",
+            session_id="sess-idle",
+            project_id="proj-1",
+            branch="main",
+            session_jwt="fresh-jwt",
+            notebook_token="notebook-token",
+        )
+        upstream = await backend.resume("sbx-idle", request)
         runtime.resume.assert_awaited_once_with("sbx-idle")
+        runtime.start_process.assert_awaited_once()
+        process_command = runtime.start_process.await_args.args[1]
+        process_env = runtime.start_process.await_args.kwargs["env"]
+        assert "SP_SNAPSHOT_URL" not in process_env
+        assert process_env["SP_SESSION_JWT"] == "fresh-jwt"
+        assert "sp edit" in process_command
         runtime.create.assert_not_awaited()
         assert upstream == "https://sbx-idle.vercel.run"
 
@@ -1057,31 +1072,27 @@ class TestUnifiedArtifacts:
 
     @pytest_asyncio.fixture
     async def seeded(self, db):
-        from tests.test_artifacts_index import seed_chat_artifact, seed_eval_artifacts
+        from tests.test_artifacts_index import seed_eval_artifacts
 
-        chat_run_id, _ = await seed_chat_artifact(db, org_id=ORG)
         eval_run_id = await seed_eval_artifacts(db, org_id=ORG)
-        return db, chat_run_id, eval_run_id
+        return db, eval_run_id
 
     @pytest.mark.asyncio
-    async def test_artifact_index_lists_across_chat_and_eval_sources(self, seeded):
+    async def test_artifact_index_lists_eval_sources(self, seeded):
         from gateway.store.artifacts_index import list_artifacts
 
-        db, _, _ = seeded
+        db, _ = seeded
         records, total = await list_artifacts(db, org_id=ORG)
-        assert total == 2
-        assert {record.kind for record in records} == {"chat", "eval"}
+        assert total == 1
+        assert {record.kind for record in records} == {"eval"}
 
     @pytest.mark.asyncio
-    async def test_artifact_records_carry_provenance_run_task_session(self, seeded):
+    async def test_artifact_records_carry_provenance_run_task(self, seeded):
         from gateway.store.artifacts_index import list_artifacts
 
-        db, chat_run_id, eval_run_id = seeded
+        db, eval_run_id = seeded
         records, _ = await list_artifacts(db, org_id=ORG)
         by_kind = {record.kind: record.to_dict() for record in records}
-        assert by_kind["chat"]["provenance"]["run_id"] == chat_run_id
-        assert by_kind["chat"]["provenance"]["session_id"] == "vs-123"
-        assert by_kind["chat"]["provenance"]["conversation_id"]
         assert by_kind["eval"]["provenance"]["run_id"] == eval_run_id
         assert by_kind["eval"]["provenance"]["task_id"] == "q1"
 
@@ -1098,7 +1109,7 @@ class TestUnifiedArtifacts:
         from gateway.db.engine import get_db
         from gateway.security.scope_guard import _resolve_user_id as scope_user
 
-        db, _, _ = seeded
+        db, _ = seeded
         app = FastAPI()
         app.include_router(artifacts_router)
 
@@ -1117,23 +1128,8 @@ class TestUnifiedArtifacts:
         app.dependency_overrides[scope_user] = _user
         client = TestClient(app)
         body = client.get("/api/artifacts").json()
-        assert body["total"] == 2
+        assert body["total"] == 1
         assert all(record["download"]["route"] for record in body["artifacts"])
-
-    @pytest.mark.asyncio
-    async def test_agent_run_artifacts_appear_in_the_index(self, db):
-        """An artifact committed by an agent run is discoverable without
-        knowing the branch/run — it lists by org like any other."""
-        from tests.test_artifacts_index import seed_chat_artifact
-
-        from gateway.store.artifacts_index import list_artifacts
-
-        run_id, _ = await seed_chat_artifact(
-            db, org_id=ORG, filename="agent-report.html", session_id="chat:run-77"
-        )
-        records, _ = await list_artifacts(db, org_id=ORG)
-        match = [r for r in records if r.to_dict()["name"] == "agent-report.html"]
-        assert match and match[0].to_dict()["provenance"]["run_id"] == run_id
 
     @pytest.mark.asyncio
     async def test_artifact_retention_prunes_blobs_but_never_provenance_rows(self, db):

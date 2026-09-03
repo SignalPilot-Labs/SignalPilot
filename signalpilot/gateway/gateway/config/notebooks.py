@@ -23,6 +23,22 @@ _DIGEST_RE = re.compile(r"@sha256:[0-9a-f]{64}$")
 KNOWN_BACKENDS = ("", "vercel", "direct")
 
 
+def chat_force_oauth_token() -> bool:
+    """Whether interactive AI product paths must use the gateway's Claude OAuth token.
+
+    Force mode is deliberately separate from normal credential precedence.
+    Data Chat and governed dashboard authoring fail closed when the token is
+    missing, and chat notebooks launch without the organization's Anthropic API
+    key. Automated improvement runs remain separately credentialed.
+    """
+    return os.getenv("SP_CHAT_FORCE_OAUTH_TOKEN", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 @dataclass(frozen=True)
 class NotebookSettings:
     execution_backend: str = field(

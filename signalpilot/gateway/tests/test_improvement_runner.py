@@ -163,6 +163,7 @@ class TestSeedImprovementRun:
 class FakeRuntime:
     session_id: str = "sess-1"
     internal_base_url: str = "http://notebook:8888"
+    access_token: str | None = None
 
 
 @pytest_asyncio.fixture
@@ -188,12 +189,16 @@ def capture_execution(monkeypatch: pytest.MonkeyPatch):
         captured["jwt_kwargs"] = kwargs
         return "jwt-token"
 
-    async def fake_user_key(db, org_id, user_id):
+    async def fake_org_key(db, org_id):
         return None
 
     monkeypatch.setattr(execution, "ensure_execution_runtime", fake_ensure)
     monkeypatch.setattr(execution, "mint_session_jwt", fake_mint)
-    monkeypatch.setattr(execution, "get_user_anthropic_key", fake_user_key)
+    monkeypatch.setattr(
+        execution.org_secrets_store,
+        "resolve_anthropic_key",
+        fake_org_key,
+    )
     return captured
 
 
@@ -247,7 +252,7 @@ class TestPrepareExecutionImprovement:
             )
         assert prepared.payload["runtime_auth"] == {"type": "oauth", "token": "sk-ant-oat01-test-token"}
 
-    async def test_user_run_has_no_sandbox_capability(
+    async def test_user_run_gets_default_mcp_sandbox_capability(
         self, session_factory, capture_execution, monkeypatch
     ) -> None:
         from gateway.standalone_chat.execution import prepare_execution
@@ -279,6 +284,14 @@ class TestPrepareExecutionImprovement:
                 warm_context={},
             )
         assert prepared.payload["run_origin"] == "user"
-        assert "sandbox:execute" not in capture_execution["jwt_kwargs"]["capabilities"]
+        assert "sandbox:execute" in capture_execution["jwt_kwargs"]["capabilities"]
+        assert "dbt:execute" in capture_execution["jwt_kwargs"]["capabilities"]
+        assert capture_execution["jwt_kwargs"]["scopes"] == [
+            "read",
+            "query",
+            "execute",
+            "write",
+            "admin",
+        ]
         # The improvement billing key must never apply to user runs.
         assert prepared.payload.get("runtime_auth") is None

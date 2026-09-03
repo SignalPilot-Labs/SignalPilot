@@ -1,5 +1,5 @@
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import { useErrorBoundary } from "react-error-boundary";
 import { toast } from "@/components/ui/use-toast";
 import { getNotebook, useCellActions } from "@/core/cells/cells";
@@ -58,7 +58,7 @@ import { isSwitchingNotebookAtom as isSwitchingNotebookAtom_ } from "../notebook
 import { store } from "../state/jotai";
 import { kernelStateAtom } from "../kernel/state";
 import { type LayoutState, useLayoutActions } from "../layout/layout";
-import { kioskModeAtom } from "../mode";
+import { kioskModeAtom, viewerOnlyAtom } from "../mode";
 import { connectionAtom } from "../network/connection";
 import type { RequestId } from "../network/DeferredRequestRegistry";
 import { useRuntimeManager } from "../runtime/config";
@@ -167,10 +167,12 @@ function getExistingCells(): CellData[] | undefined {
     return undefined;
   }
 
-  // Remove scratch pad
-  return Object.values(getNotebook().cellData).filter(
-    (cell) => cell.id !== SCRATCH_CELL_ID,
-  );
+  // Document order matters: kernel-ready reconciliation maps existing cells
+  // to server cells positionally. Remove the scratch pad.
+  const notebook = getNotebook();
+  return notebook.cellIds.inOrderIds
+    .map((id) => notebook.cellData[id])
+    .filter((cell) => cell && cell.id !== SCRATCH_CELL_ID);
 }
 
 /**
@@ -232,6 +234,9 @@ export function useSpKernelConnection(opts: {
   const { addBanner } = useBannersActions();
   const { addPackageAlert, addStartupLog } = useAlertActions();
   const setKioskMode = useSetAtom(kioskModeAtom);
+  // Viewer embeds (the chat notebook panel) own the kiosk flag: it backs
+  // the user's Code/App view toggle there. Set before mount, never changes.
+  const viewerOnly = useAtomValue(viewerOnlyAtom);
   const setCapabilities = useSetAtom(capabilitiesAtom);
   const runtimeManager = useRuntimeManager();
   const setCacheInfo = useSetAtom(cacheInfoAtom);
@@ -260,7 +265,10 @@ export function useSpKernelConnection(opts: {
           onError: showBoundary,
           existingCells,
         });
-        setKioskMode(msg.data.kiosk);
+        // Do not let a kernel replay overwrite the viewer's Code/App choice.
+        if (!viewerOnly) {
+          setKioskMode(msg.data.kiosk);
+        }
         // Clear notebook switching state
         store.set(isSwitchingNotebookAtom_, false);
         return;
@@ -508,8 +516,27 @@ export function useSpKernelConnection(opts: {
     return wsResolveRef.current.promise!;
   };
 
+  // When the static placeholder transport hands over to the real one, clear
+  // its synthetic OPEN: BasicTransport reports "open" immediately (so static
+  // exports render), but the real transport starts CLOSED and — on a lazy
+  // runtime — stays idle until provisioning. A stale OPEN here makes the app
+  // think a kernel exists (saves and doc-sync go to a void, Run never
+  // provisions).
+  const effectiveStatic = isStaticNotebook() || opts.static;
+  const wasStaticRef = useRef(effectiveStatic);
+  useEffect(() => {
+    if (wasStaticRef.current && !effectiveStatic) {
+      setConnection((prev) =>
+        prev.state === WebSocketState.OPEN
+          ? { state: WebSocketState.NOT_STARTED }
+          : prev,
+      );
+    }
+    wasStaticRef.current = effectiveStatic;
+  }, [effectiveStatic, setConnection]);
+
   const ws = useConnectionTransport({
-    static: isStaticNotebook() || opts.static,
+    static: effectiveStatic,
     /**
      * Unique URL for this session.
      */
@@ -548,6 +575,14 @@ export function useSpKernelConnection(opts: {
      */
     waitToConnect: async () => {
       if (isStaticNotebook()) {
+        return;
+      }
+
+      if (runtimeManager.isLazy) {
+        // Lazy runtime: the sandbox may not exist yet. Sleep until someone
+        // provisions it (first Run click → init()); the URL factory then
+        // resolves against the freshly provisioned session URL.
+        await runtimeManager.whenHealthy();
         return;
       }
 

@@ -1,0 +1,104 @@
+"""Shared guards and project-readiness helpers for chat routes."""
+
+from __future__ import annotations
+
+from fastapi import HTTPException, Request
+from sqlalchemy import select
+
+from gateway.db.models import GatewayChatRun
+from gateway.standalone_chat.config import enterprise_chat_feature_flags, standalone_chat_enabled
+from gateway.standalone_chat.projects import authorize_chat_project, evaluate_project_readiness
+from gateway.store import standalone_chat as chat_store
+
+from ..deps import StoreD
+
+
+def require_enabled() -> None:
+    if not standalone_chat_enabled():
+        raise HTTPException(status_code=404, detail="Standalone chat is not enabled")
+
+
+async def owned_conversation_or_404(store: StoreD, conversation_id: str):
+    """Return the conversation when the caller owns it; 404 otherwise."""
+    conversation = await chat_store.get_owned_conversation(
+        store.session,
+        org_id=store._require_org_id(),
+        user_id=store.user_id or "local",
+        conversation_id=conversation_id,
+    )
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return conversation
+
+
+async def running_run_for_execution_identity(store: StoreD, request: Request) -> GatewayChatRun:
+    """Return the running chat run named by the scoped token, or raise 403.
+
+    The token must carry execution_identity "chat:<run_id>". The run must be
+    running, not cancelled, and owned by the token's org, user, and project.
+    """
+    claims = getattr(request.state, "_jwt_claims", {}) or {}
+    identity = claims.get("execution_identity")
+    if not isinstance(identity, str) or not identity.startswith("chat:"):
+        raise HTTPException(status_code=403, detail="This route requires a chat run token")
+    run_id = identity.removeprefix("chat:")
+    run = (
+        await store.session.execute(
+            select(GatewayChatRun).where(
+                GatewayChatRun.id == run_id,
+                GatewayChatRun.org_id == store._require_org_id(),
+                GatewayChatRun.user_id == (store.user_id or "local"),
+                GatewayChatRun.project_id == claims.get("project_id"),
+                GatewayChatRun.status == "running",
+                GatewayChatRun.cancellation_requested_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if run is None:
+        raise HTTPException(status_code=403, detail="Chat run scope mismatch")
+    return run
+
+
+def require_enterprise_feature(name: str) -> None:
+    if not getattr(enterprise_chat_feature_flags(), name):
+        raise HTTPException(status_code=404, detail="Chat capability is not enabled")
+
+
+def is_admin(role: str) -> bool:
+    return role in {"admin", "org:admin"}
+
+
+async def readiness_or_error(
+    store: StoreD,
+    project_id: str,
+    *,
+    branch_override: str | None = None,
+):
+    project = await authorize_chat_project(
+        store.session,
+        org_id=store._require_org_id(),
+        user_id=store.user_id or "local",
+        project_id=project_id,
+    )
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    readiness = await evaluate_project_readiness(
+        store.session,
+        org_id=store._require_org_id(),
+        user_id=store.user_id or "local",
+        project=project,
+        branch_override=branch_override,
+    )
+    return project, readiness
+
+
+def unready_detail(readiness, *, admin: bool) -> dict[str, str | bool]:
+    return {
+        "code": readiness.code,
+        "message": (
+            readiness.message
+            if admin
+            else "This project is not ready for data chat. Ask an administrator to finish setup."
+        ),
+        "setup_cta": admin,
+    }

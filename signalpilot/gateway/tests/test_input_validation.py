@@ -87,7 +87,12 @@ def client() -> TestClient:
             middleware_instance = _find_auth_middleware()
             if middleware_instance is not None:
                 middleware_instance.dispatch_func = _bypass_auth_dispatch
-            yield _client
+            try:
+                yield _client
+            finally:
+                # Shared app singleton: restore the real dispatcher for later modules.
+                if middleware_instance is not None:
+                    middleware_instance.dispatch_func = middleware_instance.dispatch
     app.dependency_overrides.pop(get_store, None)
 
 

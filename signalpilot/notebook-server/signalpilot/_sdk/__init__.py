@@ -4,19 +4,16 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from signalpilot._sdk._artifacts import (
+    apply_chart_theme as _apply_chart_theme,
+    artifact_path as _artifact_path,
+)
 from signalpilot._sdk._checks import checks as checks
 from signalpilot._sdk._client import GatewayClient, _is_local_url
-from signalpilot._sdk._connection import (
-    Connection,
-    DatasetRef,
-    QueryPlan as QueryPlan,
-)
+from signalpilot._sdk._connection import Connection, DatasetRef
 from signalpilot._sdk._runtime_publication import (
-    PublishedArtifact,
     PublishedResult,
-    apply_runtime_chart_theme as _apply_runtime_chart_theme,
     open_dataset as _open_dataset,
-    publish_artifact as _publish_artifact,
     publish_result as _publish_result,
 )
 from signalpilot._server.auth.session_token import load_session_jwt
@@ -28,25 +25,35 @@ def init(
     gateway_url: str | None = None,
     api_key: str | None = None,
     session_token: str | None = None,
+    session_token_file: str | os.PathLike[str] | None = None,
 ) -> None:
     """Initialize the SignalPilot Data SDK.
 
     Local:    sp.init()
     Cloud:    sp.init(api_key="sp_...")
-    Sandbox:  sp.init(gateway_url=..., session_token=...)   # internal
+    Sandbox:  sp.init(gateway_url=..., session_token_file=...)   # internal
+
+    session_token_file points at a run-scoped credential the runtime rotates
+    between chat turns. The client reads it per request, so a kernel kept
+    alive across turns always presents the active run's token.
+
+    Inside a chat run the house chart theme is applied here, so plain
+    matplotlib and Plotly figures match the product without any styling.
     """
     from signalpilot._utils.localhost import fix_localhost_url
     global _gw
     url = fix_localhost_url(gateway_url or os.environ.get("SP_GATEWAY_URL") or "http://localhost:3300")
     token = session_token or api_key or load_session_jwt() or os.environ.get("SP_API_KEY")
-    if not _is_local_url(url) and not token:
+    if not _is_local_url(url) and not token and not session_token_file:
         raise ValueError(
             "API key required for remote gateway. "
             "Pass api_key= or set SP_API_KEY env var."
         )
-    _gw = GatewayClient(url, token)
-    if os.getenv("SP_CHAT_SCRATCH_DIRECTORY"):
-        _apply_runtime_chart_theme()
+    _gw = GatewayClient(url, token, token_file=session_token_file)
+    if os.getenv("SP_CHAT_SCRATCH_DIRECTORY") or os.getenv(
+        "SP_CHAT_ARTIFACTS_DIRECTORY"
+    ):
+        _apply_chart_theme()
 
 
 def connections() -> list[str]:
@@ -87,27 +94,18 @@ def publish_result(
     )
 
 
-def publish_artifact(
-    path: str | os.PathLike[str],
-    *,
-    kind: str,
-    result_id: str,
-    assumptions: list[str] | None = None,
-    exclusions: list[str] | None = None,
-    caveats: list[str] | None = None,
-) -> PublishedArtifact:
-    """Publish a validated scratch-relative runtime artifact."""
-    _require_init()
-    assert _gw is not None
-    return _publish_artifact(
-        _gw,
-        path,
-        kind=kind,
-        result_id=result_id,
-        assumptions=assumptions,
-        exclusions=exclusions,
-        caveats=caveats,
-    )
+def artifact_path(name: str) -> os.PathLike[str]:
+    """Return the path for one artifact file and create its directory.
+
+    Save a chart with `fig.savefig(sp.artifact_path("revenue.png"))`. The
+    chat captures every file under the artifacts directory.
+    """
+    return _artifact_path(name)
+
+
+def apply_chart_theme() -> None:
+    """Apply the SignalPilot matplotlib rcParams and Plotly template."""
+    _apply_chart_theme()
 
 
 def open_dataset(dataset: DatasetRef) -> Any:

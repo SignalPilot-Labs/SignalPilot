@@ -132,6 +132,8 @@ export interface SSHTunnelConfig {
   password: string | null;
   private_key: string | null;
   private_key_passphrase: string | null;
+  proxy_host?: string | null;
+  proxy_port?: number | null;
 }
 
 export interface SSLConfig {
@@ -192,6 +194,20 @@ export interface ConnectionInfo {
   // Schema filtering
   schema_filter_include: string[] | null;
   schema_filter_exclude: string[] | null;
+  connection_string?: string | null;
+  scope?: "workspace" | "project";
+  read_only?: boolean;
+  pool_min_size?: number | null;
+  pool_max_size?: number | null;
+  auth_method?: string | null;
+  aws_region?: string | null;
+  cluster_id?: string | null;
+  workgroup?: string | null;
+  azure_tenant_id?: string | null;
+  azure_client_id?: string | null;
+  pii_enabled?: boolean;
+  pii_rules?: Record<string, string>;
+  byok_key_alias?: string | null;
 }
 
 /** One shared demo warehouse, plus whether this workspace has cloned it. */
@@ -394,6 +410,34 @@ export interface GitHubRepoLink {
   last_sync_at: number | null;
   created_at: number;
   updated_at: number;
+}
+
+export interface GitHubRepoImportResult {
+  project: WorkspaceProjectInfo;
+  link: GitHubRepoLink;
+  created: boolean;
+}
+
+export interface DbtMapInfo {
+  id: string;
+  project_id: string;
+  branch: string;
+  revision: number;
+  status: string;
+  trigger: string;
+  error: string | null;
+  dbt_version: string | null;
+  node_count: number;
+  manifest_bytes: number;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface DbtMapResponse {
+  status: "none" | "queued" | "running" | "success" | "failed";
+  map: DbtMapInfo | null;
+  // A manifest-shaped subset: nodes/sources records + parent_map/child_map.
+  graph: Record<string, unknown> | null;
 }
 
 export interface GitCredentials {

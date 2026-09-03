@@ -23,9 +23,24 @@ export function useUpdateFilename() {
 
   const handleFilenameChange = useEvent(async (name: string) => {
     const appConfig = getAppConfig();
+
+    // Sessionless (no kernel): naming a notebook is a pure client/store
+    // concern — set the filename locally; the follow-up save writes the
+    // file through the gateway store. No sandbox involved.
     if (connection.state !== WebSocketState.OPEN) {
-      openAlert("Failed to save notebook: not connected to a kernel.");
-      return null;
+      const { canSaveViaGateway } = await import("./gateway-save");
+      if (!(await canSaveViaGateway())) {
+        openAlert("Failed to save notebook: not connected to a kernel.");
+        return null;
+      }
+      updateQueryParams((params) => {
+        params.set(KnownQueryParams.filePath, name);
+      });
+      setFilename(name);
+      setDocumentTitle(
+        appConfig.app_title || Paths.basename(name) || "Untitled Notebook",
+      );
+      return name;
     }
 
     updateQueryParams((params) => {

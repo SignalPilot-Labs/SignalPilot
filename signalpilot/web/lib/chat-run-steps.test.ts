@@ -1,9 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
+  activeDashboardAuthoringProgress,
+  activeDashboardPreviewLabel,
+  extractRunPlan,
+  extractRuntimeBoot,
   foldRunBlocks,
   foldRunSteps,
+  formatErrorSupportBundle,
   formatStepDuration,
   normalizeToolName,
+  shouldShowAgentThinking,
+  shouldShowRuntimeBoot,
   summarizeRunSteps,
 } from "~/lib/chat-run-steps";
 import {
@@ -20,9 +27,6 @@ describe("normalizeToolName", () => {
       tool: "query_database",
       origin: "signalpilot",
     });
-    expect(
-      normalizeToolName("mcp__standalone-chat__run_scratch_python"),
-    ).toEqual({ tool: "run_scratch_python", origin: "chat" });
     expect(normalizeToolName("mcp__signalpilot-notebook__run_cells")).toEqual({
       tool: "run_cells",
       origin: "notebook",
@@ -61,12 +65,6 @@ describe("foldRunSteps", () => {
     expect(edit?.input?.new_string).toContain("all regions");
   });
 
-  it("extracts python source from the scratch runtime tool", () => {
-    const scratch = steps.find((step) => step.tool === "run_scratch_python");
-    expect(scratch?.category).toBe("python");
-    expect(scratch?.code).toContain("round((q3[region]");
-  });
-
   it("attaches source chips to schema tools", () => {
     const schema = steps.find((step) => step.tool === "get_table_schema");
     expect(schema?.category).toBe("source");
@@ -79,14 +77,284 @@ describe("foldRunSteps", () => {
     expect(foldRunSteps(allEvents, "other-run")).toEqual([]);
   });
 
+  it("keeps the exact upstream message, trace, and safe diagnostics", () => {
+    const error = foldRunSteps(
+      [
+        {
+          run_id: "failed-run",
+          sequence: 1,
+          type: "error" as const,
+          payload: {
+            message:
+              "You've hit your session limit · resets 2:50pm (America/Los_Angeles)",
+            full_trace:
+              "CLIConnectionError: authentication failed\n[traceback]",
+            diagnostic_context: {
+              auth_mode: "oauth",
+              credential_present: true,
+              api_error_status: 429,
+              rate_limit: {
+                status: "rejected",
+                resets_at: 1788213000,
+              },
+            },
+          },
+          created_at: "2026-08-31T00:00:00Z",
+        },
+      ],
+      "failed-run",
+    )[0];
+
+    expect(error.detail).toBe(
+      "You've hit your session limit · resets 2:50pm (America/Los_Angeles)",
+    );
+    expect(error.fullTrace).toContain("[traceback]");
+    expect(error.diagnostics).toEqual({
+      auth_mode: "oauth",
+      credential_present: true,
+      api_error_status: 429,
+      rate_limit: {
+        status: "rejected",
+        resets_at: 1788213000,
+      },
+    });
+    expect(formatErrorSupportBundle(error)).toBe(
+      "Root cause: You've hit your session limit · resets 2:50pm (America/Los_Angeles)\n\n" +
+        "Diagnostics:\n" +
+        "auth_mode: oauth\n" +
+        "credential_present: true\n" +
+        "api_error_status: 429\n" +
+        'rate_limit: {"status":"rejected","resets_at":1788213000}\n\n' +
+        "Full trace:\nCLIConnectionError: authentication failed\n[traceback]",
+    );
+  });
+
   it("leaves an unmatched tool start running", () => {
     const partial = foldRunSteps(
       materializeFixtureEvents(5_000),
       FIXTURE_RUN_ID,
     );
-    const last = partial[partial.length - 1];
-    expect(last.tool).toBe("query_database");
-    expect(last.status).toBe("running");
+    const query = partial.find((step) => step.tool === "query_database");
+    expect(query?.status).toBe("running");
+  });
+
+  it("renders dashboard validation as regular tools and the final preview specially", () => {
+    const dashboardEvents = [
+      {
+        run_id: "dashboard-run",
+        sequence: 1,
+        type: "tool_started" as const,
+        payload: {
+          tool: "mcp__standalone-chat__begin_dashboard_authoring",
+          tool_call_id: "begin-call",
+          parent_tool_call_id: "",
+          input: { request: "Build a sales dashboard", timezone: "UTC" },
+        },
+        created_at: "2026-09-01T10:00:00Z",
+      },
+      {
+        run_id: "dashboard-run",
+        sequence: 2,
+        type: "tool_started" as const,
+        payload: {
+          tool: "mcp__standalone-chat__upsert_dashboard_chart",
+          tool_call_id: "chart-a-call",
+          parent_tool_call_id: "",
+          input: {
+            chart_id: "revenue",
+            chart: { title: "Total revenue" },
+          },
+        },
+        created_at: "2026-09-01T10:00:01Z",
+      },
+      {
+        run_id: "dashboard-run",
+        sequence: 3,
+        type: "tool_started" as const,
+        payload: {
+          tool: "mcp__standalone-chat__upsert_dashboard_chart",
+          tool_call_id: "chart-b-call",
+          parent_tool_call_id: "",
+          input: {
+            chart_id: "trend",
+            chart: { title: "Revenue trend" },
+          },
+        },
+        created_at: "2026-09-01T10:00:02Z",
+      },
+      {
+        run_id: "dashboard-run",
+        sequence: 4,
+        type: "tool_started" as const,
+        payload: {
+          tool: "mcp__standalone-chat__create_dashboard_preview",
+          tool_call_id: "preview-call",
+          parent_tool_call_id: "",
+          input: { expected_draft_revision: 3 },
+        },
+        created_at: "2026-09-01T10:00:02Z",
+      },
+      {
+        run_id: "dashboard-run",
+        sequence: 5,
+        type: "tool_completed" as const,
+        payload: {
+          tool_call_id: "chart-b-call",
+          error: false,
+          dashboard_authoring: {
+            label: "Dashboard chart validated (1 of 2)",
+            phase: "upsert_dashboard_chart",
+            authoring_session_id: "session-top-level",
+            draft_revision: 3,
+          },
+        },
+        created_at: "2026-09-01T10:00:03Z",
+      },
+      {
+        run_id: "dashboard-run",
+        sequence: 6,
+        type: "tool_completed" as const,
+        payload: {
+          tool_call_id: "preview-call",
+          error: false,
+          dashboard_authoring: {
+            label: "Dashboard preview ready",
+            phase: "create_dashboard_preview",
+            authoring_session_id: "session-top-level",
+            draft_revision: 3,
+          },
+        },
+        created_at: "2026-09-01T10:00:04Z",
+      },
+      {
+        run_id: "dashboard-run",
+        sequence: 7,
+        type: "tool_completed" as const,
+        payload: { tool_call_id: "begin-call", error: false },
+        created_at: "2026-09-01T10:00:05Z",
+      },
+      {
+        run_id: "dashboard-run",
+        sequence: 8,
+        type: "tool_completed" as const,
+        payload: { tool_call_id: "chart-a-call", error: true },
+        created_at: "2026-09-01T10:00:06Z",
+      },
+    ];
+
+    const dashboardSteps = foldRunSteps(dashboardEvents, "dashboard-run");
+    expect(dashboardSteps).toHaveLength(4);
+    expect(dashboardSteps.map((step) => step.category)).toEqual([
+      "generic",
+      "generic",
+      "generic",
+      "dashboard",
+    ]);
+    expect(dashboardSteps.map((step) => step.title)).toEqual([
+      "Resolving dashboard fields",
+      "Validating Total revenue",
+      "Validating Revenue trend",
+      "Creating dashboard preview",
+    ]);
+    expect(dashboardSteps.map((step) => step.status)).toEqual([
+      "succeeded",
+      "failed",
+      "succeeded",
+      "succeeded",
+    ]);
+    expect(dashboardSteps[2]?.detail).toBeNull();
+    expect(dashboardSteps[3]?.detail).toBe("Dashboard preview ready");
+  });
+
+  it("exposes the plan-ready session and revision for event-driven preview refresh", () => {
+    const progress = activeDashboardAuthoringProgress(
+      [
+        {
+          run_id: "dashboard-run",
+          sequence: 1,
+          type: "tool_completed" as const,
+          payload: {
+            tool_call_id: "plan-call",
+            error: false,
+            dashboard_authoring: {
+              phase: "set_dashboard_plan",
+              label: "Building 9 dashboard charts",
+              authoring_session_id: "session-progressive",
+              draft_revision: 4,
+            },
+          },
+          created_at: "2026-09-01T10:00:00Z",
+        },
+      ],
+      "dashboard-run",
+    );
+
+    expect(progress).toEqual({
+      label: "Building 9 dashboard charts",
+      phase: "set_dashboard_plan",
+      sessionId: "session-progressive",
+      draftRevision: 4,
+    });
+  });
+
+  it("normalizes governed-tool wording in persisted chat events", () => {
+    const [failed] = foldRunSteps(
+      [
+        {
+          run_id: "legacy-run",
+          sequence: 1,
+          type: "tool_started" as const,
+          payload: {
+            tool: "mcp__signalpilot__query_database",
+            tool_call_id: "legacy-tool",
+            input: {},
+          },
+          created_at: "2026-08-31T00:00:00Z",
+        },
+        {
+          run_id: "legacy-run",
+          sequence: 2,
+          type: "tool_completed" as const,
+          payload: {
+            tool_call_id: "legacy-tool",
+            summary: "The governed tool returned an error.",
+            error: true,
+          },
+          created_at: "2026-08-31T00:00:01Z",
+        },
+      ],
+      "legacy-run",
+    );
+
+    expect(failed.detail).toBe("The tool returned an error.");
+  });
+
+  it("groups subagent work under its spawn with an exact tally", () => {
+    const spawn = steps.find((step) => step.category === "subagent");
+    expect(spawn?.title).toBe("Map the revenue marts and their grain");
+    expect(spawn?.subagentType).toBe("Explore");
+    expect(spawn?.status).toBe("succeeded");
+    expect(spawn?.children.map((child) => child.tool)).toEqual([
+      "Glob",
+      "Read",
+      "Grep",
+    ]);
+    expect(spawn?.children.every((child) => child.status === "succeeded")).toBe(
+      true,
+    );
+    expect(spawn?.report).toContain("Three marts touch");
+    expect(spawn?.liveText).toContain("checking each one's grain");
+    // Child tools never leak into the top-level timeline.
+    expect(steps.some((step) => step.tool === "Grep")).toBe(false);
+  });
+
+  it("keeps subagent narration out of the main text blocks", () => {
+    const blocks = foldRunBlocks(allEvents, FIXTURE_RUN_ID);
+    const mainText = blocks
+      .filter((block) => block.kind === "text")
+      .map((block) => (block as { text: string }).text)
+      .join("");
+    expect(mainText).not.toContain("checking each one's grain");
   });
 });
 
@@ -112,7 +380,6 @@ describe("plan and route step enrichment", () => {
         payload: {
           plan_id: "p1",
           route: "aggregate_required",
-          route_reason: "The projected output exceeds the direct-query row budget.",
         },
       },
     ],
@@ -125,9 +392,10 @@ describe("plan and route step enrichment", () => {
     expect(steps[0].sql).toBe("select 1");
   });
 
-  it("explains the chosen route with its reason", () => {
+  it("shows only the actionable route", () => {
     expect(steps[1].title).toContain("needs a bounded aggregate");
-    expect(steps[1].detail).toContain("row budget");
+    expect(steps[1].detail).toBeNull();
+    expect(steps[1].input).toBeNull();
   });
 });
 
@@ -135,20 +403,46 @@ describe("foldRunBlocks", () => {
   it("splits the run into tool chains separated by streamed narration", () => {
     const blocks = foldRunBlocks(allEvents, FIXTURE_RUN_ID);
     expect(blocks.map((block) => block.kind)).toEqual([
+      "thinking",
+      "steps",
+      "text",
       "steps",
       "text",
       "steps",
       "text",
     ]);
-    const [chain1, narration, chain2, answer] = blocks;
+    const [thinking, chain1, narration, chain2, answer, chain3, tail] = blocks;
+    if (thinking.kind !== "thinking") throw new Error();
     if (chain1.kind !== "steps" || chain2.kind !== "steps") throw new Error();
     if (narration.kind !== "text" || answer.kind !== "text") throw new Error();
-    expect(chain1.steps).toHaveLength(5); // progress → todo → schema → validate → query
-    expect(chain1.steps.at(-1)?.tool).toBe("query_database");
+    if (chain3.kind !== "steps" || tail.kind !== "text") throw new Error();
+    expect(thinking.text).toContain("fct_orders looks right");
+    expect(chain1.steps).toHaveLength(6); // progress → todo → schema → validate → query → subagent
+    expect(chain1.steps.at(-1)?.tool).toBe("Agent");
+    expect(chain1.steps.at(-2)?.tool).toBe("query_database");
     expect(narration.text).toContain("analysis runtime");
-    expect(chain2.steps).toHaveLength(8); // notebook → write → bash → python → todo → edit → 2 publishes
+    // notebook → write → bash → 3 export writes → edit → md write → todo →
+    // run_cells
+    expect(chain2.steps).toHaveLength(10);
     expect(chain2.steps[0]?.tool).toBe("start_analysis_notebook");
     expect(answer.text).toContain("EMEA drove the growth");
+    // Follow-up verification chain: list_tables → explore_columns →
+    // dbt_execute → search_knowledge → hubspot connector, then a short tail.
+    expect(chain3.steps.map((step) => step.tool)).toEqual([
+      "list_tables",
+      "explore_columns",
+      "dbt_execute",
+      "search_knowledge",
+      "search_contacts",
+    ]);
+    expect(chain3.steps.map((step) => step.result?.kind)).toEqual([
+      "table_list",
+      "column_profile",
+      "dbt_run",
+      "knowledge",
+      "json",
+    ]);
+    expect(tail.text).toContain("rpt_region_rollup");
   });
 
   it("keeps a mid-stream narration attached to no group while the next chain runs", () => {
@@ -157,13 +451,87 @@ describe("foldRunBlocks", () => {
       FIXTURE_RUN_ID,
     );
     expect(blocks.map((block) => block.kind)).toEqual([
+      "thinking",
       "steps",
       "text",
       "steps",
     ]);
-    const tail = blocks[2];
+    const tail = blocks[3];
     if (tail.kind !== "steps") throw new Error();
     expect(tail.steps.some((step) => step.status === "running")).toBe(true);
+  });
+});
+
+describe("shouldShowAgentThinking", () => {
+  it("shows while an active run has not started its first tool", () => {
+    expect(shouldShowAgentThinking([], true)).toBe(true);
+  });
+
+  it("shows after a tool chain completes while the run remains active", () => {
+    const blocks = foldRunBlocks(
+      materializeFixtureEvents(7_420),
+      FIXTURE_RUN_ID,
+    );
+    expect(blocks.at(-1)?.kind).toBe("steps");
+    expect(shouldShowAgentThinking(blocks, true)).toBe(true);
+  });
+
+  it("stays hidden while a tool or real thinking block is active", () => {
+    const toolBlocks = foldRunBlocks(
+      materializeFixtureEvents(5_000),
+      FIXTURE_RUN_ID,
+    );
+    const thinkingBlocks = foldRunBlocks(
+      materializeFixtureEvents(360),
+      FIXTURE_RUN_ID,
+    );
+    expect(shouldShowAgentThinking(toolBlocks, true)).toBe(false);
+    expect(shouldShowAgentThinking(thinkingBlocks, true)).toBe(false);
+  });
+
+  it("stays hidden after the run finishes", () => {
+    expect(
+      shouldShowAgentThinking(foldRunBlocks(allEvents, FIXTURE_RUN_ID), false),
+    ).toBe(false);
+  });
+});
+
+describe("extractRuntimeBoot", () => {
+  it("returns the boot lifecycle for a cold-start run", () => {
+    const boot = extractRuntimeBoot(allEvents, FIXTURE_RUN_ID);
+    expect(boot?.phase).toBe("ready");
+    expect(boot?.bootMs).toBe(41_200);
+    expect(boot?.readyAt).toBeTruthy();
+  });
+
+  it("stays in the live phase until ready arrives", () => {
+    const boot = extractRuntimeBoot(
+      materializeFixtureEvents(100),
+      FIXTURE_RUN_ID,
+    );
+    expect(boot?.phase).toBe("provisioning");
+    expect(boot?.readyAt).toBeNull();
+  });
+
+  it("returns null for warm runs with no boot events", () => {
+    const warmEvents = allEvents.filter(
+      (event) => event.type !== "runtime_boot",
+    );
+    expect(extractRuntimeBoot(warmEvents, FIXTURE_RUN_ID)).toBeNull();
+  });
+
+  it("hides an unresolved boot as soon as its run is terminal", () => {
+    const boot = extractRuntimeBoot(
+      materializeFixtureEvents(100),
+      FIXTURE_RUN_ID,
+    );
+    expect(shouldShowRuntimeBoot(boot, true)).toBe(true);
+    expect(shouldShowRuntimeBoot(boot, false)).toBe(false);
+  });
+
+  it("keeps completed boot provenance in a terminal transcript", () => {
+    const boot = extractRuntimeBoot(allEvents, FIXTURE_RUN_ID);
+    expect(shouldShowRuntimeBoot(boot, false)).toBe(true);
   });
 });
 
@@ -171,8 +539,9 @@ describe("summarizeRunSteps", () => {
   it("counts queries, code runs, files and errors", () => {
     const summary = summarizeRunSteps(foldRunSteps(allEvents, FIXTURE_RUN_ID));
     expect(summary.queries).toBe(2); // validate_sql + query_database
-    expect(summary.codeRuns).toBe(2); // Bash + run_scratch_python
-    expect(summary.files).toBe(4); // Write + Edit + publish_table + publish_chart
+    expect(summary.codeRuns).toBe(2); // Bash + run_cells
+    // 5 Writes (py + html + svg + csv + md) + Edit
+    expect(summary.files).toBe(6);
     expect(summary.errors).toBe(1);
     expect(summary.running).toBe(false);
   });
@@ -184,5 +553,61 @@ describe("formatStepDuration", () => {
     expect(formatStepDuration(40)).toBe("<0.1s");
     expect(formatStepDuration(2_600)).toBe("2.6s");
     expect(formatStepDuration(94_000)).toBe("1m 34s");
+  });
+});
+
+describe("extractRunPlan", () => {
+  it("returns null before any TodoWrite is published", () => {
+    expect(
+      extractRunPlan(materializeFixtureEvents(500), FIXTURE_RUN_ID),
+    ).toBeNull();
+    expect(extractRunPlan(allEvents, "some-other-run")).toBeNull();
+  });
+
+  it("reads the first published plan mid-run", () => {
+    const plan = extractRunPlan(
+      materializeFixtureEvents(2_000),
+      FIXTURE_RUN_ID,
+    );
+    expect(plan).not.toBeNull();
+    expect(plan!.items).toHaveLength(4);
+    expect(plan!.completed).toBe(0);
+    expect(plan!.currentLabel).toBe(
+      "Confirm the revenue model and region join",
+    );
+  });
+
+  it("tracks the latest TodoWrite as the run progresses", () => {
+    const plan = extractRunPlan(allEvents, FIXTURE_RUN_ID);
+    expect(plan).not.toBeNull();
+    expect(plan!.completed).toBe(3);
+    expect(plan!.items[3].status).toBe("in_progress");
+    expect(plan!.currentLabel).toBe("Save the chart and the underlying rows");
+  });
+
+  it("ignores TodoWrites published inside subagents", () => {
+    const maxSequence = allEvents.reduce(
+      (max, event) => Math.max(max, event.sequence),
+      0,
+    );
+    const withSubagentPlan = [
+      ...allEvents,
+      {
+        ...allEvents[0],
+        sequence: maxSequence + 1,
+        type: "tool_started" as const,
+        payload: {
+          tool: "TodoWrite",
+          parent_tool_call_id: "toolu_subagent",
+          input: {
+            todos: [{ content: "Subagent-only step", status: "pending" }],
+          },
+        },
+      },
+    ];
+    const plan = extractRunPlan(withSubagentPlan, FIXTURE_RUN_ID);
+    expect(plan!.items.map((item) => item.content)).not.toContain(
+      "Subagent-only step",
+    );
   });
 });

@@ -7,24 +7,68 @@ messages resume the conversation via the SDK's `resume` option.
 
 On Windows, the SDK spawns subprocesses which requires a ProactorEventLoop.
 We run the agent in a separate thread with its own event loop.
+
+This module is the public entry point and the thread/event-loop
+orchestrator. The pieces live in sibling modules:
+
+- ``claude_agent_options``: ClaudeAgentOptions kwargs, env, tool policy
+- ``claude_agent_events``: SDK message -> AgentEvent translation
+- ``claude_agent_context``: system-prompt context injection
+- ``claude_agent_state``: session/agent registries and event buffers
+- ``claude_agent_config``: auth, MCP and system-prompt configuration
 """
+
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import queue
 import sys
 import threading
 import traceback
-import uuid
-from dataclasses import dataclass, field
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlparse
 
 from signalpilot import _loggers
-from signalpilot._server.auth.session_token import load_session_jwt
+from signalpilot._server.ai.claude_agent_config import (
+    _apply_auth_config,
+    _get_auth_config,
+    _get_dbt_project_context,
+    _get_mcp_servers_config,
+    _get_system_prompt,
+    _normalized_sp_api_key,
+)
+from signalpilot._server.ai.claude_agent_context import (
+    _build_context_file_block,
+    _extend_system_prompt,
+)
+from signalpilot._server.ai.claude_agent_events import (
+    _rate_limit_diagnostic,
+    _relay_sdk_messages,
+    _result_message_content,
+    _SdkStreamState,
+)
+from signalpilot._server.ai.claude_agent_options import (
+    _EFFORT_LEVELS,
+    FILE_EDIT_TOOLS,
+    _agent_effort,
+    _build_agent_env,
+    _build_agent_options_kwargs,
+    _build_disallowed_tools,
+)
+from signalpilot._server.ai.claude_agent_state import (
+    AgentEvent,
+    _active_agents,
+    _ActiveAgent,
+    _chat_sessions,
+    _get_or_create_chat_session,
+    _save_chat_sessions,
+    buffer_event,
+    clear_chat_session,
+    clear_event_buffer,
+    clip_tool_result_for_event,
+    get_buffered_events,
+    tool_result_text,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
@@ -33,322 +77,44 @@ if TYPE_CHECKING:
 
 LOGGER = _loggers.sp_logger()
 
-INSTRUCTIONS_PATH = Path(__file__).parent / "instructions.md"
-
-
-def _get_dbt_project_context(search_dir: str | None = None) -> str:
-    from signalpilot._dbt.runner import (
-        discover_dbt_projects,
-        find_dbt_project,
-        parse_dbt_project_yml,
-    )
-
-    project_dir = None
-    for d in [d for d in [search_dir, os.getcwd()] if d]:
-        project_dir = find_dbt_project(d)
-        if project_dir:
-            break
-
-    if not project_dir and search_dir:
-        projects = discover_dbt_projects(search_dir, max_depth=2)
-        if projects:
-            project_dir = projects[0].project_dir
-
-    if not project_dir:
-        projects = discover_dbt_projects(os.getcwd(), max_depth=2)
-        if projects:
-            project_dir = projects[0].project_dir
-
-    if not project_dir:
-        return ""
-
-    info = parse_dbt_project_yml(project_dir)
-    return (
-        f"# Active dbt project\n"
-        f"path: {project_dir}\n"
-        f"name: {info.project_name or 'unknown'}\n"
-        f"profile: {info.profile or 'default'}\n"
-        f"model_paths: {', '.join(info.model_paths)}\n\n"
-        f"IMPORTANT: Only work within this project directory. Do NOT search for "
-        f"or access dbt projects elsewhere on the machine. All file reads, writes, "
-        f"and dbt commands must be scoped to {project_dir}."
-    )
-
+__all__ = [
+    "FILE_EDIT_TOOLS",
+    "_EFFORT_LEVELS",
+    "AgentEvent",
+    "_agent_effort",
+    "_apply_auth_config",
+    "_build_context_file_block",
+    "_build_disallowed_tools",
+    "_chat_sessions",
+    "_extend_system_prompt",
+    "_get_auth_config",
+    "_get_dbt_project_context",
+    "_get_mcp_servers_config",
+    "_get_or_create_chat_session",
+    "_get_system_prompt",
+    "_normalized_sp_api_key",
+    "_rate_limit_diagnostic",
+    "_result_message_content",
+    "_save_chat_sessions",
+    "buffer_event",
+    "clear_chat_session",
+    "clear_event_buffer",
+    "clip_tool_result_for_event",
+    "get_buffered_events",
+    "run_notebook_agent",
+    "steer_agent",
+    "stop_agent",
+    "tool_result_text",
+]
 
 _DONE = object()
-FILE_EDIT_TOOLS = ["Write", "Edit", "MultiEdit", "NotebookEdit", "Bash"]
-PLACEHOLDER_SP_API_KEYS = {"", "sp_test_key_here"}
-
-# ── Persistent chat session mapping ──────────────────────────────
-# Survives server restarts by saving to disk.
-
-_SESSIONS_FILE = Path(__file__).parent / ".chat_sessions.json"
-
-
-def _load_chat_sessions() -> dict[str, str]:
-    try:
-        if _SESSIONS_FILE.exists():
-            return json.loads(_SESSIONS_FILE.read_text(encoding="utf-8"))
-    except Exception:
-        pass
-    return {}
-
-
-def _save_chat_sessions() -> None:
-    try:
-        _SESSIONS_FILE.write_text(
-            json.dumps(_chat_sessions, indent=2),
-            encoding="utf-8",
-        )
-    except Exception:
-        pass
-
-
-_chat_sessions: dict[str, str] = _load_chat_sessions()
-
-
-@dataclass
-class _ActiveAgent:
-    """Tracks a running agent thread so it can be cancelled."""
-
-    event_queue: queue.Queue[AgentEvent | object] = field(
-        default_factory=queue.Queue
-    )
-    thread: threading.Thread | None = None
-    loop: asyncio.AbstractEventLoop | None = None
-    task: asyncio.Task[None] | None = None
-
-
-_active_agents: dict[str, _ActiveAgent] = {}
-
-# ── Event buffer for tab-away recovery ─────────────────────────
-# Stores all agent events per session so the frontend can catch up
-# when the tab comes back into focus.
-_event_buffers: dict[str, list[dict[str, Any]]] = {}
-MAX_BUFFER_EVENTS = 500
-
-
-def buffer_event(
-    session_id: str,
-    event_data: dict[str, Any],
-    *,
-    thread_id: str | None = None,
-) -> int:
-    """Add an event to the buffer. Returns the event index."""
-    buffer_key = thread_id or session_id
-    if buffer_key not in _event_buffers:
-        _event_buffers[buffer_key] = []
-    buf = _event_buffers[buffer_key]
-    buf.append(event_data)
-    # Trim old events
-    if len(buf) > MAX_BUFFER_EVENTS:
-        _event_buffers[buffer_key] = buf[-MAX_BUFFER_EVENTS:]
-    return len(buf) - 1
-
-
-def get_buffered_events(
-    session_id: str,
-    after_index: int = -1,
-    *,
-    thread_id: str | None = None,
-) -> list[dict[str, Any]]:
-    """Get events after the given index."""
-    buf = _event_buffers.get(thread_id or session_id, [])
-    return buf[after_index + 1:]
-
-
-def clear_event_buffer(session_id: str, *, thread_id: str | None = None) -> None:
-    """Clear the event buffer for a session."""
-    _event_buffers.pop(thread_id or session_id, None)
-
-
-def _get_or_create_chat_session(
-    notebook_session_id: str,
-    *,
-    persist: bool = True,
-) -> tuple[str, bool]:
-    """Get existing chat session ID or create a new one. Returns (id, is_resume)."""
-    if notebook_session_id in _chat_sessions:
-        return _chat_sessions[notebook_session_id], True
-    chat_id = str(uuid.uuid4())
-    _chat_sessions[notebook_session_id] = chat_id
-    if persist:
-        _save_chat_sessions()
-    return chat_id, False
-
-
-def clear_chat_session(notebook_session_id: str, *, persist: bool = True) -> None:
-    """Clear the chat session (for 'new chat' button)."""
-    _chat_sessions.pop(notebook_session_id, None)
-    if persist:
-        _save_chat_sessions()
-
-
-@dataclass
-class AgentEvent:
-    """A streaming event from the Claude Agent."""
-
-    type: str  # "text", "thinking", "tool_use", "tool_result", "error", "done"
-    content: str = ""
-    tool_name: str = ""
-    tool_input: dict[str, Any] | None = None
-    tool_call_id: str = ""
-    is_error: bool = False
-    cost_usd: float | None = None
-    turn: int = 0
-
-
-def _get_auth_config() -> dict[str, str]:
-    """Get agent auth config. Supports OAuth token or Anthropic API key."""
-    oauth = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "") or os.environ.get("OAUTH_TOKEN", "")
-    if oauth:
-        return {"type": "oauth", "token": oauth}
-
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if api_key:
-        return {"type": "api_key", "token": api_key}
-
-    config_dir = os.environ.get("CLAUDE_CONFIG_DIR")
-    credentials_path = (
-        Path(config_dir) / ".credentials.json"
-        if config_dir
-        else Path.home() / ".claude" / ".credentials.json"
-    )
-    if credentials_path.is_file() and credentials_path.stat().st_size > 0:
-        return {"type": "config_dir", "token": ""}
-
-    # Check gateway org secrets. In cloud pods this should already be injected
-    # into ANTHROPIC_API_KEY at pod creation; local direct-mode notebooks fetch
-    # it over the runtime-authenticated gateway channel instead.
-    try:
-        import httpx
-
-        from signalpilot._server.gateway_client import (
-            gateway_headers,
-            gateway_url,
-        )
-        resp = httpx.get(
-            f"{gateway_url()}/api/org/secrets/anthropic-key",
-            headers=gateway_headers(),
-            timeout=5.0,
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            key = data.get("anthropic_api_key", "")
-            if isinstance(key, str) and key:
-                return {"type": "api_key", "token": key}
-    except Exception:
-        pass
-
-    raise ValueError(
-        "No AI credentials configured. Set CLAUDE_CODE_OAUTH_TOKEN or "
-        "ANTHROPIC_API_KEY, or ask your admin to add the Anthropic API key "
-        "on the integrations page."
-    )
-
-
-def _apply_auth_config(
-    agent_env: dict[str, str],
-    auth_config: dict[str, str] | None,
-) -> None:
-    """Apply one execution's credential without mutating process-global auth."""
-    if not auth_config:
-        return
-    if auth_config["type"] == "oauth":
-        agent_env.pop("ANTHROPIC_API_KEY", None)
-        agent_env.pop("OAUTH_TOKEN", None)
-        agent_env["CLAUDE_CODE_OAUTH_TOKEN"] = auth_config["token"]
-    elif auth_config["type"] == "api_key":
-        agent_env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
-        agent_env.pop("OAUTH_TOKEN", None)
-        agent_env["ANTHROPIC_API_KEY"] = auth_config["token"]
-
-
-def _get_oauth_token() -> str:
-    """Backward compat wrapper."""
-    auth = _get_auth_config()
-    return auth["token"]
-
-
-def _get_mcp_servers_config(mcp_config: dict[str, Any] | None = None) -> dict[str, Any]:
-    from signalpilot._utils.localhost import fix_localhost_url
-
-    servers: dict[str, Any] = {}
-    sp_gateway_url = os.environ.get("SP_GATEWAY_MCP_URL")
-    if not sp_gateway_url:
-        sp_gateway_url = os.environ.get("SP_GATEWAY_URL", "http://localhost:3300")
-        if not sp_gateway_url.rstrip("/").endswith("/mcp"):
-            sp_gateway_url = f"{sp_gateway_url.rstrip('/')}/mcp"
-    sp_gateway_url = fix_localhost_url(sp_gateway_url)
-    sp_session_jwt = load_session_jwt()
-    sp_api_key = _normalized_sp_api_key(os.environ.get("SP_API_KEY", ""))
-    auth_token = sp_session_jwt or sp_api_key
-    if auth_token or _is_local_url(sp_gateway_url):
-        signalpilot_server: dict[str, Any] = {
-            "type": "http",
-            "url": sp_gateway_url,
-        }
-        if auth_token:
-            signalpilot_server["headers"] = {"Authorization": f"Bearer {auth_token}"}
-        servers["signalpilot"] = signalpilot_server
-    if mcp_config:
-        try:
-            from signalpilot._server.ai.mcp.config import append_presets
-
-            mcp_config = append_presets(mcp_config)  # type: ignore[arg-type]
-        except Exception:
-            pass
-        for name, config in mcp_config.get("mcpServers", {}).items():
-            if config.get("disabled"):
-                continue
-            if "command" in config:
-                server: dict[str, Any] = {
-                    "type": "stdio",
-                    "command": config["command"],
-                }
-                if config.get("args"):
-                    server["args"] = config["args"]
-                if config.get("env"):
-                    server["env"] = config["env"]
-                servers[name] = server
-            elif "url" in config:
-                server = {
-                    "type": config.get("type", "http"),
-                    "url": config["url"],
-                }
-                if config.get("headers"):
-                    server["headers"] = config["headers"]
-                servers[name] = server
-    return servers
-
-
-def _normalized_sp_api_key(value: str) -> str:
-    stripped = value.strip()
-    if stripped in PLACEHOLDER_SP_API_KEYS:
-        return ""
-    return stripped
-
-
-def _is_local_url(url: str) -> bool:
-    return urlparse(url).hostname in {
-        "localhost",
-        "127.0.0.1",
-        "::1",
-        "0.0.0.0",
-        "gateway",
-    }
-
-
-def _get_system_prompt() -> str:
-    if INSTRUCTIONS_PATH.exists():
-        return INSTRUCTIONS_PATH.read_text(encoding="utf-8")
-    return "You are an AI assistant helping with a reactive Python notebook."
 
 
 def _run_agent_in_thread(
     agent_state: _ActiveAgent,
     message: str,
     model: str,
+    effort: str | None,
     max_turns: int,
     mcp_servers: dict[str, Any],
     system_prompt: str,
@@ -360,12 +126,16 @@ def _run_agent_in_thread(
     cwd: str | None = None,
     auth_config: dict[str, str] | None = None,
     notebook_session_authorizer: Callable[[str], bool] | None = None,
+    agent_env_overrides: dict[str, str] | None = None,
 ) -> None:
     """Run the agent SDK in a separate thread with session resume support."""
     event_queue = agent_state.event_queue
 
     try:
-        from claude_agent_sdk import (
+        # Import every SDK symbol the relay loop needs up front so a missing
+        # or incompatible SDK is reported as a single install error rather
+        # than surfacing mid-run inside claude_agent_events.
+        from claude_agent_sdk import (  # noqa: F401
             AssistantMessage,
             ClaudeAgentOptions,
             ClaudeSDKClient,
@@ -377,172 +147,47 @@ def _run_agent_in_thread(
             ToolUseBlock,
             UserMessage,
         )
-        from claude_agent_sdk.types import RateLimitEvent
+        from claude_agent_sdk.types import RateLimitEvent  # noqa: F401
     except ImportError:
-        event_queue.put(AgentEvent(
-            type="error",
-            content="claude-agent-sdk not installed. Run: pip install claude-agent-sdk",
-            is_error=True,
-        ))
+        event_queue.put(
+            AgentEvent(
+                type="error",
+                content="claude-agent-sdk not installed. Run: pip install claude-agent-sdk",
+                is_error=True,
+            )
+        )
         event_queue.put(_DONE)
         return
 
     async def _run() -> None:
         agent_state.task = asyncio.current_task()
-        turn_count = 0
+        stream = _SdkStreamState()
 
-        agent_env = dict(os.environ)
-        _apply_auth_config(agent_env, auth_config)
-        if _normalized_sp_api_key(agent_env.get("SP_API_KEY", "")) == "":
-            agent_env.pop("SP_API_KEY", None)
-        # On Windows, python3 doesn't exist — create a shim so skills work
-        if sys.platform == "win32":
-            python_dir = os.path.dirname(sys.executable)
-            agent_env["PATH"] = python_dir + os.pathsep + agent_env.get("PATH", "")
-            # Set PYENV_VERSION so pyenv doesn't complain
-            if "PYENV_VERSION" not in agent_env:
-                agent_env["PYENV_VERSION"] = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
-
-        agent_options_kwargs: dict[str, Any] = {
-            "model": model,
-            "max_turns": max_turns,
-            "permission_mode": "bypassPermissions",
-            "system_prompt": system_prompt,
-            "cwd": cwd or os.getcwd(),
-            "env": agent_env,
-        }
-        if disallowed_tools:
-            agent_options_kwargs["disallowed_tools"] = disallowed_tools
-        if allowed_tools:
-            agent_options_kwargs["allowed_tools"] = allowed_tools
-
-        # MCP servers: external (SignalPilot gateway) + notebook tools
-        all_mcp = dict(mcp_servers) if mcp_servers else {}
-
-        if app is not None:
-            try:
-                from signalpilot._server.ai.notebook_mcp import (
-                    build_notebook_mcp_server,
-                )
-                from signalpilot._server.ai.tools.base import ToolContext
-
-                tool_context = ToolContext(app=app)
-                notebook_mcp = build_notebook_mcp_server(
-                    tool_context,
-                    session_authorizer=notebook_session_authorizer,
-                )
-                all_mcp["signalpilot-notebook"] = notebook_mcp
-                LOGGER.info("Notebook MCP server attached to agent")
-            except Exception as e:
-                LOGGER.warning(f"Could not build notebook MCP server: {e}")
-
-        if all_mcp:
-            agent_options_kwargs["mcp_servers"] = all_mcp
-
-        # Session continuity: resume existing session or start new with known ID
-        if is_resume:
-            agent_options_kwargs["resume"] = chat_session_id
-        else:
-            agent_options_kwargs["session_id"] = chat_session_id
-
-        agent_options_kwargs["include_partial_messages"] = True
+        agent_env = _build_agent_env(auth_config, agent_env_overrides)
+        agent_options_kwargs = _build_agent_options_kwargs(
+            model=model,
+            effort=effort,
+            max_turns=max_turns,
+            system_prompt=system_prompt,
+            cwd=cwd,
+            agent_env=agent_env,
+            disallowed_tools=disallowed_tools,
+            allowed_tools=allowed_tools,
+            mcp_servers=mcp_servers,
+            app=app,
+            notebook_session_authorizer=notebook_session_authorizer,
+            chat_session_id=chat_session_id,
+            is_resume=is_resume,
+        )
         options = ClaudeAgentOptions(**agent_options_kwargs)
 
         try:
             async with ClaudeSDKClient(options=options) as client:
+                agent_state.client = client
                 await client.query(message)
-                async for msg in client.receive_messages():
-                    if isinstance(msg, AssistantMessage):
-                        turn_count += 1
-                        for block in msg.content:
-                            if isinstance(block, ThinkingBlock):
-                                # Final authoritative thinking — replaces accumulated deltas
-                                event_queue.put(AgentEvent(
-                                    type="thinking",
-                                    content=block.thinking,
-                                    turn=turn_count,
-                                ))
-                            elif isinstance(block, TextBlock):
-                                # Final authoritative text — replaces accumulated deltas
-                                event_queue.put(AgentEvent(
-                                    type="text",
-                                    content=block.text,
-                                    turn=turn_count,
-                                ))
-                            elif isinstance(block, ToolUseBlock):
-                                event_queue.put(AgentEvent(
-                                    type="tool_use",
-                                    tool_name=block.name,
-                                    tool_input=block.input,
-                                    tool_call_id=getattr(block, "id", ""),
-                                    turn=turn_count,
-                                ))
-
-                    elif isinstance(msg, UserMessage):
-                        content = msg.content
-                        if isinstance(content, list):
-                            for block in content:
-                                if isinstance(block, ToolResultBlock):
-                                    result_str = (
-                                        str(block.content)
-                                        if hasattr(block, "content")
-                                        else str(block)
-                                    )
-                                    event_queue.put(AgentEvent(
-                                        type="tool_result",
-                                        content=result_str[:5000],
-                                        tool_call_id=getattr(block, "tool_use_id", ""),
-                                        is_error=getattr(block, "is_error", False),
-                                        turn=turn_count,
-                                    ))
-
-                    elif isinstance(msg, ResultMessage):
-                        cost = getattr(msg, "total_cost_usd", None)
-                        event_queue.put(AgentEvent(
-                            type="done",
-                            content="",
-                            cost_usd=cost,
-                            turn=turn_count,
-                        ))
-                        break  # Session complete for this query
-
-                    elif isinstance(msg, RateLimitEvent):
-                        info = msg.rate_limit_info
-                        status = getattr(info, "status", None)
-                        if status != "allowed":
-                            event_queue.put(AgentEvent(
-                                type="error",
-                                content="Rate limited. Try again shortly.",
-                                is_error=True,
-                                turn=turn_count,
-                            ))
-
-                    elif isinstance(msg, StreamEvent):
-                        event = msg.event
-                        event_type = event.get("type", "")
-                        delta = event.get("delta", {})
-                        text = delta.get("text", "")
-                        thinking = delta.get("thinking", "")
-
-                        if text:
-                            event_queue.put(AgentEvent(
-                                type="text_delta",
-                                content=text,
-                                turn=turn_count,
-                            ))
-                        elif thinking:
-                            event_queue.put(AgentEvent(
-                                type="thinking_delta",
-                                content=thinking,
-                                turn=turn_count,
-                            ))
-                        elif event_type == "content_block_start":
-                            block = event.get("content_block", {})
-                            event_queue.put(AgentEvent(
-                                type="block_start",
-                                content=block.get("type", ""),
-                                turn=turn_count,
-                            ))
+                await _relay_sdk_messages(
+                    client, agent_state, event_queue, stream
+                )
 
         except asyncio.CancelledError:
             LOGGER.info("Agent task cancelled by user")
@@ -552,12 +197,16 @@ def _run_agent_in_thread(
             stderr = getattr(e, "stderr", None) or ""
             full_error = f"{type(e).__name__}: {e}\nstderr: {stderr}\n{tb}"
             LOGGER.error(f"Agent error: {full_error}")
-            event_queue.put(AgentEvent(
-                type="error",
-                content=full_error,
-                is_error=True,
-                turn=turn_count,
-            ))
+            event_queue.put(
+                AgentEvent(
+                    type="error",
+                    content=str(e) if str(e) else repr(e),
+                    full_trace=full_error,
+                    diagnostic_context={"error_type": type(e).__name__},
+                    is_error=True,
+                    turn=stream.turn_count,
+                )
+            )
 
     if sys.platform == "win32":
         loop = asyncio.ProactorEventLoop()
@@ -573,12 +222,17 @@ def _run_agent_in_thread(
         LOGGER.info("Agent thread: task was cancelled")
     except Exception as e:
         tb = traceback.format_exc()
-        event_queue.put(AgentEvent(
-            type="error",
-            content=f"Thread error: {e}\n{tb}",
-            is_error=True,
-        ))
+        event_queue.put(
+            AgentEvent(
+                type="error",
+                content=str(e) if str(e) else repr(e),
+                full_trace=tb,
+                diagnostic_context={"error_type": type(e).__name__},
+                is_error=True,
+            )
+        )
     finally:
+        agent_state.client = None
         try:
             loop.close()
         except Exception:
@@ -606,24 +260,40 @@ def stop_agent(session_id: str) -> bool:
     return True
 
 
-def _build_disallowed_tools(
-    *,
-    disallow_file_edits: bool,
-    additional_disallowed_tools: list[str] | None = None,
-) -> list[str] | None:
-    disallowed = [
-        *(FILE_EDIT_TOOLS if disallow_file_edits else []),
-        *(additional_disallowed_tools or []),
-    ]
-    if not disallowed:
-        return None
-    return list(dict.fromkeys(disallowed))
+async def steer_agent(session_id: str, message: str, steering_id: str) -> bool:
+    """Queue a user message on a live SDK client without interrupting it."""
+    agent = _active_agents.get(session_id)
+    if (
+        agent is None
+        or agent.client is None
+        or agent.loop is None
+        or agent.loop.is_closed()
+        or agent.task is None
+        or agent.task.done()
+    ):
+        return False
+    if steering_id in agent.accepted_steering_ids:
+        return True
+    agent.accepted_steering_ids.add(steering_id)
+    future = asyncio.run_coroutine_threadsafe(
+        agent.client.query(message),
+        agent.loop,
+    )
+    try:
+        await asyncio.wrap_future(future)
+        agent.pending_steering_turns += 1
+    except Exception:
+        agent.accepted_steering_ids.discard(steering_id)
+        raise
+    LOGGER.info("Queued steering message for session %s", session_id)
+    return True
 
 
 async def run_notebook_agent(
     message: str,
     session_id: SessionId,
     model: str = "claude-opus-4-6",
+    effort: str | None = None,
     max_turns: int = 50,
     new_chat: bool = False,
     message_history: list[dict[str, str]] | None = None,
@@ -641,6 +311,9 @@ async def run_notebook_agent(
     persist_session_mapping: bool = True,
     auth_config_override: dict[str, str] | None = None,
     notebook_session_authorizer: Callable[[str], bool] | None = None,
+    chat_session_id_override: str | None = None,
+    resume_session_override: bool | None = None,
+    agent_env_overrides: dict[str, str] | None = None,
 ) -> AsyncGenerator[AgentEvent, None]:
     """
     Run the Claude Agent SDK for a chat message.
@@ -656,13 +329,16 @@ async def run_notebook_agent(
     effective_app = notebook_mcp_app or app
     chat_session_key = thread_id or str(session_id)
 
-    if new_chat:
-        clear_chat_session(chat_session_key, persist=persist_session_mapping)
-
-    chat_session_id, is_resume = _get_or_create_chat_session(
-        chat_session_key,
-        persist=persist_session_mapping,
-    )
+    if chat_session_id_override is not None:
+        chat_session_id = chat_session_id_override
+        is_resume = bool(resume_session_override)
+    else:
+        if new_chat:
+            clear_chat_session(chat_session_key, persist=persist_session_mapping)
+        chat_session_id, is_resume = _get_or_create_chat_session(
+            chat_session_key,
+            persist=persist_session_mapping,
+        )
 
     effective_cwd = cwd or os.getcwd()
     mcp_servers = _get_mcp_servers_config(mcp_config)
@@ -674,76 +350,14 @@ async def run_notebook_agent(
         additional_disallowed_tools=additional_disallowed_tools,
     )
 
-    # Reconstruct context from message history if session was lost
-    if not is_resume and message_history and len(message_history) > 1:
-        history_lines = []
-        for msg in message_history[:-1]:
-            role = msg.get("role", "user").upper()
-            content = msg.get("content", "")
-            if content.strip():
-                history_lines.append(f"[{role}]: {content}")
-        if history_lines:
-            history_text = "\n\n".join(history_lines)
-            system_prompt += f"\n\n<previous_conversation>\n{history_text}\n</previous_conversation>\n"
-
-    # Add dbt project context on first message
-    if not is_resume:
-        dbt_context = _get_dbt_project_context(effective_cwd)
-        if dbt_context:
-            system_prompt += f"\n\n{dbt_context}\n"
-
-    # Inject active file context so the agent knows what the user is viewing
-    if context_file:
-        context_block = f"\n\n## Current File Context\nThe user is currently viewing: `{context_file}`\n"
-        matched_session = False
-        if effective_app is not None:
-            try:
-                from signalpilot._server.ai.tools.base import ToolContext
-                tc = ToolContext(app=effective_app)
-                cf_normalized = context_file.replace("\\", "/").strip("/")
-                LOGGER.info(f"[Agent Context] Looking for file: {cf_normalized}")
-                for sid, sess in tc.session_manager.sessions.items():
-                    file_path = sess.app_file_manager.path
-                    if not file_path:
-                        continue
-                    fp_str = str(file_path).replace("\\", "/")
-                    LOGGER.info(f"[Agent Context] Session {sid} -> {fp_str}")
-                    if (
-                        fp_str == cf_normalized
-                        or fp_str.endswith(("/" + cf_normalized, cf_normalized))
-                        or os.path.basename(fp_str) == os.path.basename(cf_normalized)
-                    ):
-                        context_block += f"This notebook's session_id is: `{sid}`\n"
-                        context_block += "Use this session_id with notebook tools (edit_notebook, run_cells, get_cell_runtime_data, etc.) to modify this notebook directly.\n"
-                        LOGGER.info(f"[Agent Context] Matched session {sid} for {context_file}")
-                        matched_session = True
-                        break
-            except Exception as e:
-                LOGGER.warning(f"Could not resolve session for context file: {e}")
-
-        # For non-notebook files (.sql, .yml, etc.), include the file contents
-        if not matched_session:
-            try:
-                resolved = Path(context_file)
-                if not resolved.is_absolute() and effective_app is not None:
-                    from signalpilot._server.ai.tools.base import ToolContext
-                    tc = ToolContext(app=effective_app)
-                    workspace_dir = getattr(tc.session_manager.workspace, "directory", None)
-                    if workspace_dir:
-                        resolved = Path(workspace_dir) / context_file
-                if not resolved.is_absolute():
-                    resolved = Path(effective_cwd) / context_file
-                if resolved.is_file():
-                    contents = resolved.read_text(encoding="utf-8", errors="replace")
-                    if len(contents) > 20000:
-                        contents = contents[:20000] + "\n... (truncated)"
-                    ext = resolved.suffix.lower()
-                    lang = {"sql": "sql", "yml": "yaml", "yaml": "yaml", "json": "json", "toml": "toml"}.get(ext.lstrip("."), "")
-                    context_block += f"\n```{lang}\n{contents}\n```\n"
-            except Exception as e:
-                LOGGER.debug(f"Could not read context file contents: {e}")
-
-        system_prompt += context_block
+    system_prompt = _extend_system_prompt(
+        system_prompt,
+        is_resume=is_resume,
+        message_history=message_history,
+        effective_cwd=effective_cwd,
+        context_file=context_file,
+        effective_app=effective_app,
+    )
 
     agent = _ActiveAgent()
     _active_agents[str(session_id)] = agent
@@ -751,11 +365,22 @@ async def run_notebook_agent(
     thread = threading.Thread(
         target=_run_agent_in_thread,
         args=(
-            agent, message, model, max_turns, mcp_servers,
-            system_prompt, chat_session_id, is_resume, disallowed_tools, allowed_tools,
-            effective_app, effective_cwd,
+            agent,
+            message,
+            model,
+            effort,
+            max_turns,
+            mcp_servers,
+            system_prompt,
+            chat_session_id,
+            is_resume,
+            disallowed_tools,
+            allowed_tools,
+            effective_app,
+            effective_cwd,
             auth,
             notebook_session_authorizer,
+            agent_env_overrides,
         ),
         daemon=True,
     )

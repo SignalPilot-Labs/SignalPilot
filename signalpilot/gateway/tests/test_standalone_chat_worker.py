@@ -8,7 +8,106 @@ from typing import Any
 
 import pytest
 
-from gateway.standalone_chat import worker
+from gateway.standalone_chat import worker, worker_context
+
+
+def test_dashboard_tool_completion_exposes_only_safe_native_progress() -> None:
+    completion = worker._dashboard_authoring_completion(
+        "mcp__standalone-chat__upsert_dashboard_chart",
+        '{"status":"ready","authoring_session_id":"session-a","draft_revision":4,'
+        '"ready_count":2,"failed_count":0,"expected_count":3,"session":{"definition":{"sql":"secret"}}}',
+    )
+
+    assert completion == {
+        "dashboard_authoring": {
+            "label": "Building dashboard (2 of 3 charts)",
+            "phase": "upsert_dashboard_chart",
+            "authoring_session_id": "session-a",
+            "draft_revision": 4,
+            "status": "ready",
+            "ready_count": 2,
+            "failed_count": 0,
+            "expected_count": 3,
+        }
+    }
+    assert "secret" not in str(completion)
+
+
+def test_dashboard_tool_completion_ignores_untyped_or_unrelated_results() -> None:
+    assert worker._dashboard_authoring_completion("query_database", "{}") == {}
+    assert worker._dashboard_authoring_completion("create_dashboard_preview", "not-json") == {}
+
+
+def test_public_error_message_preserves_upstream_text_verbatim() -> None:
+    error = RuntimeError(
+        "CLIConnectionError: OAuth token expired\n"
+        "stderr: authentication failed\n"
+        "Traceback (most recent call last):\n"
+        '  File "/opt/runtime/agent.py", line 42, in run\n'
+        "RuntimeError: hidden implementation detail"
+    )
+
+    message = worker._public_error_message(error)
+
+    assert message == str(error)
+
+
+def test_public_error_message_redacts_credentials() -> None:
+    message = worker._public_error_message(RuntimeError("Database failed: postgresql://admin:hunter2@db.internal/prod"))
+
+    assert message == "Database failed: [REDACTED_CONNECTION]"
+    assert "hunter2" not in message
+
+
+def test_public_error_message_is_not_truncated_or_paraphrased() -> None:
+    upstream = "provider error: " + ("x" * 2_000)
+
+    assert worker._public_error_message(RuntimeError(upstream)) == upstream
+
+
+def test_public_full_trace_is_expandable_safe_diagnostic_content() -> None:
+    error = worker._AnalysisRuntimeError(
+        "CLIConnectionError: auth failed",
+        full_trace=(
+            "CLIConnectionError: auth failed\n"
+            "Authorization: Bearer oauth-secret\n"
+            "SDK token sk-ant-oat01-very-secret-token\n"
+            '  File "/opt/runtime/agent.py", line 42, in run'
+        ),
+        diagnostic_context={
+            "model": "claude-sonnet-test",
+            "auth_mode": "oauth",
+            "credential_present": True,
+            "api_error_status": 429,
+            "rate_limit": {
+                "status": "rejected",
+                "resets_at": 1788213000,
+                "raw": {"unknownFutureField": "preserved"},
+            },
+            "environment": {
+                "CLAUDE_CONFIG_DIR": "configured",
+                "SECRET_TOKEN": "must-not-pass",
+            },
+        },
+    )
+
+    trace = worker._public_full_trace(error)
+    context = worker._public_diagnostic_context(error)
+
+    assert "oauth-secret" not in trace
+    assert "very-secret-token" not in trace
+    assert "Authorization: Bearer [REDACTED]" in trace
+    assert "/opt/runtime/agent.py" in trace
+    assert context["auth_mode"] == "oauth"
+    assert context["error_type"] == "CLIConnectionError"
+    assert context["credential_present"] is True
+    assert context["api_error_status"] == 429
+    assert context["rate_limit"] == {
+        "status": "rejected",
+        "resets_at": 1788213000,
+        "raw": {"unknownFutureField": "preserved"},
+    }
+    assert context["environment"] == {"CLAUDE_CONFIG_DIR": "configured"}
 
 
 def test_dashboard_chart_reference_is_preloaded_into_existing_chat_runtime(
@@ -39,18 +138,56 @@ def test_dashboard_chart_reference_is_preloaded_into_existing_chat_runtime(
                 metadata_json={"dashboard_chart_reference": reference},
             )
         ],
-        "artifacts": [],
         "query_approvals": [],
         "query_proposals": [],
         "query_executions": [],
         "query_results": [],
     }
-    monkeypatch.setattr(worker, "project_metadata_context", lambda *_args: {"models": []})
+    monkeypatch.setattr(worker_context, "project_metadata_context", lambda *_args: {"models": []})
 
     warm = worker._warm_context(context)
 
     assert warm["dashboard_chart_reference"] == reference
     assert warm["project"]["commit_sha"] == "a" * 40
+
+
+def test_dashboard_authoring_session_is_preloaded_for_chat_refinement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = {
+        "conversation": SimpleNamespace(branch="main", commit_sha="a" * 40, internal_summary=None),
+        "project": SimpleNamespace(
+            id="project-a",
+            name="pilot",
+            display_name="Pilot",
+            description=None,
+            connection_name="production",
+        ),
+        "messages": [],
+        "query_approvals": [],
+        "query_proposals": [],
+        "query_executions": [],
+        "query_results": [],
+        "dashboard_authoring_session": SimpleNamespace(
+            id="session-a",
+            dashboard_id="dashboard-a",
+            definition_json={"name": "Executive dashboard"},
+            draft_revision=3,
+            status="preview",
+        ),
+    }
+    monkeypatch.setattr(worker_context, "project_metadata_context", lambda *_args: {"models": []})
+
+    warm = worker._warm_context(context)
+
+    assert warm["dashboard_authoring"] == {
+        "authoring_session_id": "session-a",
+        "dashboard_id": "dashboard-a",
+        "dashboard_name": "Executive dashboard",
+        "draft_revision": 3,
+        "status": "preview",
+        "instruction": "Refine this dashboard session when the user asks for dashboard changes.",
+    }
 
 
 @pytest.mark.asyncio
@@ -106,6 +243,9 @@ async def test_notebook_stream_does_not_hold_a_database_session(monkeypatch: pyt
 
     run = SimpleNamespace(
         id="run-a",
+        org_id="org-a",
+        user_id="user-a",
+        conversation_id="conv-a",
         execution_attempt=1,
         cancellation_requested_at=None,
     )
@@ -150,13 +290,10 @@ async def test_notebook_stream_does_not_hold_a_database_session(monkeypatch: pyt
         yield {
             "type": "final",
             "content": "Analysis complete",
-            "artifacts": [],
-            "report_action_outcome": {
-                "action": "no_suggestion",
-                "artifact_kind": "report",
-                "artifact_filename": "diagnostic.html",
-                "reason": "One-off diagnostic.",
-                "catalog_scan_complete": True,
+                "dashboard_preview": {
+                "authoring_session_id": "authoring-session-1",
+                "dashboard_name": "Executive Revenue",
+                "chart_count": 2,
             },
         }
 
@@ -197,7 +334,6 @@ async def test_notebook_stream_does_not_hold_a_database_session(monkeypatch: pyt
     monkeypatch.setattr(worker, "stream_execution", stream_execution)
     monkeypatch.setattr(worker, "_warm_context", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(worker, "_append", append_event)
-    monkeypatch.setattr(worker, "_persist_artifacts", noop)
     monkeypatch.setattr(worker, "_lease_renewer", wait_until_stopped)
     monkeypatch.setattr(worker, "_cancellation_monitor", wait_until_stopped)
     monkeypatch.setattr(worker, "cleanup_finished_execution", noop)
@@ -205,12 +341,11 @@ async def test_notebook_stream_does_not_hold_a_database_session(monkeypatch: pyt
     await worker._execute_claimed_run("run-a", "worker-a")
 
     assert completed_runs == ["run-a"]
-    assert completion_payloads[0]["report_action_outcome"] == {
-        "action": "no_suggestion",
-        "artifact_kind": "report",
-        "artifact_filename": "diagnostic.html",
-        "reason": "One-off diagnostic.",
-        "catalog_scan_complete": True,
+    assert "report_action_outcome" not in completion_payloads[0]
+    assert completion_payloads[0]["dashboard_preview"] == {
+        "authoring_session_id": "authoring-session-1",
+        "dashboard_name": "Executive Revenue",
+        "chart_count": 2,
     }
     assert failed_runs == []
     assert ("cell_executed", {"status": "failed"}) in appended_events
@@ -221,12 +356,11 @@ async def test_notebook_stream_does_not_hold_a_database_session(monkeypatch: pyt
 
 
 @pytest.mark.asyncio
-async def test_terminal_notebook_validation_error_persists_no_answer_or_artifact(
+async def test_terminal_notebook_validation_error_persists_no_answer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     completed_runs: list[str] = []
     failed_runs: list[str] = []
-    persisted_artifacts: list[str] = []
 
     class FakeSessionContext:
         async def __aenter__(self) -> object:
@@ -237,6 +371,9 @@ async def test_terminal_notebook_validation_error_persists_no_answer_or_artifact
 
     run = SimpleNamespace(
         id="run-dirty",
+        org_id="org-a",
+        user_id="user-a",
+        conversation_id="conv-a",
         execution_attempt=1,
         cancellation_requested_at=None,
     )
@@ -251,7 +388,6 @@ async def test_terminal_notebook_validation_error_persists_no_answer_or_artifact
             internal_summary=None,
         ),
         "messages": [SimpleNamespace(role="user", content="Diagnose revenue")],
-        "artifacts": [],
         "query_approvals": [],
         "query_proposals": [],
         "query_executions": [],
@@ -279,9 +415,6 @@ async def test_terminal_notebook_validation_error_persists_no_answer_or_artifact
     async def fail_run(*_args: Any, **kwargs: Any) -> None:
         failed_runs.append(kwargs["run_id"])
 
-    async def persist_artifacts(*_args: Any, **kwargs: Any) -> None:
-        persisted_artifacts.append(kwargs["run_id"])
-
     async def wait_until_stopped(
         _run_id: str,
         _worker_id: str,
@@ -302,7 +435,6 @@ async def test_terminal_notebook_validation_error_persists_no_answer_or_artifact
     monkeypatch.setattr(worker, "stream_execution", stream_execution)
     monkeypatch.setattr(worker, "_warm_context", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(worker, "_append", noop)
-    monkeypatch.setattr(worker, "_persist_artifacts", persist_artifacts)
     monkeypatch.setattr(worker, "_lease_renewer", wait_until_stopped)
     monkeypatch.setattr(worker, "_cancellation_monitor", wait_until_stopped)
     monkeypatch.setattr(worker, "cleanup_finished_execution", noop)
@@ -310,5 +442,85 @@ async def test_terminal_notebook_validation_error_persists_no_answer_or_artifact
     await worker._execute_claimed_run("run-dirty", "worker-a")
 
     assert completed_runs == []
-    assert persisted_artifacts == []
     assert failed_runs == ["run-dirty"]
+
+
+class TestNotebookStartedPayload:
+    """worker.py: notebook_started carries the ids the live panel attaches with."""
+
+    def test_enriches_from_tool_result_and_runtime(self):
+        import json
+
+        from gateway.standalone_chat.worker import _notebook_started_payload
+
+        payload = _notebook_started_payload(
+            tool_result_content=json.dumps(
+                {
+                    "session_id": "s_abc123",
+                    "status": "started",
+                    "plan_id": "plan-1",
+                    "notebook_path": "/tmp/signalpilot-chat-runs/run-1/analysis.py",
+                }
+            ),
+            gateway_session_id="gw-sess-1",
+        )
+        assert payload == {
+            "status": "running",
+            "gateway_session_id": "gw-sess-1",
+            "kernel_session_id": "s_abc123",
+            "notebook_path": "/tmp/signalpilot-chat-runs/run-1/analysis.py",
+            "notebook": "analysis",
+        }
+
+    def test_tolerates_non_json_tool_result(self):
+        from gateway.standalone_chat.worker import _notebook_started_payload
+
+        payload = _notebook_started_payload(
+            tool_result_content="kernel started",
+            gateway_session_id="gw-sess-1",
+        )
+        assert payload == {
+            "status": "running",
+            "gateway_session_id": "gw-sess-1",
+            "notebook": "analysis",
+        }
+
+    def test_tolerates_missing_everything(self):
+        from gateway.standalone_chat.worker import _notebook_started_payload
+
+        payload = _notebook_started_payload(
+            tool_result_content="",
+            gateway_session_id=None,
+        )
+        assert payload == {"status": "running", "notebook": "analysis"}
+
+    def test_extracts_ids_from_content_block_repr(self):
+        """The agent SDK forwards MCP tool results as str(content_blocks) —
+        a Python repr of a block list wrapping the JSON — not raw JSON."""
+        from gateway.standalone_chat.worker import _notebook_started_payload
+
+        wrapped = (
+            '[TextContent(type=\'text\', text=\'{"session_id": "s_abc123", '
+            '"status": "started", "plan_id": "plan-1", "cell_ids": [], '
+            '"notebook_path": "/tmp/signalpilot-chat-runs/run-1/analysis.py"}\')]'
+        )
+        payload = _notebook_started_payload(
+            tool_result_content=wrapped,
+            gateway_session_id="gw-sess-1",
+        )
+        assert payload["kernel_session_id"] == "s_abc123"
+        assert payload["notebook_path"] == "/tmp/signalpilot-chat-runs/run-1/analysis.py"
+
+    def test_extracts_ids_from_dict_block_repr(self):
+        from gateway.standalone_chat.worker import _notebook_started_payload
+
+        wrapped = (
+            "[{'type': 'text', 'text': '{\"session_id\": \"s_def456\", "
+            '"notebook_path": "/tmp/signalpilot-chat-runs/run-2/analysis.py"}\'}]'
+        )
+        payload = _notebook_started_payload(
+            tool_result_content=wrapped,
+            gateway_session_id=None,
+        )
+        assert payload["kernel_session_id"] == "s_def456"
+        assert payload["notebook_path"] == "/tmp/signalpilot-chat-runs/run-2/analysis.py"

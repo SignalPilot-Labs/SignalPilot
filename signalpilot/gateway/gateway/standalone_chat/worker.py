@@ -5,23 +5,22 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import socket
-import uuid
+import time
 from contextlib import suppress
 from typing import Any
 
 import httpx
 
-from gateway import __version__ as gateway_version
 from gateway.db.engine import get_session_factory, init_db
-from gateway.db.models import GatewayChatRun
 from gateway.standalone_chat.config import (
     lease_seconds,
     standalone_chat_enabled,
     worker_concurrency,
     worker_poll_seconds,
 )
-from gateway.standalone_chat.domain import select_context_for_summary
+from gateway.standalone_chat.domain import (
+    select_context_for_summary,
+)
 from gateway.standalone_chat.execution import (
     cancel_execution_session,
     cleanup_expired_approval_sandboxes,
@@ -30,149 +29,46 @@ from gateway.standalone_chat.execution import (
     prepare_execution,
     stream_execution,
 )
-from gateway.standalone_chat.projects import project_metadata_context
+from gateway.standalone_chat.worker_context import (
+    merge_text_delta as _merge_text_delta,
+)
+from gateway.standalone_chat.worker_context import (
+    message_context as _message_context,
+)
+from gateway.standalone_chat.worker_context import (
+    warm_context as _warm_context,
+)
+from gateway.standalone_chat.worker_errors import (
+    AnalysisRuntimeError as _AnalysisRuntimeError,
+)
+from gateway.standalone_chat.worker_errors import (
+    public_diagnostic_context as _public_diagnostic_context,
+)
+from gateway.standalone_chat.worker_errors import (
+    public_error_message as _public_error_message,
+)
+from gateway.standalone_chat.worker_errors import (
+    public_full_trace as _public_full_trace,
+)
+from gateway.standalone_chat.worker_events import (
+    _cancellation_monitor,
+    _lease_renewer,
+    _notebook_started_payload,  # noqa: F401 — re-exported for tests
+    _steering_monitor,
+    _update_summary,
+    _worker_id,
+)
+from gateway.standalone_chat.worker_tool_results import (
+    cache_tool_input,
+    handle_tool_result,
+)
+from gateway.standalone_chat.worker_tool_results import (
+    dashboard_authoring_completion as _dashboard_authoring_completion,  # noqa: F401
+)
 from gateway.store import standalone_chat as chat_store
 
 logger = logging.getLogger(__name__)
 _CLARIFICATION_PREFIX = "CLARIFICATION_REQUESTED:"
-
-
-def _worker_id() -> str:
-    return f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
-
-
-def _message_context(context: dict[str, Any]) -> list[dict[str, str]]:
-    return [
-        {"role": row.role, "content": row.content} for row in context["messages"] if row.role in {"user", "assistant"}
-    ]
-
-
-def _merge_text_delta(current: str, delta: str, *, starts_new_block: bool) -> tuple[str, str]:
-    if not delta:
-        return current, ""
-    separator = ""
-    if current and starts_new_block:
-        trailing_newlines = len(current) - len(current.rstrip("\n"))
-        leading_newlines = len(delta) - len(delta.lstrip("\n"))
-        separator = "\n" * max(0, 2 - trailing_newlines - leading_newlines)
-    emitted = f"{separator}{delta}"
-    return f"{current}{emitted}", emitted
-
-
-def _warm_context(
-    context: dict[str, Any],
-    *,
-    summary_override: str | None = None,
-) -> dict[str, Any]:
-    conversation = context["conversation"]
-    project = context["project"]
-    artifact_refs: list[dict[str, Any]] = []
-    artifacts = context["artifacts"]
-    for index, artifact in enumerate(artifacts):
-        snapshot = artifact.snapshot_json or {}
-        reference: dict[str, Any] = {
-            "id": artifact.id,
-            "kind": artifact.kind,
-            "filename": artifact.filename,
-            "parent_artifact_id": artifact.parent_artifact_id,
-            "schema": {
-                "columns": snapshot.get("columns") or (snapshot.get("source") or {}).get("columns"),
-                "truncated": snapshot.get("truncated", False),
-            },
-            "provenance": artifact.provenance_json,
-            "freshness_at": artifact.freshness_at.isoformat() if artifact.freshness_at else None,
-            "assumptions": artifact.assumptions,
-            "exclusions": artifact.exclusions,
-            "caveats": artifact.caveats,
-        }
-        # Keep schemas for every artifact and bounded snapshot data for the five
-        # most recent artifacts so follow-up questions can refine exact results.
-        if index >= max(0, len(artifacts) - 5):
-            if artifact.kind == "report":
-                reference["snapshot"] = {
-                    "html_excerpt": str(snapshot.get("html") or "")[:20_000],
-                }
-            else:
-                rows = (snapshot.get("source") or {}).get("rows") if artifact.kind == "chart" else snapshot.get("rows")
-                reference["snapshot"] = {
-                    "spec": snapshot.get("spec") if artifact.kind == "chart" else None,
-                    "rows": list(rows or [])[:200],
-                    "snapshot_row_count": len(rows or []),
-                }
-        artifact_refs.append(reference)
-    artifact_refs.reverse()
-    approvals_by_proposal = {approval.proposal_id: approval for approval in context.get("query_approvals", [])}
-    query_decisions = [
-        {
-            "proposal_id": proposal.id,
-            "purpose": proposal.purpose,
-            "sql_hash": proposal.sql_hash,
-            "status": proposal.status,
-            "estimated_cost_usd": proposal.estimated_cost_usd,
-            "decision": (approvals_by_proposal[proposal.id].decision if proposal.id in approvals_by_proposal else None),
-        }
-        for proposal in context.get("query_proposals", [])
-    ]
-    executions_by_id = {execution.id: execution for execution in context.get("query_executions", [])}
-    result_refs = [
-        {
-            "result_id": result.id,
-            "execution_id": result.execution_id,
-            "columns": result.columns_json,
-            "query_row_count": result.query_row_count,
-            "saved_row_count": result.saved_row_count,
-            "completeness": result.result_completeness,
-            "truncation_reason": result.truncation_reason,
-            "provenance": result.provenance_json,
-            "connection_name": (
-                executions_by_id[result.execution_id].connection_name
-                if result.execution_id in executions_by_id
-                else None
-            ),
-        }
-        for result in context.get("query_results", [])
-    ]
-    report_reference = next(
-        (
-            message.metadata_json.get("report_reference")
-            for message in reversed(context.get("messages", []))
-            if message.role == "user"
-            and isinstance(message.metadata_json, dict)
-            and isinstance(message.metadata_json.get("report_reference"), dict)
-        ),
-        None,
-    )
-    dashboard_chart_reference = next(
-        (
-            message.metadata_json.get("dashboard_chart_reference")
-            for message in reversed(context.get("messages", []))
-            if message.role == "user"
-            and isinstance(message.metadata_json, dict)
-            and isinstance(message.metadata_json.get("dashboard_chart_reference"), dict)
-        ),
-        None,
-    )
-    return {
-        "project": {
-            "id": project.id,
-            "name": project.display_name or project.name,
-            "description": project.description,
-            "default_branch": conversation.branch,
-            "commit_sha": conversation.commit_sha,
-            "connection_name": project.connection_name,
-            "dbt_metadata": project_metadata_context(project, conversation.branch or "main"),
-        },
-        "conversation_summary": summary_override or conversation.internal_summary,
-        "prior_artifacts": artifact_refs,
-        "query_decisions": query_decisions,
-        "structured_results": result_refs,
-        "report_reference": report_reference,
-        "dashboard_chart_reference": dashboard_chart_reference,
-        "runtime": {
-            "gateway_version": gateway_version,
-            "plugin_version": os.getenv("SIGNALPILOT_PLUGIN_VERSION", "deployed"),
-        },
-    }
 
 
 async def _append(run_id: str, event_type: str, payload: dict[str, Any]) -> None:
@@ -186,108 +82,30 @@ async def _append(run_id: str, event_type: str, payload: dict[str, Any]) -> None
         )
 
 
-async def _lease_renewer(run_id: str, worker_id: str, stop: asyncio.Event) -> None:
-    interval = max(5.0, lease_seconds() / 3)
-    factory = get_session_factory()
-    while not stop.is_set():
-        try:
-            await asyncio.wait_for(stop.wait(), timeout=interval)
-            return
-        except TimeoutError:
-            pass
+async def _announce_notebook(run_id: str, payload: dict[str, Any]) -> None:
+    """Append the notebook_started event and persist the conversation pointer.
+
+    The pointer makes the conversation row the single source of truth for
+    where the notebook lives. Persist only a complete id set: a partial
+    payload cannot be attached to and must not clobber a good pointer.
+    """
+    await _append(run_id, "notebook_started", payload)
+    gateway_session_id = payload.get("gateway_session_id")
+    kernel_session_id = payload.get("kernel_session_id")
+    notebook_path = payload.get("notebook_path")
+    if not (gateway_session_id and kernel_session_id and notebook_path):
+        return
+    with suppress(Exception):
+        factory = get_session_factory()
         async with factory() as db:
-            if not await chat_store.renew_lease(
+            await chat_store.set_conversation_notebook_for_run(
                 db,
                 run_id=run_id,
-                worker_id=worker_id,
-                lease_seconds=lease_seconds(),
-            ):
-                stop.set()
-                return
-
-
-async def _cancellation_monitor(
-    run_id: str,
-    worker_id: str,
-    stop: asyncio.Event,
-    worker_task: asyncio.Task[None],
-) -> None:
-    factory = get_session_factory()
-    while not stop.is_set():
-        try:
-            await asyncio.wait_for(stop.wait(), timeout=1.0)
-            return
-        except TimeoutError:
-            pass
-        async with factory() as db:
-            run = await chat_store.get_worker_run(db, run_id=run_id, worker_id=worker_id)
-            if run is None:
-                stop.set()
-                return
-            if run.cancellation_requested_at:
-                stop.set()
-                worker_task.cancel()
-                return
-
-
-async def _persist_artifacts(
-    *,
-    run_id: str,
-    worker_id: str,
-    artifacts: list[dict[str, Any]],
-) -> None:
-    factory = get_session_factory()
-    for artifact_payload in artifacts:
-        normalized = {
-            **artifact_payload,
-            "snapshot": artifact_payload.get("snapshot") or artifact_payload.get("payload"),
-        }
-        async with factory() as db:
-            run = await chat_store.get_worker_run(db, run_id=run_id, worker_id=worker_id)
-            if run is None or run.cancellation_requested_at:
-                return
-            artifact = await chat_store.persist_artifact(db, run=run, payload=normalized)
-        await _append(
-            run_id,
-            "artifact_created",
-            {
-                "artifact_id": artifact.id,
-                "kind": artifact.kind,
-                "filename": artifact.filename,
-            },
-        )
-
-
-async def _update_summary(run_id: str) -> None:
-    factory = get_session_factory()
-    async with factory() as db:
-        run = await db.get(GatewayChatRun, run_id)
-        if run is None:
-            return
-        context = await chat_store.worker_context(db, run=run)
-    messages = _message_context(context)
-    artifact_refs = [
-        {
-            "id": artifact.id,
-            "kind": artifact.kind,
-            "filename": artifact.filename,
-            "provenance": artifact.provenance_json,
-        }
-        for artifact in context["artifacts"]
-    ]
-    selection = select_context_for_summary(
-        messages,
-        artifact_refs=artifact_refs,
-        usable_context_chars=400_000,
-    )
-    if selection is None:
-        return
-    async with factory() as db:
-        await chat_store.update_internal_summary(
-            db,
-            conversation_id=context["conversation"].id,
-            summary=str(selection["summary"]),
-        )
+                gateway_session_id=str(gateway_session_id),
+                kernel_session_id=str(kernel_session_id),
+                notebook_path=str(notebook_path),
+                name=str(payload.get("notebook") or "analysis"),
+            )
 
 
 async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
@@ -296,18 +114,22 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
     worker_task = asyncio.current_task()
     assert worker_task is not None
     cancellation = asyncio.create_task(_cancellation_monitor(run_id, worker_id, stop, worker_task))
+    steering: asyncio.Task[None] | None = None
     final_text = ""
     streamed_text = ""
     report_proposal: dict[str, Any] | None = None
-    report_action_outcome: dict[str, Any] | None = None
+    dashboard_preview: dict[str, Any] | None = None
     starts_new_text_block = False
     tool_names_by_id: dict[str, str] = {}
+    tool_inputs_by_id: dict[str, dict[str, Any]] = {}
     try:
         factory = get_session_factory()
         async with factory() as db:
             run = await chat_store.get_worker_run(db, run_id=run_id, worker_id=worker_id)
             if run is None:
                 return
+            # Tool result handling runs after this session closes.
+            run_org_id = run.org_id
             recovering = run.execution_attempt > 1
             context = await chat_store.worker_context(db, run=run)
             project = context["project"]
@@ -321,7 +143,6 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
             all_messages = _message_context(context)
             selection = select_context_for_summary(
                 all_messages,
-                artifact_refs=[],
                 usable_context_chars=400_000,
             )
             messages = list(selection["recent_messages"]) if selection is not None else all_messages
@@ -356,11 +177,15 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
             "status",
             {"status": "running", "reset_text": recovering},
         )
-        await _append(
-            run_id,
-            "progress",
-            {"label": "Exploring the project and relevant data"},
-        )
+
+        # Runtime boot progress: emitted ONLY when the sandbox is actually
+        # cold (fresh provision or snapshot resume). A warm conversation
+        # reuses its running sandbox and the UI shows nothing.
+        boot_started_at: dict[str, float] = {}
+
+        async def _on_cold_boot(phase: str) -> None:
+            boot_started_at.setdefault("t0", time.monotonic())
+            await _append(run_id, "runtime_boot", {"phase": phase})
 
         last_error: Exception | None = None
         for notebook_attempt in range(2):
@@ -373,13 +198,6 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                     )
                     if active_run is None:
                         return
-                    # Sandbox cold starts take 30-60s; without a progress
-                    # event the run looks hung before the first agent event.
-                    await _append(
-                        run_id,
-                        "progress",
-                        {"label": "Starting the secure analysis runtime"},
-                    )
                     execution = await prepare_execution(
                         db,
                         run=active_run,
@@ -390,18 +208,46 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                         prompt=prompt,
                         messages=messages,
                         warm_context=warm_context,
+                        on_cold_boot=_on_cold_boot,
                     )
-                    await _append(
-                        run_id,
-                        "progress",
-                        {"label": "Analysis runtime ready"},
-                    )
+                    if "t0" in boot_started_at:
+                        await _append(
+                            run_id,
+                            "runtime_boot",
+                            {
+                                "phase": "ready",
+                                "boot_ms": int((time.monotonic() - boot_started_at.pop("t0")) * 1000),
+                            },
+                        )
+                    if steering is None:
+                        steering = asyncio.create_task(
+                            _steering_monitor(
+                                run_id,
+                                worker_id,
+                                execution,
+                                stop,
+                            )
+                        )
                 async for event in stream_execution(execution):
                     if stop.is_set():
                         raise asyncio.CancelledError
                     event_type = str(event.get("type") or "")
                     content = str(event.get("content") or "")
+                    parent_tool_call_id = str(event.get("parent_tool_call_id") or "")
                     if event_type == "text_delta":
+                        if parent_tool_call_id:
+                            # Subagent narration: recorded for its spawn card,
+                            # never merged into the run's own narration.
+                            if content:
+                                await _append(
+                                    run_id,
+                                    "text_delta",
+                                    {
+                                        "delta": content,
+                                        "parent_tool_call_id": parent_tool_call_id,
+                                    },
+                                )
+                            continue
                         streamed_text, emitted_content = _merge_text_delta(
                             streamed_text,
                             content,
@@ -414,6 +260,16 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                                 {"delta": emitted_content},
                             )
                             starts_new_text_block = False
+                    elif event_type == "thinking_delta":
+                        if content:
+                            await _append(
+                                run_id,
+                                "thinking_delta",
+                                {
+                                    "delta": content,
+                                    **({"parent_tool_call_id": parent_tool_call_id} if parent_tool_call_id else {}),
+                                },
+                            )
                     elif event_type == "text":
                         final_text = content
                     elif event_type == "progress":
@@ -423,17 +279,36 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                             {"label": content or "Analysis is continuing"},
                         )
                     elif event_type == "tool_use":
-                        starts_new_text_block = bool(streamed_text)
+                        # Subagent tool calls don't split the main narration.
+                        if not parent_tool_call_id:
+                            starts_new_text_block = bool(streamed_text)
                         tool_name = str(event.get("tool_name") or "analysis tool")
                         tool_input = event.get("tool_input") or {}
                         tool_call_id = str(event.get("tool_call_id") or "")
                         if tool_call_id:
                             tool_names_by_id[tool_call_id] = tool_name
+                            cached_input = cache_tool_input(tool_input)
+                            if cached_input is not None:
+                                tool_inputs_by_id[tool_call_id] = cached_input
                         await _append(
                             run_id,
                             "tool_started",
-                            {"tool": tool_name, "input": tool_input},
+                            {
+                                "tool": tool_name,
+                                "input": tool_input,
+                                # tool_call_id makes completion pairing exact
+                                # (parallel subagents complete out of order);
+                                # parent groups the step under its spawn.
+                                "tool_call_id": tool_call_id or None,
+                                **({"parent_tool_call_id": parent_tool_call_id} if parent_tool_call_id else {}),
+                            },
                         )
+                        # Side events (sql/source) attach to the latest OPEN
+                        # top-level step in the UI — suppress them for
+                        # subagent tools, whose SQL still shows on the child
+                        # step from its input.
+                        if parent_tool_call_id:
+                            continue
                         if tool_name.endswith(("query_database", "explain_query", "validate_sql")):
                             sql = tool_input.get("sql") if isinstance(tool_input, dict) else None
                             if sql:
@@ -457,46 +332,60 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                                 {"tool": tool_name, **source_refs},
                             )
                     elif event_type == "tool_result":
-                        starts_new_text_block = bool(streamed_text)
-                        is_error = bool(event.get("is_error"))
-                        tool_call_id = str(event.get("tool_call_id") or "")
-                        completed_tool = tool_names_by_id.get(tool_call_id, "")
-                        await _append(
-                            run_id,
-                            "tool_completed",
-                            {
-                                "tool_call_id": event.get("tool_call_id"),
-                                "summary": (
-                                    "The governed tool returned an error."
-                                    if is_error
-                                    else "The governed tool completed."
-                                ),
-                                "error": is_error,
-                            },
+                        if not parent_tool_call_id:
+                            starts_new_text_block = bool(streamed_text)
+                        # Projects the result into the tool_completed card
+                        # payload and emits the notebook/cell side events.
+                        await handle_tool_result(
+                            run_id=run_id,
+                            event=event,
+                            content=content,
+                            parent_tool_call_id=parent_tool_call_id,
+                            tool_names_by_id=tool_names_by_id,
+                            tool_inputs_by_id=tool_inputs_by_id,
+                            execution=execution,
+                            org_id=run_org_id,
                         )
-                        if not is_error and completed_tool.endswith("start_analysis_notebook"):
-                            await _append(run_id, "notebook_started", {"status": "running"})
-                        if completed_tool.endswith("run_cells"):
-                            await _append(
-                                run_id,
-                                "cell_executed",
-                                {"status": "failed" if is_error else "completed"},
-                            )
+                    elif event_type == "notebook_started":
+                        # Emitted by the runtime when it starts a replacement
+                        # kernel (notebook recovery). The normal path derives
+                        # this event from the start_analysis_notebook result.
+                        recovery_payload: dict[str, Any] = {"status": "running"}
+                        if execution.session_id:
+                            recovery_payload["gateway_session_id"] = execution.session_id
+                        if event.get("session_id"):
+                            recovery_payload["kernel_session_id"] = str(event["session_id"])
+                        if event.get("notebook_path"):
+                            recovery_payload["notebook_path"] = str(event["notebook_path"])
+                        if event.get("notebook"):
+                            recovery_payload["notebook"] = str(event["notebook"])
+                        await _announce_notebook(run_id, recovery_payload)
                     elif event_type == "error":
-                        raise RuntimeError(content or "Notebook analysis failed")
+                        raise _AnalysisRuntimeError(
+                            content,
+                            full_trace=str(event.get("full_trace") or content or ""),
+                            diagnostic_context=event.get("diagnostic_context"),
+                        )
                     elif event_type == "final":
                         final_text = content or final_text or streamed_text
+                        # Operator accounting: cost + token usage reported by
+                        # the agent SDK, persisted on the run row.
+                        raw_usage = event.get("usage")
+                        raw_cost = event.get("cost_usd")
+                        if raw_cost is not None or isinstance(raw_usage, dict):
+                            with suppress(Exception):
+                                async with factory() as db:
+                                    await chat_store.record_run_usage(
+                                        db,
+                                        run_id=run_id,
+                                        worker_id=worker_id,
+                                        cost_usd=(raw_cost if isinstance(raw_cost, (int, float)) else None),
+                                        usage=(raw_usage if isinstance(raw_usage, dict) else None),
+                                    )
                         raw_report_proposal = event.get("report_proposal")
                         report_proposal = raw_report_proposal if isinstance(raw_report_proposal, dict) else None
-                        raw_report_action_outcome = event.get("report_action_outcome")
-                        report_action_outcome = (
-                            raw_report_action_outcome if isinstance(raw_report_action_outcome, dict) else None
-                        )
-                        await _persist_artifacts(
-                            run_id=run_id,
-                            worker_id=worker_id,
-                            artifacts=[item for item in event.get("artifacts") or [] if isinstance(item, dict)],
-                        )
+                        raw_dashboard_preview = event.get("dashboard_preview")
+                        dashboard_preview = raw_dashboard_preview if isinstance(raw_dashboard_preview, dict) else None
                         if event.get("kernel_stopped"):
                             await _append(run_id, "kernel_stopped", {"status": "stopped"})
                 last_error = None
@@ -536,14 +425,6 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
         if not answer:
             raise RuntimeError("The analysis runtime returned no answer")
 
-        await _append(
-            run_id,
-            "progress",
-            {
-                "label": "Answer complete",
-                "summary": "Reviewed governed project metadata, relevant sources, and query results.",
-            },
-        )
         async with factory() as db:
             message = await chat_store.complete_run(
                 db,
@@ -551,7 +432,7 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                 worker_id=worker_id,
                 content=answer,
                 report_proposal=report_proposal,
-                report_action_outcome=report_action_outcome,
+                dashboard_preview=dashboard_preview,
             )
         if message is not None:
             await _update_summary(run_id)
@@ -578,7 +459,10 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
             type(exc).__name__,
             exc_info=True,
         )
-        public_message = "I could not complete this analysis. You can inspect the work and retry."
+        public_message = _public_error_message(exc)
+        full_trace = _public_full_trace(exc)
+        diagnostic_context = _public_diagnostic_context(exc)
+        diagnostic_context["run_id"] = run_id
         with suppress(Exception):
             await _append(
                 run_id,
@@ -586,7 +470,8 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                 {
                     "code": "analysis_failed",
                     "message": public_message,
-                    "technical_detail": type(exc).__name__,
+                    "full_trace": full_trace,
+                    "diagnostic_context": diagnostic_context,
                 },
             )
         async with get_session_factory()() as db:
@@ -599,13 +484,29 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
             )
     finally:
         stop.set()
-        for task in (renewer, cancellation):
+        for task in (renewer, cancellation, steering):
+            if task is None:
+                continue
             task.cancel()
             with suppress(asyncio.CancelledError):
                 await task
         with suppress(Exception):
             async with get_session_factory()() as db:
+                await chat_store.finalize_undelivered_steering(
+                    db,
+                    run_id=run_id,
+                )
+        with suppress(Exception):
+            async with get_session_factory()() as db:
                 await cleanup_finished_execution(db, run_id=run_id)
+        # Tear down the improvement-run agent sandbox (per-run). The chat agent
+        # no longer creates one (collapsed to the notebook session). The dbt
+        # executor is NOT released here: it is conversation-scoped and kept warm
+        # across messages, freed by cleanup_idle_executors after the warm window.
+        with suppress(Exception):
+            from ..mcp.tools.sandbox_vm import release_session_sandbox
+
+            await release_session_sandbox(f"chat:{run_id}")
 
 
 async def run_worker() -> None:
@@ -625,6 +526,10 @@ async def run_worker() -> None:
             async with factory() as db:
                 await cleanup_expired_approval_sandboxes(db)
                 await cleanup_expired_runtime_objects(db)
+                with suppress(Exception):
+                    from .dbt_executor import cleanup_idle_executors
+
+                    await cleanup_idle_executors()
                 run_ids = await chat_store.claim_runs(
                     db,
                     worker_id=worker_id,

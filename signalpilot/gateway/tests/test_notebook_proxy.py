@@ -286,6 +286,12 @@ class TestLaunchCredentialDelivery:
         # The token itself must never appear in argv (process lists are readable).
         assert "pod-notebook-token" not in command
 
+    def test_unpartitioned_deployment_keeps_legacy_notebook_tag(self, monkeypatch):
+        from gateway.notebooks.backends import _notebook_sandbox_tags
+
+        monkeypatch.delenv("SP_RUNTIME_ENV", raising=False)
+        assert _notebook_sandbox_tags() == {"sp-purpose": "notebook"}
+
     @pytest.mark.asyncio
     async def test_reap_orphans_spares_launching_sandboxes(self, monkeypatch):
         """A sandbox mid-launch has tags but no session row yet; the reaper
@@ -301,8 +307,10 @@ class TestLaunchCredentialDelivery:
         class FakeRuntime:
             def __init__(self):
                 self.destroyed = []
+                self.list_tags = None
 
             async def list(self, *, tags=None):
+                self.list_tags = tags
                 return [
                     SandboxInfo("young", "running", created_at_epoch=now - 30),
                     SandboxInfo("old-orphan", "running", created_at_epoch=now - 7200),
@@ -314,10 +322,16 @@ class TestLaunchCredentialDelivery:
                 self.destroyed.append(sandbox_id)
 
         monkeypatch.setenv("SP_NOTEBOOK_VERCEL_IMAGE", "reg/img@sha256:" + "0" * 64)
+        monkeypatch.setenv("SP_RUNTIME_ENV", "local-daniel")
         runtime = FakeRuntime()
         backend = VercelNotebookBackend(NotebookSettings(), runtime=runtime)
         reaped = await backend.reap_orphans({"kept"})
         assert reaped == 2
+        assert runtime.list_tags == {
+            "sp-purpose": "notebook-local-daniel",
+            "sp-runtime-env": "local-daniel",
+            "sp-workload": "notebook",
+        }
         assert sorted(runtime.destroyed) == ["old-orphan", "unknown-age"]
 
     def test_boot_command_works_without_sudo(self):
@@ -353,14 +367,26 @@ class TestLaunchCredentialDelivery:
         runtime.exec.return_value = MagicMock(ok=True)
         runtime.routes.return_value = {2718: "https://sbx-1.vercel.run"}
         monkeypatch.setenv("SP_NOTEBOOK_VERCEL_IMAGE", "reg/nb:dev")
+        monkeypatch.setenv("SP_RUNTIME_ENV", "local-daniel")
         monkeypatch.delenv("SP_DEPLOYMENT_MODE", raising=False)
         backend = VercelNotebookBackend(NotebookSettings(), runtime=runtime)
         await backend.launch(self._launch_request())
         spec = runtime.create.await_args.args[0]
         assert spec.env == {}
+        assert spec.tags == {
+            "sp-purpose": "notebook-local-daniel",
+            "sp-runtime-env": "local-daniel",
+            "sp-workload": "notebook",
+            "sp-org": "org-1",
+            "sp-session": "sess-abc",
+        }
         process_env = runtime.start_process.await_args.kwargs["env"]
         assert process_env["SP_SESSION_JWT"] == "jwt.value"
-        assert "pod-notebook-token" not in process_env.values()
+        # The token rides the process env (never the creation spec); the boot
+        # command stages it into the 0400 token file and unsets it before
+        # exec'ing the server. No provider write_file on the critical path.
+        assert process_env["SP_NOTEBOOK_TOKEN"] == "pod-notebook-token"
+        runtime.write_file.assert_not_awaited()
 
 
 class TestUpstreamResolution:
@@ -655,12 +681,14 @@ def _arrange_proxy_session(
     caller_user_id: str = "user-1",
     caller_org_id: str = "org-1",
     access_token: str = "tok",
+    conversation_row: Any | None = None,
 ):
     """Wire resolve_proxy_session's three collaborators and return the connection.
 
     Stubs the caller identity (resolve_user_id/resolve_org_id), the DB session
     factory, and the session row, so the test only varies who is calling and
-    which org owns the session.
+    which org owns the session. ``conversation_row`` is returned by the stub
+    DB session's ``get`` — used by the standalone-chat ownership carve-out.
     """
     import contextlib
 
@@ -686,7 +714,9 @@ def _arrange_proxy_session(
 
     @contextlib.asynccontextmanager
     async def _factory():
-        yield AsyncMock()
+        db = AsyncMock()
+        db.get = AsyncMock(return_value=conversation_row)
+        yield db
 
     monkeypatch.setattr(engine_mod, "get_session_factory", lambda: _factory)
 
@@ -706,6 +736,97 @@ def _arrange_proxy_session(
     connection.state = MagicMock()
     connection.state.auth = None
     return connection
+
+
+class TestProxyChatConversationCarveOut:
+    """auth.py: standalone-chat runtime sessions (owned by the synthetic
+    identity chat:conv-<conversation_id>) resolve for the browser user who
+    owns that conversation — and for no one else. This is what lets the chat
+    page attach the live notebook panel to the agent's kernel."""
+
+    @staticmethod
+    def _conversation(user_id: str = "user-1", org_id: str = "org-1"):
+        row = MagicMock()
+        row.user_id = user_id
+        row.org_id = org_id
+        return row
+
+    @pytest.mark.asyncio
+    async def test_conversation_owner_is_allowed(self, monkeypatch):
+        from gateway.notebook_proxy.auth import resolve_proxy_session
+
+        connection = _arrange_proxy_session(
+            monkeypatch,
+            session_user_id="chat:conv-conv-42",
+            conversation_row=self._conversation(user_id="user-1"),
+        )
+        result = await resolve_proxy_session(connection, "sess-123")
+        assert result.session_id == "sess-123"
+
+    @pytest.mark.asyncio
+    async def test_non_owner_is_refused(self, monkeypatch):
+        from fastapi import HTTPException
+
+        from gateway.notebook_proxy.auth import resolve_proxy_session
+
+        connection = _arrange_proxy_session(
+            monkeypatch,
+            session_user_id="chat:conv-conv-42",
+            conversation_row=self._conversation(user_id="someone-else"),
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            await resolve_proxy_session(connection, "sess-123")
+        assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_missing_conversation_is_refused(self, monkeypatch):
+        from fastapi import HTTPException
+
+        from gateway.notebook_proxy.auth import resolve_proxy_session
+
+        connection = _arrange_proxy_session(
+            monkeypatch,
+            session_user_id="chat:conv-conv-42",
+            conversation_row=None,
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            await resolve_proxy_session(connection, "sess-123")
+        assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_conversation_in_other_org_is_refused(self, monkeypatch):
+        """Owning the conversation in org A does not open it from org B."""
+        from fastapi import HTTPException
+
+        from gateway.notebook_proxy.auth import resolve_proxy_session
+
+        connection = _arrange_proxy_session(
+            monkeypatch,
+            session_user_id="chat:conv-conv-42",
+            session_org_id="org-b",
+            caller_org_id="org-b",
+            conversation_row=self._conversation(user_id="user-1", org_id="org-a"),
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            await resolve_proxy_session(connection, "sess-123")
+        assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_non_chat_identity_gets_no_carve_out(self, monkeypatch):
+        """A plain foreign user id is never resolved through the conversation
+        lookup, even when the stub DB would return a matching conversation."""
+        from fastapi import HTTPException
+
+        from gateway.notebook_proxy.auth import resolve_proxy_session
+
+        connection = _arrange_proxy_session(
+            monkeypatch,
+            session_user_id="user-2",
+            conversation_row=self._conversation(user_id="user-1"),
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            await resolve_proxy_session(connection, "sess-123")
+        assert exc_info.value.status_code == 404
 
 
 class TestProxyUsesRouteUrl:

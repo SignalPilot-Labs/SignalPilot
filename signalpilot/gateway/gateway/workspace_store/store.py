@@ -7,11 +7,14 @@ bytes — never the other way around.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import io
+import logging
 import tarfile
 import time
 import uuid
+from collections import OrderedDict
 from dataclasses import dataclass
 
 from sqlalchemy import delete as sa_delete
@@ -24,8 +27,17 @@ from .model import FileEntry, Manifest, blob_key, manifest_key, snapshot_key
 from .objects import WorkspaceObjectStorage
 from .paths import confine_relpath
 
+logger = logging.getLogger(__name__)
+
 _MAX_INLINE_UPSERT_BYTES = 8 * 1024 * 1024
 _CAS_RETRIES = 3
+_S3_CONCURRENCY = 32
+
+# Manifests are immutable once written (the key embeds revision + a nonce), so
+# a small process-wide LRU turns the per-file-read "fetch the whole manifest
+# from S3" pattern into a memory hit. Keyed by manifest_key — never stale.
+_MANIFEST_CACHE: OrderedDict[str, Manifest] = OrderedDict()
+_MANIFEST_CACHE_MAX = 32
 
 
 class RevisionConflict(RuntimeError):
@@ -50,6 +62,58 @@ class Upsert:
     size: int | None = None
     mode: int = 0o644
     mtime: float | None = None
+
+
+# ── Background snapshot pre-warming ─────────────────────────────────────────
+# One debounced task per (org, project, branch); a new commit supersedes the
+# pending warm. Strictly best-effort: any failure just means the next launch
+# builds the snapshot on demand, exactly as before.
+
+_WARM_DEBOUNCE_SECONDS = 1.5
+_warm_tasks: dict[tuple[str, str, str], asyncio.Task] = {}
+# In-flight snapshot builds keyed by object key — concurrent callers await
+# the same build instead of duplicating it.
+_snapshot_builds: dict[str, asyncio.Future] = {}
+
+
+def _schedule_snapshot_warm(
+    storage: WorkspaceObjectStorage, *, org_id: str, project_id: str, branch: str
+) -> None:
+    if not storage.enabled:
+        return
+    key = (org_id, project_id, branch)
+    prior = _warm_tasks.get(key)
+    if prior is not None and not prior.done():
+        prior.cancel()
+
+    async def _warm() -> None:
+        try:
+            await asyncio.sleep(_WARM_DEBOUNCE_SECONDS)
+            from ..db.engine import get_session_factory
+
+            factory = get_session_factory()
+            async with factory() as db:
+                await WorkspaceStore(storage).build_snapshot(
+                    db, org_id=org_id, project_id=project_id, branch=branch
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.debug(
+                "Snapshot pre-warm failed for %s@%s (next launch builds on demand)",
+                project_id,
+                branch,
+                exc_info=True,
+            )
+        finally:
+            if _warm_tasks.get(key) is asyncio.current_task():
+                _warm_tasks.pop(key, None)
+
+    try:
+        _warm_tasks[key] = asyncio.create_task(_warm())
+    except RuntimeError:
+        # No running event loop (sync test contexts) — skip quietly.
+        pass
 
 
 class WorkspaceStore:
@@ -133,10 +197,18 @@ class WorkspaceStore:
             raise RevisionNotFound(
                 f"No revision {'HEAD' if revision is None else revision} for {project_id}@{branch}"
             )
+        cached = _MANIFEST_CACHE.get(row.manifest_key)
+        if cached is not None:
+            _MANIFEST_CACHE.move_to_end(row.manifest_key)
+            return cached
         data = await self.storage.get_bytes(row.manifest_key)
         if data is None:
             raise RevisionNotFound(f"Manifest object missing for revision {row.revision}")
-        return Manifest.from_bytes(data)
+        manifest = Manifest.from_bytes(data)
+        _MANIFEST_CACHE[row.manifest_key] = manifest
+        while len(_MANIFEST_CACHE) > _MANIFEST_CACHE_MAX:
+            _MANIFEST_CACHE.popitem(last=False)
+        return manifest
 
     # ── Reads ────────────────────────────────────────────────────────────────
 
@@ -179,10 +251,14 @@ class WorkspaceStore:
         deletes: list[str],
         created_by: str | None = None,
         message: str | None = None,
+        progress_cb: "callable | None" = None,
     ) -> Manifest:
         """Commit a batch atomically. `base_revision` must equal the current
         head (None for the first commit on a branch) or RevisionConflict is
-        raised — exactly one racer wins."""
+        raised — exactly one racer wins.
+
+        `progress_cb(done, total)` — when given, called after each blob's S3
+        round trip so long imports can surface live progress."""
         deletes = [confine_relpath(p) for p in deletes]
         for item in upserts:
             confine_relpath(item.path)
@@ -201,6 +277,13 @@ class WorkspaceStore:
         entries = dict(parent_entries)
         for path in deletes:
             entries.pop(path, None)
+
+        # Stage 1 (sequential, cheap): validate and build the entry map.
+        # Stage 2 (parallel, bounded): the S3 round trips — exists/put for
+        # inline content, head_size for referenced blobs. A bulk import pays
+        # ~2 S3 ops per file; serializing them dominated initial-sync time.
+        inline_blobs: dict[str, bytes] = {}
+        ref_sizes: dict[str, int] = {}
         for item in upserts:
             path = confine_relpath(item.path)
             if item.content is not None:
@@ -209,20 +292,13 @@ class WorkspaceStore:
                         "Inline upsert exceeds 8 MB — upload via presigned PUT and commit by reference"
                     )
                 digest = hashlib.sha256(item.content).hexdigest()
-                key = blob_key(org_id, project_id, digest)
-                if not await self.storage.exists(key):
-                    await self.storage.put_bytes(key, item.content)
+                inline_blobs[digest] = item.content
                 size = len(item.content)
             else:
                 if not item.sha256 or item.size is None:
                     raise ValueError("Reference upserts need sha256 and size")
                 digest = item.sha256
-                key = blob_key(org_id, project_id, digest)
-                actual = await self.storage.head_size(key)
-                if actual is None:
-                    raise ValueError(f"Referenced blob {digest[:12]} was never uploaded")
-                if actual != item.size:
-                    raise ValueError(f"Referenced blob {digest[:12]} size mismatch")
+                ref_sizes[digest] = item.size
                 size = item.size
             entries[path] = FileEntry(
                 path=path,
@@ -230,6 +306,39 @@ class WorkspaceStore:
                 size=size,
                 mode=item.mode,
                 mtime=item.mtime if item.mtime is not None else now,
+            )
+
+        semaphore = asyncio.Semaphore(_S3_CONCURRENCY)
+        total_ops = len(inline_blobs) + len(ref_sizes)
+        done_ops = 0
+
+        def _tick() -> None:
+            nonlocal done_ops
+            done_ops += 1
+            if progress_cb is not None:
+                progress_cb(done_ops, total_ops)
+
+        async def _ensure_inline(digest: str, content: bytes) -> None:
+            async with semaphore:
+                key = blob_key(org_id, project_id, digest)
+                if not await self.storage.exists(key):
+                    await self.storage.put_bytes(key, content)
+                _tick()
+
+        async def _verify_ref(digest: str, expected_size: int) -> None:
+            async with semaphore:
+                key = blob_key(org_id, project_id, digest)
+                actual = await self.storage.head_size(key)
+                if actual is None:
+                    raise ValueError(f"Referenced blob {digest[:12]} was never uploaded")
+                if actual != expected_size:
+                    raise ValueError(f"Referenced blob {digest[:12]} size mismatch")
+                _tick()
+
+        if inline_blobs or ref_sizes:
+            await asyncio.gather(
+                *(_ensure_inline(d, c) for d, c in inline_blobs.items()),
+                *(_verify_ref(d, s) for d, s in ref_sizes.items()),
             )
 
         manifest = Manifest(
@@ -267,6 +376,14 @@ class WorkspaceStore:
             raise RevisionConflict(
                 f"Revision {new_revision} on {project_id}@{branch} was committed by another writer"
             ) from exc
+        # Pre-warm the boot snapshot for the new head in the background so a
+        # subsequent session launch finds it cached instead of paying the
+        # full tar build on the critical path (measured at 10s+ for a
+        # few-thousand-file project). Debounced per branch: save bursts
+        # rebuild once.
+        _schedule_snapshot_warm(
+            self.storage, org_id=org_id, project_id=project_id, branch=branch
+        )
         return manifest
 
     async def commit_at_head(
@@ -351,8 +468,6 @@ class WorkspaceStore:
     ) -> tuple[int, str]:
         """Materialize (or reuse) the tarball of a revision and return
         (revision, object_key). Presigning is the caller's concern."""
-        import asyncio
-
         manifest = await self.load_manifest(
             db, org_id=org_id, project_id=project_id, branch=branch, revision=revision
         )
@@ -360,6 +475,31 @@ class WorkspaceStore:
         if await self.storage.exists(key):
             return manifest.revision, key
 
+        # Dedup concurrent builds of the same snapshot: a launch that lands
+        # while the post-commit pre-warm is still building must await that
+        # build, not run a second one (each build re-fetches every blob).
+        in_flight = _snapshot_builds.get(key)
+        if in_flight is not None:
+            await asyncio.shield(in_flight)
+            return manifest.revision, key
+        future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        _snapshot_builds[key] = future
+        try:
+            await self._build_snapshot_object(org_id, project_id, manifest, key)
+            future.set_result(None)
+        except BaseException as exc:
+            future.set_exception(exc)
+            # A waiter (if any) re-raises; otherwise silence the "exception
+            # was never retrieved" warning.
+            future.exception()
+            raise
+        finally:
+            _snapshot_builds.pop(key, None)
+        return manifest.revision, key
+
+    async def _build_snapshot_object(
+        self, org_id: str, project_id: str, manifest: Manifest, key: str
+    ) -> None:
         # Blob fetches dominate build time; identical content dedupes to one
         # fetch, and the rest run concurrently (bounded so a 20k-file project
         # doesn't stampede the store).
@@ -384,7 +524,6 @@ class WorkspaceStore:
                 info.mtime = int(entry.mtime)
                 tar.addfile(info, io.BytesIO(blob))
         await self.storage.put_bytes(key, buffer.getvalue(), content_type="application/gzip")
-        return manifest.revision, key
 
     # ── Deletion ─────────────────────────────────────────────────────────────
 

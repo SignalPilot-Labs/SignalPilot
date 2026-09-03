@@ -14,15 +14,17 @@ Every handle is persisted; a gateway restart reattaches by runtime_handle.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.auth.notebook_jwt import mint_session_jwt
 from gateway.config.gateway import get_gateway_settings
-from gateway.config.notebooks import get_notebook_settings
+from gateway.config.notebooks import chat_force_oauth_token, get_notebook_settings
 from gateway.models.notebook_sessions import NotebookSessionInfo
 from gateway.notebooks.backends import (
     LaunchRequest,
@@ -41,6 +43,11 @@ logger = logging.getLogger(__name__)
 _AI_CREDENTIAL_ENV_NAMES = ("CLAUDE_CODE_OAUTH_TOKEN", "OAUTH_TOKEN")
 _NOTEBOOK_MODEL_ENV_NAMES = ("SIGNALPILOT_ANALYSIS_AGENT_MODEL", "SIGNALPILOT_WORKER_AGENT_MODEL")
 _DEFAULT_CLOUD_WEB_URL = "https://app.signalpilot.ai"
+# The run must leave its visible provisioning state even when the provider or
+# guest health check hangs. Provider execution limits and the orphan reaper are
+# still backstops, but callers receive a terminal failure within two minutes.
+_NOTEBOOK_LAUNCH_TIMEOUT_SECONDS = 120
+_NOTEBOOK_RESUME_TIMEOUT_SECONDS = 30
 
 
 @dataclass(frozen=True)
@@ -118,9 +125,11 @@ async def _runtime_env(
     web_url = _web_url()
     if web_url:
         env["SP_WEB_URL"] = web_url
-    anthropic_key = await org_secrets_store.resolve_anthropic_key(session, org_id)
-    if anthropic_key:
-        env["ANTHROPIC_API_KEY"] = anthropic_key
+    is_standalone_chat = bool(extra_env and extra_env.get("SP_CHAT_PROJECT_ID"))
+    if not (is_standalone_chat and chat_force_oauth_token()):
+        anthropic_key = await org_secrets_store.resolve_anthropic_key(session, org_id)
+        if anthropic_key:
+            env["ANTHROPIC_API_KEY"] = anthropic_key
     if extra_env:
         env.update(extra_env)
     return env
@@ -210,6 +219,7 @@ async def _try_resume(
     session: AsyncSession,
     backend: NotebookBackend,
     existing: NotebookSessionInfo,
+    request: LaunchRequest,
     *,
     org_id: str,
 ) -> NotebookSessionInfo | None:
@@ -217,7 +227,7 @@ async def _try_resume(
     if internal is None or not internal.runtime_handle:
         return None
     try:
-        upstream = await backend.resume(internal.runtime_handle)
+        upstream = await backend.resume(internal.runtime_handle, request)
     except Exception:
         logger.info(
             "Resume of session %s failed; falling back to a cold start", existing.id, exc_info=True
@@ -227,8 +237,9 @@ async def _try_resume(
     await ns.update_session_runtime(
         session, session_id=existing.id, org_id=org_id, status="running", upstream_url=upstream
     )
-    refreshed = await ns.get_session_by_id(session, session_id=existing.id, org_id=org_id)
-    return refreshed
+    return await ns.get_session_by_id(
+        session, session_id=existing.id, org_id=org_id
+    )
 
 
 async def ensure_notebook_session(
@@ -250,9 +261,15 @@ async def ensure_notebook_session(
     token_execution_identity: str | None = None,
     token_scopes: list[str] | None = None,
     backend: NotebookBackend | None = None,
+    on_cold_boot: Callable[[str], Awaitable[None]] | None = None,
 ) -> NotebookSessionInfo:
     """Create, reuse, or resume the notebook session for one
-    (org, user, project, branch)."""
+    (org, user, project, branch).
+
+    `on_cold_boot` fires only when real boot work is about to start —
+    "resuming" before a snapshot resume, "provisioning" before a fresh sandbox
+    launch. A warm running session never fires it, which lets callers surface
+    boot progress exclusively on cold paths."""
     if not org_id:
         raise NotebookOrgRequiredError("org_id required")
 
@@ -260,6 +277,7 @@ async def ensure_notebook_session(
     project_id = project_id or None
     settings = get_notebook_settings()
     backend = backend or get_notebook_backend(settings)
+    boot_deadline = asyncio.get_running_loop().time() + _NOTEBOOK_LAUNCH_TIMEOUT_SECONDS
 
     existing = await ns.get_active_session(session, org_id=org_id, user_id=user_id)
     if existing and not _session_matches(existing, project_id=project_id, branch=branch):
@@ -280,7 +298,54 @@ async def ensure_notebook_session(
         await terminate_session(session, session_info=existing, backend=backend)
         existing = None
     elif existing and existing.status == "snapshotted":
-        resumed = await _try_resume(session, backend, existing, org_id=org_id)
+        if on_cold_boot is not None:
+            await on_cold_boot("resuming")
+        internal = await ns.get_session_internal(
+            session, session_id=existing.id, org_id=org_id
+        )
+        if internal is not None and internal.access_token:
+            resume_request = LaunchRequest(
+                org_id=org_id,
+                user_id=user_id,
+                session_id=existing.id,
+                project_id=project_id,
+                branch=branch,
+                session_jwt=mint_session_jwt(
+                    user_id=credential_user_id or user_id,
+                    org_id=org_id,
+                    session_id=existing.id,
+                    project_id=(
+                        token_project_id if token_project_id is not None else project_id
+                    ),
+                    branch=token_branch or branch,
+                    connection_name=token_connection_name,
+                    commit_sha=token_commit_sha,
+                    capabilities=token_capabilities,
+                    execution_identity=token_execution_identity,
+                    scopes=token_scopes,
+                    ttl=get_gateway_settings().sp_session_jwt_ttl_seconds,
+                ),
+                notebook_token=internal.access_token,
+                env=await _runtime_env(session, org_id=org_id, extra_env=extra_env),
+                base_revision=frozen_revision,
+                read_only=read_only,
+            )
+            try:
+                async with asyncio.timeout(_NOTEBOOK_RESUME_TIMEOUT_SECONDS):
+                    resumed = await _try_resume(
+                        session, backend, existing, resume_request, org_id=org_id
+                    )
+            except TimeoutError:
+                logger.info(
+                    "Resume of session %s exceeded %ss; falling back to a cold start",
+                    existing.id,
+                    _NOTEBOOK_RESUME_TIMEOUT_SECONDS,
+                )
+                if internal.runtime_handle:
+                    await backend.terminate(internal.runtime_handle)
+                resumed = None
+        else:
+            resumed = None
         if resumed is not None:
             return resumed
         await ns.mark_stopped(session, session_id=existing.id, org_id=org_id)
@@ -290,6 +355,9 @@ async def ensure_notebook_session(
         existing = None
 
     await ns.delete_stopped(session, org_id=org_id, user_id=user_id)
+
+    if on_cold_boot is not None:
+        await on_cold_boot("provisioning")
 
     if backend.name == "vercel":
         running = await ns.count_running_for_org(session, org_id=org_id)
@@ -346,21 +414,26 @@ async def ensure_notebook_session(
     env = await _runtime_env(session, org_id=org_id, extra_env=extra_env)
 
     try:
-        launch = await backend.launch(
-            LaunchRequest(
-                org_id=org_id,
-                user_id=user_id,
-                session_id=session_info.id,
-                project_id=project_id,
-                branch=branch,
-                session_jwt=session_jwt,
-                notebook_token=notebook_token,
-                env=env,
-                snapshot_url=snapshot_url,
-                base_revision=base_revision,
-                read_only=read_only,
-            )
+        remaining_boot_seconds = max(
+            0.001,
+            boot_deadline - asyncio.get_running_loop().time(),
         )
+        async with asyncio.timeout(remaining_boot_seconds):
+            launch = await backend.launch(
+                LaunchRequest(
+                    org_id=org_id,
+                    user_id=user_id,
+                    session_id=session_info.id,
+                    project_id=project_id,
+                    branch=branch,
+                    session_jwt=session_jwt,
+                    notebook_token=notebook_token,
+                    env=env,
+                    snapshot_url=snapshot_url,
+                    base_revision=base_revision,
+                    read_only=read_only,
+                )
+            )
     except Exception as exc:
         await _mark_session_status_best_effort(
             session, session_id=session_info.id, org_id=org_id, status="error"
@@ -521,20 +594,26 @@ async def ensure_standalone_chat_notebook_session(
     *,
     org_id: str,
     user_id: str,
-    run_id: str,
+    conversation_id: str,
     project_id: str,
     branch: str,
     connection_name: str,
     commit_sha: str,
     frozen_revision: int | None = None,
+    on_cold_boot: Callable[[str], Awaitable[None]] | None = None,
 ) -> NotebookRuntime:
-    """Start an isolated, frozen-workspace runtime for one durable chat run.
+    """Start (or reuse) the notebook runtime for a chat CONVERSATION.
 
-    The workspace is pinned to `frozen_revision` (default: the branch head at
-    session start) and mounted read-only; commit_sha remains in the JWT for
-    run attribution.
+    The session is keyed by conversation, not by run, so every message in a
+    conversation reuses one warm sandbox instead of booting a fresh one. The
+    idle lifecycle loop snapshots and resumes it, so the agent's files survive
+    between messages. The workspace is pinned to `frozen_revision` (the branch
+    head at first session start) and mounted read-only; commit_sha stays in the
+    JWT for run attribution.
     """
-    execution_identity = f"chat:{run_id}"
+    # Conversation-scoped identity. Keeps the `chat:` prefix so identity checks
+    # that accept `chat:` (and reject `chat-exec:`) still hold.
+    execution_identity = f"chat:conv-{conversation_id}"
     session_info = await ensure_notebook_session(
         session,
         org_id=org_id,
@@ -545,7 +624,6 @@ async def ensure_standalone_chat_notebook_session(
         frozen_revision=frozen_revision,
         read_only=True,
         extra_env={
-            "SP_CHAT_RUN_ID": run_id,
             "SP_CHAT_PROJECT_ID": project_id,
             "SP_CHAT_BRANCH": branch,
             "SP_CHAT_CONNECTION_NAME": connection_name,
@@ -557,7 +635,6 @@ async def ensure_standalone_chat_notebook_session(
         token_connection_name=connection_name,
         token_commit_sha=commit_sha,
         token_capabilities=[
-            "artifact:publish",
             "dbt:read",
             "notebook:analysis",
             "query:read",
@@ -566,5 +643,6 @@ async def ensure_standalone_chat_notebook_session(
         ],
         token_execution_identity=execution_identity,
         token_scopes=["read", "query", "execute"],
+        on_cold_boot=on_cold_boot,
     )
     return await runtime_for_session(session, session_info)

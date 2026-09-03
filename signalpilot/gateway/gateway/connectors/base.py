@@ -25,6 +25,21 @@ active_connection_name_var: contextvars.ContextVar[str | None] = contextvars.Con
     "active_connection_name", default=None
 )
 
+# Audit writes go to the gateway DB (often remote). Schema introspection audits
+# one row per catalog query per database, so a warehouse with 10 databases emits
+# ~50 audit rows for a single get_schema. Writing them inline, serially, added
+# ~30s to a 7s introspection. These are written in the background instead, with
+# bounded concurrency so a burst never exhausts the gateway DB pool. Strong refs
+# are held so the tasks are not garbage-collected mid-flight.
+_AUDIT_TASKS: set[asyncio.Task] = set()
+_AUDIT_WRITE_SEMAPHORE = asyncio.Semaphore(8)
+
+
+async def drain_audit_tasks() -> None:
+    """Wait for pending background audit writes. For shutdown and tests."""
+    if _AUDIT_TASKS:
+        await asyncio.gather(*list(_AUDIT_TASKS), return_exceptions=True)
+
 
 class BaseConnector(ABC):
     """Abstract base class for all database connectors.
@@ -51,7 +66,10 @@ class BaseConnector(ABC):
 
     @abstractmethod
     async def _execute_impl(
-        self, sql: str, params: list | None = None, timeout: int | None = None
+        self,
+        sql: str,
+        params: list | dict[str, Any] | None = None,
+        timeout: int | None = None,
     ) -> list[dict[str, Any]]:
         """Execute query and return rows as list of dicts. Subclasses implement this."""
 
@@ -65,7 +83,12 @@ class BaseConnector(ABC):
 
     # ─── Audited execute (concrete — wraps _execute_impl) ────────────
 
-    async def execute(self, sql: str, params: list | None = None, timeout: int | None = None) -> list[dict[str, Any]]:
+    async def execute(
+        self,
+        sql: str,
+        params: list | dict[str, Any] | None = None,
+        timeout: int | None = None,
+    ) -> list[dict[str, Any]]:
         """Execute query with audit logging. Subclasses implement _execute_impl."""
         import time as _time
 
@@ -107,6 +130,30 @@ class BaseConnector(ABC):
         return None
 
     async def _audit_sql(self, sql: str, rows_returned: int, duration_ms: float) -> None:
+        """Schedule an audit-log write in the background. Non-blocking.
+
+        The actual DB write runs as a background task (bounded concurrency) so
+        callers that audit many statements — schema introspection audits one row
+        per catalog query per database — are never serialized behind a remote DB
+        round-trip each. create_task copies the current contextvars (org, user,
+        audit id) into the task, so the record is attributed correctly.
+        Best-effort; never fails the caller.
+        """
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        task = loop.create_task(self._write_audit_row(sql, rows_returned, duration_ms))
+        _AUDIT_TASKS.add(task)
+        task.add_done_callback(_AUDIT_TASKS.discard)
+
+    async def _write_audit_row(self, sql: str, rows_returned: int, duration_ms: float) -> None:
+        """Write one audit row. Runs in the background; bounded by a semaphore
+        so a burst of introspection audits cannot exhaust the gateway DB pool."""
+        async with _AUDIT_WRITE_SEMAPHORE:
+            await self._audit_sql_write(sql, rows_returned, duration_ms)
+
+    async def _audit_sql_write(self, sql: str, rows_returned: int, duration_ms: float) -> None:
         """Log SQL execution to gateway_audit_logs. Best-effort, never fails the query."""
         try:
             import time as _time

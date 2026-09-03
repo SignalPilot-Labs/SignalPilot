@@ -75,12 +75,27 @@ class WebSocketConnectionValidator:
 
         session_id = SessionId(raw_session_id)
 
+        # Reconnect-by-id comes first: an EXISTING session already owns its
+        # file, so the connection needs no file param at all (the chat live
+        # notebook panel attaches with only the kernel session id) and must
+        # not run workspace path validation — standalone-chat analysis
+        # notebooks live in a run-scoped scratch directory outside the
+        # workspace.
+        existing_session = self.app_state.session_manager.get_session(
+            session_id
+        )
+
         # Extract file_key
         file_key: SpFileKey | None = (
             self.app_state.query_params(FILE_QUERY_PARAM_KEY)
             or self.app_state.session_manager.workspace.get_unique_file_key()
         )
         requested_file_key = file_key
+
+        if existing_session is not None:
+            session_path = existing_session.app_file_manager.path
+            if session_path:
+                file_key = SpFileKey(str(session_path))
 
         if file_key is None:
             await self.websocket.close(
@@ -112,7 +127,7 @@ class WebSocketConnectionValidator:
             )
             return None
 
-        if not file_key.startswith(NEW_FILE):
+        if existing_session is None and not file_key.startswith(NEW_FILE):
             try:
                 resolved_file = resolve_notebook_file(file_key, directory)
             except Exception:
@@ -136,7 +151,7 @@ class WebSocketConnectionValidator:
         config = self.app_state.config_manager_at_file(file_key).get_config()
         rtc_enabled = config.get("experimental", {}).get("rtc_v2", False)
         auto_instantiate = config["runtime"]["auto_instantiate"]
-        if is_generated_analysis_trail_notebook(
+        if requested_file_key is not None and is_generated_analysis_trail_notebook(
             project_id=project_id,
             branch=branch,
             file_key=requested_file_key,

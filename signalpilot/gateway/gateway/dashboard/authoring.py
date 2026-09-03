@@ -1,20 +1,16 @@
-"""Model-backed dashboard draft creation constrained by typed contracts."""
+"""Pure dashboard authoring contracts and bounded semantic projections."""
 
 from __future__ import annotations
 
-import json
-import os
 import re
+from copy import deepcopy
 from typing import Any
 
 from pydantic import Field, model_validator
 
-from gateway.analysis_delivery.model_client import AnthropicMessagesClient, MessagesModelClient
-from gateway.dashboard.domain import CartesianChartConfig, ContractModel, DashboardDefinition, SemanticChartQuery
+from gateway.dashboard.domain import ContractModel, DashboardDefinition, SemanticChartQuery
 from gateway.dashboard.operations import DashboardOperation, apply_dashboard_operations
 from gateway.models.dashboards import DashboardSemanticContext
-
-DEFAULT_DASHBOARD_AUTHORING_MODEL = "claude-sonnet-4-5-20250929"
 
 FILTER_OPT_OUT_PATTERNS = (
     r"\bwithout (?:any )?(?:dashboard )?filters?\b",
@@ -41,12 +37,78 @@ class DashboardAgentDraft(ContractModel):
         return self
 
 
+def canonicalize_agent_draft_query_encodings(
+    value: Any,
+    context: DashboardSemanticContext,
+) -> Any:
+    """Repair only unambiguous raw visualization references before contract validation."""
+    if not isinstance(value, dict) or not isinstance(value.get("definition"), dict):
+        return value
+    normalized = deepcopy(value)
+    charts = normalized["definition"].get("charts")
+    if not isinstance(charts, list):
+        return normalized
+    metric_formats = {
+        metric.field_id: metric.format for explore in context.explores for metric in explore.metrics if metric.format
+    }
+
+    def resolve(reference: Any, candidates: list[str], *, singleton: bool = False) -> Any:
+        if not isinstance(reference, str) or reference in candidates:
+            return reference
+        folded = reference.casefold()
+        matches = [
+            candidate
+            for candidate in candidates
+            if candidate.casefold() == folded or candidate.rsplit(".", 1)[-1].casefold() == folded
+        ]
+        if len(matches) == 1:
+            return matches[0]
+        if singleton and len(candidates) == 1:
+            return candidates[0]
+        return reference
+
+    for chart in charts:
+        if not isinstance(chart, dict):
+            continue
+        query = chart.get("query")
+        visualization = chart.get("visualization")
+        if not isinstance(query, dict) or query.get("kind") != "semantic" or not isinstance(visualization, dict):
+            continue
+        dimensions = [item for item in query.get("dimensions", []) if isinstance(item, str)]
+        metrics = [item for item in query.get("metrics", []) if isinstance(item, str)]
+        config = visualization.get("config")
+        if not isinstance(config, dict):
+            continue
+        if visualization.get("type") == "big_number":
+            config["field"] = resolve(config.get("field"), metrics, singleton=True)
+            governed_format = metric_formats.get(config["field"])
+            if governed_format:
+                config["format"] = "decimal" if governed_format == "number" else governed_format
+        elif visualization.get("type") == "cartesian":
+            layout = config.get("layout")
+            if not isinstance(layout, dict):
+                continue
+            layout["xField"] = resolve(layout.get("xField"), dimensions, singleton=True)
+            y_fields = layout.get("yField")
+            if isinstance(y_fields, list):
+                singleton = len(y_fields) == 1
+                layout["yField"] = [resolve(item, metrics, singleton=singleton) for item in y_fields]
+        elif visualization.get("type") == "table":
+            outputs = [*dimensions, *metrics]
+            for key in ("columns", "groups"):
+                references = config.get(key)
+                if isinstance(references, list):
+                    config[key] = [resolve(item, outputs) for item in references]
+    return normalized
+
+
 def compact_semantic_projection(context: DashboardSemanticContext) -> dict[str, Any]:
     """Bounded agent-facing projection; it does not create a second catalog."""
     return {
         "project_id": context.project_id,
         "commit_sha": context.commit_sha,
         "connection_name": context.connection_name,
+        "connection_type": context.connection_type,
         "semantic_fingerprint": context.semantic_fingerprint,
         "explores": [
             {
@@ -83,173 +145,76 @@ def compact_semantic_projection(context: DashboardSemanticContext) -> dict[str, 
     }
 
 
-def charts_missing_usable_drills(
-    definition: DashboardDefinition,
-    context: DashboardSemanticContext,
-) -> list[str]:
-    """Return applicable Cartesian charts without a distinct next drill level."""
-    dimensions_by_explore = {
-        explore.name: {field.field_id for field in explore.dimensions} for explore in context.explores
-    }
-    missing: list[str] = []
-    for chart in definition.charts:
-        if not isinstance(chart.query, SemanticChartQuery) or not isinstance(chart.visualization, CartesianChartConfig):
-            continue
-        query_dimensions = set(chart.query.dimensions)
-        if not query_dimensions:
-            continue
-        explore_dimensions = dimensions_by_explore.get(chart.query.exploreName, set())
-        candidates = explore_dimensions - query_dimensions
-        if not candidates:
-            continue
-        drill_dimensions = chart.signalPilot.drillDimensions or []
-        if (
-            not drill_dimensions
-            or len(drill_dimensions) != len(set(drill_dimensions))
-            or any(field_id not in explore_dimensions for field_id in drill_dimensions)
-        ):
-            missing.append(chart.id)
-            continue
-        if any(field_id in query_dimensions for field_id in drill_dimensions):
-            missing.append(chart.id)
-    return missing
-
-
-class DashboardAuthoringAgent:
-    def __init__(self, *, api_key: str, model_client: MessagesModelClient | None = None) -> None:
-        self.model = os.getenv("SIGNALPILOT_DASHBOARD_AUTHORING_MODEL") or DEFAULT_DASHBOARD_AUTHORING_MODEL
-        self.model_client = model_client or AnthropicMessagesClient(api_key=api_key, timeout_seconds=90)
-
-    async def draft(
-        self,
-        *,
-        prompt: str,
-        context: DashboardSemanticContext,
-        base_definition: DashboardDefinition | None,
-    ) -> DashboardAgentDraft:
-        mode = "update" if base_definition is not None else "create"
-        contract = DashboardAgentDraft.model_json_schema(by_alias=True)
-        system = (
-            "You are SignalPilot's governed dashboard author. Use only the supplied explores, fields, and metrics. "
-            "Use only KPI, table, bar, line, and area visualizations. Each semantic chart queries one explore. "
-            "For every chart, write three distinct pieces of business copy: question is a concise natural-language "
-            "question shown at the top left and ending in a question mark; title is a short 2-5 word business label "
-            "such as Total Revenue or Net Revenue; description is one useful sentence. For Cartesian charts, begin "
-            "the description with the visualization type, for example 'Line chart showing monthly net revenue.' "
-            "Prefer compact KPI tiles in 12-column thirds and full-width 36-column Cartesian trend charts when the "
-            "requested dashboard composition allows it. Arrange every dashboard row on the 36-column grid so tile "
-            "widths sum to exactly 36, tiles use increasing x and y positions, and no row leaves unused horizontal space. "
-            "Every dashboard must include useful global filter controls unless the user's request explicitly says to omit "
-            "filters. Prefer a date filter when a governed date or timestamp dimension is available, then add a small "
-            "number of business-relevant categorical controls. Use explicit per-tile targets across explores and mark "
-            "incompatible tiles as false. Copy each filter target exactly from the dimension's filter_target object; fieldId "
-            "must remain the complete supplied field_id, including its explore prefix. When updating a draft that has no "
-            "controls, add them in the same typed operation "
-            "set unless the current request explicitly opts out. Do not treat silence about filters as an opt-out. "
-            "For every applicable semantic bar, line, or area chart, configure a meaningful lower-grain drill hierarchy "
-            "in signalPilot.drillDimensions when the same explore supplies a dimension below the chart's current business "
-            "grain. Order drill dimensions from the immediate next level to the deepest level and copy complete field_id "
-            "values exactly. Never repeat a query dimension or repeat a level within drillDimensions. For example, a chart "
-            "grouped by region may drill to customer when customer is the lower-grain governed dimension. Omit a drill "
-            "hierarchy only when the explore has no meaningful lower-grain dimension for that chart. "
-            "Never emit renderer options, code, HTML, or SQL. For creation return a complete definition. "
-            "For updates return typed operations using stable IDs and do not rewrite unrelated charts. "
-            "The server validates all output and the user must explicitly apply it."
-        )
-        payload = {
-            "mode": mode,
-            "request": prompt,
-            "semantic_context": compact_semantic_projection(context),
-            "base_definition": (
-                base_definition.model_dump(mode="json", by_alias=True, exclude_none=True)
-                if base_definition is not None
-                else None
-            ),
-        }
-        request_body = {
-            "model": self.model,
-            "max_tokens": 16_000,
-            "system": system,
-            "messages": [{"role": "user", "content": json.dumps(payload, default=str)}],
-            "tools": [
-                {
-                    "name": "submit_dashboard_draft",
-                    "description": "Return one validated dashboard draft or typed update operation list.",
-                    "input_schema": contract,
-                }
-            ],
-            "tool_choice": {"type": "tool", "name": "submit_dashboard_draft"},
-        }
-
-        async def request_draft(body: dict[str, Any]) -> DashboardAgentDraft:
-            response = await self.model_client.create_message(body)
-            content = response.get("content")
-            if not isinstance(content, list):
-                raise ValueError("Dashboard authoring model returned no tool result")
-            tool_input = next(
-                (
-                    block.get("input")
-                    for block in content
-                    if isinstance(block, dict)
-                    and block.get("type") == "tool_use"
-                    and block.get("name") == "submit_dashboard_draft"
-                ),
-                None,
-            )
-            return DashboardAgentDraft.model_validate(tool_input)
-
-        draft = await request_draft(request_body)
-        if not explicitly_omits_filters(prompt) and not draft_has_filters(draft, base_definition=base_definition):
-            repair_payload = {
-                **payload,
-                "rejected_draft": draft.model_dump(mode="json", by_alias=True, exclude_none=True),
-                "validation_feedback": (
-                    "The previous draft was rejected because it omitted dashboard filter controls. Add useful governed "
-                    "filters now. Prefer a date filter when available, include explicit per-tile targets, and preserve "
-                    "all otherwise valid chart and layout work."
-                ),
-            }
-            request_body = {
-                **request_body,
-                "messages": [{"role": "user", "content": json.dumps(repair_payload, default=str)}],
-            }
-            draft = await request_draft(request_body)
-            if not draft_has_filters(draft, base_definition=base_definition):
-                raise ValueError("Dashboard authoring requires at least one governed filter control")
-        if base_definition is None and draft.definition is not None:
-            missing_drills = charts_missing_usable_drills(draft.definition, context)
-            if missing_drills:
-                repair_payload = {
-                    **payload,
-                    "rejected_draft": draft.model_dump(mode="json", by_alias=True, exclude_none=True),
-                    "validation_feedback": (
-                        "The previous draft was rejected because applicable charts omitted a usable lower-grain drill "
-                        f"hierarchy: {', '.join(missing_drills)}. Add meaningful signalPilot.drillDimensions using exact "
-                        "same-explore field_id values. Do not repeat query dimensions or drill levels, and preserve all "
-                        "otherwise valid filters, charts, and layout work."
-                    ),
-                }
-                request_body = {
-                    **request_body,
-                    "messages": [{"role": "user", "content": json.dumps(repair_payload, default=str)}],
-                }
-                draft = await request_draft(request_body)
-                if draft.definition is None or charts_missing_usable_drills(draft.definition, context):
-                    raise ValueError("Dashboard authoring requires usable drill hierarchies for applicable charts")
-                if not explicitly_omits_filters(prompt) and not draft_has_filters(
-                    draft, base_definition=base_definition
-                ):
-                    raise ValueError("Dashboard authoring requires at least one governed filter control")
-        if base_definition is None and draft.definition is None:
-            raise ValueError("Dashboard creation requires a complete definition")
-        if base_definition is not None and draft.definition is not None:
-            raise ValueError("Dashboard updates require typed operations")
-        return draft
-
-
 def explicitly_omits_filters(prompt: str) -> bool:
     normalized = " ".join(prompt.casefold().split())
     return any(re.search(pattern, normalized) for pattern in FILTER_OPT_OUT_PATTERNS)
+
+
+def add_default_governed_date_filter(
+    draft: DashboardAgentDraft,
+    context: DashboardSemanticContext,
+) -> DashboardAgentDraft:
+    """Add a bounded date control when creation omitted filters and the mapping is governed."""
+    definition = draft.definition
+    if definition is None or definition.filters.dimensions or definition.filters.metrics:
+        return draft
+    date_fields_by_explore = {
+        explore.name: [field for field in explore.dimensions if field.logical_type in {"date", "timestamp"}]
+        for explore in context.explores
+    }
+    selected_explore: str | None = None
+    selected_field = None
+    for chart in definition.charts:
+        if not isinstance(chart.query, SemanticChartQuery):
+            continue
+        candidates = {field.field_id: field for field in date_fields_by_explore.get(chart.query.exploreName, [])}
+        selected_field = next(
+            (candidates[field_id] for field_id in chart.query.dimensions if field_id in candidates),
+            None,
+        )
+        if selected_field is not None:
+            selected_explore = chart.query.exploreName
+            break
+    if selected_field is None:
+        for explore in context.explores:
+            fields = date_fields_by_explore.get(explore.name, [])
+            if fields:
+                selected_explore = explore.name
+                selected_field = fields[0]
+                break
+    if selected_explore is None or selected_field is None:
+        return draft
+
+    charts_by_id = {chart.id: chart for chart in definition.charts}
+    tile_targets: dict[str, dict[str, str] | bool] = {}
+    for tile in definition.tiles:
+        chart = charts_by_id.get(tile.chartId)
+        if chart is None or not isinstance(chart.query, SemanticChartQuery):
+            tile_targets[tile.uuid] = False
+            continue
+        target_fields = date_fields_by_explore.get(chart.query.exploreName, [])
+        if not target_fields:
+            tile_targets[tile.uuid] = False
+            continue
+        target_field = selected_field if chart.query.exploreName == selected_explore else target_fields[0]
+        tile_targets[tile.uuid] = {
+            "tableName": chart.query.exploreName,
+            "fieldId": target_field.field_id,
+        }
+
+    payload = definition.model_dump(mode="json", by_alias=True)
+    payload["filters"]["dimensions"] = [
+        {
+            "id": "date-filter",
+            "operator": "inThePast",
+            "values": [30],
+            "target": {"tableName": selected_explore, "fieldId": selected_field.field_id},
+            "tileTargets": tile_targets,
+            "label": selected_field.label or selected_field.column.replace("_", " ").title(),
+            "settings": {"unitOfTime": "days"},
+        }
+    ]
+    return draft.model_copy(update={"definition": DashboardDefinition.model_validate(payload)})
 
 
 def draft_has_filters(draft: DashboardAgentDraft, *, base_definition: DashboardDefinition | None) -> bool:

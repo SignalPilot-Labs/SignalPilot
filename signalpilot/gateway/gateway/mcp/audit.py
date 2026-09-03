@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import functools
+import inspect
 import logging as _logging
 import time
 import uuid
@@ -70,6 +71,8 @@ MCP_TOOL_SCOPES: dict[str, str] = {
     "sandbox_exec": "execute",
     "sandbox_write_file": "execute",
     "sandbox_read_file": "execute",
+    "dbt_execute": "execute",
+    "refresh_mart": "execute",
     "describe_table": "query",
     "list_tables": "query",
     "get_date_boundaries": "query",
@@ -138,35 +141,22 @@ EVAL_ALLOWED_MCP_TOOLS: frozenset[str] = frozenset(
     }
 )
 
-STANDALONE_CHAT_TOOL_ALLOWLIST = frozenset(
+# Standalone chat gets the normal SignalPilot MCP surface. Keep this derived
+# from the registration scope map so adding a regular MCP tool does not create
+# a second, stale chat-only denylist. Xata branch control remains excluded:
+# chat runs use a frozen project/branch and must not create or delete database
+# branches as a side effect of analysis.
+STANDALONE_CHAT_BLOCKED_TOOLS = frozenset(
     {
-        "check_budget",
-        "connector_capabilities",
-        "debug_cte_query",
-        "describe_table",
-        "estimate_query_cost",
-        "explain_query",
-        "explore_column",
-        "explore_columns",
-        "explore_table",
-        "find_join_path",
-        "get_date_boundaries",
-        "get_relationships",
-        "list_database_connections",
-        "list_semantic_metrics",
-        "list_tables",
-        "plan_query",
-        "query_database",
-        "sandbox_exec",
-        "sandbox_read_file",
-        "sandbox_write_file",
-        "schema_ddl",
-        "schema_link",
-        "schema_overview",
-        "schema_statistics",
-        "validate_sql",
-        "verify_metric_conformance",
+        "schema_diff_branches",
+        "xata_branch_diff",
+        "xata_list_branches",
+        "create_xata_branch",
+        "delete_xata_branch",
     }
+)
+STANDALONE_CHAT_TOOL_ALLOWLIST = (
+    frozenset(MCP_TOOL_SCOPES) - STANDALONE_CHAT_BLOCKED_TOOLS
 )
 
 
@@ -249,9 +239,14 @@ def _audited_tool(fn):
         # Generate a unique ID for this tool call so child SQL can link back
         audit_id = str(uuid.uuid4())
         token = mcp_audit_id_var.set(audit_id)
-        # Extract connection_name and sql from kwargs if present
-        conn = kwargs.get("connection_name") or (args[0] if args and isinstance(args[0], str) else None)
-        sql_arg = kwargs.get("sql")
+        # Bind against the actual signature: tool contracts do not all put the
+        # connection first, and chat-bound query tools no longer require it.
+        try:
+            bound_args = dict(inspect.signature(fn).bind_partial(*args, **kwargs).arguments)
+        except TypeError:
+            bound_args = dict(kwargs)
+        conn = bound_args.get("connection_name")
+        sql_arg = bound_args.get("sql")
         try:
             from gateway.mcp.context import mcp_eval_run_var
 
@@ -278,7 +273,7 @@ def _audited_tool(fn):
             asyncio.create_task(
                 _audit_tool_call(
                     tool_name=tool_name,
-                    args=kwargs,
+                    args=bound_args,
                     result=result_str[:200],
                     duration_ms=duration_ms,
                     connection_name=conn,
@@ -295,7 +290,7 @@ def _audited_tool(fn):
             asyncio.create_task(
                 _audit_tool_call(
                     tool_name=tool_name,
-                    args=kwargs,
+                    args=bound_args,
                     result=None,
                     duration_ms=duration_ms,
                     error=str(exc)[:200],

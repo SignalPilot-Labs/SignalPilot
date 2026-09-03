@@ -1,0 +1,30 @@
+{
+  "cells": [
+    {
+      "code": "x = 1",
+      "code_hash": "d37ffc54b67ce8de1f01efb1f2e33689",
+      "config": {
+        "column": null,
+        "disabled": false,
+        "hide_code": false
+      },
+      "id": "Hbol",
+      "name": "_"
+    },
+    {
+      "code": "this is not ( valid python",
+      "code_hash": "02793c635e7503559121822c72d7d686",
+      "config": {
+        "column": null,
+        "disabled": false,
+        "hide_code": false
+      },
+      "id": "MJUe",
+      "name": "broken"
+    }
+  ],
+  "metadata": {
+    "signalpilot_version": "0.1.0"
+  },
+  "version": "1"
+}

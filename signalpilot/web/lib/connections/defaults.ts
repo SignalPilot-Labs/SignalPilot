@@ -1,0 +1,36 @@
+import type { ConnectionForm } from "./types";
+
+export const DEFAULT_CONNECTION_FORM: ConnectionForm = {
+  name: "", db_type: "postgres", connectionMode: "fields",
+  connection_string: "", host: "localhost", port: "5432",
+  database: "", username: "", password: "", description: "",
+  account: "", warehouse: "", schema_name: "", role: "",
+  project: "", dataset: "", credentials_json: "", bq_location: "", bq_max_bytes_billed: "",
+  bq_auth_method: "service_account", bq_oauth_token: "", bq_impersonate_sa: "",
+  ch_protocol: "native",
+  http_path: "", access_token: "", catalog: "",
+  databricks_auth_method: "pat", dbx_oauth_client_id: "", dbx_oauth_client_secret: "",
+  branch: "main",
+  xata_api_key: "", xata_organization: "", xata_project: "", xata_database: "xata",
+  xata_api_url: "https://api.xata.tech",
+  ssl_enabled: false, ssl_mode: "require", ssl_ca_cert: "", ssl_client_cert: "", ssl_client_key: "",
+  ssh_enabled: false, ssh_host: "", ssh_port: "22", ssh_username: "", ssh_auth_method: "password",
+  ssh_password: "", ssh_private_key: "", ssh_key_passphrase: "",
+  ssh_proxy_enabled: false, ssh_proxy_host: "", ssh_proxy_port: "3128",
+  snowflake_auth_method: "password", sf_private_key: "", sf_private_key_passphrase: "", sf_oauth_token: "",
+  sf_pat: "", sf_passcode: "", sf_okta_url: "",
+  snowflake_host: "", snowflake_protocol: "https",
+  iam_auth: false, aws_region: "us-east-1", aws_access_key_id: "", aws_secret_access_key: "",
+  redshift_cluster_id: "", redshift_workgroup: "",
+  azure_ad_auth: false, azure_tenant_id: "", azure_client_id: "", azure_client_secret: "",
+  trino_https: false, trino_auth_method: "none", trino_jwt_token: "", trino_client_cert: "", trino_client_key: "", trino_krb_service_name: "trino",
+  duckdb_mode: "memory",
+  motherduck_token: "",
+  tags: [], tagInput: "",
+  schema_refresh_enabled: false, schema_refresh_interval: "300",
+  scope: "workspace", read_only: true,
+  schema_filter_include: "", schema_filter_exclude: "",
+  connection_timeout: "15", query_timeout: "120", keepalive_interval: "0", pool_min_size: "1", pool_max_size: "5",
+};
+
+

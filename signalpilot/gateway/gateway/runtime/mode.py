@@ -16,6 +16,12 @@ def is_local_mode() -> bool:
     return not is_cloud_mode()
 
 
+def runtime_env() -> str | None:
+    """Return the deployment label used to isolate shared runtime resources."""
+    value = os.getenv("SP_RUNTIME_ENV", "").strip()
+    return value[:50] or None
+
+
 def byok_custom_endpoint_allowed() -> bool:
     """Return True when custom endpoint_url is permitted for BYOK providers.
 
@@ -73,7 +79,9 @@ def assert_cloud_hardening_intact() -> None:
     Enforced kill-switches and required settings (final list — extend only via spec revision):
       CLERK_JWT_AUDIENCE          — optional Clerk client binding; when set,
                                     auth/user.py validates JWT aud at request time.
-      SP_NOTEBOOK_DIRECT_URL      — any non-empty value is forbidden
+      SP_NOTEBOOK_DIRECT_URL      — any non-empty value is forbidden (cloud
+                                    notebooks run on isolated sandboxes, never
+                                    a shared direct container)
       SP_DISABLE_SANDBOX          — case-insensitive "true", "1", "yes" is forbidden
       SP_ALLOWED_ORIGINS          — must be set; no wildcards; all entries must be
                                     https:// or http://localhost / http://127.0.0.1 (L-5)

@@ -8,7 +8,7 @@ import {
   isConnectingAtom,
   isNotStartedAtom,
 } from "@/core/network/connection";
-import { useConnectToRuntime } from "@/core/runtime/config";
+import { useConnectToRuntime, useRuntimeManager } from "@/core/runtime/config";
 import { Banner } from "@/plugins/impl/common/error-banner";
 import { Tooltip } from "../../ui/tooltip";
 import { FloatingAlert } from "./floating-alert";
@@ -72,6 +72,14 @@ export const ConnectingAlert: React.FC = () => {
 export const NotStartedConnectionAlert: React.FC = () => {
   const isNotStarted = useAtomValue(isNotStartedAtom);
   const connectToRuntime = useConnectToRuntime();
+  const isLazy = useRuntimeManager().isLazy;
+
+  // Lazy runtimes are *meant* to sit idle until the first run — "not
+  // connected" is the resting state, not a problem to alert on. The kernel
+  // status island and footer chip carry that story instead.
+  if (isLazy) {
+    return null;
+  }
 
   if (isNotStarted) {
     return (
@@ -101,9 +109,12 @@ export const NotStartedConnectionAlert: React.FC = () => {
 export const NotebookLoadingState: React.FC = () => {
   const isNotStarted = useAtomValue(isNotStartedAtom);
   const isClosed = useAtomValue(isClosedAtom);
+  const isLazy = useRuntimeManager().isLazy;
 
   // Genuine not-connected / closed states keep their reconnect prompts.
-  if (isNotStarted) {
+  // For lazy runtimes NOT_STARTED just means the document is still loading
+  // sessionless — fall through to the loading spinner.
+  if (isNotStarted && !isLazy) {
     return <NotStartedConnectionAlert />;
   }
   if (isClosed) {

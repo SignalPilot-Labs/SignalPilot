@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, useMemo } from "react";
 import dynamic from "next/dynamic";
-import { KeyRound, CreditCard, Plug, BarChart3, Shield, Lock, Users, GitBranch, BookOpen, Menu, X } from "lucide-react";
+import { KeyRound, CreditCard, Plug, PlugZap, BarChart3, Shield, Lock, Users, GitBranch, BookOpen, Menu, X } from "lucide-react";
 import { Tooltip } from "~/components/ui/tooltip";
 import { useAppAuth } from "~/lib/auth-context";
 import { getProjects, getWorkspaceProjects } from "~/lib/api";
@@ -26,12 +26,14 @@ function NavIconDashboard({ active }: { active: boolean }) {
     </svg>
   );
 }
-function NavIconQuery({ active }: { active: boolean }) {
+function NavIconLineage({ active }: { active: boolean }) {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <path d="M2 3H12M2 7H8M2 11H10" stroke="currentColor" strokeWidth="1" strokeLinecap="square" />
-      <path d="M10 8L12 10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="square" />
-      {active && <circle cx="11" cy="9" r="1" fill="var(--color-success)" />}
+      <rect x="1" y="5.5" width="3" height="3" stroke="currentColor" strokeWidth="1" />
+      <rect x="10" y="1.5" width="3" height="3" stroke="currentColor" strokeWidth="1" />
+      <rect x="10" y="9.5" width="3" height="3" stroke="currentColor" strokeWidth="1" />
+      <path d="M4 7H6.5C7.5 7 7.5 3 8.5 3H10M4 7H6.5C7.5 7 7.5 11 8.5 11H10" stroke="currentColor" strokeWidth="1" fill="none" />
+      {active && <rect x="1.75" y="6.25" width="1.5" height="1.5" fill="var(--color-success)" />}
     </svg>
   );
 }
@@ -197,7 +199,7 @@ const navGroups: { label: string | null; items: NavItem[] }[] = [
     items: [
       { href: "/connections", label: "Connections", icon: NavIconDatabase, shortcut: "2" },
       { href: "/schema", label: "Schema", icon: NavIconSchema, shortcut: "4" },
-      { href: "/query", label: "Query", icon: NavIconQuery, shortcut: "6" },
+      { href: "/lineage", label: "Lineage", icon: NavIconLineage, shortcut: "6" },
     ],
   },
   {
@@ -369,6 +371,25 @@ function UsageNavLink({ pathname }: { pathname: string }) {
     >
       <BarChart3 size={11} className="flex-shrink-0 text-[var(--color-text-dim)]" />
       <span className="flex-1 tracking-wide text-[12px]">usage</span>
+    </Link>
+  );
+}
+
+/** Connectors nav link — external tool servers for the chat agent */
+function ConnectorsNavLink({ pathname }: { pathname: string }) {
+  const active = pathname.startsWith("/settings/connectors");
+
+  return (
+    <Link
+      href="/settings/connectors"
+      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 rounded-[10px] text-[12.5px] transition-colors duration-150 ${
+        active
+          ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
+          : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
+      }`}
+    >
+      <PlugZap size={11} className="flex-shrink-0 text-[var(--color-text-dim)]" />
+      <span className="flex-1 tracking-wide text-[12px]">Connectors</span>
     </Link>
   );
 }
@@ -687,6 +708,8 @@ export default function Sidebar() {
         <UsageNavLink pathname={pathname} />
         {/* Billing sub-link — cloud mode only */}
         <BillingNavLink pathname={pathname} />
+        {/* Connectors sub-link */}
+        <ConnectorsNavLink pathname={pathname} />
         {/* MCP Connect sub-link */}
         <McpConnectNavLink pathname={pathname} />
         {/* Security sub-link */}

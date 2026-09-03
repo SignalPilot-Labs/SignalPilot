@@ -36,4 +36,11 @@ export interface RuntimeConfig {
    * verified the runtime is reachable (e.g. NotebookBoot's pre-check).
    */
   readonly healthVerified?: boolean;
+  /**
+   * Lazy-runtime provisioner. When set, `init()` calls this exactly once
+   * before health-checking and swaps `url` for the returned value. This is
+   * how a notebook opens with no compute at all: the sandbox session is
+   * created only when the user first needs a kernel (e.g. clicking Run).
+   */
+  readonly provision?: () => Promise<string>;
 }

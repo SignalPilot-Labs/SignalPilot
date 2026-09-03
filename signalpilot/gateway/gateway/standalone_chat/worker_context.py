@@ -1,0 +1,134 @@
+"""Context shaping for the durable standalone-chat worker."""
+
+from __future__ import annotations
+
+import os
+from typing import Any
+
+from gateway import __version__ as gateway_version
+from gateway.standalone_chat.projects import project_metadata_context
+
+
+def message_context(context: dict[str, Any]) -> list[dict[str, str]]:
+    return [
+        {"role": row.role, "content": row.content}
+        for row in context["messages"]
+        if row.role in {"user", "assistant"}
+    ]
+
+
+def merge_text_delta(
+    current: str, delta: str, *, starts_new_block: bool
+) -> tuple[str, str]:
+    if not delta:
+        return current, ""
+    separator = ""
+    if current and starts_new_block:
+        trailing_newlines = len(current) - len(current.rstrip("\n"))
+        leading_newlines = len(delta) - len(delta.lstrip("\n"))
+        separator = "\n" * max(0, 2 - trailing_newlines - leading_newlines)
+    emitted = f"{separator}{delta}"
+    return f"{current}{emitted}", emitted
+
+
+def warm_context(
+    context: dict[str, Any],
+    *,
+    summary_override: str | None = None,
+) -> dict[str, Any]:
+    conversation = context["conversation"]
+    project = context["project"]
+
+    approvals = {
+        approval.proposal_id: approval
+        for approval in context.get("query_approvals", [])
+    }
+    query_decisions = [
+        {
+            "proposal_id": proposal.id,
+            "purpose": proposal.purpose,
+            "sql_hash": proposal.sql_hash,
+            "status": proposal.status,
+            "estimated_cost_usd": proposal.estimated_cost_usd,
+            "decision": (
+                approvals[proposal.id].decision if proposal.id in approvals else None
+            ),
+        }
+        for proposal in context.get("query_proposals", [])
+    ]
+
+    executions = {
+        execution.id: execution
+        for execution in context.get("query_executions", [])
+    }
+    result_refs = [
+        {
+            "result_id": result.id,
+            "execution_id": result.execution_id,
+            "columns": result.columns_json,
+            "query_row_count": result.query_row_count,
+            "saved_row_count": result.saved_row_count,
+            "completeness": result.result_completeness,
+            "truncation_reason": result.truncation_reason,
+            "provenance": result.provenance_json,
+            "connection_name": (
+                executions[result.execution_id].connection_name
+                if result.execution_id in executions
+                else None
+            ),
+        }
+        for result in context.get("query_results", [])
+    ]
+
+    dashboard_session = context.get("dashboard_authoring_session")
+    return {
+        "project": {
+            "id": project.id,
+            "name": project.display_name or project.name,
+            "description": project.description,
+            "default_branch": conversation.branch,
+            "commit_sha": conversation.commit_sha,
+            "connection_name": project.connection_name,
+            "dbt_metadata": project_metadata_context(
+                project, conversation.branch or "main"
+            ),
+        },
+        "conversation_summary": summary_override or conversation.internal_summary,
+        "query_decisions": query_decisions,
+        "structured_results": result_refs,
+        "report_reference": _latest_message_reference(context, "report_reference"),
+        "dashboard_chart_reference": _latest_message_reference(
+            context, "dashboard_chart_reference"
+        ),
+        "dashboard_authoring": (
+            {
+                "authoring_session_id": dashboard_session.id,
+                "dashboard_id": dashboard_session.dashboard_id,
+                "dashboard_name": (dashboard_session.definition_json or {}).get("name", "Dashboard"),
+                "draft_revision": dashboard_session.draft_revision,
+                "status": dashboard_session.status,
+                "instruction": "Refine this dashboard session when the user asks for dashboard changes.",
+            }
+            if dashboard_session is not None
+            else None
+        ),
+        "runtime": {
+            "gateway_version": gateway_version,
+            "plugin_version": os.getenv("SIGNALPILOT_PLUGIN_VERSION", "deployed"),
+        },
+    }
+
+
+def _latest_message_reference(
+    context: dict[str, Any], key: str
+) -> dict[str, Any] | None:
+    return next(
+        (
+            message.metadata_json[key]
+            for message in reversed(context.get("messages", []))
+            if message.role == "user"
+            and isinstance(message.metadata_json, dict)
+            and isinstance(message.metadata_json.get(key), dict)
+        ),
+        None,
+    )

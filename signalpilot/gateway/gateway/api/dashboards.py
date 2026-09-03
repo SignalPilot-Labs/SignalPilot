@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -17,7 +18,7 @@ from fastapi import APIRouter, HTTPException
 from sqlalchemy import select
 
 from gateway.dashboard import store as dashboard_store
-from gateway.dashboard.authoring import DashboardAuthoringAgent, materialize_agent_draft
+from gateway.dashboard import top_level_authoring
 from gateway.dashboard.cache import dashboard_query_cache_key
 from gateway.dashboard.compiler import (
     DashboardCompileError,
@@ -28,8 +29,6 @@ from gateway.dashboard.compiler import (
 from gateway.dashboard.confidence import semantic_query_signature
 from gateway.dashboard.domain import DashboardDefinition, FieldTarget, FilterRule, SemanticChartQuery
 from gateway.dashboard.operations import (
-    canonicalize_dashboard_filter_targets,
-    has_custom_sql,
     validate_dashboard_semantics,
     validate_time_series_default_windows,
 )
@@ -37,7 +36,10 @@ from gateway.dashboard.project_snapshot import ensure_branch_snapshot
 from gateway.dashboard.semantic_resolver import DashboardSemanticError, DashboardSemanticResolver
 from gateway.dashboard.telemetry import DashboardTelemetryEvent, record_dashboard_event
 from gateway.db.models import (
+    GatewayChatConversation,
+    GatewayChatRun,
     GatewayDashboard,
+    GatewayDashboardAuthoringSession,
     GatewayDashboardResult,
     GatewayDashboardVersion,
     GatewayStructuredQueryResult,
@@ -50,6 +52,8 @@ from gateway.governance.query_executor import (
     governed_query_executor,
 )
 from gateway.models.dashboards import (
+    ApplyDashboardOperationsRequest,
+    BeginDashboardAuthoringRequest,
     CreateDashboardRequest,
     CreateDashboardVersionRequest,
     DashboardAnalyzeRequest,
@@ -58,6 +62,7 @@ from gateway.models.dashboards import (
     DashboardAuthoringMessageRequest,
     DashboardAuthoringRequest,
     DashboardAuthoringSessionInfo,
+    DashboardAuthoringToolResult,
     DashboardChartReference,
     DashboardClientTelemetryRequest,
     DashboardDetail,
@@ -74,10 +79,12 @@ from gateway.models.dashboards import (
     DashboardSemanticContext,
     DashboardSuggestion,
     DashboardVisibilityRequest,
+    FinalizeDashboardPreviewRequest,
+    SetDashboardPlanRequest,
+    UpsertDashboardChartRequest,
 )
 from gateway.security.scope_guard import RequireScope
 from gateway.standalone_chat.projects import evaluate_project_readiness
-from gateway.store import org_secrets as org_secrets_store
 from gateway.store import standalone_chat as chat_store
 from gateway.verification import compare_columns
 from gateway.workspace_store.objects import workspace_object_storage
@@ -86,8 +93,29 @@ from .deps import StoreD
 
 router = APIRouter(prefix="/api")
 resolver = DashboardSemanticResolver()
-
 DashboardResultT = TypeVar("DashboardResultT")
+
+
+async def _request_chat_run(store: StoreD) -> GatewayChatRun | None:
+    """Resolve the active Data Chat run from a scoped notebook-session JWT."""
+    identity = getattr(store, "execution_identity", None)
+    if not isinstance(identity, str) or not identity.startswith("chat:"):
+        return None
+    run_id = identity.removeprefix("chat:")
+    return (
+        await store.session.execute(
+            select(GatewayChatRun).where(
+                GatewayChatRun.id == run_id,
+                GatewayChatRun.org_id == store._require_org_id(),
+                GatewayChatRun.user_id == _user_id(store),
+                GatewayChatRun.status == "running",
+                GatewayChatRun.cancellation_requested_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+
+
+logger = logging.getLogger(__name__)
 
 
 def _visualization_type(chart) -> str:
@@ -158,6 +186,7 @@ class _DashboardFailureRaised(RuntimeError):
 
 
 dashboard_connection_retry_gate = _DashboardConnectionRetryGate()
+authoring_preview_query_semaphore = asyncio.Semaphore(3)
 
 
 _FAILURE_MESSAGES: dict[DashboardFailureCode, str] = {
@@ -283,7 +312,7 @@ async def _verified_context(store: StoreD, definition: DashboardDefinition) -> D
     try:
         context = await resolver.resolve(store, project_id=binding.projectId, commit_sha=binding.commitSha)
     except DashboardSemanticError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(status_code=422, detail={"code": exc.code, "message": str(exc)}) from exc
     if context.connection_name != binding.connectionName:
         raise HTTPException(status_code=422, detail="Dashboard connection does not match the project")
     if context.semantic_fingerprint != binding.semanticFingerprint:
@@ -398,9 +427,9 @@ async def record_dashboard_client_telemetry(
     if body.event_type == DashboardTelemetryEvent.RENDERED:
         if body.duration_ms is None or body.chart_id is not None or body.failure_fingerprint is not None:
             raise HTTPException(status_code=422, detail="Invalid dashboard render telemetry")
-        dedupe_key = "render:" + hashlib.sha256(
-            f"{dashboard_id}:{version.id}:{body.open_instance_id}".encode()
-        ).hexdigest()
+        dedupe_key = (
+            "render:" + hashlib.sha256(f"{dashboard_id}:{version.id}:{body.open_instance_id}".encode()).hexdigest()
+        )
         metadata = {
             "dashboard_id": dashboard_id,
             "version_id": version.id,
@@ -414,12 +443,12 @@ async def record_dashboard_client_telemetry(
         chart = next((item for item in definition.charts if item.id == body.chart_id), None)
         if chart is None or not body.failure_fingerprint or body.duration_ms is not None:
             raise HTTPException(status_code=422, detail="Invalid dashboard tile telemetry")
-        dedupe_key = "tile:" + hashlib.sha256(
-            (
-                f"{dashboard_id}:{version.id}:{body.open_instance_id}:"
-                f"{chart.id}:{body.failure_fingerprint}"
-            ).encode()
-        ).hexdigest()
+        dedupe_key = (
+            "tile:"
+            + hashlib.sha256(
+                (f"{dashboard_id}:{version.id}:{body.open_instance_id}:{chart.id}:{body.failure_fingerprint}").encode()
+            ).hexdigest()
+        )
         metadata = {
             "dashboard_id": dashboard_id,
             "version_id": version.id,
@@ -601,7 +630,210 @@ async def get_dashboard_semantic_context(project_id: str, commit_sha: str, store
     try:
         return await resolver.resolve(store, project_id=project_id, commit_sha=commit_sha)
     except DashboardSemanticError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(status_code=422, detail={"code": exc.code, "message": str(exc)}) from exc
+
+
+async def _top_level_authoring_session(
+    store: StoreD,
+    *,
+    session_id: str,
+) -> tuple[GatewayChatRun, GatewayDashboardAuthoringSession, DashboardSemanticContext]:
+    chat_run = await _request_chat_run(store)
+    if chat_run is None:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "dashboard_authoring_run_required", "message": "An active Data Chat run is required"},
+        )
+    row = await dashboard_store.get_authoring_session(
+        store.session,
+        org_id=store._require_org_id(),
+        user_id=_user_id(store),
+        session_id=session_id,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail={"code": "dashboard_authoring_session_not_found"})
+    if row.conversation_id != chat_run.conversation_id or row.project_id != chat_run.project_id:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "dashboard_authoring_scope_mismatch", "message": "Dashboard authoring scope mismatch"},
+        )
+    try:
+        context = await resolver.resolve(store, project_id=row.project_id, commit_sha=row.commit_sha)
+    except DashboardSemanticError as exc:
+        raise HTTPException(status_code=422, detail={"code": "semantic_context_invalid", "message": str(exc)}) from exc
+    if context.semantic_fingerprint != row.semantic_fingerprint:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "semantic_context_changed", "message": "The governed semantic context changed"},
+        )
+    return chat_run, row, context
+
+
+def _require_top_level_authoring_contract(version: str) -> None:
+    try:
+        top_level_authoring.require_contract(version)
+    except top_level_authoring.AuthoringContractError as exc:
+        raise HTTPException(status_code=409, detail={"code": exc.code, "message": str(exc)}) from exc
+
+
+@router.post(
+    "/dashboard-authoring/begin",
+    response_model=DashboardAuthoringToolResult,
+    dependencies=[RequireScope("write")],
+)
+async def begin_top_level_dashboard_authoring(body: BeginDashboardAuthoringRequest, store: StoreD):
+    chat_run = await _request_chat_run(store)
+    if chat_run is None:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "dashboard_authoring_run_required", "message": "An active Data Chat run is required"},
+        )
+    if body.authoring_session_id:
+        _, row, context = await _top_level_authoring_session(store, session_id=body.authoring_session_id)
+        return top_level_authoring.begin_result(dashboard_store.authoring_info(row), context)
+    conversation = (
+        await store.session.execute(
+            select(GatewayChatConversation).where(
+                GatewayChatConversation.id == chat_run.conversation_id,
+                GatewayChatConversation.org_id == store._require_org_id(),
+                GatewayChatConversation.user_id == _user_id(store),
+                GatewayChatConversation.project_id == chat_run.project_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if conversation is None or not conversation.commit_sha:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "dashboard_authoring_scope_unavailable",
+                "message": "The frozen chat project is unavailable",
+            },
+        )
+    try:
+        context = await resolver.resolve(store, project_id=chat_run.project_id, commit_sha=conversation.commit_sha)
+    except DashboardSemanticError as exc:
+        raise HTTPException(status_code=422, detail={"code": "semantic_context_invalid", "message": str(exc)}) from exc
+    if not context.explores:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "no_governed_explores", "message": "The pinned project has no governed explores"},
+        )
+    if not any(explore.metrics for explore in context.explores):
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "no_approved_metrics", "message": "The pinned project has no approved dashboard metrics"},
+        )
+    created = await dashboard_store.create_top_level_authoring_session(
+        store.session,
+        org_id=store._require_org_id(),
+        user_id=_user_id(store),
+        dashboard_id=None,
+        base_version_id=None,
+        context=context,
+        prompt=body.request,
+        timezone=body.timezone,
+        conversation_id=chat_run.conversation_id,
+        run_id=chat_run.id,
+    )
+    return top_level_authoring.begin_result(created, context)
+
+
+@router.post(
+    "/dashboard-authoring/sessions/{session_id}/plan",
+    response_model=DashboardAuthoringToolResult,
+    dependencies=[RequireScope("write")],
+)
+async def set_top_level_dashboard_plan(session_id: str, body: SetDashboardPlanRequest, store: StoreD):
+    _require_top_level_authoring_contract(body.authoring_contract_version)
+    _, row, context = await _top_level_authoring_session(store, session_id=session_id)
+    try:
+        return await top_level_authoring.accept_plan(
+            store.session,
+            session=row,
+            context=context,
+            plan=body.plan,
+            expected_plan_revision=body.expected_plan_revision,
+            tool_call_id=body.tool_call_id,
+        )
+    except top_level_authoring.AuthoringContractError as exc:
+        raise HTTPException(status_code=409, detail={"code": exc.code, "message": str(exc)}) from exc
+    except ValueError as exc:
+        issue = top_level_authoring.validation_issue(exc, context=context)
+        return top_level_authoring.tool_result(dashboard_store.authoring_info(row), status="rejected", issues=[issue])
+
+
+@router.post(
+    "/dashboard-authoring/sessions/{session_id}/charts/{chart_id}",
+    response_model=DashboardAuthoringToolResult,
+    dependencies=[RequireScope("write")],
+)
+async def upsert_top_level_dashboard_chart(
+    session_id: str, chart_id: str, body: UpsertDashboardChartRequest, store: StoreD
+):
+    _require_top_level_authoring_contract(body.authoring_contract_version)
+    _, row, context = await _top_level_authoring_session(store, session_id=session_id)
+    try:
+        return await top_level_authoring.accept_chart(
+            store.session,
+            session=row,
+            context=context,
+            plan_revision=body.plan_revision,
+            chart_id=chart_id,
+            chart=body.chart,
+            tool_call_id=body.tool_call_id,
+        )
+    except top_level_authoring.AuthoringContractError as exc:
+        raise HTTPException(status_code=409, detail={"code": exc.code, "message": str(exc)}) from exc
+
+
+@router.post(
+    "/dashboard-authoring/sessions/{session_id}/operations",
+    response_model=DashboardAuthoringToolResult,
+    dependencies=[RequireScope("write")],
+)
+async def apply_top_level_dashboard_operations(session_id: str, body: ApplyDashboardOperationsRequest, store: StoreD):
+    _require_top_level_authoring_contract(body.authoring_contract_version)
+    _, row, context = await _top_level_authoring_session(store, session_id=session_id)
+    try:
+        return await top_level_authoring.apply_operations(
+            store.session,
+            session=row,
+            context=context,
+            expected_draft_revision=body.expected_draft_revision,
+            operations=body.operations,
+            tool_call_id=body.tool_call_id,
+        )
+    except top_level_authoring.AuthoringContractError as exc:
+        raise HTTPException(status_code=409, detail={"code": exc.code, "message": str(exc)}) from exc
+    except ValueError as exc:
+        issue = top_level_authoring.validation_issue(exc, context=context)
+        return top_level_authoring.tool_result(dashboard_store.authoring_info(row), status="rejected", issues=[issue])
+
+
+@router.post(
+    "/dashboard-authoring/sessions/{session_id}/finalize",
+    response_model=DashboardAuthoringToolResult,
+    dependencies=[RequireScope("write")],
+)
+async def finalize_top_level_dashboard_preview(session_id: str, body: FinalizeDashboardPreviewRequest, store: StoreD):
+    _require_top_level_authoring_contract(body.authoring_contract_version)
+    _, row, context = await _top_level_authoring_session(store, session_id=session_id)
+    try:
+        return await top_level_authoring.finalize_preview(
+            store.session,
+            session=row,
+            context=context,
+            plan_revision=body.plan_revision,
+            expected_draft_revision=body.expected_draft_revision,
+            tool_call_id=body.tool_call_id,
+        )
+    except top_level_authoring.AuthoringContractError as exc:
+        if exc.code == "required_charts_incomplete":
+            issue = top_level_authoring.validation_issue(exc, context=context)
+            return top_level_authoring.tool_result(
+                dashboard_store.authoring_info(row), status="partial_failed", issues=[issue]
+            )
+        raise HTTPException(status_code=409, detail={"code": exc.code, "message": str(exc)}) from exc
 
 
 @router.post(
@@ -610,126 +842,16 @@ async def get_dashboard_semantic_context(project_id: str, commit_sha: str, store
     status_code=201,
     dependencies=[RequireScope("write")],
 )
-async def create_dashboard_authoring_session(body: DashboardAuthoringRequest, store: StoreD):
-    org_id = store._require_org_id()
-    user_id = _user_id(store)
-    base_definition: DashboardDefinition | None = None
-    dashboard_id = body.dashboard_id
-    base_version_id = body.base_version_id
-    if dashboard_id:
-        rows = await dashboard_store.get_private_dashboard_rows(
-            store.session,
-            org_id=org_id,
-            user_id=user_id,
-            dashboard_id=dashboard_id,
-            version_id=base_version_id,
-        )
-        if rows is None:
-            raise HTTPException(status_code=404, detail="Dashboard not found")
-        dashboard, base_version = rows
-        if base_version.id != dashboard.current_version_id:
-            raise HTTPException(status_code=409, detail="Authoring must start from the current immutable version")
-        base_definition = DashboardDefinition.model_validate(base_version.definition_json)
-        base_version_id = base_version.id
-        project_id = dashboard.project_id
-        commit_sha = base_version.commit_sha
-    else:
-        project_id = body.project_id
-        commit_sha = body.commit_sha
-        if not project_id:
-            raise HTTPException(status_code=422, detail="New dashboard authoring requires project_id")
-        if not commit_sha:
-            project = (
-                await store.session.execute(
-                    select(GatewayWorkspaceProject).where(
-                        GatewayWorkspaceProject.id == project_id,
-                        GatewayWorkspaceProject.org_id == org_id,
-                        GatewayWorkspaceProject.status == "active",
-                    )
-                )
-            ).scalar_one_or_none()
-            if project is None:
-                raise HTTPException(status_code=404, detail="Dashboard project not found")
-            branch = body.branch or project.default_branch or "main"
-            commit_sha = await _resolve_project_immutable_head(
-                store,
-                org_id=org_id,
-                project_id=project.id,
-                branch=branch,
-            )
-            if not commit_sha:
-                raise HTTPException(
-                    status_code=409,
-                    detail="The selected project branch has no durable workspace snapshot or immutable Git head",
-                )
-    try:
-        context = await resolver.resolve(store, project_id=project_id, commit_sha=commit_sha)
-    except DashboardSemanticError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    api_key = await org_secrets_store.resolve_anthropic_key(store.session, org_id)
-    if not api_key:
-        raise HTTPException(status_code=409, detail="Dashboard authoring requires the organization Anthropic key")
-    agent = DashboardAuthoringAgent(api_key=api_key)
-    try:
-        draft = await agent.draft(prompt=body.prompt, context=context, base_definition=base_definition)
-        definition = materialize_agent_draft(draft, base_definition=base_definition)
-        if base_definition is None:
-            binding = definition.signalPilot.model_copy(
-                update={
-                    "dashboardId": f"draft-{uuid.uuid4()}",
-                    "projectId": context.project_id,
-                    "connectionName": context.connection_name,
-                    "commitSha": context.commit_sha,
-                    "semanticFingerprint": context.semantic_fingerprint,
-                    "timezone": body.timezone,
-                }
-            )
-            charts = []
-            for chart in definition.charts:
-                query = chart.query
-                if isinstance(query, SemanticChartQuery):
-                    query = query.model_copy(update={"projectId": context.project_id, "commitSha": context.commit_sha})
-                charts.append(chart.model_copy(update={"query": query}))
-            definition = DashboardDefinition.model_validate(
-                definition.model_copy(update={"signalPilot": binding, "charts": charts})
-            )
-        verified = await _verified_context(store, definition)
-        definition = canonicalize_dashboard_filter_targets(definition, verified)
-        validate_dashboard_semantics(definition, verified)
-        validate_time_series_default_windows(definition, verified)
-    except (DashboardCompileError, ValueError) as exc:
-        await record_dashboard_event(
-            store.session,
-            org_id=org_id,
-            user_id=user_id,
-            event_type=DashboardTelemetryEvent.AGENT_VALIDATION_FAILED,
-            connection_name=context.connection_name,
-            metadata={
-                "dashboard_id": dashboard_id or "draft:new",
-                "version_id": base_version_id or "draft:new",
-                "failure_code": (
-                    "dashboard_time_series_window_required"
-                    if getattr(exc, "code", None) == "dashboard_time_series_window_required"
-                    else "dashboard_agent_draft_invalid"
-                ),
-            },
-        )
-        raise HTTPException(status_code=422, detail=f"Agent draft rejected: {exc}") from exc
-    custom_sql = has_custom_sql(definition)
-    return await dashboard_store.create_authoring_session(
-        store.session,
-        org_id=org_id,
-        user_id=user_id,
-        dashboard_id=dashboard_id,
-        base_version_id=base_version_id,
-        definition=definition,
-        operations=[operation.model_dump(mode="json") for operation in draft.operations],
-        prompt=body.prompt,
-        summary=draft.summary,
-        agent_run_id=str(uuid.uuid4()),
-        model=agent.model,
-        requires_custom_sql_confirmation=custom_sql,
-        custom_sql_confirmed=body.confirm_custom_sql,
+async def create_dashboard_authoring_session(
+    body: DashboardAuthoringRequest,
+    store: StoreD,
+):
+    raise HTTPException(
+        status_code=410,
+        detail={
+            "code": "skill_driven_dashboard_authoring_required",
+            "message": "Load /signalpilot-dbt:dashboard-authoring and use the run-scoped authoring tools",
+        },
     )
 
 
@@ -748,6 +870,21 @@ async def get_dashboard_authoring_session(session_id: str, store: StoreD):
     if row is None:
         raise HTTPException(status_code=404, detail="Dashboard authoring conversation not found")
     return dashboard_store.authoring_info(row)
+
+
+@router.post(
+    "/dashboard-authoring/sessions/{session_id}/retry-failed",
+    response_model=DashboardAuthoringSessionInfo,
+    dependencies=[RequireScope("write")],
+)
+async def retry_failed_dashboard_charts(session_id: str, store: StoreD):
+    raise HTTPException(
+        status_code=410,
+        detail={
+            "code": "top_level_chart_repair_required",
+            "message": "Repair the rejected chart once with upsert_dashboard_chart",
+        },
+    )
 
 
 @router.get(
@@ -774,117 +911,125 @@ async def get_active_dashboard_authoring_session(dashboard_id: str, store: Store
 
 
 @router.post(
+    "/dashboards/{dashboard_id}/authoring-chat",
+    dependencies=[RequireScope("write")],
+)
+async def open_dashboard_authoring_chat(dashboard_id: str, store: StoreD):
+    """Return a Data Chat thread and governed preview for editing a dashboard."""
+    org_id = store._require_org_id()
+    user_id = _user_id(store)
+    rows = await dashboard_store.get_private_dashboard_rows(
+        store.session,
+        org_id=org_id,
+        user_id=user_id,
+        dashboard_id=dashboard_id,
+    )
+    if rows is None:
+        raise HTTPException(status_code=404, detail="Dashboard not found")
+    dashboard, version = rows
+    session = await dashboard_store.get_active_authoring_session(
+        store.session,
+        org_id=org_id,
+        user_id=user_id,
+        dashboard_id=dashboard_id,
+    )
+    conversation = None
+    creation_conversation_id = await dashboard_store.get_dashboard_creation_conversation_id(
+        store.session,
+        org_id=org_id,
+        user_id=user_id,
+        dashboard_id=dashboard_id,
+    )
+    if creation_conversation_id:
+        conversation = await chat_store.get_owned_conversation(
+            store.session,
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=creation_conversation_id,
+        )
+    if conversation is None and session and session.conversation_id:
+        conversation = await chat_store.get_owned_conversation(
+            store.session,
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=session.conversation_id,
+        )
+    if session:
+        session_matches_current = session.status == "preview" and session.base_version_id == version.id
+        if conversation is not None and session_matches_current:
+            if session.conversation_id != conversation.id:
+                session.conversation_id = conversation.id
+                await store.session.commit()
+            return {
+                "conversation_id": conversation.id,
+                "authoring_session_id": session.id,
+            }
+
+    project = (
+        await store.session.execute(
+            select(GatewayWorkspaceProject).where(
+                GatewayWorkspaceProject.id == dashboard.project_id,
+                GatewayWorkspaceProject.org_id == org_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if project is None:
+        raise HTTPException(status_code=409, detail="Dashboard project is unavailable")
+    definition = DashboardDefinition.model_validate(version.definition_json)
+    if conversation is None:
+        conversation = await chat_store.create_empty_conversation(
+            store.session,
+            org_id=org_id,
+            user_id=user_id,
+            project=project,
+            branch=project.default_branch or "main",
+            commit_sha=version.commit_sha,
+            title=f"Edit {definition.name}",
+        )
+    if session and session.status == "preview" and session.base_version_id == version.id:
+        session.conversation_id = conversation.id
+        await store.session.commit()
+        session_id = session.id
+    else:
+        created = await dashboard_store.create_authoring_session(
+            store.session,
+            org_id=org_id,
+            user_id=user_id,
+            dashboard_id=dashboard_id,
+            base_version_id=version.id,
+            definition=definition,
+            operations=[],
+            prompt="Open this dashboard in Data Chat for editing.",
+            summary="The current saved dashboard is ready to refine in Data Chat.",
+            agent_run_id=str(uuid.uuid4()),
+            model="data-chat",
+            requires_custom_sql_confirmation=False,
+            custom_sql_confirmed=True,
+            conversation_id=conversation.id,
+        )
+        session_id = created.id
+    return {
+        "conversation_id": conversation.id,
+        "authoring_session_id": session_id,
+    }
+
+
+@router.post(
     "/dashboard-authoring/sessions/{session_id}/messages",
     response_model=DashboardAuthoringSessionInfo,
     dependencies=[RequireScope("write")],
 )
-async def continue_dashboard_authoring_session(session_id: str, body: DashboardAuthoringMessageRequest, store: StoreD):
-    org_id = store._require_org_id()
-    user_id = _user_id(store)
-    row = await dashboard_store.get_authoring_session(
-        store.session, org_id=org_id, user_id=user_id, session_id=session_id
-    )
-    if row is None:
-        raise HTTPException(status_code=404, detail="Dashboard authoring conversation not found")
-    if row.status not in {"preview", "applied", "discarded"}:
-        raise HTTPException(status_code=409, detail="Dashboard authoring conversation is no longer active")
-    resuming_saved_thread = row.status in {"applied", "discarded"}
-    if not resuming_saved_thread and row.requires_custom_sql_confirmation and not row.custom_sql_confirmed:
-        raise HTTPException(
-            status_code=409,
-            detail="Confirm or decline the pending custom SQL before refining this draft",
-        )
-    if resuming_saved_thread:
-        if not row.dashboard_id:
-            raise HTTPException(status_code=409, detail="Saved authoring thread has no dashboard")
-        dashboard_rows = await dashboard_store.get_private_dashboard_rows(
-            store.session,
-            org_id=org_id,
-            user_id=user_id,
-            dashboard_id=row.dashboard_id,
-        )
-        if dashboard_rows is None:
-            raise HTTPException(status_code=404, detail="Dashboard not found")
-        _, current_version = dashboard_rows
-        current_definition = DashboardDefinition.model_validate(current_version.definition_json)
-        base_version_id = current_version.id
-    else:
-        current_definition = DashboardDefinition.model_validate(row.definition_json)
-        base_version_id = row.base_version_id
-    try:
-        context = await _verified_context(store, current_definition)
-        api_key = await org_secrets_store.resolve_anthropic_key(store.session, org_id)
-        if not api_key:
-            raise HTTPException(status_code=409, detail="Dashboard authoring requires the organization Anthropic key")
-        agent = DashboardAuthoringAgent(api_key=api_key)
-        draft = await agent.draft(prompt=body.prompt, context=context, base_definition=current_definition)
-        definition = materialize_agent_draft(draft, base_definition=current_definition)
-        verified = await _verified_context(store, definition)
-        definition = canonicalize_dashboard_filter_targets(definition, verified)
-        validate_dashboard_semantics(definition, verified)
-        validate_time_series_default_windows(definition, verified)
-    except HTTPException:
-        raise
-    except (DashboardCompileError, ValueError) as exc:
-        await dashboard_store.record_authoring_failure(
-            store.session,
-            org_id=org_id,
-            user_id=user_id,
-            session_id=session_id,
-            prompt=body.prompt,
-            safe_message=f"That change could not be validated: {exc}",
-        )
-        await record_dashboard_event(
-            store.session,
-            org_id=org_id,
-            user_id=user_id,
-            event_type=DashboardTelemetryEvent.AGENT_VALIDATION_FAILED,
-            connection_name=current_definition.signalPilot.connectionName,
-            metadata={
-                "dashboard_id": row.dashboard_id or f"draft:{row.id}",
-                "version_id": base_version_id or f"draft:{row.id}",
-                "failure_code": (
-                    "dashboard_time_series_window_required"
-                    if getattr(exc, "code", None) == "dashboard_time_series_window_required"
-                    else "dashboard_agent_draft_invalid"
-                ),
-            },
-        )
-        raise HTTPException(status_code=422, detail=f"Agent draft rejected: {exc}") from exc
-    previous_sql = {
-        chart.id: chart.model_dump(mode="json") for chart in current_definition.charts if chart.query.kind == "sql"
-    }
-    changed_custom_sql_chart_ids = [
-        chart.id
-        for chart in definition.charts
-        if chart.query.kind == "sql" and previous_sql.get(chart.id) != chart.model_dump(mode="json")
-    ]
-    authoring_kwargs = {
-        "db": store.session,
-        "org_id": org_id,
-        "user_id": user_id,
-        "definition": definition,
-        "operations": [operation.model_dump(mode="json") for operation in draft.operations],
-        "prompt": body.prompt,
-        "summary": draft.summary,
-        "agent_run_id": str(uuid.uuid4()),
-        "model": agent.model,
-        "requires_custom_sql_confirmation": bool(changed_custom_sql_chart_ids),
-    }
-    if resuming_saved_thread:
-        return await dashboard_store.create_authoring_session(
-            **authoring_kwargs,
-            dashboard_id=row.dashboard_id,
-            base_version_id=base_version_id,
-            custom_sql_confirmed=False,
-            thread_id=row.thread_id,
-            prior_events=list(row.events_json or []),
-            pending_custom_sql_chart_ids=changed_custom_sql_chart_ids,
-        )
-    return await dashboard_store.update_authoring_session_draft(
-        **authoring_kwargs,
-        session_id=session_id,
-        pending_custom_sql_chart_ids=changed_custom_sql_chart_ids,
+async def continue_dashboard_authoring_session(
+    session_id: str,
+    body: DashboardAuthoringMessageRequest,
+    store: StoreD,
+):
+    raise HTTPException(
+        status_code=410,
+        detail={
+            "code": "skill_driven_dashboard_authoring_required",
+            "message": "Use begin_dashboard_authoring and typed operations from the top-level Data Chat run",
+        },
     )
 
 
@@ -960,6 +1105,8 @@ async def apply_dashboard_authoring_session(session_id: str, body: DashboardAuth
     )
     if row is None:
         raise HTTPException(status_code=404, detail="Dashboard authoring preview not found")
+    if row.status != "preview" or row.definition_json is None:
+        raise HTTPException(status_code=409, detail="Dashboard authoring preview is not ready to apply")
     definition = DashboardDefinition.model_validate(row.definition_json)
     context = await _verified_context(store, definition)
     try:
@@ -1149,6 +1296,7 @@ async def _cached_receipt(
         tables=dashboard_result.tables_json,
         semantic_definition=dashboard_result.semantic_definition_json,
         compiled_sql=None,
+        connection_type=(dashboard_result.semantic_definition_json or {}).get("connection_type"),
         cache_state="fresh"
         if dashboard_result.expires_at.replace(tzinfo=dashboard_result.expires_at.tzinfo or UTC) > now
         else "stale_refreshing",
@@ -1352,6 +1500,7 @@ async def _execute_dashboard_chart(
                 if isinstance(chart.query, SemanticChartQuery)
                 else compile_custom_sql_query(
                     chart.query,
+                    dialect=context.connection_type,
                     runtime_filters=runtime_filters,
                     timezone=parsed.signalPilot.timezone,
                 )
@@ -1364,6 +1513,7 @@ async def _execute_dashboard_chart(
                 connection_name=dashboard.connection_name,
                 sql=compiled.sql,
                 parameters=compiled.parameters,
+                bound_query=compiled.bound_query,
                 row_limit=chart.query.limit,
                 timeout_seconds=60,
                 context=GovernedQueryContext(
@@ -1434,6 +1584,7 @@ async def _execute_dashboard_chart(
                 tables=result.tables,
                 semantic_definition=compiled.semantic_definition,
                 compiled_sql=compiled.sql,
+                connection_type=context.connection_type,
                 cache_state="fresh",
             )
         except asyncio.CancelledError:
@@ -1541,12 +1692,17 @@ async def query_dashboard_chart(dashboard_id: str, chart_id: str, body: Dashboar
         )
         if authoring is None or authoring.dashboard_id != dashboard.id or authoring.base_version_id != version.id:
             raise HTTPException(status_code=404, detail="Dashboard authoring preview not found")
-        if authoring.status != "preview":
+        if authoring.status not in {"building", "partial_failed", "preview"}:
             raise HTTPException(status_code=409, detail="Dashboard authoring preview is no longer active")
+        chart_draft = next((draft for draft in authoring.chart_drafts if draft.chart_id == chart_id), None)
+        if authoring.status != "preview" and (chart_draft is None or chart_draft.status != "ready"):
+            raise HTTPException(status_code=409, detail="Dashboard chart is not ready for preview queries")
+        if authoring.definition_json is None:
+            raise HTTPException(status_code=409, detail="Dashboard chart is not ready for preview queries")
         parsed = DashboardDefinition.model_validate(authoring.definition_json)
         query_version_id = f"draft:{authoring.id}"
         query_commit_sha = authoring.commit_sha
-    return await _execute_dashboard_chart(
+    operation = _execute_dashboard_chart(
         dashboard=dashboard,
         query_version_id=query_version_id,
         query_commit_sha=query_commit_sha,
@@ -1556,6 +1712,10 @@ async def query_dashboard_chart(dashboard_id: str, chart_id: str, body: Dashboar
         store=store,
         custom_sql_confirmed=(not body.authoring_session_id or authoring.custom_sql_confirmed),
     )
+    if body.authoring_session_id:
+        async with authoring_preview_query_semaphore:
+            return await operation
+    return await operation
 
 
 @router.post(
@@ -1575,24 +1735,34 @@ async def query_new_dashboard_authoring_preview(
         user_id=_user_id(store),
         session_id=session_id,
     )
-    if authoring is None or authoring.dashboard_id is not None or authoring.status != "preview":
+    if (
+        authoring is None
+        or authoring.dashboard_id is not None
+        or authoring.status not in {"building", "partial_failed", "preview"}
+    ):
         raise HTTPException(status_code=404, detail="New dashboard authoring preview not found")
+    chart_draft = next((draft for draft in authoring.chart_drafts if draft.chart_id == chart_id), None)
+    if authoring.status != "preview" and (chart_draft is None or chart_draft.status != "ready"):
+        raise HTTPException(status_code=409, detail="Dashboard chart is not ready for preview queries")
+    if authoring.definition_json is None:
+        raise HTTPException(status_code=409, detail="Dashboard chart is not ready for preview queries")
     parsed = DashboardDefinition.model_validate(authoring.definition_json)
     dashboard = SimpleNamespace(
         id=f"draft:{authoring.id}",
         project_id=authoring.project_id,
         connection_name=authoring.connection_name,
     )
-    return await _execute_dashboard_chart(
-        dashboard=dashboard,
-        query_version_id=f"draft:{authoring.id}",
-        query_commit_sha=authoring.commit_sha,
-        parsed=parsed,
-        chart_id=chart_id,
-        body=body,
-        store=store,
-        custom_sql_confirmed=authoring.custom_sql_confirmed,
-    )
+    async with authoring_preview_query_semaphore:
+        return await _execute_dashboard_chart(
+            dashboard=dashboard,
+            query_version_id=f"draft:{authoring.id}",
+            query_commit_sha=authoring.commit_sha,
+            parsed=parsed,
+            chart_id=chart_id,
+            body=body,
+            store=store,
+            custom_sql_confirmed=authoring.custom_sql_confirmed,
+        )
 
 
 @router.post(
@@ -1634,6 +1804,7 @@ async def get_dashboard_filter_values(
             connection_name=dashboard.connection_name,
             sql=compiled.sql,
             parameters=compiled.parameters,
+            bound_query=compiled.bound_query,
             row_limit=body.limit,
             timeout_seconds=30,
             context=GovernedQueryContext(
@@ -1706,6 +1877,7 @@ async def get_dashboard_chart_data(
         tables=dashboard_result.tables_json,
         semantic_definition=dashboard_result.semantic_definition_json,
         compiled_sql=None,
+        connection_type=(dashboard_result.semantic_definition_json or {}).get("connection_type"),
         cache_state="fresh" if expires_at > datetime.now(UTC) else "stale_refreshing",
     )
 

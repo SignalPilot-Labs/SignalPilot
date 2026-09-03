@@ -1,4 +1,4 @@
-import { initStore } from "@/core/bootstrap/mount-store";
+import { initStore, type InitStoreResult } from "@/core/bootstrap/mount-store";
 import type { JotaiStore } from "@/core/state/jotai";
 
 const _initialized = new WeakSet<JotaiStore>();
@@ -14,7 +14,7 @@ const _initialized = new WeakSet<JotaiStore>();
  * Throws unconditionally on a second call for the same store (fail-fast;
  * both dev and prod). Inside a React tree, propagatable via an error boundary.
  */
-export function initStoreOnce(store: JotaiStore, options: unknown): void {
+export function initStoreOnce(store: JotaiStore, options: unknown): InitStoreResult {
   if (_initialized.has(store)) {
     throw new Error(
       "SignalPilot: initStoreOnce called more than once for the same store. " +
@@ -22,5 +22,5 @@ export function initStoreOnce(store: JotaiStore, options: unknown): void {
     );
   }
   _initialized.add(store);
-  initStore(options, store);
+  return initStore(options, store);
 }

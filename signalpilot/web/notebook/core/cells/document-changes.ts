@@ -18,7 +18,13 @@ import type { DispatchedActionOf } from "@/utils/createReducer";
 import { Logger } from "@/utils/Logger";
 import type { NotificationMessageData } from "../kernel/messages";
 import { kioskModeAtom } from "../mode";
+import { connectionAtom } from "../network/connection";
 import { getRequestClient } from "../network/requests";
+import {
+  isKernelLaunchInFlight,
+  kernelLaunchAtom,
+} from "../runtime/launch-state";
+import { WebSocketState } from "../websocket/types";
 import type { NotebookDocumentTransactionRequest } from "../network/types";
 import { store } from "../state/jotai";
 import type { CellActions, NotebookState } from "./cells";
@@ -578,6 +584,11 @@ const flushChanges = debounce(() => {
   }
   const changes = pendingChanges;
   pendingChanges = [];
+  // A launch may have started between enqueue and this debounced flush —
+  // the queued changes reference ids the incoming kernel will replace.
+  if (isKernelLaunchInFlight(store.get(kernelLaunchAtom))) {
+    return;
+  }
   void getRequestClient().sendDocumentTransaction({ changes });
 }, 400);
 
@@ -594,6 +605,21 @@ function enqueue(change: DocumentChange) {
   }
   // The scratchpad cell is local-only — don't sync it to the document.
   if (isScratchChange(change)) {
+    return;
+  }
+  // No open kernel connection (sessionless boot / provisioning window):
+  // there is no server-side document to sync with, and cell ids will be
+  // re-assigned at kernel-ready — queued changes would reference dead ids
+  // and 500. Persistence is handled by the gateway save path instead; the
+  // server document converges from the first full save after connect.
+  // The kernel-launch check covers the tail of that window where the
+  // socket is already OPEN but the kernel hasn't re-id'd the cells yet
+  // (e.g. typing while a background prewarm finishes).
+  if (
+    store.get(connectionAtom).state !== WebSocketState.OPEN ||
+    isKernelLaunchInFlight(store.get(kernelLaunchAtom))
+  ) {
+    pendingChanges = [];
     return;
   }
   pendingChanges.push(change);

@@ -9,7 +9,7 @@ import {
   MoreHorizontalIcon,
 } from "lucide-react";
 import type React from "react";
-import { memo, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { z } from "zod";
 import { ReadonlyCode } from "@/components/editor/code/readonly-python-code";
 import { OutputArea } from "@/components/editor/Output";
@@ -81,6 +81,18 @@ const VerticalLayoutRenderer: React.FC<VerticalLayoutProps> = ({
       ? isStaticNotebook() || kioskMode
       : showCodeByQueryParam === "true";
   });
+
+  // Follow later kiosk changes: viewer embeds flip the kiosk flag to switch
+  // a mounted notebook between the code and app views. An explicit URL
+  // override or a disabled run-mode preference still wins.
+  useEffect(() => {
+    if (!showCodeInRunModePreference) return;
+    const byQueryParam = new URLSearchParams(window.location.search).get(
+      KnownQueryParams.showCode,
+    );
+    if (byQueryParam !== null) return;
+    setShowCode(isStaticNotebook() || kioskMode);
+  }, [kioskMode, showCodeInRunModePreference]);
 
   const canShowCode = useNotebookCodeAvailable(cells);
 
@@ -380,8 +392,12 @@ const VerticalCell = memo(
         />
       );
 
-      // Hide the code if it's pure markdown and there's an output, or if the code is empty
-      const hideCode = shouldHideCode(code, output);
+      // Hide the code if it's pure markdown and there's an output, or if the
+      // code is empty. Cells explicitly marked hide_code render no code tray
+      // at all in the read view (scaffold/plumbing cells — e.g. the chat
+      // analysis notebook's seeded setup cells); kiosk viewers still get the
+      // collapsed-but-expandable tray for ordinary cells below.
+      const hideCode = shouldHideCode(code, output) || config.hide_code === true;
 
       return (
         <div

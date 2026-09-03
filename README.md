@@ -300,7 +300,7 @@ SignalPilot/
 │       ├── app/              # App router pages (dashboard, connections, query, etc.)
 │       ├── notebook/         # Embedded reactive-notebook frontend (source)
 │       └── lib/              # API client, auth context, hooks
-├── plugin/                   # Claude Code + Codex plugin (23 skills, 2 verifier agents)
+├── signalpilot-plugin/       # Canonical agent plugin (23 skills, 2 verifier agents)
 ├── sp-sandbox/               # gVisor sandboxed Python execution
 ├── deploy/k8s/               # Kubernetes manifests: gateway RBAC + admission policies
 ├── benchmark/                # Spider 2.0-DBT (SOTA 65.6) + ADE-bench (96.9%) suites

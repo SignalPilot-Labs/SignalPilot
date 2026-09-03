@@ -6,12 +6,11 @@ import hashlib
 import json
 import uuid
 from contextlib import suppress
+from dataclasses import replace
 from datetime import UTC, datetime
-from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
@@ -37,40 +36,16 @@ from ..governance.runtime_datasets import RuntimeDatasetError, runtime_dataset_e
 from ..security.scope_guard import RequireScope
 from ..standalone_chat.config import enterprise_chat_feature_flags
 from ..standalone_chat.object_storage import chat_object_storage, runtime_object_key
+from ..standalone_chat.query_results import QueryResultUnavailable, load_result_rows
 from .deps import StoreD, sanitize_db_error
+from .query_models import (
+    DirectQueryRequest,
+    PublishResultRequest,
+    QueryDatasetRequest,
+    QueryPlanRequest,
+)
 
 router = APIRouter(prefix="/api")
-
-
-class DirectQueryRequest(BaseModel):
-    connection_name: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
-    sql: str = Field(..., min_length=1, max_length=100_000)
-    row_limit: int = Field(default=10_000, ge=1, le=100_000)
-    timeout_seconds: int | None = Field(default=None, ge=1, le=300)
-    plan_id: str | None = Field(default=None, min_length=1, max_length=200)
-
-
-class QueryPlanRequest(BaseModel):
-    connection_name: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
-    sql: str = Field(..., min_length=1, max_length=100_000)
-    purpose: str = Field(..., min_length=1, max_length=2_000)
-    execution_need: str = Field(default="sql", pattern=r"^(sql|python)$")
-    row_level_analysis_justified: bool = False
-
-
-class PublishResultRequest(BaseModel):
-    name: str = Field(..., min_length=1, max_length=200)
-    rows: list[dict[str, Any]]
-    source_result_ids: list[str] = Field(..., min_length=1, max_length=100)
-    completeness: str = Field(..., pattern=r"^(complete|truncated|unknown)$")
-    reconciliation: str | None = Field(default=None, max_length=2_000)
-    code_hash: str = Field(..., pattern=r"^[0-9a-f]{64}$")
-
-
-class QueryDatasetRequest(BaseModel):
-    connection_name: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
-    sql: str = Field(..., min_length=1, max_length=100_000)
-    plan_id: str = Field(..., min_length=1, max_length=200)
 
 
 async def _query_context(store: StoreD, request: Request, *, path: str, plan_id: str | None = None):
@@ -123,14 +98,13 @@ async def plan_query(req: QueryPlanRequest, store: StoreD, request: Request):
             connection_name=req.connection_name,
             sql=req.sql,
             purpose=req.purpose,
-            execution_need=req.execution_need,  # type: ignore[arg-type]
             context=context,
             row_level_analysis_justified=req.row_level_analysis_justified,
         )
     except QueryPlanError as exc:
         status = 404 if exc.code == "connection_not_found" else 400
         raise HTTPException(status_code=status, detail=str(exc)) from exc
-    return plan.as_dict()
+    return plan.as_agent_dict()
 
 
 @router.get("/query/plans/{plan_id}", dependencies=[RequireScope("query")])
@@ -150,13 +124,8 @@ async def get_query_plan(plan_id: str, store: StoreD, request: Request):
     ):
         raise HTTPException(status_code=404, detail="Query plan not found")
     return {
-        "plan_id": plan.id,
-        "sql_hash": plan.sql_hash,
         "route": plan.route,
-        "route_reason": plan.route_reason,
-        "estimate_quality": plan.estimate_quality,
         "approval_required": plan.approval_required,
-        "expires_at": plan.expires_at,
     }
 
 
@@ -182,17 +151,10 @@ async def get_query_result(result_id: str, store: StoreD):
     if result is None:
         raise HTTPException(status_code=404, detail="Query result not found")
     stored, execution = result
-    rows = list(stored.rows_json or [])
-    if stored.storage_kind == "object":
-        if not stored.object_key:
-            raise HTTPException(status_code=500, detail="Stored query result is unavailable")
-        data = await chat_object_storage().get_bytes(stored.object_key, max_bytes=10 * 1024 * 1024)
-        if stored.content_hash and hashlib.sha256(data).hexdigest() != stored.content_hash:
-            raise HTTPException(status_code=500, detail="Stored query result failed integrity validation")
-        loaded = json.loads(data)
-        if not isinstance(loaded, list):
-            raise HTTPException(status_code=500, detail="Stored query result is invalid")
-        rows = loaded
+    try:
+        rows = await load_result_rows(stored)
+    except QueryResultUnavailable as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     return {
         "result_id": stored.id,
         "execution_id": execution.id if execution else None,
@@ -398,11 +360,30 @@ async def create_runtime_dataset(body: QueryDatasetRequest, store: StoreD, reque
     context = await _query_context(store, request, path="sdk", plan_id=body.plan_id)
     settings = await store.load_settings()
     try:
+        plan_id = body.plan_id
+        if context.run_id and not plan_id:
+            plan = await create_query_plan(
+                store,
+                connection_name=body.connection_name,
+                sql=body.sql,
+                purpose="Create a governed notebook dataset",
+                context=context,
+                row_level_analysis_justified=True,
+            )
+            if plan.route != "dataset_ref":
+                raise RuntimeDatasetError(
+                    "route_mismatch",
+                    f"The query route is {plan.route}, not dataset_ref",
+                )
+            plan_id = plan.plan_id
+            context = replace(context, plan_id=plan_id)
+        if not plan_id:
+            raise RuntimeDatasetError("plan_required", "DatasetRef execution requires a chat plan")
         dataset = await runtime_dataset_executor.execute(
             store,
             connection_name=body.connection_name,
             sql=body.sql,
-            plan_id=body.plan_id,
+            plan_id=plan_id,
             context=context,
             timeout_seconds=settings.default_timeout_seconds,
         )
@@ -504,6 +485,20 @@ async def query_database(req: DirectQueryRequest, store: StoreD, request: Reques
         plan_id=req.plan_id,
     )
     try:
+        if context.run_id and requested_path == "sdk" and not context.plan_id:
+            plan = await create_query_plan(
+                store,
+                connection_name=req.connection_name,
+                sql=req.sql,
+                purpose="Run a governed notebook query",
+                context=context,
+            )
+            if plan.route != "notebook_sdk":
+                raise GovernedQueryError(
+                    "route_mismatch",
+                    f"The query route is {plan.route}, not notebook_sdk",
+                )
+            context = replace(context, plan_id=plan.plan_id)
         result = await governed_query_executor.execute(
             store,
             connection_name=req.connection_name,

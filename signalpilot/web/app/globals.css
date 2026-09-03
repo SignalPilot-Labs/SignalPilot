@@ -1,5 +1,9 @@
 @import "tailwindcss";
 
+/* streamdown ships pre-built markup with Tailwind classes; scan it so those
+   utilities are emitted (used by notebook/components/markdown). */
+@source "../node_modules/streamdown/dist/index.js";
+
 /* Design tokens — aligned with the landing-page system (see UX.md).
    Warm ink surfaces, translucent borders, mint reserved for live/primary,
    DM Sans for chrome + JetBrains Mono for evidence (SQL, metrics, ids). */
@@ -255,61 +259,6 @@ select {
   padding-right: 24px;
 }
 
-/* Standalone data chat markdown stays business-readable; evidence remains mono. */
-.chat-markdown {
-  color: var(--color-text);
-  font-size: 14px;
-  line-height: 1.7;
-}
-.chat-markdown > * + * { margin-top: 0.85rem; }
-.chat-markdown h1,
-.chat-markdown h2,
-.chat-markdown h3 {
-  color: var(--color-text);
-  font-weight: 600;
-  letter-spacing: -0.015em;
-  line-height: 1.3;
-}
-.chat-markdown ul,
-.chat-markdown ol { padding-left: 1.25rem; }
-.chat-markdown ul { list-style: disc; }
-.chat-markdown ol { list-style: decimal; }
-.chat-markdown a {
-  color: var(--color-text);
-  text-decoration: underline;
-  text-underline-offset: 3px;
-}
-.chat-markdown code {
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  background: var(--color-bg-input);
-  padding: 0.1rem 0.3rem;
-  color: var(--color-text-muted);
-  font-size: 0.85em;
-}
-.chat-markdown pre {
-  overflow: auto;
-  border: 1px solid var(--color-border);
-  border-radius: 10px;
-  background: var(--color-bg-input);
-  padding: 0.85rem;
-}
-.chat-markdown pre code {
-  border: 0;
-  background: transparent;
-  padding: 0;
-}
-.chat-markdown table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 12px;
-}
-.chat-markdown th,
-.chat-markdown td {
-  border: 1px solid var(--color-border);
-  padding: 0.5rem 0.65rem;
-  text-align: left;
-}
 
 /* ── Smooth transitions ── */
 a, button, input, select, textarea {
@@ -858,20 +807,23 @@ kbd {
   font-family: var(--font-mono, ui-monospace, "SF Mono", Menlo, monospace);
   tab-size: 4;
 }
-.chat-code .tok-keyword { color: #c792ea; }
+/* Token palette. Tuned on the #121214 code surface: keywords and literals
+   carry the structure, punctuation and identifiers recede toward body text so
+   a long query reads as prose rather than as a colour chart. */
+.chat-code .tok-keyword { color: #b58ce0; font-weight: 500; }
 .chat-code .tok-string,
-.chat-code .tok-string2 { color: #9ece8c; }
-.chat-code .tok-number { color: #f2b96d; }
+.chat-code .tok-string2 { color: #9dcc8b; }
+.chat-code .tok-number { color: #e3ae76; }
 .chat-code .tok-comment { color: var(--color-text-dim); font-style: italic; }
-.chat-code .tok-operator,
-.chat-code .tok-punctuation { color: #8fa3b5; }
-.chat-code .tok-variableName { color: #d6e4f0; }
-.chat-code .tok-propertyName { color: #7fb4e0; }
+.chat-code .tok-operator { color: #9aa6b2; }
+.chat-code .tok-punctuation { color: #6f7883; }
+.chat-code .tok-variableName { color: #cfd2d6; }
+.chat-code .tok-propertyName { color: #86b6de; }
 .chat-code .tok-function,
 .chat-code .tok-typeName,
-.chat-code .tok-className { color: #6fc3df; }
+.chat-code .tok-className { color: #6cc0d4; }
 .chat-code .tok-bool,
-.chat-code .tok-atom { color: #f2b96d; }
+.chat-code .tok-atom { color: #e3ae76; }
 
 @keyframes chat-step-in {
   from { opacity: 0; transform: translateY(4px); }
@@ -879,22 +831,26 @@ kbd {
 }
 .chat-step-in { animation: chat-step-in 0.25s ease-out both; }
 
+/* The highlight band is narrow (38%→62% of a 300% image) and the sweep
+   overshoots both edges, so the loop restarts on identical frames — no jump. */
 @keyframes chat-live-sheen {
-  0% { background-position: 120% 0; }
-  100% { background-position: -20% 0; }
+  0% { background-position: 130% 0; }
+  100% { background-position: -30% 0; }
 }
 .chat-live-label {
   background: linear-gradient(
     90deg,
     var(--color-text-dim) 0%,
+    var(--color-text-dim) 38%,
     var(--color-text) 50%,
+    var(--color-text-dim) 62%,
     var(--color-text-dim) 100%
   );
-  background-size: 200% 100%;
+  background-size: 300% 100%;
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
-  animation: chat-live-sheen 1.8s linear infinite;
+  animation: chat-live-sheen 2s linear infinite;
 }
 
 .chat-step-rail {
@@ -925,11 +881,170 @@ kbd {
 .chat-collapse[data-open="true"] { grid-template-rows: 1fr; }
 .chat-collapse > div { overflow: hidden; min-width: 0; }
 
+/* ── Runtime boot card (cold sandbox starts) ─────────────────────────── */
+
+@keyframes chat-boot-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.chat-boot-in { animation: chat-boot-in 0.35s ease-out both; }
+
+/* Comet tracing the chip's rounded-square border. The gradient ANGLE is
+   animated (via @property) instead of rotating the element, so the square
+   silhouette stays still while the light travels around it. */
+@property --chat-boot-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+@keyframes chat-boot-orbit {
+  to { --chat-boot-angle: 360deg; }
+}
+.chat-boot-orbit {
+  border-radius: 0.75rem;
+  padding: 1.5px;
+  background: conic-gradient(
+    from var(--chat-boot-angle),
+    transparent 0deg 250deg,
+    rgba(0, 255, 136, 0.9) 330deg,
+    transparent 360deg
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  animation: chat-boot-orbit 2.4s linear infinite;
+}
+
+@keyframes chat-boot-breathe {
+  0%, 100% { transform: scale(1); opacity: 0.75; }
+  50% { transform: scale(1.35); opacity: 1; }
+}
+.chat-boot-core {
+  animation: chat-boot-breathe 1.8s ease-in-out infinite;
+  box-shadow: 0 0 12px rgba(0, 255, 136, 0.35);
+}
+
+@keyframes chat-boot-check-pop {
+  0% { transform: scale(0.4); opacity: 0; }
+  60% { transform: scale(1.15); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+.chat-boot-check { animation: chat-boot-check-pop 0.45s cubic-bezier(0.2, 1.4, 0.4, 1) both; }
+
+@keyframes chat-boot-fact-in {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.chat-boot-fact { animation: chat-boot-fact-in 0.5s ease-out both; }
+
+/* Indeterminate scanner: the bar starts and ends fully off-screen, so the
+   loop is seamless by construction. */
+@keyframes chat-boot-scan {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(350%); }
+}
+.chat-boot-scan { animation: chat-boot-scan 1.6s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+
+@keyframes chat-boot-fill {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+.chat-boot-fill {
+  transform-origin: left;
+  animation: chat-boot-fill 0.5s ease-out both;
+}
+
+/* ── Thinking blocks ─────────────────────────────────────────────────── */
+
+.chat-thinking-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@keyframes chat-thinking-pulse {
+  0%, 100% { opacity: 0.25; transform: scale(0.92); }
+  50% { opacity: 0.8; transform: scale(1.08); }
+}
+.chat-thinking-pulse { animation: chat-thinking-pulse 1.8s ease-in-out infinite; }
+
+@keyframes chat-thinking-dot {
+  0%, 60%, 100% { opacity: 0.25; transform: translateY(0); }
+  30% { opacity: 1; transform: translateY(-3px); }
+}
+.chat-thinking-dot { animation: chat-thinking-dot 1.2s ease-in-out infinite; }
+.chat-thinking-dot:nth-child(2) { animation-delay: 0.15s; }
+.chat-thinking-dot:nth-child(3) { animation-delay: 0.3s; }
+
 @media (prefers-reduced-motion: reduce) {
   .chat-step-in,
   .chat-live-label,
-  .chat-dot-live {
+  .chat-dot-live,
+  .chat-boot-in,
+  .chat-boot-orbit,
+  .chat-boot-core,
+  .chat-boot-check,
+  .chat-boot-fact,
+  .chat-boot-scan,
+  .chat-boot-fill,
+  .chat-thinking-pulse,
+  .chat-thinking-dot {
     animation: none !important;
   }
   .chat-collapse { transition: none; }
 }
+
+/* ── Inline artifact cards (chat transcript) ─────────────────────────────
+   Appended section: utilities for components/chat/chat-artifact-card.tsx.
+   Keep additions to this file at the end, below this comment. */
+
+/* One-shot border/glow flash when a card's file is updated in place. */
+@keyframes chat-artifact-flash {
+  0% { box-shadow: 0 0 0 0 rgba(0, 255, 136, 0.25); }
+  40% { box-shadow: 0 0 14px 0 rgba(0, 255, 136, 0.18); }
+  100% { box-shadow: 0 0 0 0 rgba(0, 255, 136, 0); }
+}
+.chat-artifact-flash { animation: chat-artifact-flash 1.1s ease-out both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-artifact-flash { animation: none !important; }
+}
+
+/* ── Plan tracker (components/chat/plan-tracker.tsx) ─────────────────────
+   The agent's plan is the one element in the transcript that is NOT a step:
+   it pins to the top while the run streams and summarises everything below.
+   It therefore gets its own surface — a success-tinted, elevated panel with
+   a left rail — so it never reads as one more step-group card, and its
+   header hover is tinted rather than the neutral --color-bg-hover the
+   step cards use. */
+.chat-plan {
+  position: relative;
+  overflow: hidden;
+  border-radius: 0.75rem;
+  border: 1px solid rgba(0, 255, 136, 0.18);
+  background:
+    linear-gradient(180deg, rgba(0, 255, 136, 0.07), rgba(0, 255, 136, 0.02)),
+    var(--color-bg-elevated);
+  box-shadow:
+    0 12px 32px -14px rgba(0, 255, 136, 0.28),
+    0 12px 28px -12px rgba(0, 0, 0, 0.7);
+}
+.chat-plan::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--color-success);
+  opacity: 0.85;
+}
+.chat-plan__header { transition: background-color 0.15s ease; }
+.chat-plan__header:hover { background: rgba(0, 255, 136, 0.06); }
+.chat-plan__eyebrow { color: rgba(0, 255, 136, 0.72); }
+.chat-plan__segment-pending { background: rgba(255, 255, 255, 0.14); }
+.chat-plan__body { border-top: 1px solid rgba(0, 255, 136, 0.14); }

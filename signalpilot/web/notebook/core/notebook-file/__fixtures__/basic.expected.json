@@ -1,0 +1,41 @@
+{
+  "cells": [
+    {
+      "code": "import os\nimport sys",
+      "code_hash": "f25467900049a19a6f010e69d57609bf",
+      "config": {
+        "column": null,
+        "disabled": false,
+        "hide_code": false
+      },
+      "id": "Hbol",
+      "name": "_"
+    },
+    {
+      "code": "x = 1\ny = x + 1",
+      "code_hash": "c20cad9254fa23916d2fd8015acb1a30",
+      "config": {
+        "column": null,
+        "disabled": false,
+        "hide_code": false
+      },
+      "id": "MJUe",
+      "name": "compute"
+    },
+    {
+      "code": "print(x, y, os.sep, sys.platform)",
+      "code_hash": "7cc1b945056b4a5f4e46da9cd8fcbc57",
+      "config": {
+        "column": null,
+        "disabled": false,
+        "hide_code": false
+      },
+      "id": "vblA",
+      "name": "_"
+    }
+  ],
+  "metadata": {
+    "signalpilot_version": "0.1.0"
+  },
+  "version": "1"
+}

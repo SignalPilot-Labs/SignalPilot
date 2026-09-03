@@ -236,3 +236,53 @@ export function initStore(
 
   return { mode, parsed: parsedOptions.data };
 }
+
+/**
+ * Hydrate the notebook cells from the mount payload (client-parsed notebook
+ * structure + optional session-outputs snapshot) so the document renders
+ * immediately with NO kernel. When a kernel later connects, kernel-ready
+ * reconciles against these cells (handleKernelReady existingCells path).
+ *
+ * Async on purpose: cells/session are heavy modules kept out of the entry
+ * chunk. No-ops when there is nothing to hydrate or when cells already exist
+ * (e.g. kernel-ready won the race on an eager-connect boot).
+ */
+export async function hydrateNotebookState(
+  parsed: ParsedMountOptions,
+  targetStore?: JotaiStore,
+): Promise<void> {
+  if (!parsed.session && !parsed.notebook) {
+    return;
+  }
+  const s = targetStore ?? store;
+  const [cellsModule, sessionModule] = await Promise.all([
+    import("@/core/cells/cells"),
+    import("@/core/cells/session"),
+  ]);
+  const current = s.get(cellsModule.notebookAtom);
+  if (current.cellIds.inOrderIds.length > 0) {
+    return;
+  }
+  const notebook = sessionModule.notebookStateFromSession(
+    parsed.session,
+    parsed.notebook,
+  );
+  if (notebook && s.get(cellsModule.notebookAtom).cellIds.inOrderIds.length === 0) {
+    s.set(cellsModule.notebookAtom, notebook);
+    // Prime the saved baseline to what we just hydrated: edits made before
+    // any kernel exists must flip needsSave (so the sessionless gateway save
+    // and the pre-provision flush fire), while an untouched notebook must
+    // NOT be rewritten by the client serializer.
+    const [{ lastSavedNotebookAtom }, { layoutStateAtom }] = await Promise.all([
+      import("@/core/saving/state"),
+      import("@/core/layout/layout"),
+    ]);
+    const data = notebook.cellIds.inOrderIds.map((id) => notebook.cellData[id]);
+    s.set(lastSavedNotebookAtom, {
+      codes: data.map((d) => d.code),
+      names: data.map((d) => d.name),
+      configs: data.map((d) => d.config),
+      layout: s.get(layoutStateAtom),
+    });
+  }
+}

@@ -1,26 +1,33 @@
+import { useAtomValue } from "jotai";
 import { HardDriveDownloadIcon, PlayIcon } from "lucide-react";
 import type { JSX } from "react";
+import { Spinner } from "@/components/icons/spinner";
 import type { CellConfig, RuntimeState } from "@/core/network/types";
+import { useRuntimeManager } from "@/core/runtime/config";
+import {
+  isKernelLaunchInFlight,
+  kernelLaunchAtom,
+} from "@/core/runtime/launch-state";
 import {
   getConnectionTooltip,
   isAppInteractionDisabled,
 } from "@/core/websocket/connection-utils";
-import type { WebSocketState } from "@/core/websocket/types";
+import { WebSocketState } from "@/core/websocket/types";
 import { renderShortcut } from "../../shortcuts/renderShortcut";
 import { ToolbarItem } from "./toolbar";
 
 function computeColor({
-  connectionState,
+  appInteractionDisabled,
   needsRun,
   loading,
   inactive,
 }: {
-  connectionState: WebSocketState;
+  appInteractionDisabled: boolean;
   needsRun: boolean;
   loading: boolean;
   inactive: boolean;
 }) {
-  if (isAppInteractionDisabled(connectionState)) {
+  if (appInteractionDisabled) {
     return "disabled";
   }
   if (needsRun && !loading) {
@@ -42,14 +49,27 @@ export const RunButton = (props: {
 }): JSX.Element => {
   const { onClick, connectionState, needsRun, status, config, edited } = props;
 
+  const launch = useAtomValue(kernelLaunchAtom);
+  const isLazy = useRuntimeManager().isLazy;
+  const launching = isKernelLaunchInFlight(launch);
+  // Lazy runtime, kernel not up yet: the run flow itself brings the kernel
+  // up (and queues this run behind an in-flight launch), so the button must
+  // stay clickable — a dead Play button here reads as "broken".
+  const lazyPreKernel =
+    isLazy &&
+    (connectionState === WebSocketState.NOT_STARTED ||
+      (connectionState === WebSocketState.CONNECTING && launching));
+
+  const appInteractionDisabled =
+    isAppInteractionDisabled(connectionState) && !lazyPreKernel;
   const blockedStatus = status === "disabled-transitively";
   const loading = status === "running" || status === "queued";
   const inactive =
-    isAppInteractionDisabled(connectionState) ||
+    appInteractionDisabled ||
     loading ||
     (!config.disabled && blockedStatus && !edited);
   const variant = computeColor({
-    connectionState,
+    appInteractionDisabled,
     needsRun,
     loading,
     inactive,
@@ -84,7 +104,11 @@ export const RunButton = (props: {
 
   let tooltipMsg: React.ReactNode = "";
 
-  if (isAppInteractionDisabled(connectionState)) {
+  if (lazyPreKernel) {
+    tooltipMsg = launching
+      ? "Kernel is starting — your run begins the moment it's ready"
+      : renderShortcut("cell.run");
+  } else if (appInteractionDisabled) {
     tooltipMsg = getConnectionTooltip(connectionState);
   } else if (status === "queued") {
     tooltipMsg = "This cell is already queued to run";
@@ -102,7 +126,11 @@ export const RunButton = (props: {
       variant={variant}
       data-testid="run-button"
     >
-      <PlayIcon strokeWidth={1.2} />
+      {lazyPreKernel && launching && launch.trigger === "run" ? (
+        <Spinner size="small" className="size-3" />
+      ) : (
+        <PlayIcon strokeWidth={1.2} />
+      )}
     </ToolbarItem>
   );
 };

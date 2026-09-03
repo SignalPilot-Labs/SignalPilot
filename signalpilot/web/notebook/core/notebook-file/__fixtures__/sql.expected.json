@@ -1,0 +1,19 @@
+{
+  "cells": [
+    {
+      "code": "df = sp.sql(\n    f\"\"\"\n    SELECT *\n    FROM my_table\n    LIMIT 10\n    \"\"\"\n)",
+      "code_hash": "8e011c13415cad4c2eb02b992bc2bad4",
+      "config": {
+        "column": null,
+        "disabled": false,
+        "hide_code": false
+      },
+      "id": "Hbol",
+      "name": "_"
+    }
+  ],
+  "metadata": {
+    "signalpilot_version": "0.1.0"
+  },
+  "version": "1"
+}

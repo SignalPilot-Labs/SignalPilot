@@ -25,6 +25,7 @@ from gateway.db.models import (
     GatewayChatUserPreference,
     GatewayConnection,
     GatewayCredential,
+    GatewayDbtManifest,
     GatewayStructuredQueryResult,
     GatewayWorkspaceProject,
 )
@@ -34,6 +35,9 @@ from gateway.mcp.context import (
     mcp_execution_identity_var,
 )
 from gateway.models.standalone_chat import (
+    StandaloneConversationCreate,
+    StandaloneConversationEffortUpdate,
+    StandaloneConversationModelUpdate,
     StandaloneConversationPatch,
     StandaloneRunCreate,
 )
@@ -42,18 +46,7 @@ from gateway.standalone_chat import projects as chat_projects
 from gateway.standalone_chat.artifacts import (
     normalize_table_snapshot,
     protect_csv_cell,
-    sanitize_chart_snapshot,
-    sanitize_report_html,
     table_to_csv,
-)
-from gateway.standalone_chat.chart_theme import (
-    CHART_BACKGROUND,
-    CHART_COLORS,
-    CHART_MUTED_TEXT,
-    CHART_TEXT,
-    MAX_CHART_CATEGORIES,
-    MAX_CHART_SERIES,
-    SIGNALPILOT_CHART_THEME,
 )
 from gateway.standalone_chat.domain import (
     assert_run_transition,
@@ -220,15 +213,25 @@ def test_state_machine_and_title_contracts():
         StandaloneRunCreate(message="answer", role="assistant")
     with pytest.raises(ValueError):
         StandaloneConversationPatch(title="Renamed", project_id="another-project")
+    assert StandaloneConversationModelUpdate(model="claude-fable-5-1").model == "claude-fable-5-1"
+    assert StandaloneConversationEffortUpdate(effort="max").effort == "max"
+    with pytest.raises(ValueError, match="Unsupported chat model"):
+        StandaloneConversationModelUpdate(model="claude-imaginary-9")
+    with pytest.raises(ValueError, match="Unsupported chat model"):
+        StandaloneConversationCreate(
+            project_id="project-a",
+            message="Analyze revenue",
+            model="claude-imaginary-9",
+        )
+    with pytest.raises(ValueError, match="Unsupported thinking level"):
+        StandaloneConversationEffortUpdate(effort="unlimited")
     messages = [{"role": "user" if index % 2 == 0 else "assistant", "content": "x" * 100} for index in range(20)]
     selection = select_context_for_summary(
         messages,
-        artifact_refs=[{"id": "artifact-a"}],
         usable_context_chars=2_000,
     )
     assert selection is not None
     assert len(selection["recent_messages"]) == 16
-    assert selection["artifact_refs"] == [{"id": "artifact-a"}]
 
 
 def test_starter_questions_are_exactly_four_and_project_aware():
@@ -265,155 +268,7 @@ def test_artifact_security_helpers():
     ).decode("utf-8-sig")
     assert "'@cmd" in content
     assert "governed query row limit" in content
-
-    sanitized = sanitize_report_html(
-        '<script>alert(1)</script><img src="https://example.com/x.png" onerror="x">'
-        '<img src="/api/private">'
-        '<p style="color:red">safe</p><a href="javascript:alert(1)">bad</a>'
-    )
-    assert "<script" not in sanitized
-    assert "onerror" not in sanitized
-    assert "https://example.com" not in sanitized
-    assert "/api/private" not in sanitized
-    assert "javascript:" not in sanitized
-    assert 'style="color:red"' in sanitized
-    assert "connect-src 'none'" in sanitized
-
-    full_document = sanitize_report_html(
-        "<!doctype html><html><head>"
-        '<meta charset="utf-8"><link rel="stylesheet" href="https://example.com/report.css">'
-        "<style>body{color:#171717}.metric{display:grid}</style>"
-        '</head><body><main class="metric"><h1>Revenue</h1><p>$42</p></main></body></html>'
-    )
-    assert "<main" in full_document
-    assert "<h1>Revenue</h1>" in full_document
-    assert "body{color:#171717}" in full_document
-    assert "example.com/report.css" not in full_document
-
-    unsafe_style = sanitize_report_html("<style>.metric{background:url(https://example.com/pixel)}</style><p>safe</p>")
-    assert "example.com/pixel" not in unsafe_style
-    assert "<p>safe</p>" in unsafe_style
-
-    with pytest.raises(ValueError, match="no renderable static content"):
-        sanitize_report_html('<meta charset="utf-8"><script>document.write("report")</script>')
-
-    chart = sanitize_chart_snapshot(
-        {
-            "spec": {
-                "mark": "bar",
-                "data": {"url": "https://example.com/data.json"},
-                "encoding": {
-                    "x": {"field": "label", "href": "https://example.com"},
-                    "y": {"field": "value"},
-                },
-                "transform": [
-                    {"calculate": "datum.value * 2", "as": "unsafe"},
-                    {"filter": "datum.value > 0"},
-                ],
-            },
-            "rows": [{"label": "A", "value": 1}],
-        }
-    )
-    serialized = str(chart)
-    assert "https://example.com" not in serialized
-    assert "calculate" not in serialized
-    assert "datum.value" not in serialized
-    assert chart["source"]["rows"] == [{"label": "A", "value": 1}]
     assert len(normalize_table_snapshot({"rows": list(range(1_100))})["rows"]) == 200
-
-
-def test_chart_theme_is_enforced_after_sanitization_and_limits_visual_density():
-    rows = [
-        {
-            "category": f"Very long category label {category:02d}",
-            "value": (-1 if category % 2 else 1) * (category + 1) * 1_000_000,
-            "series": f"Series {series:02d}",
-        }
-        for category in range(MAX_CHART_CATEGORIES + 3)
-        for series in range(MAX_CHART_SERIES + 2)
-    ]
-    chart = sanitize_chart_snapshot(
-        {
-            "spec": {
-                "title": {"text": "Revenue by category", "color": "#000000"},
-                "background": "#000000",
-                "mark": {
-                    "type": "bar",
-                    "color": "#000000",
-                    "opacity": 0.05,
-                },
-                "config": {
-                    "axis": {"labelColor": "#000000"},
-                    "range": {"category": ["#000000"]},
-                },
-                "encoding": {
-                    "x": {
-                        "field": "category",
-                        "type": "nominal",
-                        "axis": {"labelColor": "#000000"},
-                    },
-                    "y": {
-                        "field": "value",
-                        "type": "quantitative",
-                        "scale": {"domain": [0, 1]},
-                    },
-                    "color": {
-                        "field": "series",
-                        "type": "nominal",
-                        "scale": {"range": ["#000000"]},
-                        "legend": {"labelColor": "#000000"},
-                    },
-                },
-            },
-            "rows": rows,
-        }
-    )
-
-    spec = chart["spec"]
-    assert spec["background"] == CHART_BACKGROUND
-    assert spec["title"] == "Revenue by category"
-    assert spec["mark"] == {
-        "type": "bar",
-        "cornerRadiusEnd": 3,
-        "invalid": "filter",
-    }
-    assert spec["config"]["axis"]["labelColor"] == CHART_TEXT
-    assert spec["config"]["axis"]["titleColor"] == CHART_TEXT
-    assert spec["config"]["legend"]["labelColor"] == CHART_TEXT
-    assert spec["config"]["range"]["category"] == list(CHART_COLORS)
-    assert spec["encoding"]["x"]["axis"]["labelAngle"] == -45
-    assert spec["encoding"]["y"]["axis"]["format"] == ".3~s"
-    assert spec["encoding"]["y"]["scale"] == {
-        "type": "linear",
-        "nice": True,
-        "zero": True,
-    }
-    assert spec["encoding"]["color"]["scale"]["range"] == list(CHART_COLORS)
-    assert spec["encoding"]["xOffset"]["field"] == "series"
-    assert spec["usermeta"]["signalpilotChartTheme"] == SIGNALPILOT_CHART_THEME
-    assert "#000000" not in str(spec)
-    assert chart["display"] == {
-        "category_limit": MAX_CHART_CATEGORIES,
-        "legend_limit": MAX_CHART_SERIES,
-        "limited": True,
-        "omitted_rows": len(rows) - (MAX_CHART_CATEGORIES * MAX_CHART_SERIES),
-    }
-    assert len(chart["rows"]) == MAX_CHART_CATEGORIES * MAX_CHART_SERIES
-    assert chart["source"]["rows"] == rows[:200]
-    assert chart["source"]["display_limited"] is True
-    assert chart["source"]["saved_row_count"] == len(rows)
-
-
-def test_chart_theme_text_contrast_is_at_least_wcag_aa():
-    def luminance(color: str) -> float:
-        values = [int(color[index : index + 2], 16) / 255 for index in (1, 3, 5)]
-        linear = [value / 12.92 if value <= 0.04045 else ((value + 0.055) / 1.055) ** 2.4 for value in values]
-        return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
-
-    background = luminance(CHART_BACKGROUND)
-    for foreground in (CHART_TEXT, CHART_MUTED_TEXT):
-        light, dark = sorted((luminance(foreground), background), reverse=True)
-        assert (light + 0.05) / (dark + 0.05) >= 4.5
 
 
 @pytest.mark.asyncio
@@ -461,9 +316,6 @@ async def test_share_grant_is_hashed_same_org_and_trace_free(db_session):
     assert shared.conversation.title == "Revenue trend"
     assert [message.role for message in shared.messages] == ["user", "assistant"]
     assert not hasattr(shared.messages[1], "metadata")
-    assert len(shared.artifacts) == 1
-    assert shared.artifacts[0].assumptions == ["Booked revenue only"]
-    assert not hasattr(shared.artifacts[0], "provenance")
     assert (
         await chat_store.get_shared_conversation(
             db_session,
@@ -552,6 +404,10 @@ async def test_rotating_revoking_and_archiving_share_returns_not_found(db_sessio
 @pytest.mark.asyncio
 async def test_same_org_viewer_can_fork_share_safe_snapshot(db_session):
     conversation_id, _, assistant_message_id = await _completed_shared_conversation(db_session)
+    source = await db_session.get(GatewayChatConversation, conversation_id)
+    assert source is not None
+    source.model = "claude-fable-5-1"
+    await db_session.commit()
     shared = await chat_store.create_share_grant(
         db_session,
         org_id="org-a",
@@ -577,6 +433,7 @@ async def test_same_org_viewer_can_fork_share_safe_snapshot(db_session):
     assert fork.forked_from_conversation_id == conversation_id
     assert fork.per_query_budget_usd == 0.5
     assert fork.chat_budget_usd == 2.0
+    assert fork.model == "claude-fable-5-1"
 
     detail = await chat_store.get_conversation_detail(
         db_session,
@@ -591,14 +448,6 @@ async def test_same_org_viewer_can_fork_share_safe_snapshot(db_session):
     ]
     assert detail.messages[1].id != assistant_message_id
     assert detail.current_run is None
-    assert len(detail.artifacts) == 1
-    assert detail.artifacts[0].assistant_message_id == detail.messages[1].id
-
-    copied_artifact = (
-        await db_session.execute(select(GatewayChatArtifact).where(GatewayChatArtifact.id == detail.artifacts[0].id))
-    ).scalar_one()
-    assert copied_artifact.provenance_json["forked_from_conversation_id"] == conversation_id
-    assert copied_artifact.snapshot_json["rows"] == [{"revenue": 112}]
 
     reshared = await chat_store.create_share_grant(
         db_session,
@@ -614,7 +463,10 @@ async def test_same_org_viewer_can_fork_share_safe_snapshot(db_session):
         token=reshared_token,
     )
     assert reshared_detail is not None
-    assert len(reshared_detail.artifacts) == 1
+    assert [message.content for message in reshared_detail.messages] == [
+        "What changed in revenue?",
+        "Revenue increased by 12%.",
+    ]
 
 
 @pytest.mark.asyncio
@@ -654,24 +506,7 @@ async def test_fork_preview_preserves_project_commit_and_recipient_budgets(db_se
 
 @pytest.mark.asyncio
 async def test_share_fork_rejects_active_run_and_cross_org(db_session):
-    conversation_id, run = await _conversation_and_run(db_session)
-    db_session.add(
-        GatewayChatArtifact(
-            id="in-progress-artifact",
-            org_id="org-a",
-            user_id="user-a",
-            conversation_id=conversation_id,
-            run_id=run.id,
-            kind="table",
-            filename="in-progress.csv",
-            mime_type="text/csv",
-            snapshot_json={"columns": [], "rows": []},
-            assumptions=[],
-            exclusions=[],
-            caveats=[],
-        )
-    )
-    await db_session.commit()
+    conversation_id, _run = await _conversation_and_run(db_session)
     shared = await chat_store.create_share_grant(
         db_session,
         org_id="org-a",
@@ -686,16 +521,7 @@ async def test_share_fork_rejects_active_run_and_cross_org(db_session):
         token=token,
     )
     assert shared_detail is not None
-    assert shared_detail.artifacts == []
-    assert (
-        await chat_store.get_shared_artifact(
-            db_session,
-            org_id="org-a",
-            token=token,
-            artifact_id="in-progress-artifact",
-        )
-        is None
-    )
+    assert [message.role for message in shared_detail.messages] == ["user"]
     with pytest.raises(RuntimeError, match="finish before forking"):
         await chat_store.fork_shared_conversation(
             db_session,
@@ -916,6 +742,167 @@ async def test_project_readiness_accepts_org_anthropic_key(db_session, monkeypat
     resolve_org_key.assert_awaited_once_with(db_session, "org-a")
 
 
+async def _add_production_connection(db: AsyncSession) -> None:
+    db.add_all(
+        [
+            GatewayConnection(
+                org_id="org-a",
+                user_id="user-a",
+                name="production",
+                db_type="postgres",
+                status="connected",
+                created_at=1.0,
+                description="",
+                tags=[],
+                schema_filter_include=[],
+                schema_filter_exclude=[],
+            ),
+            GatewayCredential(
+                org_id="org-a",
+                user_id="user-a",
+                connection_name="production",
+                connection_string_enc=b"encrypted",
+            ),
+        ]
+    )
+    await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_readiness_recognizes_a_nested_dbt_project(db_session, monkeypatch):
+    """Most real repos nest the dbt project in a subfolder. Readiness must find
+    it the same way compile/execute do, not assume `dbt_project.yml` at root."""
+    project = await _project(db_session)
+    await _add_production_connection(db_session)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "configured")
+    # dbt project lives under `dumpsters_dbt/`, and there is decoy content
+    # (design docs, a second broken copy) that must not fool detection.
+    monkeypatch.setattr(
+        chat_projects,
+        "_project_tree",
+        lambda *_args: (
+            [
+                "README.md",
+                "design/models/fct_orders.md",
+                "dumpsters_dbt/dbt_project.yml",
+                "dumpsters_dbt/models/marts/fct_orders.sql",
+                "dumpsters_dbt_broken/dbt_project.yml",
+            ],
+            "head-sha",
+        ),
+    )
+
+    readiness = await evaluate_project_readiness(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        project=project,
+    )
+
+    assert readiness.ready
+    assert readiness.code == "ready"
+    assert readiness.connection_type == "postgres"
+    assert readiness.registered is True
+
+
+@pytest.mark.asyncio
+async def test_readiness_distinguishes_unknown_type_and_missing_credentials(db_session, monkeypatch):
+    project = await _project(db_session)
+    monkeypatch.setattr(
+        chat_projects,
+        "_project_tree",
+        lambda *_args: (["dbt_project.yml", "models/orders.sql"], "head-sha"),
+    )
+    connection = GatewayConnection(
+        org_id="org-a",
+        user_id="user-a",
+        name="production",
+        db_type="future-db",
+        status="connected",
+        created_at=1.0,
+        description="",
+        tags=[],
+        schema_filter_include=[],
+        schema_filter_exclude=[],
+    )
+    db_session.add(connection)
+    await db_session.commit()
+
+    readiness = await evaluate_project_readiness(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        project=project,
+    )
+    assert readiness.code == "connection_type_unknown"
+    assert readiness.connection_type == "future-db"
+    assert readiness.registered is False
+
+    connection.db_type = "duckdb"
+    await db_session.commit()
+    readiness = await evaluate_project_readiness(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        project=project,
+    )
+    assert readiness.code == "credentials_missing"
+    assert readiness.connection_type == "duckdb"
+    assert readiness.registered is True
+
+
+@pytest.mark.asyncio
+async def test_readiness_trusts_a_successful_compile_when_tree_is_bare(db_session, monkeypatch):
+    """A green dbt-map manifest is proof metadata exists even when the local git
+    mirror can't surface the files (sparse/generated models)."""
+    project = await _project(db_session)
+    await _add_production_connection(db_session)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "configured")
+    # Tree carries no dbt project at all — only the compiled manifest vouches.
+    monkeypatch.setattr(
+        chat_projects,
+        "_project_tree",
+        lambda *_args: (["README.md", "notes.txt"], "head-sha"),
+    )
+    db_session.add(
+        GatewayDbtManifest(
+            org_id="org-a",
+            project_id=project.id,
+            branch="main",
+            revision=1,
+            status="success",
+            trigger="manual",
+            node_count=5,
+            created_at=1.0,
+            updated_at=1.0,
+        )
+    )
+    await db_session.commit()
+
+    readiness = await evaluate_project_readiness(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        project=project,
+    )
+
+    assert readiness.ready
+
+    # A failed compile is NOT proof — flip the manifest and readiness must fail.
+    manifest = (await db_session.execute(select(GatewayDbtManifest))).scalar_one()
+    manifest.status = "failed"
+    await db_session.commit()
+
+    readiness = await evaluate_project_readiness(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        project=project,
+    )
+    assert not readiness.ready
+    assert readiness.code == "metadata_unavailable"
+
+
 @pytest.mark.asyncio
 async def test_execution_uses_org_anthropic_key_as_request_scoped_auth(
     db_session,
@@ -925,6 +912,12 @@ async def test_execution_uses_org_anthropic_key_as_request_scoped_auth(
         db_session,
         user_id="user-without-a-key",
     )
+    conversation = await db_session.get(GatewayChatConversation, run.conversation_id)
+    assert conversation is not None
+    conversation.model = "claude-fable-5-1"
+    conversation.effort = "max"
+    await db_session.commit()
+    monkeypatch.setenv("SP_CHAT_AGENT_MODEL", "claude-opus-5")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-server")
     monkeypatch.setattr(
         chat_execution,
@@ -933,6 +926,7 @@ async def test_execution_uses_org_anthropic_key_as_request_scoped_auth(
             return_value=SimpleNamespace(
                 session_id="session-a",
                 internal_base_url="http://notebook.internal",
+                access_token=None,
             )
         ),
     )
@@ -964,7 +958,167 @@ async def test_execution_uses_org_anthropic_key_as_request_scoped_auth(
         "type": "api_key",
         "token": "sk-ant-org",
     }
+    assert prepared.payload["conversation_id"] == run.conversation_id
+    assert prepared.payload["model"] == "claude-fable-5-1"
+    assert prepared.payload["effort"] == "max"
+    assert prepared.payload["agent_session"] == {
+        "session_id": run.conversation_id,
+        "storage": "unavailable",
+    }
     resolve_org_key.assert_awaited_once_with(db_session, "org-a")
+
+
+def test_direct_chat_runtime_uses_shared_notebook_token(
+    monkeypatch,
+    tmp_path,
+):
+    token_file = tmp_path / "notebook-token"
+    token_file.write_text("shared-direct-token")
+    monkeypatch.setenv("SP_NOTEBOOK_DIRECT_URL", "http://notebook:2718")
+    monkeypatch.setenv("SP_NOTEBOOK_TOKEN_FILE", str(token_file))
+
+    headers = chat_execution._runtime_auth_headers(
+        SimpleNamespace(
+            internal_base_url="http://notebook:2718",
+            access_token="logical-session-token",
+        )
+    )
+
+    assert headers == {"Authorization": "Bearer shared-direct-token"}
+
+
+def test_sandbox_chat_runtime_uses_isolated_session_token(monkeypatch):
+    monkeypatch.setenv("SP_NOTEBOOK_DIRECT_URL", "http://notebook:2718")
+
+    headers = chat_execution._runtime_auth_headers(
+        SimpleNamespace(
+            internal_base_url="https://sandbox.example/notebook/session-a",
+            access_token="isolated-session-token",
+        )
+    )
+
+    assert headers == {"Authorization": "Bearer isolated-session-token"}
+
+
+@pytest.mark.asyncio
+async def test_execution_force_oauth_never_resolves_org_api_key(
+    db_session,
+    monkeypatch,
+):
+    _, run = await _conversation_and_run(db_session)
+    monkeypatch.setenv("SP_CHAT_FORCE_OAUTH_TOKEN", "true")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat-test")
+    ensure_runtime = AsyncMock(
+        return_value=SimpleNamespace(
+            session_id="session-a",
+            internal_base_url="http://notebook.internal",
+            access_token=None,
+        )
+    )
+    monkeypatch.setattr(chat_execution, "ensure_execution_runtime", ensure_runtime)
+    resolve_org_key = AsyncMock(side_effect=AssertionError("org key must not be resolved"))
+    monkeypatch.setattr(
+        chat_execution.org_secrets_store,
+        "resolve_anthropic_key",
+        resolve_org_key,
+    )
+    monkeypatch.setattr(chat_execution, "mint_session_jwt", lambda **_kwargs: "session-jwt")
+    monkeypatch.setattr(
+        chat_execution,
+        "get_gateway_settings",
+        lambda: SimpleNamespace(sp_session_jwt_ttl_seconds=300),
+    )
+
+    prepared = await chat_execution.prepare_execution(
+        db_session,
+        run=run,
+        worker_id="worker-a",
+        branch="main",
+        connection_name="production",
+        commit_sha="a" * 40,
+        prompt="Analyze revenue",
+        messages=[],
+        warm_context={},
+    )
+
+    assert prepared.payload["runtime_auth"] == {
+        "type": "oauth",
+        "token": "sk-ant-oat-test",
+    }
+    resolve_org_key.assert_not_awaited()
+    ensure_runtime.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_execution_force_oauth_fails_before_starting_runtime_when_missing(
+    db_session,
+    monkeypatch,
+):
+    _, run = await _conversation_and_run(db_session)
+    monkeypatch.setenv("SP_CHAT_FORCE_OAUTH_TOKEN", "true")
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    monkeypatch.delenv("OAUTH_TOKEN", raising=False)
+    ensure_runtime = AsyncMock()
+    monkeypatch.setattr(chat_execution, "ensure_execution_runtime", ensure_runtime)
+
+    with pytest.raises(RuntimeError, match="no Claude OAuth token"):
+        await chat_execution.prepare_execution(
+            db_session,
+            run=run,
+            worker_id="worker-a",
+            branch="main",
+            connection_name="production",
+            commit_sha="a" * 40,
+            prompt="Analyze revenue",
+            messages=[],
+            warm_context={},
+        )
+
+    ensure_runtime.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_conversation_model_and_effort_are_persisted_and_can_be_updated(db_session):
+    project = await _project(db_session)
+    conversation, _run = await chat_store.create_conversation_with_run(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        project=project,
+        branch="main",
+        message="Analyze revenue",
+        model="claude-sonnet-4-6",
+        effort="high",
+    )
+    detail = await chat_store.get_conversation_detail(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        conversation_id=conversation.id,
+    )
+    assert detail is not None
+    assert detail.conversation.model == "claude-sonnet-4-6"
+    assert detail.conversation.effort == "high"
+
+    assert await chat_store.update_conversation_model(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        conversation_id=conversation.id,
+        model="claude-opus-5",
+    )
+    await db_session.refresh(conversation)
+    assert conversation.model == "claude-opus-5"
+
+    assert await chat_store.update_conversation_effort(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        conversation_id=conversation.id,
+        effort="max",
+    )
+    await db_session.refresh(conversation)
+    assert conversation.effort == "max"
 
 
 @pytest.mark.asyncio
@@ -988,6 +1142,94 @@ async def test_one_nonterminal_run_and_atomic_initial_state(db_session):
             conversation_id=conversation_id,
             message="A second question",
         )
+
+
+@pytest.mark.asyncio
+async def test_running_run_steering_is_durable_and_marked_picked_up(db_session):
+    conversation_id, run = await _conversation_and_run(db_session)
+    assert await chat_store.claim_runs(
+        db_session,
+        worker_id="worker-a",
+        limit=1,
+        lease_seconds=45,
+    ) == [run.id]
+
+    queued = await chat_store.queue_steering_message(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        run_id=run.id,
+        message="Focus on retention instead.",
+    )
+    assert queued is not None
+    assert queued.metadata_json == {
+        "surface": "standalone",
+        "steering_for_run_id": run.id,
+        "steering_status": "queued",
+    }
+    pending = await chat_store.pending_steering_messages(
+        db_session,
+        run_id=run.id,
+        worker_id="worker-a",
+    )
+    assert [message.id for message in pending] == [queued.id]
+
+    assert await chat_store.mark_steering_message_picked_up(
+        db_session,
+        run_id=run.id,
+        worker_id="worker-a",
+        message_id=queued.id,
+    )
+    await db_session.refresh(queued)
+    assert queued.metadata_json["steering_status"] == "picked_up"
+    assert (
+        await chat_store.pending_steering_messages(
+            db_session,
+            run_id=run.id,
+            worker_id="worker-a",
+        )
+        == []
+    )
+    undelivered = await chat_store.queue_steering_message(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        run_id=run.id,
+        message="This one loses the runtime race.",
+    )
+    assert undelivered is not None
+    assert (
+        await chat_store.finalize_undelivered_steering(
+            db_session,
+            run_id=run.id,
+        )
+        == 1
+    )
+    await db_session.refresh(undelivered)
+    assert undelivered.metadata_json["steering_status"] == "not_delivered"
+    events = await chat_store.list_run_events(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        run_id=run.id,
+    )
+    assert events is not None
+    assert [event.type for event in events] == [
+        "steering_queued",
+        "steering_picked_up",
+        "steering_queued",
+        "steering_not_delivered",
+    ]
+    detail = await chat_store.get_conversation_detail(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        conversation_id=conversation_id,
+    )
+    assert detail is not None
+    assert detail.messages[-2].content == "Focus on retention instead."
+    assert detail.messages[-2].metadata["steering_status"] == "picked_up"
+    assert detail.messages[-1].metadata["steering_status"] == "not_delivered"
 
 
 @pytest.mark.asyncio
@@ -1068,15 +1310,12 @@ async def test_claim_completion_and_final_message_are_idempotent(db_session):
         run_id=run.id,
         worker_id="worker-a",
         content="Revenue increased.",
-        report_action_outcome={
-            "action": "no_suggestion",
-            "artifact_kind": "report",
-            "artifact_filename": "diagnostic.html",
-            "reason": "One-off diagnostic.",
-            "source": "agent",
-            "catalog_scan_complete": True,
-            "catalog_revision": "must-not-be-exposed",
-            "loaded_report_ids": ["must-not-be-exposed"],
+        dashboard_preview={
+            "authoring_session_id": "authoring-session-1",
+            "dashboard_name": "Executive Revenue",
+            "summary": "A governed executive dashboard.",
+            "chart_count": 4,
+            "chart_titles": ["must-not-be-exposed"],
         },
     )
     second = await chat_store.complete_run(
@@ -1086,13 +1325,14 @@ async def test_claim_completion_and_final_message_are_idempotent(db_session):
         content="Duplicate.",
     )
     assert first is not None
-    assert first.metadata_json["report_action_outcome"] == {
-        "action": "no_suggestion",
-        "artifact_kind": "report",
-        "artifact_filename": "diagnostic.html",
-        "reason": "One-off diagnostic.",
-        "source": "agent",
-        "catalog_scan_complete": True,
+    assert "report_action_outcome" not in first.metadata_json
+    assert first.metadata_json["dashboard_preview"] == {
+        "authoring_session_id": "authoring-session-1",
+        "dashboard_name": "Executive Revenue",
+        "summary": "A governed executive dashboard.",
+        "chart_count": 4,
+        "requires_review": True,
+        "apply_required": True,
     }
     assert second is None
     count = await db_session.scalar(
@@ -1191,29 +1431,6 @@ async def test_cancelled_and_failed_runs_leave_inspectable_status_messages(
         limit=1,
         lease_seconds=45,
     )
-    failed_artifact = await chat_store.persist_artifact(
-        db_session,
-        run=failed_run,
-        payload={
-            "kind": "table",
-            "filename": "unvalidated.csv",
-            "mime_type": "text/csv",
-            "snapshot": {
-                "columns": [{"name": "value"}],
-                "rows": [{"value": 1}],
-            },
-        },
-    )
-    failed_artifact.storage_kind = "object"
-    failed_artifact.object_key = "artifacts/unvalidated.csv"
-    failed_artifact.source_object_key = "artifact-sources/unvalidated.csv"
-    await db_session.commit()
-    delete_object = AsyncMock()
-    monkeypatch.setattr(
-        chat_store,
-        "chat_object_storage",
-        lambda: SimpleNamespace(delete=delete_object),
-    )
     assert await chat_store.fail_run(
         db_session,
         run_id=failed_run.id,
@@ -1229,12 +1446,6 @@ async def test_cancelled_and_failed_runs_leave_inspectable_status_messages(
     )
     assert detail is not None
     assert detail.messages[-1].metadata["status"] == "failed"
-    assert all(artifact.id != failed_artifact.id for artifact in detail.artifacts)
-    assert await db_session.get(GatewayChatArtifact, failed_artifact.id) is None
-    assert [call.args[0] for call in delete_object.await_args_list] == [
-        "artifacts/unvalidated.csv",
-        "artifact-sources/unvalidated.csv",
-    ]
     failed_events = await chat_store.list_run_events(
         db_session,
         org_id="org-a",
@@ -1243,6 +1454,37 @@ async def test_cancelled_and_failed_runs_leave_inspectable_status_messages(
     )
     assert failed_events is not None
     assert failed_events[-1].payload == {"status": "failed"}
+
+
+@pytest.mark.asyncio
+async def test_fail_run_preserves_the_complete_upstream_error(db_session):
+    conversation_id, run = await _conversation_and_run(db_session)
+    await chat_store.claim_runs(
+        db_session,
+        worker_id="worker-a",
+        limit=1,
+        lease_seconds=45,
+    )
+    upstream = "provider error: " + ("x" * 2_000)
+
+    assert await chat_store.fail_run(
+        db_session,
+        run_id=run.id,
+        worker_id="worker-a",
+        code="analysis_failed",
+        message=upstream,
+    )
+    detail = await chat_store.get_conversation_detail(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        conversation_id=conversation_id,
+    )
+
+    assert detail is not None
+    assert detail.current_run is not None
+    assert detail.current_run.public_error_message == upstream
+    assert detail.messages[-1].content == upstream
 
 
 @pytest.mark.asyncio
@@ -1362,79 +1604,6 @@ async def test_archive_hides_descendants_without_deleting_them(db_session):
 
 
 @pytest.mark.asyncio
-async def test_artifact_parent_scope_and_immutable_snapshots(db_session):
-    _, run = await _conversation_and_run(db_session)
-    parent = await chat_store.persist_artifact(
-        db_session,
-        run=run,
-        payload={
-            "kind": "table",
-            "filename": "revenue.csv",
-            "mime_type": "text/csv",
-            "snapshot": {
-                "columns": [{"name": "revenue"}],
-                "rows": [{"revenue": 10}],
-            },
-        },
-    )
-    recovered_parent = await chat_store.persist_artifact(
-        db_session,
-        run=run,
-        payload={
-            "kind": "table",
-            "filename": "revenue.csv",
-            "mime_type": "text/csv",
-            "snapshot": {
-                "columns": [{"name": "revenue"}],
-                "rows": [{"revenue": 999}],
-            },
-        },
-    )
-    assert recovered_parent.id == parent.id
-    child = await chat_store.persist_artifact(
-        db_session,
-        run=run,
-        payload={
-            "kind": "table",
-            "filename": "revenue-refined.csv",
-            "mime_type": "text/csv",
-            "parent_artifact_id": parent.id,
-            "snapshot": {
-                "columns": [{"name": "revenue"}],
-                "rows": [{"revenue": 12}],
-            },
-        },
-    )
-    assert child.parent_artifact_id == parent.id
-    stored_parent = await db_session.get(GatewayChatArtifact, parent.id)
-    assert stored_parent is not None
-    assert stored_parent.snapshot_json["rows"] == [{"revenue": 10}]
-    with pytest.raises(ValueError, match="MIME"):
-        await chat_store.persist_artifact(
-            db_session,
-            run=run,
-            payload={
-                "kind": "table",
-                "filename": "bad.csv",
-                "mime_type": "text/html",
-                "snapshot": {"columns": [], "rows": []},
-            },
-        )
-    with pytest.raises(ValueError, match="10 MiB"):
-        await chat_store.persist_artifact(
-            db_session,
-            run=run,
-            payload={
-                "kind": "report",
-                "filename": "oversized.html",
-                "mime_type": "text/html",
-                "snapshot": {"html": "<p>small report</p>"},
-                "provenance": {f"source_{index}": "x" * 20_000 for index in range(530)},
-            },
-        )
-
-
-@pytest.mark.asyncio
 async def test_fresh_runtime_context_includes_durable_derived_result_references(db_session):
     conversation_id, run = await _conversation_and_run(db_session)
     db_session.add(
@@ -1538,7 +1707,10 @@ def test_standalone_session_claims_and_mcp_allowlist(monkeypatch):
         assert standalone_chat_tool_denial("query_database", "production") is None
         assert standalone_chat_tool_denial("plan_query", "production") is None
         assert "outside" in (standalone_chat_tool_denial("query_database", "secondary") or "")
-        assert "unavailable" in (standalone_chat_tool_denial("notion_create_page", None) or "")
+        assert standalone_chat_tool_denial("notion_create_page", None) is None
+        assert standalone_chat_tool_denial("get_knowledge", None) is None
+        assert standalone_chat_tool_denial("propose_knowledge", None) is None
+        assert "unavailable" in (standalone_chat_tool_denial("create_xata_branch", None) or "")
     finally:
         mcp_execution_identity_var.reset(identity_token)
         mcp_allowed_connection_var.reset(connection_token)
@@ -1591,3 +1763,98 @@ async def test_workers_only_claim_runs_from_their_own_runtime_env(db_session, mo
         lease_seconds=45,
     )
     assert claimed_rest == [staging_run.id]
+
+
+@pytest.mark.asyncio
+async def test_fork_copies_conversation_files_under_new_keys(db_session, monkeypatch):
+    """Fork copies every active file row and object with a new key and the same hash."""
+    from gateway.db.models import GatewayChatFile
+    from gateway.standalone_chat.object_storage import StoredObject, conversation_prefix
+
+    conversation_id, run, _ = await _completed_shared_conversation(db_session)
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 8
+    active = await chat_store.upsert_conversation_file(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        conversation_id=conversation_id,
+        path="artifacts/revenue.png",
+        filename="revenue.png",
+        mime_type="image/png",
+        byte_size=len(png),
+        content_hash=hashlib.sha256(png).hexdigest(),
+        object_key=f"{conversation_prefix('org-a', conversation_id)}/files/f1-revenue.png",
+        origin_run_id=run.id,
+        origin="runtime",
+    )
+    await chat_store.upsert_conversation_file(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        conversation_id=conversation_id,
+        path="artifacts/gone.csv",
+        filename="gone.csv",
+        mime_type="text/csv",
+        byte_size=2,
+        content_hash=hashlib.sha256(b"a\n").hexdigest(),
+        object_key="objects/gone.csv",
+        origin_run_id=run.id,
+        origin="runtime",
+    )
+    await chat_store.mark_conversation_file_deleted(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        conversation_id=conversation_id,
+        path="artifacts/gone.csv",
+    )
+    copies: list[tuple[str, str]] = []
+
+    async def _copy(*, source_key: str, destination_key: str) -> StoredObject:
+        copies.append((source_key, destination_key))
+        return StoredObject(
+            key=destination_key, byte_size=len(png), content_hash=hashlib.sha256(png).hexdigest()
+        )
+
+    monkeypatch.setattr(chat_store, "chat_object_storage", lambda: SimpleNamespace(copy=_copy))
+    shared = await chat_store.create_share_grant(
+        db_session, org_id="org-a", user_id="user-a", conversation_id=conversation_id
+    )
+    assert shared is not None
+    _, token = shared
+    fork = await chat_store.fork_shared_conversation(
+        db_session,
+        org_id="org-a",
+        user_id="user-b",
+        token=token,
+        per_query_budget_usd=0.5,
+        chat_budget_usd=2.0,
+    )
+    assert fork is not None
+
+    copied_rows = await chat_store.list_conversation_files(
+        db_session, org_id="org-a", user_id="user-b", conversation_id=fork.id
+    )
+    assert [row.path for row in copied_rows] == ["artifacts/revenue.png"]
+    copied = copied_rows[0]
+    assert copied.id != active.id
+    assert copied.content_hash == active.content_hash
+    assert copied.byte_size == active.byte_size
+    assert copied.kind == "image"
+    assert copied.mime_type == "image/png"
+    assert copied.origin == "fork"
+    assert copied.origin_run_id is None
+    assert copied.object_key != active.object_key
+    assert copied.object_key.startswith(f"{conversation_prefix('org-a', fork.id)}/files/")
+    assert copies == [(active.object_key, copied.object_key)]
+
+    # The source manifest is untouched and the deleted row was not copied.
+    source_rows = (
+        await db_session.execute(
+            select(GatewayChatFile).where(GatewayChatFile.conversation_id == conversation_id)
+        )
+    ).scalars()
+    assert {row.path: row.status for row in source_rows} == {
+        "artifacts/revenue.png": "active",
+        "artifacts/gone.csv": "deleted",
+    }

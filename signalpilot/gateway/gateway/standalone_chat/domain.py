@@ -6,6 +6,18 @@ import re
 from enum import StrEnum
 from typing import Any
 
+_ERROR_SECRET_VALUE_RE = re.compile(
+    r"(?i)(authorization\s*[:=]\s*(?:bearer\s+)?|"
+    r"(?:api[_-]?key|token|secret|password)\s*[:=]\s*)[^\s,;]+"
+)
+_ERROR_TOKEN_LITERAL_RE = re.compile(
+    r"(?i)\b(?:sk-ant-[A-Za-z0-9_-]+|xox[abprs]-[A-Za-z0-9-]+|"
+    r"gh[pousr]_[A-Za-z0-9_]+|sp_[A-Za-z0-9_-]{16,})\b"
+)
+_ERROR_CONNECTION_LITERAL_RE = re.compile(
+    r"(?i)\b(?:postgres(?:ql)?|mysql|snowflake|redshift|clickhouse)://[^\s]+"
+)
+
 
 class RunStatus(StrEnum):
     queued = "queued"
@@ -128,10 +140,20 @@ def redact_public_payload(value: Any) -> Any:
     return value
 
 
+def redact_error_text(raw: str) -> str:
+    """Redact credential values without paraphrasing or truncating an error."""
+    redacted = _ERROR_CONNECTION_LITERAL_RE.sub(
+        "[REDACTED_CONNECTION]", str(raw)
+    )
+    redacted = _ERROR_SECRET_VALUE_RE.sub(
+        lambda match: f"{match.group(1)}[REDACTED]", redacted
+    )
+    return _ERROR_TOKEN_LITERAL_RE.sub("[REDACTED]", redacted)
+
+
 def select_context_for_summary(
     messages: list[dict[str, Any]],
     *,
-    artifact_refs: list[dict[str, Any]],
     usable_context_chars: int,
     threshold: float = 0.60,
     recent_exchange_count: int = 8,
@@ -155,5 +177,4 @@ def select_context_for_summary(
     return {
         "summary": summary,
         "recent_messages": recent,
-        "artifact_refs": artifact_refs,
     }

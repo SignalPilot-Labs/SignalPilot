@@ -23,6 +23,7 @@ import {
   updateWorkspaceProject,
 } from "~/lib/api";
 import type { ConnectionInfo, WorkspaceProjectInfo } from "~/lib/types";
+import { ProjectAutomationSettings } from "~/components/projects/project-automation-settings";
 
 type ProjectReadiness = Awaited<
   ReturnType<typeof getStandaloneChatProjectReadiness>
@@ -271,6 +272,8 @@ export function ProjectConnectionSettings({ projectId }: { projectId: string }) 
           </div>
         </div>
       </section>
+
+      <ProjectAutomationSettings project={project} onProjectUpdated={setProject} />
     </div>
   );
 }

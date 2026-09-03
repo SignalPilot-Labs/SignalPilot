@@ -46,6 +46,20 @@ def runtime_object_key(
     )
 
 
+def conversation_file_key(
+    *,
+    org_id: str,
+    conversation_id: str,
+    file_id: str,
+    filename: str,
+) -> str:
+    """Key for one durable conversation file under the conversation prefix."""
+    return (
+        f"{conversation_prefix(org_id, conversation_id)}"
+        f"/files/{_key_part(file_id, fallback='file')}-{_key_part(filename, fallback='payload')}"
+    )
+
+
 @dataclass(frozen=True)
 class StoredObject:
     key: str
@@ -187,6 +201,15 @@ class ChatObjectStorage:
             "get_object",
             Params={"Bucket": self.bucket, "Key": key},
             ExpiresIn=min(300, max(30, expires_seconds)),
+        )
+
+    async def presign_put(self, key: str, *, expires_seconds: int = 3600) -> str:
+        client = self._require_client()
+        return await asyncio.to_thread(
+            client.generate_presigned_url,
+            "put_object",
+            Params={"Bucket": self.bucket, "Key": key},
+            ExpiresIn=min(3600, max(30, expires_seconds)),
         )
 
     async def multipart_writer(self, *, key: str, content_type: str) -> MultipartUploadWriter:

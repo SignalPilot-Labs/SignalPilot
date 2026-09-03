@@ -142,6 +142,22 @@ class TestBindingSurvivesValidation:
         scoped = await get_store(request, ORG, "eval", db_session)
         assert scoped.eval_connection == PINNED
 
+    async def test_rest_store_retains_the_verified_chat_execution_identity(self, db_session) -> None:
+        from gateway.api.deps import get_store
+
+        request = SimpleNamespace(
+            state=SimpleNamespace(
+                auth={},
+                _jwt_claims={
+                    "execution_identity": "chat:run-1",
+                    "connection_name": PINNED,
+                },
+            )
+        )
+        scoped = await get_store(request, ORG, "user-1", db_session)
+        assert scoped.execution_identity == "chat:run-1"
+        assert scoped.allowed_connection_name == PINNED
+
     async def test_local_no_key_cannot_bypass_an_active_eval_key(
         self, store: Store, session_factory, monkeypatch
     ) -> None:

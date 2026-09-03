@@ -1,8 +1,22 @@
 import type { NextConfig } from "next";
 
+// `output: "standalone"` exists only so Dockerfile.web can copy
+// .next/standalone. Vercel builds its own serverless output and must not have
+// it set: on Vercel the standalone copy step looks for
+// .next/next-server.js.nft.json, which is not emitted there, and the build
+// dies with ENOENT after "Running onBuildComplete".
 const nextConfig: NextConfig = {
-  output: "standalone",
+  output: process.env.VERCEL ? undefined : "standalone",
   poweredByHeader: false,
+  async redirects() {
+    return [
+      {
+        source: "/dashboards/new",
+        destination: "/chats",
+        permanent: false,
+      },
+    ];
+  },
   serverExternalPackages: [
     "@tailwindcss/oxide",
     "lightningcss",

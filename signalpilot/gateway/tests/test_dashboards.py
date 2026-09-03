@@ -100,6 +100,7 @@ def _authorities():
         project_id="project-a",
         commit_sha="a" * 40,
         connection_name="warehouse",
+        connection_type="mssql",
         project_map=project_map,
         physical_schema=schema,
         semantic_model={
@@ -109,6 +110,25 @@ def _authorities():
         },
         approved_metrics=metrics,
     )
+
+
+def test_approved_metric_number_format_is_canonicalized_for_dashboard_rendering() -> None:
+    metrics = parse_approved_metrics(
+        {
+            "dashboard_metrics": [
+                {
+                    "model": "orders",
+                    "column": "quantity",
+                    "aggregation": "sum",
+                    "label": "Orders",
+                    "format": "number",
+                    "approved": True,
+                }
+            ]
+        }
+    )
+
+    assert metrics[0]["format"] == "decimal"
 
 
 def _fixture_definition() -> DashboardDefinition:
@@ -548,6 +568,7 @@ def test_custom_sql_filters_only_declared_output_bindings_with_bound_values() ->
     )
     compiled = compile_custom_sql_query(
         query,
+        dialect="mssql",
         runtime_filters=[
             FilterRule(id="region", operator="equals", values=["North"], target=FieldTarget(fieldId="orders.region"))
         ],

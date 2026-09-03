@@ -24,3 +24,33 @@ jobs:
             -f event_type="deploy-${GITHUB_REF_NAME}" \
             -F 'client_payload[sha]=${{ github.sha }}' \
             -F "client_payload[ref]=${GITHUB_REF_NAME}"
+
+      - name: Dispatch notebook image build if notebook-server changed
+        env:
+          GH_TOKEN: ${{ secrets.DEPLOY_DISPATCH_TOKEN }}
+        run: |
+          BEFORE="${{ github.event.before }}"
+          if [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+            echo "new branch push — building notebook image to be safe"
+            NEEDS_BUILD=1
+          else
+            FILES=$(gh api "repos/${{ github.repository }}/compare/$BEFORE...${{ github.sha }}" --jq '.files[].filename')
+            COUNT=$(echo "$FILES" | grep -c . || true)
+            CHANGED=$(echo "$FILES" | grep -E '^signalpilot/notebook-server/|^scripts/build-notebook-image-vercel.sh' || true)
+            if [ -n "$CHANGED" ]; then
+              echo "notebook-server files changed:"; echo "$CHANGED" | head -10
+              NEEDS_BUILD=1
+            elif [ "$COUNT" -ge 300 ]; then
+              # compare API truncates at 300 files; can't rule out notebook changes
+              echo "diff too large to inspect ($COUNT files) — building notebook image to be safe"
+              NEEDS_BUILD=1
+            else
+              echo "no notebook-server changes — skipping image build"
+              NEEDS_BUILD=0
+            fi
+          fi
+          if [ "$NEEDS_BUILD" = "1" ]; then
+            gh api repos/SignalPilot-Labs/deployment/dispatches \
+              -f event_type="build-notebook-${GITHUB_REF_NAME}" \
+              -F 'client_payload[sha]=${{ github.sha }}'
+          fi

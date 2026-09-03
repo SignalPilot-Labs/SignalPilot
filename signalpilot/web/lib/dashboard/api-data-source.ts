@@ -44,6 +44,7 @@ export type DashboardQueryReceipt = {
   tables: string[];
   semantic_definition: Record<string, unknown>;
   compiled_sql: string | null;
+  connection_type?: string | null;
   cache_state: DashboardResultState;
   refresh_failure?: DashboardFailurePayload | null;
 };

@@ -61,7 +61,10 @@ import { RuntimeState } from "./kernel/RuntimeState";
 import { getSessionId, setSessionId } from "./kernel/session";
 import { useTogglePresenting } from "./layout/useTogglePresenting";
 import { viewStateAtom } from "./mode";
+import { connectionAtom } from "./network/connection";
 import { useRequestClient } from "./network/requests";
+import { getRuntimeManager } from "./runtime/config";
+import { WebSocketState } from "./websocket/types";
 import { useFilename } from "./saving/filename";
 import { setDocumentTitle } from "./dom/document-title";
 import { lastSavedNotebookAtom } from "./saving/state";
@@ -174,6 +177,37 @@ export const EditApp: React.FC<AppProps> = ({
       activeTab?.type === "raw" ||
       (!activeTab && initialRawFallback),
   });
+
+  // Speculative sandbox prewarm: opening a notebook is itself the intent
+  // signal — start the kernel in the background as soon as the notebook
+  // editor is active, so the cold boot (~5-10s) is usually done before the
+  // first Run is pressed. The launch state machine keeps the run button and
+  // status UI in sync with this background launch (a Run mid-prewarm simply
+  // adopts it). Fire-and-forget — a failure here is invisible; the Run
+  // click provisions again through the normal path.
+  const notebookEditorActive =
+    fileNavigationReady &&
+    activeTab?.type !== "raw" &&
+    !(!activeTab && initialRawFallback);
+  const prewarmFired = useRef(false);
+  useEffect(() => {
+    if (!notebookEditorActive || prewarmFired.current) {
+      return;
+    }
+    const runtimeManager = getRuntimeManager();
+    if (
+      !runtimeManager.isLazy ||
+      store.get(connectionAtom).state !== WebSocketState.NOT_STARTED
+    ) {
+      return;
+    }
+    prewarmFired.current = true;
+    void import("@/core/runtime/launch-state").then(({ launchRuntime }) =>
+      launchRuntime("prewarm").catch(() => {
+        /* silent — the Run click retries via the normal provisioning path */
+      }),
+    );
+  }, [notebookEditorActive]);
 
   // Update document title whenever filename or app_title changes
   useEffect(() => {
@@ -434,6 +468,21 @@ export const EditApp: React.FC<AppProps> = ({
     currentWsPath.current = newPath;
 
     if (wasNull) {return;}
+
+    // No kernel (sessionless boot, or a lazy runtime whose session ended):
+    // load the target notebook straight from the gateway store instead of
+    // bouncing the WS — there is nothing on the other end to reconnect to.
+    const connState = store.get(connectionAtom).state;
+    if (
+      connState === WebSocketState.NOT_STARTED ||
+      (connState === WebSocketState.CLOSED && getRuntimeManager().isLazy)
+    ) {
+      console.log("[TAB-SWITCH] sessionless load:", newPath.slice(-40));
+      void import("./notebook-file/load-sessionless").then(
+        ({ loadNotebookSessionless }) => loadNotebookSessionless(newPath),
+      );
+      return;
+    }
 
     console.log("[WS-RECONNECT] path changed:", newPath.slice(-40), "wasNull:", wasNull);
     store.set(isSwitchingNotebookAtom, true);

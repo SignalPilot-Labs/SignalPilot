@@ -17,10 +17,12 @@ from gateway.governance.query_planner import (
     MCP_MAX_ROWS,
     TRACK_A_MAX_ROWS,
     UNKNOWN_SCOUT_ROWS,
+    QueryPlanDecision,
     QueryPlanError,
     _approval_required,
     _policy_hash,
     choose_query_route,
+    create_query_plan,
     require_execution_plan,
 )
 from gateway.standalone_chat.artifacts import normalize_table_snapshot, table_to_csv
@@ -29,6 +31,87 @@ from gateway.standalone_chat.object_storage import (
     conversation_prefix,
     runtime_object_key,
 )
+
+
+def test_agent_plan_decision_contains_only_actionable_fields() -> None:
+    decision = QueryPlanDecision(
+        plan_id="internal-plan",
+        sql_hash="a" * 64,
+        estimated_scan_rows=None,
+        estimated_scan_bytes=None,
+        estimated_output_rows=None,
+        estimated_output_bytes=None,
+        estimated_cost_usd=0,
+        estimate_quality="unknown",
+        route="mcp",
+        route_reason="internal audit explanation",
+        approval_required=False,
+        expires_at=datetime.now(UTC),
+        scout_row_limit=None,
+        shadow=True,
+    )
+
+    assert decision.as_agent_dict() == {
+        "route": "mcp",
+        "approval_required": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_disabled_router_skips_estimation_and_shadow_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from gateway.governance import query_planner
+
+    monkeypatch.delenv("SP_FEATURE_CHAT_SIZE_ROUTER", raising=False)
+    monkeypatch.delenv("SP_FEATURE_CHAT_QUERY_APPROVAL", raising=False)
+    monkeypatch.setattr(
+        query_planner,
+        "load_annotations",
+        lambda _org_id, _connection: SimpleNamespace(blocked_tables=[]),
+    )
+
+    class Session:
+        def add(self, _row) -> None:
+            pass
+
+        async def commit(self) -> None:
+            pass
+
+    class Store:
+        user_id = "user-a"
+        session = Session()
+
+        def _require_org_id(self) -> str:
+            return "org-a"
+
+        async def get_connection(self, _name: str):
+            return SimpleNamespace(db_type="postgres")
+
+        async def load_settings(self):
+            return SimpleNamespace(blocked_tables=[])
+
+        async def get_connection_string(self, _name: str):
+            raise AssertionError("disabled routing must not run an estimate")
+
+    decision = await create_query_plan(
+        Store(),  # type: ignore[arg-type]
+        connection_name="production",
+        sql="select 1",
+        purpose="test transparent planning",
+        context=GovernedQueryContext(
+            path="mcp",
+            conversation_id="conversation-a",
+            run_id="run-a",
+            project_id="project-a",
+            commit_sha="a" * 40,
+            branch="main",
+        ),
+    )
+
+    assert decision.route == "mcp"
+    assert decision.shadow is False
+    assert decision.estimate_quality == "unknown"
 
 
 def _route(
@@ -41,7 +124,6 @@ def _route(
     supported: bool = True,
     justified: bool = False,
     raw_export: bool = False,
-    notebook_analysis: bool = True,
 ):
     return choose_query_route(
         execution_need=execution_need,  # type: ignore[arg-type]
@@ -52,7 +134,6 @@ def _route(
         connector_supports_datasets=supported,
         row_level_analysis_justified=justified,
         raw_export_requested=raw_export,
-        notebook_analysis_enabled=notebook_analysis,
     )
 
 
@@ -206,34 +287,6 @@ def test_track_b_requires_flag_connector_support_and_row_level_justification():
         justified=True,
         raw_export=True,
     )[0] == "refuse"
-
-
-@pytest.mark.parametrize("execution_need", ["sql", "python"])
-def test_notebook_routes_are_not_selected_when_notebook_analysis_is_disabled(
-    execution_need,
-):
-    assert _route(
-        rows=MCP_MAX_ROWS + 1,
-        byte_size=1,
-        execution_need=execution_need,
-        notebook_analysis=False,
-    ) == (
-        "aggregate_required",
-        "Notebook analysis is disabled; rewrite the work as a bounded warehouse aggregate.",
-        None,
-    )
-
-    assert (
-        _route(
-            rows=TRACK_A_MAX_ROWS + 1,
-            byte_size=1,
-            track_b=True,
-            supported=True,
-            justified=True,
-            notebook_analysis=False,
-        )[0]
-        == "aggregate_required"
-    )
 
 
 def test_routes_are_deterministic_for_identical_inputs():

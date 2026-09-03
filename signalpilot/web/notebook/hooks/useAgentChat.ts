@@ -20,8 +20,14 @@ export interface AgentToolCall {
 }
 
 export interface UseAgentChatOptions {
-  baseUrl: string;
+  /** Agent API base. A thunk re-resolves per call — required for lazy
+   * runtimes, whose URL changes when the sandbox is provisioned. */
+  baseUrl: string | (() => string);
   headers: () => Record<string, string> | Promise<Record<string, string>>;
+  /** Bring the runtime up before agent calls (lazy provisioning). The agent
+   * lives on the sandbox, so sending a message is a "start the runtime"
+   * intent exactly like clicking Run. */
+  ensureRuntime?: () => Promise<void>;
   getActiveFile?: () => string | null;
   includeNotionConversations?: boolean;
   initialSessionId?: string | null;
@@ -142,6 +148,7 @@ function deserializeMessages(
 export function useAgentChat({
   baseUrl,
   headers,
+  ensureRuntime,
   getActiveFile,
   includeNotionConversations = false,
   initialSessionId = null,
@@ -160,6 +167,11 @@ export function useAgentChat({
   const [isLoadingSessions, setIsLoadingSessions] = useState(true);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+
+  const resolveBaseUrl = useCallback(
+    () => (typeof baseUrl === "function" ? baseUrl() : baseUrl),
+    [baseUrl],
+  );
 
   // The underlying headers() may be async (e.g. when an auth token must be resolved).
   const getHeaders = useCallback(async (): Promise<Record<string, string>> => {
@@ -384,7 +396,7 @@ export function useAgentChat({
       return instanceIdRef.current;
     }
 
-    const resp = await fetch(`${baseUrl}/create`, {
+    const resp = await fetch(`${resolveBaseUrl()}/create`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...hdrs },
       body: JSON.stringify({
@@ -473,6 +485,8 @@ export function useAgentChat({
       abortRef.current = abort;
 
       try {
+        // Lazy runtime: the agent runs on the sandbox — provision it first.
+        await ensureRuntime?.();
         const hdrs = await getHeaders();
         const instanceId = await ensureInstance(hdrs);
 
@@ -487,7 +501,7 @@ export function useAgentChat({
           content: m.content,
         }));
 
-        const response = await fetch(`${baseUrl}/message`, {
+        const response = await fetch(`${resolveBaseUrl()}/message`, {
           method: "POST",
           headers: { "Content-Type": "application/json", ...hdrs },
           body: JSON.stringify({
@@ -578,7 +592,7 @@ export function useAgentChat({
         newChatRef.current = false;
       }
     },
-    [baseUrl, headers, messages],
+    [resolveBaseUrl, ensureRuntime, headers, messages],
   );
 
   function handleEvent(event: {
@@ -704,7 +718,7 @@ export function useAgentChat({
       const instanceId = instanceIdRef.current;
       getHeaders()
         .then((hdrs) => {
-          fetch(`${baseUrl}/stop`, {
+          fetch(`${resolveBaseUrl()}/stop`, {
             method: "POST",
             headers: { "Content-Type": "application/json", ...hdrs },
             body: JSON.stringify({ instanceId }),
@@ -724,7 +738,7 @@ export function useAgentChat({
         ),
       );
     }
-  }, [baseUrl, headers]);
+  }, [resolveBaseUrl, headers]);
 
   return {
     messages,

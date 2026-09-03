@@ -135,6 +135,7 @@ async def explore_column(
         null_count = stats.get("null_count", 0) or 0
         null_pct = round(null_count / max(total_rows, 1) * 100, 1)
 
+        # Format parsed by standalone_chat/tool_projection/schema.py; update tests there if you change this
         lines = [f"Column: {table_key}.{column}"]
         lines.append(f"Total rows: {total_rows:,}")
         lines.append(f"Distinct values: {stats.get('distinct_count', 0) or 0:,}")

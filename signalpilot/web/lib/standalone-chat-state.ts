@@ -13,7 +13,7 @@ export type OptimisticUserMessage = {
 };
 
 export type StandaloneRunActivity = {
-  phase: "analyzing" | "running_cells" | "fixing_query";
+  phase: "starting_runtime" | "analyzing" | "running_cells" | "fixing_query";
   label: string;
   detail: string;
 };
@@ -58,6 +58,22 @@ export function deriveStandaloneRunActivity(
         label: "Fixing query",
         detail: "Reviewing an execution error",
       };
+      continue;
+    }
+
+    if (event.type === "runtime_boot") {
+      const phase = eventString(event, "phase");
+      activity =
+        phase === "ready"
+          ? DEFAULT_RUN_ACTIVITY
+          : {
+              phase: "starting_runtime",
+              label:
+                phase === "resuming"
+                  ? "Waking your workspace"
+                  : "Starting secure runtime",
+              detail: "Preparing an isolated sandbox for this conversation",
+            };
       continue;
     }
 
@@ -357,6 +373,20 @@ export function applyStandaloneChatEvent(
 ): StandaloneConversationDetail {
   const status = event.type === "status" ? eventRunStatus(event) : null;
   const appliesToCurrentRun = detail.current_run?.id === event.run_id;
+  const steeringMessageId =
+    event.type === "steering_queued" ||
+    event.type === "steering_picked_up" ||
+    event.type === "steering_not_delivered"
+      ? event.payload.message_id
+      : null;
+  const steeringStatus =
+    event.type === "steering_queued"
+      ? "queued"
+      : event.type === "steering_picked_up"
+        ? "picked_up"
+        : event.type === "steering_not_delivered"
+          ? "not_delivered"
+        : null;
   return {
     ...detail,
     conversation:
@@ -373,6 +403,20 @@ export function applyStandaloneChatEvent(
           ),
         }
       : detail.current_run,
+    messages:
+      typeof steeringMessageId === "string" && steeringStatus
+        ? detail.messages.map((message) =>
+            message.id === steeringMessageId
+              ? {
+                  ...message,
+                  metadata: {
+                    ...message.metadata,
+                    steering_status: steeringStatus,
+                  },
+                }
+              : message,
+          )
+        : detail.messages,
     run_events: mergeStandaloneChatEvents(detail.run_events, [event]),
   };
 }

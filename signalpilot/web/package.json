@@ -9,8 +9,9 @@
     "start": "next start --port 3200",
     "lint": "next lint",
     "test:unit": "vitest run",
+    "check:connections-size": "node scripts/check-connection-file-sizes.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "release:check": "npm run typecheck && npm run test:unit && npm run build"
+    "release:check": "npm run check:connections-size && npm run typecheck && npm run test:unit && npm run build"
   },
   "dependencies": {
     "@anywidget/types": "^0.2.0",
@@ -125,8 +126,9 @@
     "react-grid-layout": "^1.5.3",
     "react-hook-form": "7.54.2",
     "react-markdown": "^9.1.0",
-    "react-responsive-carousel": "^3.2.23",
+    "react-resizable": "^3.2.0",
     "react-resizable-panels": "2.1.9",
+    "react-responsive-carousel": "^3.2.23",
     "react-use-event-hook": "^0.9.6",
     "react-vega": "^8.0.0",
     "react-virtuoso": "^4.18.1",
@@ -159,6 +161,8 @@
     "zustand": "5.0.14"
   },
   "devDependencies": {
+    "@clerk/testing": "^2.2.31",
+    "@clerk/types": "^4.101.24",
     "@playwright/test": "^1.60.0",
     "@tailwindcss/postcss": "^4.0.0",
     "@types/lodash-es": "^4.17.12",
@@ -174,17 +178,17 @@
     "raw-loader": "^4.0.2",
     "tailwindcss": "^4.0.0",
     "typescript": "^5",
+    "vega-typings": "^2.1.0",
     "vitest": "^4.1.10"
   },
   "optionalDependencies": {
-    "lightningcss-darwin-arm64": "1.32.0",
-    "lightningcss-darwin-x64": "1.32.0",
-    "lightningcss-linux-arm64-gnu": "1.32.0",
-    "lightningcss-linux-arm64-musl": "1.32.0",
-    "lightningcss-linux-x64-gnu": "1.32.0",
-    "lightningcss-linux-x64-musl": "1.32.0",
-    "lightningcss-win32-arm64-msvc": "1.32.0",
-    "lightningcss-win32-x64-msvc": "1.32.0",
+    "@img/sharp-darwin-arm64": "0.35.3",
+    "@img/sharp-darwin-x64": "0.35.3",
+    "@img/sharp-linux-arm64": "0.35.3",
+    "@img/sharp-linux-x64": "0.35.3",
+    "@img/sharp-linuxmusl-arm64": "0.35.3",
+    "@img/sharp-linuxmusl-x64": "0.35.3",
+    "@img/sharp-win32-x64": "0.35.3",
     "@tailwindcss/oxide-darwin-arm64": "4.2.4",
     "@tailwindcss/oxide-darwin-x64": "4.2.4",
     "@tailwindcss/oxide-linux-arm64-gnu": "4.2.4",
@@ -193,13 +197,14 @@
     "@tailwindcss/oxide-linux-x64-musl": "4.2.4",
     "@tailwindcss/oxide-win32-arm64-msvc": "4.2.4",
     "@tailwindcss/oxide-win32-x64-msvc": "4.2.4",
-    "@img/sharp-darwin-arm64": "0.35.3",
-    "@img/sharp-darwin-x64": "0.35.3",
-    "@img/sharp-linux-arm64": "0.35.3",
-    "@img/sharp-linux-x64": "0.35.3",
-    "@img/sharp-linuxmusl-arm64": "0.35.3",
-    "@img/sharp-linuxmusl-x64": "0.35.3",
-    "@img/sharp-win32-x64": "0.35.3"
+    "lightningcss-darwin-arm64": "1.32.0",
+    "lightningcss-darwin-x64": "1.32.0",
+    "lightningcss-linux-arm64-gnu": "1.32.0",
+    "lightningcss-linux-arm64-musl": "1.32.0",
+    "lightningcss-linux-x64-gnu": "1.32.0",
+    "lightningcss-linux-x64-musl": "1.32.0",
+    "lightningcss-win32-arm64-msvc": "1.32.0",
+    "lightningcss-win32-x64-msvc": "1.32.0"
   },
   "overrides": {
     "@babel/core": "7.29.7",

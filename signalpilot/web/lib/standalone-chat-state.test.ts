@@ -26,6 +26,8 @@ function detailFixture(): StandaloneConversationDetail {
       updated_at: 100,
       run_status: null,
       commit_sha: "abc123",
+      model: "claude-opus-5",
+      effort: "medium",
       per_query_budget_usd: 0.25,
       chat_budget_usd: 1,
       estimated_spend_usd: 0,
@@ -33,13 +35,51 @@ function detailFixture(): StandaloneConversationDetail {
       reserved_spend_usd: 0,
     },
     messages: [],
-    artifacts: [],
     current_run: null,
     run_events: [],
   };
 }
 
 describe("standalone chat state", () => {
+  it("marks a queued steering message as picked up in place", () => {
+    const detail = detailFixture();
+    detail.current_run = {
+      id: "run-1",
+      conversation_id: detail.conversation.id,
+      status: "running",
+      retry_of_run_id: null,
+      public_error_code: null,
+      public_error_message: null,
+      cancellation_requested_at: null,
+      created_at: "2026-08-28T12:00:00Z",
+      started_at: "2026-08-28T12:00:01Z",
+      terminal_at: null,
+      last_event_sequence: 1,
+      runtime_archive_available: false,
+    };
+    detail.messages = [
+      {
+        id: "message-1",
+        role: "user",
+        content: "Use weekly data",
+        sequence: 2,
+        created_at: 100,
+        metadata: { steering_status: "queued" },
+      },
+    ];
+
+    const updated = applyStandaloneChatEvent(detail, {
+      run_id: "run-1",
+      sequence: 2,
+      type: "steering_picked_up",
+      payload: { message_id: "message-1", status: "picked_up" },
+      created_at: "2026-08-28T12:00:02Z",
+    });
+
+    expect(updated.messages[0].metadata.steering_status).toBe("picked_up");
+    expect(updated.messages[0].content).toBe("Use weekly data");
+  });
+
   it("turns runtime events into useful live analysis stages", () => {
     const event = (
       sequence: number,

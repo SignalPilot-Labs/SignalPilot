@@ -25,6 +25,7 @@ and every S3 write happens through WorkspaceStore's CAS commit.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import os
@@ -107,17 +108,27 @@ def _run_git_bytes(
     return result.returncode, result.stdout, result.stderr
 
 
+# Build artifacts and dependency trees are never part of the saved working
+# copy — importing them would bloat every revision and slow the initial sync.
+_IMPORT_SKIP_DIRS = {"target", "dbt_packages", "node_modules", ".venv", ".git"}
+
+
+def _is_skipped_path(path: str) -> bool:
+    return any(seg in _IMPORT_SKIP_DIRS for seg in path.split("/"))
+
+
 def _read_repo_tree(rp: Path, ref: str) -> dict[str, tuple[bytes, int]]:
     """Read every blob reachable from `ref` in the bare repo.
 
     Returns {path: (content, mode)} with mode collapsed to 0o755/0o644.
-    Plumbing only — no checkout, no temp clone.
+    Plumbing only — no checkout, no temp clone. All blobs are fetched through
+    a single `git cat-file --batch` process instead of one subprocess per file.
     """
     rc, out, err = _run_git_bytes("ls-tree", "-r", "-z", ref, cwd=rp)
     if rc != 0:
         raise GitHubImportError(f"git ls-tree {ref} failed: {err.decode(errors='replace').strip()}")
 
-    files: dict[str, tuple[bytes, int]] = {}
+    entries: list[tuple[str, str, int]] = []  # (path, sha, mode)
     for record in out.split(b"\x00"):
         if not record:
             continue
@@ -129,13 +140,49 @@ def _read_repo_tree(rp: Path, ref: str) -> dict[str, tuple[bytes, int]]:
         if obj_type != "blob":
             continue  # submodules (commit) have no bytes to import
         path = raw_path.decode("utf-8")
-        rc, blob, err = _run_git_bytes("cat-file", "blob", sha, cwd=rp)
-        if rc != 0:
-            raise GitHubImportError(
-                f"git cat-file blob {sha} failed: {err.decode(errors='replace').strip()}"
-            )
+        if _is_skipped_path(path):
+            continue
         mode = 0o755 if git_mode == _EXECUTABLE_GIT_MODE else 0o644
-        files[path] = (blob, mode)
+        entries.append((path, sha, mode))
+
+    if not entries:
+        return {}
+
+    # One batch process for all blobs. Blobs can repeat across paths; request
+    # each sha once. Output framing: "<sha> blob <size>\n<content>\n" per object.
+    unique_shas = list(dict.fromkeys(sha for _, sha, _ in entries))
+    rc, out, err = _run_git_bytes(
+        "cat-file", "--batch", cwd=rp,
+        input_bytes=("\n".join(unique_shas) + "\n").encode(),
+        timeout=600,
+    )
+    if rc != 0:
+        raise GitHubImportError(
+            f"git cat-file --batch failed: {err.decode(errors='replace').strip()}"
+        )
+
+    blobs: dict[str, bytes] = {}
+    pos = 0
+    for _ in unique_shas:
+        nl = out.find(b"\n", pos)
+        if nl < 0:
+            raise GitHubImportError("git cat-file --batch output truncated (header)")
+        header = out[pos:nl].decode(errors="replace").split(" ")
+        if len(header) != 3 or header[1] != "blob":
+            raise GitHubImportError(f"git cat-file --batch unexpected header: {' '.join(header)}")
+        sha, size = header[0], int(header[2])
+        start = nl + 1
+        end = start + size
+        if end > len(out):
+            raise GitHubImportError("git cat-file --batch output truncated (content)")
+        blobs[sha] = out[start:end]
+        pos = end + 1  # trailing newline after each object
+
+    files: dict[str, tuple[bytes, int]] = {}
+    for path, sha, mode in entries:
+        if sha not in blobs:
+            raise GitHubImportError(f"git cat-file --batch missing blob {sha} for {path}")
+        files[path] = (blobs[sha], mode)
     return files
 
 
@@ -149,6 +196,7 @@ async def import_repo_to_revisions(
     org_id: str,
     project_id: str,
     branch: str | None = None,
+    progress_cb=None,
 ) -> ImportResult:
     """Commit the bare repo's tree at the branch head as the next S3 revision.
 
@@ -167,7 +215,7 @@ async def import_repo_to_revisions(
     if commit_sha is None:
         raise GitHubImportError(f"Branch {branch!r} not found in bare repo for {project_id}")
 
-    repo_files = _read_repo_tree(rp, f"refs/heads/{branch}")
+    repo_files = await asyncio.to_thread(_read_repo_tree, rp, f"refs/heads/{branch}")
 
     store = WorkspaceStore(storage)
     head = await store.head_revision(db, org_id=org_id, project_id=project_id, branch=branch)
@@ -204,6 +252,7 @@ async def import_repo_to_revisions(
         deletes=deletes,
         created_by="github-import",
         message=f"Import from GitHub {branch}@{commit_sha[:12]}",
+        progress_cb=progress_cb,
     )
     logger.info(
         "Imported %s@%s (%s) into workspace revision %s (%d upserts, %d deletes)",

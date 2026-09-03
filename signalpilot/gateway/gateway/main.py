@@ -210,10 +210,18 @@ async def lifespan(app: FastAPI):
                         token = current_org_id_var.set(conn_info.org_id)
                         try:
                             inner_store = Store(session, org_id=conn_info.org_id)
-                            conn_str = await inner_store.get_connection_string(conn_info.name)
+                            # A single row with undecryptable credentials must
+                            # not abort the sweep for every other connection.
+                            try:
+                                conn_str = await inner_store.get_connection_string(conn_info.name)
+                                extras = await inner_store.get_credential_extras(conn_info.name)
+                            except Exception as e:
+                                logger.debug(
+                                    "Health ping skipped for %s: %s", conn_info.name, e
+                                )
+                                continue
                             if not conn_str:
                                 continue
-                            extras = await inner_store.get_credential_extras(conn_info.name)
                             start = time.monotonic()
                             try:
                                 async with pool_manager.connection(
@@ -453,6 +461,19 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning("Eval retention loop error: %s", e)
 
+    async def _dbt_map_reaper_loop():
+        """Fail dbt-map compiles whose lease died with a previous process."""
+        from .dbt_map.runner import reap_stale_compiles
+
+        while True:
+            await asyncio.sleep(120)
+            try:
+                reaped = await reap_stale_compiles()
+                if reaped:
+                    logger.warning("dbt-map reaper: failed %d stale compile(s)", reaped)
+            except Exception as e:
+                logger.warning("dbt-map reaper loop error: %s", e)
+
     async def _improvement_schedule_loop():
         """Seed due daily improvement runs every minute.
 
@@ -480,6 +501,22 @@ async def lifespan(app: FastAPI):
     eval_reaper_task = asyncio.create_task(_eval_reaper_loop())
     eval_retention_task = asyncio.create_task(_eval_retention_loop())
     improvement_schedule_task = asyncio.create_task(_improvement_schedule_loop())
+    dbt_map_reaper_task = asyncio.create_task(_dbt_map_reaper_loop())
+
+    async def _repo_mirror_reconcile_startup() -> None:
+        # Heal any GitHub-linked project whose bare mirror is missing (reset
+        # repos volume, failed import clone, container remount) so users never
+        # hit "the production branch is not available". One-shot, best-effort,
+        # slightly delayed so it never slows startup.
+        await asyncio.sleep(15)
+        try:
+            from .git.sync import reconcile_all_repo_mirrors
+
+            await reconcile_all_repo_mirrors()
+        except Exception as e:
+            logger.warning("repo mirror reconcile failed: %s", e)
+
+    repo_reconcile_task = asyncio.create_task(_repo_mirror_reconcile_startup())
 
     # Start MCP session manager if mounted
     mcp_ctx = None
@@ -536,6 +573,8 @@ async def lifespan(app: FastAPI):
         eval_reaper_task.cancel()
         eval_retention_task.cancel()
         improvement_schedule_task.cancel()
+        dbt_map_reaper_task.cancel()
+        repo_reconcile_task.cancel()
         await pool_manager.close_all()
         dek_cache.clear()
         await close_db()

@@ -1,0 +1,264 @@
+"""Persistence authority for standalone data chat and authenticated sharing.
+
+This package replaces the old single-file module. It keeps the same public
+namespace. Import every name from here, not from the submodules.
+"""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import secrets
+import time
+import uuid
+from contextlib import suppress
+from datetime import UTC, datetime, timedelta
+from typing import Any, Literal
+
+from sqlalchemy import and_, delete, func, or_, select, update
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from gateway.connectors.schema_cache import _schema_fingerprint, schema_cache
+from gateway.db.models import (
+    GatewayChatArtifact,
+    GatewayChatConversation,
+    GatewayChatMessage,
+    GatewayChatObjectDeletion,
+    GatewayChatRun,
+    GatewayChatRunEvent,
+    GatewayChatShareGrant,
+    GatewayChatUserPreference,
+    GatewayGovernedQueryExecution,
+    GatewayQueryApproval,
+    GatewayQueryProposal,
+    GatewayReportRefresh,
+    GatewayRuntimeDataset,
+    GatewaySavedReport,
+    GatewaySavedReportVersion,
+    GatewayStructuredQueryResult,
+    GatewayWorkspaceProject,
+)
+from gateway.models.standalone_chat import (
+    ChatRunEventInfo,
+    ChatRunInfo,
+    SharedConversationDetail,
+    SharedConversationInfo,
+    SharedMessageInfo,
+    StandaloneConversationDetail,
+    StandaloneConversationInfo,
+    StandaloneMessageInfo,
+)
+from gateway.standalone_chat import config as chat_config
+from gateway.standalone_chat.artifacts import (
+    normalize_table_snapshot,
+    safe_filename,
+    table_to_csv,
+)
+from gateway.standalone_chat.config import enterprise_chat_feature_flags
+from gateway.standalone_chat.domain import (
+    NONTERMINAL_RUN_STATUSES,
+    TERMINAL_RUN_STATUSES,
+    RunStatus,
+    assert_run_transition,
+    fallback_conversation_title,
+    redact_public_payload,
+)
+from gateway.standalone_chat.object_storage import chat_object_storage, conversation_prefix, runtime_object_key
+from gateway.store.standalone_chat.conversations import (
+    archive_conversation,
+    create_conversation_with_run,
+    create_empty_conversation,
+    get_conversation_detail,
+    list_conversations,
+    rename_conversation,
+    update_conversation_effort,
+    update_conversation_model,
+    update_internal_summary,
+)
+from gateway.store.standalone_chat.files import (
+    conversation_file_usage,
+    derive_file_kind,
+    get_conversation_file,
+    get_conversation_file_by_path,
+    get_shared_conversation_file,
+    list_conversation_files,
+    list_shared_conversation_files,
+    mark_conversation_file_deleted,
+    upsert_conversation_file,
+)
+from gateway.store.standalone_chat.helpers import (
+    _append_status_message,
+    _event_info,
+    _message_info,
+    _now,
+    _owned_conversation_row,
+    _owned_run_row,
+    _retain_runtime_datasets_after_terminal_run,
+    _run_info,
+    _stage_run_event,
+    get_owned_conversation,
+)
+from gateway.store.standalone_chat.lifecycle import (
+    complete_run,
+    fail_run,
+    wait_for_clarification,
+)
+from gateway.store.standalone_chat.notebooks import (
+    list_conversation_notebooks,
+    upsert_conversation_notebook,
+)
+from gateway.store.standalone_chat.runs import (
+    append_event,
+    create_run,
+    finalize_undelivered_steering,
+    list_run_events,
+    mark_steering_message_picked_up,
+    pending_steering_messages,
+    queue_steering_message,
+    request_cancellation,
+    retry_run,
+    set_conversation_notebook_for_run,
+    submit_clarification,
+)
+from gateway.store.standalone_chat.sharing import (
+    _share_token_hash,
+    _shared_grant_row,
+    create_share_grant,
+    fork_shared_conversation,
+    get_fork_preview,
+    get_shared_conversation,
+    get_shared_file,
+    list_shared_files,
+    revoke_share_grants,
+)
+from gateway.store.standalone_chat.worker import (
+    claim_runs,
+    get_worker_run,
+    record_run_usage,
+    renew_lease,
+    set_execution_session,
+    worker_context,
+)
+
+__all__ = [
+    "NONTERMINAL_RUN_STATUSES",
+    "TERMINAL_RUN_STATUSES",
+    "UTC",
+    "Any",
+    "AsyncSession",
+    "ChatRunEventInfo",
+    "ChatRunInfo",
+    "GatewayChatArtifact",
+    "GatewayChatConversation",
+    "GatewayChatMessage",
+    "GatewayChatObjectDeletion",
+    "GatewayChatRun",
+    "GatewayChatRunEvent",
+    "GatewayChatShareGrant",
+    "GatewayChatUserPreference",
+    "GatewayGovernedQueryExecution",
+    "GatewayQueryApproval",
+    "GatewayQueryProposal",
+    "GatewayReportRefresh",
+    "GatewayRuntimeDataset",
+    "GatewaySavedReport",
+    "GatewaySavedReportVersion",
+    "GatewayStructuredQueryResult",
+    "GatewayWorkspaceProject",
+    "IntegrityError",
+    "Literal",
+    "RunStatus",
+    "SharedConversationDetail",
+    "SharedConversationInfo",
+    "SharedMessageInfo",
+    "StandaloneConversationDetail",
+    "StandaloneConversationInfo",
+    "StandaloneMessageInfo",
+    "_append_status_message",
+    "_event_info",
+    "_message_info",
+    "_now",
+    "_owned_conversation_row",
+    "_owned_run_row",
+    "_retain_runtime_datasets_after_terminal_run",
+    "_run_info",
+    "_schema_fingerprint",
+    "_share_token_hash",
+    "_shared_grant_row",
+    "_stage_run_event",
+    "and_",
+    "append_event",
+    "archive_conversation",
+    "assert_run_transition",
+    "base64",
+    "chat_config",
+    "chat_object_storage",
+    "claim_runs",
+    "complete_run",
+    "conversation_file_usage",
+    "conversation_prefix",
+    "create_conversation_with_run",
+    "create_empty_conversation",
+    "create_run",
+    "create_share_grant",
+    "datetime",
+    "delete",
+    "derive_file_kind",
+    "enterprise_chat_feature_flags",
+    "fail_run",
+    "fallback_conversation_title",
+    "finalize_undelivered_steering",
+    "fork_shared_conversation",
+    "func",
+    "get_conversation_detail",
+    "get_conversation_file",
+    "get_conversation_file_by_path",
+    "get_fork_preview",
+    "get_owned_conversation",
+    "get_shared_conversation",
+    "get_shared_conversation_file",
+    "get_shared_file",
+    "get_worker_run",
+    "hashlib",
+    "list_conversation_files",
+    "list_conversation_notebooks",
+    "list_conversations",
+    "list_shared_conversation_files",
+    "list_shared_files",
+    "list_run_events",
+    "mark_conversation_file_deleted",
+    "mark_steering_message_picked_up",
+    "normalize_table_snapshot",
+    "or_",
+    "pending_steering_messages",
+    "queue_steering_message",
+    "record_run_usage",
+    "redact_public_payload",
+    "rename_conversation",
+    "update_conversation_effort",
+    "update_conversation_model",
+    "renew_lease",
+    "request_cancellation",
+    "retry_run",
+    "revoke_share_grants",
+    "runtime_object_key",
+    "safe_filename",
+    "schema_cache",
+    "secrets",
+    "select",
+    "set_conversation_notebook_for_run",
+    "set_execution_session",
+    "submit_clarification",
+    "suppress",
+    "table_to_csv",
+    "time",
+    "timedelta",
+    "update",
+    "update_internal_summary",
+    "upsert_conversation_file",
+    "upsert_conversation_notebook",
+    "uuid",
+    "wait_for_clarification",
+    "worker_context",
+]

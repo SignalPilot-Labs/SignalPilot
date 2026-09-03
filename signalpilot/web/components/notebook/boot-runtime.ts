@@ -1,32 +1,21 @@
 import { createSignalpilotClient } from "@/embed/createSignalpilotClient";
-import type { SignalpilotClient } from "@/embed/types";
 import { Logger } from "@/utils/Logger";
-import type { NotebookConfig } from "./notebook-context";
+import { clearProvisionedSessionId, type NotebookConfig } from "./notebook-context";
+import { bootKioskViewer } from "./boot-kiosk";
+import { bootSessionless, loadDocumentFromStore } from "./boot-sessionless";
+import {
+  NotebookBootUserError,
+  resolveRuntimeBase,
+  type BootPhase,
+  type BootResult,
+  type NotebookStaticData,
+} from "./boot-shared";
 
-export type BootPhase = "health" | "notion" | "ready";
-
-export class NotebookBootUserError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "NotebookBootUserError";
-  }
-}
-
-export interface NotebookStaticData {
-  filename?: string;
-  code?: string;
-  session?: unknown;
-  notebook?: unknown;
-  rawFallback?: boolean;
-  /** Gateway auth token resolved at boot (Clerk JWT in cloud, "" in local).
-   * Handed to the editor so its own gateway /api calls authenticate. */
-  gatewayToken?: string;
-}
-
-export interface BootResult {
-  client: SignalpilotClient;
-  staticData: NotebookStaticData;
-}
+// Boot entry point. The kiosk and sessionless variants live in sibling
+// modules (boot-kiosk.ts, boot-sessionless.ts); shared types and helpers
+// live in boot-shared.ts. Re-export the public surface unchanged.
+export { NotebookBootUserError };
+export type { BootPhase, BootResult, NotebookStaticData };
 
 function isNotionTrailParams({
   file,
@@ -52,12 +41,6 @@ function notionRequestIdFromSessionId(
     return undefined;
   }
   return sessionId.slice("session-".length);
-}
-
-function resolveRuntimeBase(config: NotebookConfig): string {
-  const base = config.notebookProxyUrl ?? config.gatewayUrl;
-  if (base) return base.replace(/\/$/, "");
-  return typeof window === "undefined" ? "" : window.location.origin;
 }
 
 async function rehydrateNotionTrail(
@@ -107,10 +90,25 @@ export async function bootRuntime(
   navigate: (href: string) => void,
   signal: AbortSignal,
 ): Promise<BootResult> {
+  // Kiosk viewer (chat live notebook panel): DOCUMENT-FIRST, kernel-free.
+  // Branch BEFORE the token await so a slow token fetch never leaves the
+  // viewer in the runtime-health phase.
+  if (config.kioskAttach) {
+    onPhase("ready");
+    return bootKioskViewer(config, await config.getToken(), onPhase, navigate, signal);
+  }
+
   // Auth: the proxy verifies the caller's Clerk JWT (cloud) directly; in local
   // mode there's no token. Resolve once for the boot fetches; the long-lived
   // embed client gets the getToken thunk so it always uses a fresh token.
   const bootToken = await config.getToken();
+
+  // Sessionless boot (Runtime v2): a project notebook opens with NO sandbox.
+  // The document and file tree come straight from the gateway workspace
+  // store; the kernel sandbox is provisioned lazily on the first Run.
+  if (!config.sessionId && config.project) {
+    return bootSessionless(config, bootToken, onPhase, navigate, signal);
+  }
   const urlSessionId =
     typeof window === "undefined"
       ? ""
@@ -148,11 +146,23 @@ export async function bootRuntime(
   // ── Phase 1: Wait for runtime healthy ──────────────────────────
   onPhase("health");
   let healthy = false;
-  for (let i = 0; i < 30 && !signal.aborted; i++) {
+  // Warm project reattach targets a session that claimed to be running —
+  // if it's actually healthy it answers on the first probe or two. Give it
+  // a short window and fall back to a sessionless boot rather than
+  // hammering a dead sandbox for 15s. Fresh (non-project) boots keep the
+  // long window: their sandbox may genuinely still be coming up.
+  const maxHealthAttempts = isProjectRuntime ? 6 : 30;
+  for (let i = 0; i < maxHealthAttempts && !signal.aborted; i++) {
     try {
       const r = await fetch(`${runtimeUrl}/health`, { headers, signal });
       if (r.ok) {
         healthy = true;
+        break;
+      }
+      // The gateway answers 404 (no such session) / 409 (session stopped)
+      // definitively for reattach targets — retrying cannot succeed.
+      if (isProjectRuntime && (r.status === 404 || r.status === 409)) {
+        Logger.warn(`Reattach target is gone (HTTP ${r.status})`);
         break;
       }
     } catch (err) {
@@ -162,7 +172,27 @@ export async function bootRuntime(
     await new Promise((r) => setTimeout(r, 500));
   }
   if (signal.aborted) throw new Error("Boot cancelled");
-  if (!healthy) throw new Error("Runtime did not become healthy after 15 seconds");
+  if (!healthy) {
+    if (isProjectRuntime) {
+      // The session row outlived its sandbox (e.g. the sandbox hit its
+      // runtime timeout). Clean it up and open sessionless — the editor
+      // works without a kernel and the next Run provisions a fresh one.
+      Logger.warn(
+        "Warm session reattach failed — clearing stale session, booting sessionless",
+      );
+      const { deleteNotebookSession } = await import("~/lib/api");
+      await deleteNotebookSession().catch(() => {});
+      clearProvisionedSessionId();
+      return bootSessionless(
+        { ...config, sessionId: "" },
+        bootToken,
+        onPhase,
+        navigate,
+        signal,
+      );
+    }
+    throw new Error("Runtime did not become healthy after 15 seconds");
+  }
 
   // ── Phase 1b: Rehydrate Notion trail kernels before WS connect ─
   if (notionRequestId) {
@@ -238,6 +268,12 @@ export async function bootRuntime(
       }
     } catch (err) {
       if (!signal.aborted) Logger.warn("File fetch failed (non-fatal):", err);
+    }
+
+    // The sandbox couldn't serve the document (dead/blocked session): fall
+    // back to the workspace store so the notebook still renders kernel-free.
+    if (staticData.code == null && staticData.notebook == null && config.project) {
+      await loadDocumentFromStore(config, bootToken, signal, staticData);
     }
   }
 

@@ -14,7 +14,7 @@ import type { SignalpilotClient, SignalpilotMountConfig } from "./types";
 export function adaptMountConfig(source: {
   config: SignalpilotMountConfig;
   client: SignalpilotClient;
-  mode: "edit" | "home";
+  mode: "edit" | "read" | "home";
 }): unknown {
   const { config, client, mode } = source;
 

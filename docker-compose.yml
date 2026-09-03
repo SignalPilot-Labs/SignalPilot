@@ -68,7 +68,6 @@ services:
       # The proxy sends this value to the shared notebook container with each request.
       # The notebook writes the value during startup.
       SP_NOTEBOOK_TOKEN_FILE: /notebook-token/token
-      SP_NOTEBOOK_NETWORK_POLICY: "false"
       SP_PUBLIC_GATEWAY_URL: http://localhost:${SP_GATEWAY_PORT:-3300}
       SP_PUBLIC_GATEWAY_PORT: "${SP_GATEWAY_PORT:-3300}"
       SP_REPOS_DIR: /repos
@@ -78,7 +77,6 @@ services:
       SP_FEATURE_CHAT_STRUCTURED_RESULTS: ${SP_FEATURE_CHAT_STRUCTURED_RESULTS:-true}
       SP_FEATURE_CHAT_SIZE_ROUTER: ${SP_FEATURE_CHAT_SIZE_ROUTER:-true}
       # Keep Data Chat on the governed SQL/MCP path until notebook analysis is re-enabled explicitly.
-      SP_FEATURE_CHAT_NOTEBOOK_ANALYSIS: ${SP_FEATURE_CHAT_NOTEBOOK_ANALYSIS:-false}
       SP_FEATURE_CHAT_RUNTIME_RESULTS: ${SP_FEATURE_CHAT_RUNTIME_RESULTS:-true}
       SP_FEATURE_CHAT_RUNTIME_ARTIFACTS: ${SP_FEATURE_CHAT_RUNTIME_ARTIFACTS:-true}
       SP_FEATURE_CHAT_DATASET_REFS: ${SP_FEATURE_CHAT_DATASET_REFS:-false}
@@ -94,11 +92,6 @@ services:
       # The following settings configure the sandbox.
       SP_SANDBOX_MANAGER_URL: http://sandbox:8080
       SP_SANDBOX_ENABLED: "true"
-      # Gateway startup requires this value. Local mode does not use it.
-      SP_K8S_HOST: ""
-      KUBECONFIG: ""
-      SP_GATEWAY_NAMESPACE: signalpilot
-      SP_GATEWAY_POD_SELECTOR: "app=signalpilot-gateway"
       # MinIO simulates S3 for local evaluation uploads.
       # Mailpit simulates local email delivery.
       SP_EVAL_UPLOADS_BUCKET: sp-eval-uploads
@@ -232,7 +225,6 @@ services:
       SP_FEATURE_CHAT_STRUCTURED_RESULTS: ${SP_FEATURE_CHAT_STRUCTURED_RESULTS:-true}
       SP_FEATURE_CHAT_SIZE_ROUTER: ${SP_FEATURE_CHAT_SIZE_ROUTER:-true}
       # Must match the gateway so workers cannot route Data Chat runs into notebook analysis.
-      SP_FEATURE_CHAT_NOTEBOOK_ANALYSIS: ${SP_FEATURE_CHAT_NOTEBOOK_ANALYSIS:-false}
       SP_FEATURE_CHAT_RUNTIME_RESULTS: ${SP_FEATURE_CHAT_RUNTIME_RESULTS:-true}
       SP_FEATURE_CHAT_RUNTIME_ARTIFACTS: ${SP_FEATURE_CHAT_RUNTIME_ARTIFACTS:-true}
       SP_FEATURE_CHAT_DATASET_REFS: ${SP_FEATURE_CHAT_DATASET_REFS:-false}
@@ -246,15 +238,10 @@ services:
       CHAT_WORKER_CONCURRENCY: "4"
       SP_NOTEBOOK_DIRECT_URL: http://notebook:2718
       SP_NOTEBOOK_TOKEN_FILE: /notebook-token/token
-      SP_NOTEBOOK_NETWORK_POLICY: "false"
       SP_PUBLIC_GATEWAY_URL: http://gateway:3300
       SP_PUBLIC_GATEWAY_PORT: "3300"
       SP_REPOS_DIR: /repos
       SP_WEB_URL: http://localhost:${SP_WEB_PORT:-3200}
-      SP_K8S_HOST: ""
-      KUBECONFIG: ""
-      SP_GATEWAY_NAMESPACE: signalpilot
-      SP_GATEWAY_POD_SELECTOR: "app=signalpilot-gateway"
     volumes:
       - signalpilot-data:/data
       - signalpilot-gateway-secrets:/gateway-secrets
@@ -289,6 +276,12 @@ services:
       - -c
       - |
         export SP_API_KEY=$$(cat /shared/local_api_key 2>/dev/null || echo '')
+        if [ ! -s /gateway-secrets/notebook_jwt_secret ]; then
+          umask 077
+          python -c 'import secrets; print(secrets.token_urlsafe(48))' > /gateway-secrets/notebook_jwt_secret.tmp
+          mv /gateway-secrets/notebook_jwt_secret.tmp /gateway-secrets/notebook_jwt_secret
+        fi
+        export SP_SESSION_JWT_SECRET=$$(cat /gateway-secrets/notebook_jwt_secret)
         python -m signalpilot._server.local_token /notebook-token/token
         exec python -m signalpilot edit \
           --host 0.0.0.0 --port 2718 --headless \
@@ -314,6 +307,7 @@ services:
     volumes:
       - signalpilot-workspace:/workspace
       - signalpilot-shared:/shared:ro
+      - signalpilot-gateway-secrets:/gateway-secrets
       # The notebook writes this volume. The gateway mounts it as read-only.
       # Both containers use user identifier 10001.
       # This separate volume prevents notebook write access to the gateway local_api_key.

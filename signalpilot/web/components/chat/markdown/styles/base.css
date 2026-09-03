@@ -1,0 +1,47 @@
+/* Chat markdown — base rhythm and the local variables the other sheets read.
+ * Owner: shared. Area sheets (typography, containers, code, media) are loaded
+ * after this one and may override anything here. */
+
+.chat-markdown {
+  /* Vertical rhythm. One scale, so a paragraph, a table, and a code block all
+     sit on the same grid. */
+  --md-gap: 0.9rem;
+  --md-gap-tight: 0.45rem;
+  --md-gap-loose: 1.5rem;
+
+  /* Surfaces and edges shared by every framed block. */
+  --md-radius: 12px;
+  --md-radius-sm: 8px;
+  --md-pad-x: 0.9rem;
+  --md-pad-y: 0.7rem;
+  --md-rule: var(--color-border);
+  --md-rule-strong: var(--color-border-hover);
+  --md-surface: #121214;
+  --md-surface-raised: #17171a;
+
+  color: var(--color-text);
+  /* Callers scale the whole block by setting --md-font-size; a Tailwind
+     `text-[12px]` cannot, because unlayered CSS outranks the utilities layer.
+     Area sheets size everything in `em` so this stays the one dial. */
+  font-size: var(--md-font-size, 15px);
+  line-height: 1.72;
+  overflow-wrap: break-word;
+}
+
+/* Streamdown emits `space-y-4` on its wrapper; this is the single place the
+   block spacing is decided. */
+.chat-markdown > * + * { margin-top: var(--md-gap); }
+.chat-markdown > :first-child { margin-top: 0; }
+.chat-markdown > :last-child { margin-bottom: 0; }
+
+/* Every framed block (code, table, diagram, disclosure) shares one shell so
+   they line up with each other down the transcript. */
+.chat-markdown :where(.chat-md-frame) {
+  border: 1px solid var(--md-rule);
+  border-radius: var(--md-radius);
+  background: var(--md-surface);
+  overflow: hidden;
+}
+
+/* Compact variant: nested reports and file previews inside side panels. */
+.chat-markdown-compact { --md-font-size: 12.5px; }

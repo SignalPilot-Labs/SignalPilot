@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -19,6 +20,8 @@ from ..workspace_store.dbt_detect import resolve_dbt_project_dir_detailed
 from ..workspace_store.store import RevisionNotFound
 from .deps import ProjectsGate, StoreD
 from .workspace_files import WorkspaceStoreD, _valid_branch
+
+logger = logging.getLogger(__name__)
 
 # All workspace-project routes require the paid "projects" feature.
 # In local mode the tier resolves to "unlimited", so the gate is a no-op.
@@ -181,5 +184,48 @@ async def update_project(project_id: str, body: WorkspaceProjectUpdate, store: S
 
 @router.delete("/workspace-projects/{project_id}", status_code=204, response_model=None, dependencies=[RequireScope("write")])
 async def delete_project(project_id: str, store: StoreD):
+    """Delete a project and everything it owns: repo links, dbt maps, S3
+    objects, and the bare git repo. The linked GitHub repo is never touched.
+    Cascades are best-effort — a storage hiccup must not leave the project row
+    behind for a retry loop to trip on."""
+    import asyncio as _asyncio
+
+    from sqlalchemy import delete as _delete
+
+    from ..db.models import GatewayDbtManifest, GatewayGitHubRepoLink
+    from ..git.repos import delete_repo
+    from ..workspace_store import workspace_object_storage
+    from ..workspace_store.store import WorkspaceStore
+
     await _get_project_or_404(store, project_id)
+    org_id = store.org_id or "local"
+
+    await store.session.execute(
+        _delete(GatewayGitHubRepoLink).where(
+            GatewayGitHubRepoLink.org_id == org_id,
+            GatewayGitHubRepoLink.project_id == project_id,
+        )
+    )
+    await store.session.execute(
+        _delete(GatewayDbtManifest).where(
+            GatewayDbtManifest.org_id == org_id,
+            GatewayDbtManifest.project_id == project_id,
+        )
+    )
+    await store.session.commit()
+
+    storage = workspace_object_storage()
+    if storage.enabled:
+        try:
+            purged = await WorkspaceStore(storage).purge_project_objects(
+                org_id=org_id, project_id=project_id
+            )
+            logger.info("Project %s delete: purged %d S3 objects", project_id, purged)
+        except Exception:
+            logger.warning("Project %s delete: S3 purge failed", project_id, exc_info=True)
+    try:
+        await _asyncio.to_thread(delete_repo, project_id)
+    except Exception:
+        logger.warning("Project %s delete: bare repo removal failed", project_id, exc_info=True)
+
     await store.delete_workspace_project(project_id)

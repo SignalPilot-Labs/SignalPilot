@@ -131,7 +131,13 @@ def client():
                 rate_limiter._general_hits.clear()  # type: ignore[union-attr]
                 rate_limiter._expensive_hits.clear()  # type: ignore[union-attr]
                 rate_limiter._auth_hits.clear()  # type: ignore[union-attr]
-            yield _client
+            try:
+                yield _client
+            finally:
+                # The app is a process-wide singleton: put the real dispatcher back
+                # so later modules authenticate for real instead of as this fake key.
+                if auth_middleware is not None:
+                    auth_middleware.dispatch_func = auth_middleware.dispatch  # type: ignore[union-attr]
 
     app.dependency_overrides.pop(get_store, None)
     app.dependency_overrides.pop(resolve_user_id, None)

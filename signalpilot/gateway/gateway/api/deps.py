@@ -72,11 +72,11 @@ RequirePlatformStaff = Depends(require_platform_staff)
 
 
 async def require_projects_feature(org_id: OrgID) -> None:
-    """FastAPI dependency: gate the projects/notebooks feature to paid plans.
+    """Gate dbt workspace projects and lineage.
 
     Resolves the org's plan tier and raises 403 if the projects feature is not
-    available (free tier). In local mode the tier resolves to "unlimited", so
-    this is a no-op: local deployments are never gated.
+    available. In local mode the tier resolves to "unlimited", so this is a
+    no-op: local deployments are never gated.
     """
     from ..governance.plan_limits import check_feature, get_org_limits
 
@@ -85,6 +85,17 @@ async def require_projects_feature(org_id: OrgID) -> None:
 
 
 ProjectsGate = Depends(require_projects_feature)
+
+
+async def require_notebook_sessions_feature(org_id: OrgID) -> None:
+    """Gate user-facing notebook storage without affecting Chat's internal runtime."""
+    from ..governance.plan_limits import check_feature, get_org_limits
+
+    limits = await get_org_limits(org_id)
+    check_feature("notebook_sessions", limits)
+
+
+NotebookSessionsGate = Depends(require_notebook_sessions_feature)
 
 # Error sanitization.
 

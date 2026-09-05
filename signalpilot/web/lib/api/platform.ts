@@ -207,6 +207,8 @@ export interface PlanUsage {
     sso: boolean;
     budget_controls: boolean;
     audit_export: boolean;
+    projects: boolean;
+    notebook_sessions: boolean;
   };
 }
 export const getPlan = () => request<PlanUsage>("/api/plan");

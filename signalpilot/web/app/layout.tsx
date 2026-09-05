@@ -27,6 +27,7 @@ import { SWRProvider } from "~/lib/swr";
 import { SubscriptionProvider } from "~/lib/subscription-context";
 import { clerkAppearance } from "~/lib/clerk-theme";
 import TierUpgradeCelebration from "~/components/branding/tier-upgrade-celebration";
+import { GettingStartedMount } from "~/components/getting-started/getting-started-mount";
 
 export const metadata: Metadata = {
   title: "SignalPilot",
@@ -67,6 +68,7 @@ export default async function RootLayout({
               <CommandPalette />
             </MainContent>
             <TierUpgradeCelebration />
+            <GettingStartedMount />
           </SubscriptionProvider>
         </AuthProvider>
       </ConnectionProvider>

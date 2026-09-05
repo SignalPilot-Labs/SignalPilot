@@ -130,6 +130,7 @@ export function useStandaloneChatActions({
             { revalidate: false },
           );
           router.replace(`/chats/${created.conversation.id}`);
+          void mutateCache("standalone-chat-bootstrap");
           void mutateHistory();
           return;
         }
@@ -216,6 +217,7 @@ export function useStandaloneChatActions({
           { revalidate: false },
         );
         setPendingSubmission(null);
+        void mutateCache("standalone-chat-bootstrap");
         void mutateDetail();
         void mutateHistory();
       } catch (error) {
@@ -235,6 +237,7 @@ export function useStandaloneChatActions({
         }
         setPendingSubmission(null);
         setDraft(text);
+        void mutateCache("standalone-chat-bootstrap");
         toastRequestError(toast, error, "Could not send message");
       } finally {
         setIsSubmitting(false);
@@ -317,12 +320,14 @@ export function useStandaloneChatActions({
           { revalidate: false },
         );
         void mutateDetail();
+        void mutateCache("standalone-chat-bootstrap");
         await mutateHistory();
       } catch (error) {
+        void mutateCache("standalone-chat-bootstrap");
         toastRequestError(toast, error, "Could not retry the run");
       }
     },
-    [mutateDetail, mutateHistory, toast],
+    [mutateCache, mutateDetail, mutateHistory, toast],
   );
 
   const loadConversation = useCallback(

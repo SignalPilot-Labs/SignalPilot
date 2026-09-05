@@ -44,14 +44,15 @@ class PlanLimits:
     schema_tools: bool  # advanced schema explorer MCP tools
     knowledge_storage_mb: int  # per-org knowledge storage cap in MiB (0 = unlimited)
     knowledge_history_versions: int  # edit history versions kept per doc (0 = unlimited)
-    projects: bool  # workspace projects + notebook sessions (paid feature)
+    projects: bool  # dbt workspace projects and lineage
+    notebook_sessions: bool  # user-facing notebook sessions
 
 
 PLAN_TIERS: dict[str, PlanLimits] = {
     "free": PlanLimits(
         tier="free",
         connections=2,
-        users=1,
+        users=2,
         api_keys=1,
         queries_per_day=200,
         audit_retention_days=7,
@@ -63,7 +64,8 @@ PLAN_TIERS: dict[str, PlanLimits] = {
         schema_tools=True,
         knowledge_storage_mb=50,
         knowledge_history_versions=5,
-        projects=False,
+        projects=True,
+        notebook_sessions=False,
     ),
     "pro": PlanLimits(
         tier="pro",
@@ -81,6 +83,7 @@ PLAN_TIERS: dict[str, PlanLimits] = {
         knowledge_storage_mb=250,
         knowledge_history_versions=5,
         projects=True,
+        notebook_sessions=True,
     ),
     "team": PlanLimits(
         tier="team",
@@ -98,6 +101,7 @@ PLAN_TIERS: dict[str, PlanLimits] = {
         knowledge_storage_mb=1000,
         knowledge_history_versions=25,
         projects=True,
+        notebook_sessions=True,
     ),
     "enterprise": PlanLimits(
         tier="enterprise",
@@ -115,6 +119,7 @@ PLAN_TIERS: dict[str, PlanLimits] = {
         knowledge_storage_mb=5000,
         knowledge_history_versions=50,
         projects=True,
+        notebook_sessions=True,
     ),
     "unlimited": PlanLimits(
         tier="unlimited",
@@ -132,6 +137,7 @@ PLAN_TIERS: dict[str, PlanLimits] = {
         knowledge_storage_mb=0,
         knowledge_history_versions=100,
         projects=True,
+        notebook_sessions=True,
     ),
 }
 
@@ -349,6 +355,7 @@ def check_feature(feature_name: str, limits: PlanLimits) -> None:
         "budget_controls": limits.budget_controls,
         "audit_export": limits.audit_export,
         "projects": limits.projects,
+        "notebook_sessions": limits.notebook_sessions,
     }
     enabled = feature_map.get(feature_name)
     if enabled is None:

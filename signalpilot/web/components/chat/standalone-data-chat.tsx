@@ -7,6 +7,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import useSWR from "swr";
 import {
+  authorizeDemoReplay,
   getSavedChatReport,
   getStandaloneChatBootstrap,
   getStandaloneChatProjectReadiness,
@@ -69,6 +70,7 @@ import { ConnectorsProvider } from "~/components/connectors/connectors-context";
 import { useChatModelSettings } from "~/components/chat/use-chat-model-settings";
 import { useChatBudgetSettings } from "~/components/chat/use-chat-budget-settings";
 import { ChatTelemetryBoundary } from "~/components/chat/chat-telemetry-panel";
+import { GETTING_STARTED_EVENT } from "~/lib/getting-started";
 
 export { ChatUiContext, useChatUi } from "~/components/chat/chat-ui-context";
 export type { UiMessage } from "~/components/chat/chat-ui-context";
@@ -121,6 +123,8 @@ export function StandaloneDataChat({
   const requestedProject = searchParams.get("project");
   const requestedReportId = searchParams.get("report");
   const requestedPrompt = searchParams.get("prompt");
+  const requestedReplayRunId = searchParams.get("replay");
+  const [authorizedReplayRunId, setAuthorizedReplayRunId] = useState<string | null>(null);
   const [selectedReport, setSelectedReport] =
     useState<ChatReportMention | null>(null);
   const attachedReportReference = selectedReport
@@ -176,6 +180,24 @@ export function StandaloneDataChat({
       active = false;
     };
   }, [requestedReportId, selectedReport?.report_id, toast]);
+
+  useEffect(() => {
+    if (!conversationId || !requestedReplayRunId) {
+      setAuthorizedReplayRunId(null);
+      return;
+    }
+    let active = true;
+    void authorizeDemoReplay(conversationId, requestedReplayRunId)
+      .then(() => {
+        if (active) setAuthorizedReplayRunId(requestedReplayRunId);
+      })
+      .catch(() => {
+        if (!active) return;
+        setAuthorizedReplayRunId(null);
+        router.replace(`/chats/${encodeURIComponent(conversationId)}`);
+      });
+    return () => { active = false; };
+  }, [conversationId, requestedReplayRunId, router]);
 
   const { data: readiness } = useSWR(
     selectedProjectId ? `standalone-chat-readiness:${selectedProjectId}` : null,
@@ -296,16 +318,15 @@ export function StandaloneDataChat({
     !selectedProjectId ||
     (readiness?.ready === false && currentRun?.status !== "waiting_for_user") ||
     currentRun?.status === "queued" ||
-    currentRun?.status === "waiting_for_query_approval";
+    currentRun?.status === "waiting_for_query_approval" ||
+    bootstrap?.demo_requests_remaining === 0;
 
   const runIsStreaming =
     currentRun?.status === "queued" || currentRun?.status === "running";
 
-  const disabledReason = composerDisabledReason(
-    selectedProjectId,
-    readiness,
-    currentRun,
-  );
+  const disabledReason = bootstrap?.demo_requests_remaining === 0
+    ? "This Demo Team has used its 5 live requests. Start the Product Tour or set up your own data."
+    : composerDisabledReason(selectedProjectId, readiness, currentRun);
 
   const conversations = historyData?.conversations ?? [];
   const starters =
@@ -514,8 +535,24 @@ export function StandaloneDataChat({
                       key={standaloneMessageKey(conversationId, message)}
                       message={message}
                       previousMessageAt={uiMessages[index - 1]?.created_at}
+                      autoReplayRunId={authorizedReplayRunId}
                     />
                   ))}
+                  {detail?.conversation.origin === "demo_replay" && (
+                    <div className="mx-auto mb-6 w-full max-w-3xl space-y-2 px-6">
+                      {["Which experiments drove the largest conversion lift?", "Which experiment results should we trust, and why?", "Which clients have the biggest data-quality risks?"].map((question) => (
+                        <button key={question} type="button" onClick={() => setDraft(question)} className="block w-full rounded-lg border border-[var(--color-border)] px-3 py-2 text-left text-xs text-[var(--color-text-muted)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)]">{question}</button>
+                      ))}
+                      <button type="button" onClick={() => window.dispatchEvent(new CustomEvent(GETTING_STARTED_EVENT, { detail: { journey: "tour", expanded: false } }))} className="mt-2 text-xs text-[var(--color-success)] hover:underline">Start Product Tour</button>
+                    </div>
+                  )}
+                  {bootstrap.demo_requests_remaining === 0 && (
+                    <div className="mx-auto mb-6 flex w-full max-w-3xl items-center gap-3 border border-[var(--color-border)] px-4 py-3 text-xs">
+                      <span className="mr-auto text-[var(--color-text-muted)]">You can keep exploring Demo data and replays.</span>
+                      <button type="button" onClick={() => window.dispatchEvent(new CustomEvent(GETTING_STARTED_EVENT, { detail: { journey: "tour", expanded: false } }))} className="text-[var(--color-success)] hover:underline">Start Product Tour</button>
+                      <button type="button" onClick={() => window.dispatchEvent(new CustomEvent(GETTING_STARTED_EVENT, { detail: { journey: "setup", expanded: true } }))} className="text-[var(--color-text)] hover:underline">Set up my data</button>
+                    </div>
+                  )}
                 </div>
               )}
               {!isEmptyNewChat && (

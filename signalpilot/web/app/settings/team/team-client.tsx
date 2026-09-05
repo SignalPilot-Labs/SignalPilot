@@ -54,7 +54,7 @@ export default function TeamClient() {
   const membersCount = organization.membersCount ?? 0;
 
   return (
-    <div className="p-8 max-w-3xl animate-fade-in">
+    <div data-tour-id="team-members" className="p-8 max-w-3xl animate-fade-in">
       <PageHeader
         title="team"
         subtitle="settings"

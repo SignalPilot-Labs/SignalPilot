@@ -29,6 +29,21 @@ export const createDemoConnector = (demo: string) =>
     method: "POST",
     body: JSON.stringify({ demo }),
   });
+export const bootstrapDemo = () =>
+  request<import("../types").DemoBootstrapResponse>("/api/demo/bootstrap", {
+    method: "POST",
+    body: JSON.stringify({ catalog_slug: "parallax" }),
+  });
+export const getDemoBootstrap = () =>
+  request<import("../types").DemoBootstrapResponse>(
+    "/api/demo/bootstrap?catalog_slug=parallax",
+  );
+export const authorizeDemoReplay = (conversationId: string, runId: string) =>
+  request<{ authorized: true; fixture_version: string }>(
+    `/api/demo/replay/${encodeURIComponent(conversationId)}/${encodeURIComponent(runId)}`,
+  );
+export const cleanupDemoTeam = () =>
+  request<{ demo: boolean; cleaned: boolean }>("/api/demo/cleanup", { method: "POST" });
 export const refreshConnectionSchema = (name: string) =>
   request<{
     connection_name: string;

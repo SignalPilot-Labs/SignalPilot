@@ -388,7 +388,7 @@ export default function SchemaExplorerPage() {
   }
 
   return (
-    <main className="schema-page">
+    <main data-tour-id="schema-browser" className="schema-page">
       <header className="schema-titlebar">
         <div>
           <span className="schema-eyebrow">Database catalog</span>

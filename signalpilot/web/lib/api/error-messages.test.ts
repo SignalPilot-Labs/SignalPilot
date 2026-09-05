@@ -15,6 +15,16 @@ describe("userFacingErrorMessage", () => {
     expect(userFacingErrorMessage("boom", "fallback")).toBe("fallback");
   });
 
+  it("turns the atomic Demo Team limit into product copy", () => {
+    const error = new ApiRequestError(
+      429,
+      '{"code":"demo_request_limit","limit":5,"used":5}',
+    );
+    expect(userFacingErrorMessage(error, "fallback")).toBe(
+      "This Demo Team has used its 5 live requests.",
+    );
+  });
+
   it("silences the sandbox session-token rejection", () => {
     const error = new ApiRequestError(
       401,

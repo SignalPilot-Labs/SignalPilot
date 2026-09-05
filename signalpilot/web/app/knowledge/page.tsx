@@ -291,7 +291,7 @@ function KnowledgePage() {
   const list = baseSet.filter(passFilters).sort(sortDocs);
 
   return (
-    <div className="kb-root h-screen flex flex-col p-8 overflow-hidden animate-fade-in">
+    <div data-tour-id="knowledge-area" className="kb-root h-screen flex flex-col p-8 overflow-hidden animate-fade-in">
       {/* Header */}
       <div className="kb-header">
         <div className="kb-logo">

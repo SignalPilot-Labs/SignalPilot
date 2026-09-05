@@ -701,12 +701,14 @@ function CreateProjectForm({
   );
 }
 
-function GitHubImportForm({
+export function GitHubImportForm({
   onClose,
   onImported,
+  oauthReturnTo,
 }: {
   onClose: () => void;
-  onImported: () => void | Promise<void>;
+  onImported: (project?: WorkspaceProjectInfo) => void | Promise<void>;
+  oauthReturnTo?: string;
 }) {
   const { toast } = useToast();
   const [installations, setInstallations] = useState<GitHubInstallation[]>([]);
@@ -771,6 +773,9 @@ function GitHubImportForm({
   const connectGitHub = async () => {
     setConnectingGitHub(true);
     try {
+      if (oauthReturnTo) {
+        sessionStorage.setItem("signalpilot:getting-started:oauth-return", oauthReturnTo);
+      }
       const { install_url } = await getGitHubInstallUrl();
       window.location.href = install_url;
     } catch (error) {
@@ -799,7 +804,7 @@ function GitHubImportForm({
           : `${repo.full_name} was already imported`,
         "success",
       );
-      await onImported();
+      await onImported(result.project);
       onClose();
     } catch (error) {
       toast(getErrorMessage(error), "error");

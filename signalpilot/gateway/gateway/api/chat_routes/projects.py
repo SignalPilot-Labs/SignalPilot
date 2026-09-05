@@ -16,6 +16,7 @@ from gateway.standalone_chat.config import (
     enterprise_chat_feature_flags,
     standalone_chat_enabled,
 )
+from gateway.standalone_chat.demo_limits import demo_request_usage
 from gateway.standalone_chat.projects import (
     authorize_chat_project,
     cached_starter_questions,
@@ -129,6 +130,7 @@ async def bootstrap_chat(store: StoreD, role: OrgRole):
             )
         )
     ).scalar_one_or_none()
+    demo_usage = await demo_request_usage(store.session, org_id=org_id)
     return ChatBootstrapResponse(
         enabled=True,
         projects=[
@@ -162,6 +164,9 @@ async def bootstrap_chat(store: StoreD, role: OrgRole):
         available_efforts=effort_options,
         default_effort=selected_effort,
         enterprise_features=exposed_flags,
+        demo_request_limit=demo_usage[0] if demo_usage else None,
+        demo_requests_used=demo_usage[1] if demo_usage else 0,
+        demo_requests_remaining=max(0, demo_usage[0] - demo_usage[1]) if demo_usage else None,
     )
 
 

@@ -24,6 +24,7 @@ import {
 import { isReverificationCancelledError } from "~/lib/security/use-reverify";
 import { formatClerkError } from "~/lib/security/clerk-errors";
 import type { TeamPermissions } from "~/lib/team/use-team-permissions";
+import { cleanupDemoTeam } from "~/lib/api";
 
 interface LeaveOrganizationUser {
   leaveOrganization: (organizationId: string) => Promise<DeletedObjectResource>;
@@ -88,6 +89,9 @@ export function TeamDangerSection({ org, perms, user }: TeamDangerSectionProps) 
     setDeleteError(null);
     setDeleteNotice(null);
     try {
+      // Production Teams receive a no-op response. Demo Teams must finish
+      // project/connection/branch cleanup before Clerk destroys the Team.
+      await cleanupDemoTeam();
       await reverifiedDelete();
       await setActive({ organization: null });
       router.push("/onboarding");

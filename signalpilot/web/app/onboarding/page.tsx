@@ -4,8 +4,9 @@
  * Onboarding page — entry point.
  *
  * - Local mode: immediate redirect to /dashboard (no onboarding needed).
- * - Cloud mode: renders CloudOnboardingContent which handles the team-creation
- *   step + API key wizard. All @clerk/nextjs hooks live in onboarding-cloud.tsx
+ * - Cloud mode: renders the desktop Getting Started welcome screen. Its
+ *   persistent controller handles Demo, production setup, and Product Tour.
+ *   All @clerk/nextjs hooks live in onboarding-cloud.tsx
  *   to prevent them from being pulled into the SSR bundle in local-mode builds.
  */
 

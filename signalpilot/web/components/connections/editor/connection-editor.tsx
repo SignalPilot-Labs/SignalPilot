@@ -16,9 +16,10 @@ const IS_CLOUD_MODE = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "cloud";
 
 interface ConnectionEditorProps {
   controller: ConnectionsController;
+  primaryAction?: { label: string; onClick: () => void | Promise<void>; pending?: boolean };
 }
 
-export function ConnectionEditor({ controller }: ConnectionEditorProps) {
+export function ConnectionEditor({ controller, primaryAction }: ConnectionEditorProps) {
   const {
     toast, showForm, setShowForm, editingConnection, setEditingConnection,
     form, setForm, selectedVariant,
@@ -550,6 +551,12 @@ export function ConnectionEditor({ controller }: ConnectionEditorProps) {
 
             {/* Action buttons */}
             <div className="flex items-center gap-3 mt-5 pt-4 border-t border-[var(--color-border)]">
+              {primaryAction ? (
+                <button onClick={() => void primaryAction.onClick()} disabled={saving || preTesting || hasFormErrors || primaryAction.pending} className="flex items-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium rounded-[10px] transition-opacity duration-150 hover:opacity-90 disabled:opacity-30">
+                  {(saving || preTesting || primaryAction.pending) && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  {primaryAction.label}
+                </button>
+              ) : <>
               <button onClick={handleCreate} disabled={saving || preTesting || hasFormErrors} className="flex items-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium rounded-[10px] transition-opacity duration-150 hover:opacity-90 disabled:opacity-30">
                 {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
                 {editingConnection ? "update connection" : "save connection"}
@@ -561,6 +568,7 @@ export function ConnectionEditor({ controller }: ConnectionEditorProps) {
               <button onClick={handleSaveAndTest} disabled={saving || preTesting || hasFormErrors} className="flex items-center gap-2 px-4 py-2 border border-[var(--color-border)] rounded-[10px] text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-border-hover)] transition-colors duration-150 disabled:opacity-40 disabled:cursor-not-allowed">
                 {editingConnection ? "update & test" : "save & test"}
               </button>
+              </>}
               <button onClick={() => { setShowForm(false); setEditingConnection(null); setForm({ ...defaultForm }); setServerFieldErrors({}); setShowAdvanced(false); setPreTestResult(null); }} className="px-4 py-2 text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors">
                 cancel
               </button>

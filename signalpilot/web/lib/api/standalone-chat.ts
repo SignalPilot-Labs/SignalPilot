@@ -95,6 +95,9 @@ export type StandaloneChatBootstrap = {
     /** Connectors (external MCP servers) for the chat agent. */
     mcp_connectors?: boolean;
   };
+  demo_request_limit?: number | null;
+  demo_requests_used?: number;
+  demo_requests_remaining?: number | null;
 };
 
 export type StandaloneChatRun = {

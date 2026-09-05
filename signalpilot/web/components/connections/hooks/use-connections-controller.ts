@@ -170,13 +170,14 @@ export function useConnectionsController() {
     setSaving(true);
     try {
       const payload = buildCreatePayload(form);
+      let saved: ConnectionInfo;
       if (editingConnection) {
         // Update existing connection
         const { name: _n, db_type: _d, ...updateFields } = payload;
-        await updateConnection(editingConnection, updateFields);
+        saved = await updateConnection(editingConnection, updateFields);
         toast("connection updated successfully", "success");
       } else {
-        await createConnection(payload);
+        saved = await createConnection(payload);
         toast("connection created successfully", "success");
       }
       setShowForm(false);
@@ -186,6 +187,7 @@ export function useConnectionsController() {
       setServerFieldErrors({});
       setShowAdvanced(false);
       refresh();
+      return saved;
     } catch (e) { handleServerError(e); } finally { setSaving(false); }
   }
 
@@ -383,9 +385,11 @@ export function useConnectionsController() {
         const failedPhase = result.phases?.find((p: { status: string }) => p.status === "error");
         toast(failedPhase?.message || result.message, "error");
       }
+      return result;
     } catch (e) {
       handleServerError(e);
       setPreTestResult({ status: "error", message: _parseError(e), phases: [] });
+      return null;
     } finally {
       setPreTesting(false);
     }

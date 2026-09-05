@@ -82,6 +82,42 @@ describe("Data Chat dashboard artifact card", () => {
   });
 });
 
+describe("Data Chat authorized replay", () => {
+  it("starts the matching completed run in replay mode", async () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    const message: UiMessage = {
+      id: "assistant-replay",
+      role: "assistant",
+      content: "Demo answer",
+      sequence: 2,
+      created_at: 2,
+      metadata: { run_id: "run-replay", status: "completed" },
+      runId: "run-replay",
+      runStatus: "completed",
+    };
+    const events: StandaloneChatEvent[] = [{
+      run_id: "run-replay",
+      sequence: 1,
+      type: "text_delta",
+      payload: { delta: "Demo answer" },
+      created_at: "2026-01-01T00:00:00Z",
+    }];
+
+    await act(async () => {
+      root.render(
+        <ChatUiContext.Provider value={{ events, conversationId: "conversation-demo", files: [], openArtifact: () => undefined, onStop: async () => undefined, onRetry: async () => undefined, onOpenDashboardPreview: () => undefined }}>
+          <ChatMessage message={message} autoReplayRunId="run-replay" />
+        </ChatUiContext.Provider>,
+      );
+    });
+    expect(container.querySelector('[data-testid="chat-replay"]')).not.toBeNull();
+    await act(async () => root.unmount());
+    container.remove();
+  });
+});
+
 describe("Data Chat live state", () => {
   let container: HTMLDivElement;
   let root: Root;

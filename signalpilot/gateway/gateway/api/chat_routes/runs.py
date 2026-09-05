@@ -84,6 +84,9 @@ async def create_run(
     role: OrgRole,
 ):
     _require_enabled()
+    from gateway.standalone_chat.demo_limits import enforce_demo_request_limit
+
+    await enforce_demo_request_limit(store.session, org_id=store._require_org_id())
     conversation = (
         await store.session.execute(
             select(GatewayChatConversation).where(
@@ -312,6 +315,9 @@ async def clarify_run(run_id: str, body: StandaloneClarificationCreate, store: S
 )
 async def retry_run(run_id: str, store: StoreD, role: OrgRole):
     _require_enabled()
+    from gateway.standalone_chat.demo_limits import enforce_demo_request_limit
+
+    await enforce_demo_request_limit(store.session, org_id=store._require_org_id())
     failed = (
         await store.session.execute(
             select(GatewayChatRun)

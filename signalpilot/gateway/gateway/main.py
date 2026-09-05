@@ -41,6 +41,7 @@ from .http import (
 from .http.log_redaction import install_uvicorn_secret_path_filter, redact_secret_path
 from .models import ConnectionUpdate
 from .runtime.mode import is_cloud_mode
+from .standalone_chat.demo_limits import DemoRequestLimitError
 from .store import Store, configure_byok
 from .store.crypto import _validate_encryption_health
 
@@ -663,6 +664,14 @@ app.add_middleware(
 )
 
 # Global exception handler.
+
+
+@app.exception_handler(DemoRequestLimitError)
+async def _demo_request_limit_handler(
+    _request: Request, exc: DemoRequestLimitError
+) -> JSONResponse:
+    """Keep the documented demo-limit payload at the response top level."""
+    return JSONResponse(status_code=exc.status_code, content=exc.detail)
 
 
 @app.exception_handler(Exception)

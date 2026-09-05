@@ -84,7 +84,7 @@ export function ConnectionList({ controller }: ConnectionListProps) {
           }
         />
       ) : (
-        <div className="connection-list">
+        <div className="connection-list" data-tour-id="connection-list">
           <div className="connections-toolbar">
             <label className="connections-search"><Search aria-hidden="true" /><input value={connectionSearch} onChange={(event) => setConnectionSearch(event.target.value)} placeholder="Find a connection" aria-label="Find a connection" /></label>
             {(() => {

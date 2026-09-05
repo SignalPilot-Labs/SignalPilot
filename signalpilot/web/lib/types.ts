@@ -235,6 +235,19 @@ export interface DemoConnectorCreated {
   repo_url: string | null;
 }
 
+export interface DemoBootstrapResponse {
+  status: "provisioning" | "ready";
+  phase: "private_data" | "project" | "opening";
+  created: boolean;
+  connection_name?: string;
+  project_id?: string;
+  conversation_id?: string;
+  replay_run_id?: string;
+  request_limit: 5;
+  requests_used: number;
+  requests_remaining: number;
+}
+
 export interface ProjectInfo {
   id: string;
   name: string;

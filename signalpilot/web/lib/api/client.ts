@@ -151,6 +151,14 @@ export function userFacingErrorMessage(
   error: unknown,
   fallback: string,
 ): string | null {
+  if (error instanceof ApiRequestError) {
+    try {
+      const parsed = JSON.parse(error.body) as { code?: string; detail?: { code?: string } };
+      if (parsed.code === "demo_request_limit" || parsed.detail?.code === "demo_request_limit") {
+        return "This Demo Team has used its 5 live requests.";
+      }
+    } catch { /* non-JSON gateway errors use the existing fallback path */ }
+  }
   const raw = error instanceof Error ? error.message : "";
   if (isNotebookSessionAuthError(raw)) return null;
   return raw || fallback;

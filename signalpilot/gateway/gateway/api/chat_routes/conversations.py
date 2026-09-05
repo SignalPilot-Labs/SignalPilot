@@ -62,6 +62,9 @@ async def list_conversations(
 )
 async def create_conversation(body: StandaloneConversationCreate, store: StoreD, role: OrgRole):
     _require_enabled()
+    from gateway.standalone_chat.demo_limits import enforce_demo_request_limit
+
+    await enforce_demo_request_limit(store.session, org_id=store._require_org_id())
     project, readiness = await _readiness_or_error(store, body.project_id)
     if not readiness.ready or not readiness.branch:
         raise HTTPException(

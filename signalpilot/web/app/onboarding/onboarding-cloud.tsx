@@ -15,6 +15,8 @@ import {
   CheckCircle2,
   AlertTriangle,
   Plug,
+  Compass,
+  Database,
 } from "lucide-react";
 import { DashboardSkeleton } from "~/components/ui/skeleton";
 import { useUser, useOrganization, useOrganizationList } from "@clerk/nextjs";
@@ -27,6 +29,7 @@ import { CopyButton } from "~/components/ui/copy-button";
 import { CodeBlock } from "~/components/ui/code-block";
 import { useToast } from "~/components/ui/toast";
 import { TeamStep } from "./team-step";
+import { GETTING_STARTED_EVENT, normalizeGettingStarted } from "~/lib/getting-started";
 
 // ---------------------------------------------------------------------------
 // Re-export the step sub-components that the main page used to define inline.
@@ -585,6 +588,68 @@ function OnboardingWizard({
 // ---------------------------------------------------------------------------
 
 export function CloudOnboardingContent() {
+  const router = useRouter();
+  const { user, isLoaded } = useUser();
+  const { organization, isLoaded: orgLoaded } = useOrganization();
+
+  useEffect(() => {
+    if (isLoaded && !user) router.push("/sign-in");
+  }, [isLoaded, router, user]);
+
+  useEffect(() => {
+    if (!isLoaded || !orgLoaded || !user) return;
+    if (user.unsafeMetadata.onboardingCompleted === true && organization) {
+      router.replace("/dashboard");
+    }
+  }, [isLoaded, orgLoaded, organization, router, user]);
+
+  function launch(journey: "demo" | "setup") {
+    window.dispatchEvent(new CustomEvent(GETTING_STARTED_EVENT, { detail: { journey, expanded: true } }));
+  }
+
+  async function skip() {
+    if (!user) return;
+    await user.update({
+      unsafeMetadata: {
+        ...user.unsafeMetadata,
+        onboardingCompleted: true,
+        signalpilotGettingStarted: normalizeGettingStarted(
+          user.unsafeMetadata.signalpilotGettingStarted,
+        ),
+      },
+    });
+    router.push("/dashboard");
+  }
+
+  if (!isLoaded || !orgLoaded || !user) return <DashboardSkeleton />;
+  return (
+    <div className="flex min-h-screen items-center justify-center px-10 py-16">
+      <div className="w-full max-w-5xl">
+        <p className="text-[11px] uppercase tracking-[0.16em] text-[var(--color-success)]">SignalPilot</p>
+        <h1 className="mt-3 max-w-2xl text-4xl font-semibold tracking-tight text-[var(--color-text)]">Turn governed data into trusted answers.</h1>
+        <p className="mt-4 max-w-xl text-sm leading-6 text-[var(--color-text-dim)]">Start with a private interactive demo, or connect your Team&apos;s dbt project and warehouse.</p>
+        <div className="mt-10 grid grid-cols-2 gap-5">
+          <button type="button" onClick={() => launch("demo")} className="group border border-[var(--color-success)]/50 bg-[var(--color-success)]/5 p-7 text-left hover:border-[var(--color-success)]">
+            <span className="text-[10px] uppercase tracking-[0.12em] text-[var(--color-success)]">Recommended</span>
+            <Compass className="mt-8 h-6 w-6" />
+            <h2 className="mt-4 text-lg font-medium">Explore a demo</h2>
+            <p className="mt-2 text-xs leading-5 text-[var(--color-text-dim)]">Watch the Chat Agent investigate experiment lift, then explore on your own.</p>
+            <span className="mt-6 inline-block bg-[var(--color-text)] px-4 py-2 text-xs text-[var(--color-bg)]">Show me</span>
+          </button>
+          <button type="button" onClick={() => launch("setup")} className="group border border-[var(--color-border)] p-7 text-left hover:border-[var(--color-text-dim)]">
+            <Database className="mt-5 h-6 w-6" />
+            <h2 className="mt-4 text-lg font-medium">Connect my data</h2>
+            <p className="mt-2 text-xs leading-5 text-[var(--color-text-dim)]">Create a production Team and configure GitHub, your warehouse, and Agent access.</p>
+            <span className="mt-6 inline-block border border-[var(--color-border)] px-4 py-2 text-xs">Set up SignalPilot</span>
+          </button>
+        </div>
+        <button type="button" onClick={() => void skip()} className="mt-6 text-xs text-[var(--color-text-dim)] hover:text-[var(--color-text)]">Skip for now</button>
+      </div>
+    </div>
+  );
+}
+
+function LegacyCloudOnboardingContent() {
   const router = useRouter();
   const { user, isLoaded: userLoaded } = useUser();
 

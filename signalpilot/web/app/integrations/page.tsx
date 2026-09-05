@@ -17,7 +17,6 @@ import { useAppAuth } from "~/lib/auth-context";
 import {
   deleteNotionOAuthInstallation,
   deleteSlackOAuthInstallation,
-  getOrgSecrets,
   getWorkspaceProjects,
   getNotionOAuthInstallations,
   getSlackOAuthInstallations,
@@ -25,9 +24,7 @@ import {
   provisionSlackOAuthInstallation,
   startNotionOAuth,
   startSlackOAuth,
-  updateOrgSecrets,
   type NotionOAuthInstallation,
-  type OrgSecretsResponse,
   type SlackOAuthInstallation,
 } from "~/lib/api";
 import type { WorkspaceProjectInfo } from "~/lib/types";
@@ -36,13 +33,9 @@ import { StatusDot } from "~/components/ui/data-viz";
 import { SectionHeader } from "~/components/ui/section-header";
 import { useToast } from "~/components/ui/toast";
 import { ApiKeysSkeleton } from "~/components/ui/skeleton";
-import { NotebooksProjectsPaywall } from "~/components/billing/notebooks-projects-paywall";
 import { NotionIcon } from "~/components/branding/notion-icon";
 import { ThemeEditor } from "~/components/integrations/theme-editor";
-import { useSubscription } from "~/lib/subscription-context";
-
-const IS_CLOUD_MODE = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "cloud";
-const PAID_TIERS = ["pro", "team", "enterprise", "unlimited"];
+import { AnthropicKeyForm } from "~/components/integrations/anthropic-key-form";
 
 function oauthStatus(installation: NotionOAuthInstallation): { label: string; tone: "healthy" | "warning" | "error" | "unknown" } {
   if (installation.status === "disconnected") return { label: "disconnected", tone: "error" };
@@ -76,20 +69,9 @@ function projectLabel(project: WorkspaceProjectInfo): string {
   return project.display_name || project.name || project.id;
 }
 
-function formatUpdatedAt(value: number | null): string {
-  if (!value) return "-";
-  return new Date(value * 1000).toLocaleString();
-}
-
 export default function IntegrationsPage() {
   const { isLoaded } = useAppAuth();
-  const { planTier, isLoaded: subLoaded } = useSubscription();
-
-  const isPaid = PAID_TIERS.includes(planTier);
-  const gated = IS_CLOUD_MODE && subLoaded && !isPaid;
-
-  if (!isLoaded || (IS_CLOUD_MODE && !subLoaded)) return <ApiKeysSkeleton />;
-  if (gated) return <NotebooksProjectsPaywall />;
+  if (!isLoaded) return <ApiKeysSkeleton />;
   return <IntegrationsContent />;
 }
 
@@ -109,28 +91,6 @@ function IntegrationsContent() {
   const [provisioningSlackId, setProvisioningSlackId] = useState<string | null>(null);
   const [deletingOauthId, setDeletingOauthId] = useState<string | null>(null);
   const [deletingSlackId, setDeletingSlackId] = useState<string | null>(null);
-  const [orgSecrets, setOrgSecrets] = useState<OrgSecretsResponse | null>(null);
-  const [orgSecretsLoading, setOrgSecretsLoading] = useState(true);
-  const [orgSecretsLoadError, setOrgSecretsLoadError] = useState(false);
-  const [orgSecretsReadOnly, setOrgSecretsReadOnly] = useState(false);
-  const [anthropicKey, setAnthropicKey] = useState("");
-  const [savingAnthropicKey, setSavingAnthropicKey] = useState(false);
-  const [confirmRemoveAnthropicKey, setConfirmRemoveAnthropicKey] = useState(false);
-
-  const fetchOrgSecrets = useCallback(async () => {
-    setOrgSecretsLoading(true);
-    try {
-      const secrets = await getOrgSecrets();
-      setOrgSecrets(secrets);
-      setOrgSecretsLoadError(false);
-    } catch {
-      setOrgSecrets(null);
-      setOrgSecretsLoadError(true);
-    } finally {
-      setOrgSecretsLoading(false);
-    }
-  }, []);
-
   const fetchIntegrations = useCallback(async () => {
     try {
       const [installations, slackInstalls, projectResult] = await Promise.all([
@@ -181,7 +141,6 @@ function IntegrationsContent() {
   }, [toast]);
 
   useEffect(() => { fetchIntegrations(); }, [fetchIntegrations]);
-  useEffect(() => { fetchOrgSecrets(); }, [fetchOrgSecrets]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -372,49 +331,6 @@ function IntegrationsContent() {
       await fetchIntegrations();
     } catch (e) {
       toast(`failed: ${e}`, "error");
-    }
-  }
-
-  async function handleSaveAnthropicKey() {
-    const key = anthropicKey.trim();
-    if (!key || savingAnthropicKey) return;
-    setSavingAnthropicKey(true);
-    try {
-      const updated = await updateOrgSecrets({ anthropic_api_key: key });
-      setOrgSecrets(updated);
-      setAnthropicKey("");
-      setOrgSecretsReadOnly(false);
-      setOrgSecretsLoadError(false);
-      toast(orgSecrets?.has_key ? "anthropic key rotated" : "anthropic key saved", "success");
-    } catch (e) {
-      if (String(e).includes("403:")) {
-        setOrgSecretsReadOnly(true);
-        toast("you do not have permission to update org secrets", "error");
-      } else {
-        toast(`failed to save key: ${e}`, "error");
-      }
-    } finally {
-      setSavingAnthropicKey(false);
-    }
-  }
-
-  async function handleRemoveAnthropicKey() {
-    setSavingAnthropicKey(true);
-    try {
-      const updated = await updateOrgSecrets({ anthropic_api_key: null });
-      setOrgSecrets(updated);
-      setConfirmRemoveAnthropicKey(false);
-      setOrgSecretsReadOnly(false);
-      toast("anthropic key removed", "success");
-    } catch (e) {
-      if (String(e).includes("403:")) {
-        setOrgSecretsReadOnly(true);
-        toast("you do not have permission to update org secrets", "error");
-      } else {
-        toast(`failed to remove key: ${e}`, "error");
-      }
-    } finally {
-      setSavingAnthropicKey(false);
     }
   }
 
@@ -797,127 +713,9 @@ function IntegrationsContent() {
       </section>
 
       <section className="mb-8">
-        <div className="flex items-center justify-between mb-4">
-          <SectionHeader icon={KeyRound} title="anthropic api key" />
-        </div>
-
-        <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5">
-          {orgSecretsLoading ? (
-            <div className="flex items-center gap-2 text-[12px] text-[var(--color-text-dim)] tracking-wider">
-              <Loader2 className="w-3 h-3 animate-spin" />
-              checking key
-            </div>
-          ) : orgSecretsLoadError ? (
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex items-center gap-2">
-                <StatusDot status="error" size={4} />
-                <span className="text-[12px] text-[var(--color-text-dim)] tracking-wider">
-                  failed to load
-                </span>
-              </div>
-              <button
-                onClick={fetchOrgSecrets}
-                className="px-4 py-2 text-[12px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-all tracking-wider uppercase"
-              >
-                retry
-              </button>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2">
-                    <StatusDot status={orgSecrets?.has_key ? "healthy" : "warning"} size={4} />
-                    <span className="text-[13px] text-[var(--color-text)] tracking-wider font-medium">
-                      {orgSecrets?.has_key ? "key set" : "no key"}
-                    </span>
-                  </div>
-                  <div className="space-y-1 text-[11px] text-[var(--color-text-dim)] tracking-wider">
-                    {orgSecrets?.key_preview && (
-                      <p>
-                        preview: <span className="text-[var(--color-text-muted)] font-mono">{orgSecrets.key_preview}</span>
-                      </p>
-                    )}
-                    <p>
-                      updated: <span className="text-[var(--color-text-muted)]">{formatUpdatedAt(orgSecrets?.updated_at ?? null)}</span>
-                    </p>
-                    {orgSecretsReadOnly && (
-                      <p className="text-[var(--color-warning)]">
-                        read-only: write permission required
-                      </p>
-                    )}
-                  </div>
-                </div>
-                {orgSecrets?.has_key && (
-                  <div className="flex items-center gap-1.5">
-                    {confirmRemoveAnthropicKey ? (
-                      <>
-                        <button
-                          onClick={handleRemoveAnthropicKey}
-                          disabled={savingAnthropicKey || orgSecretsReadOnly}
-                          className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] text-[var(--color-error)] border border-[var(--color-error)]/30 hover:border-[var(--color-error)] transition-all tracking-wider uppercase disabled:opacity-30"
-                        >
-                          {savingAnthropicKey ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
-                          confirm
-                        </button>
-                        <button
-                          onClick={() => setConfirmRemoveAnthropicKey(false)}
-                          className="p-1.5 text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"
-                        >
-                          <X className="w-3 h-3" />
-                        </button>
-                      </>
-                    ) : (
-                      <button
-                        onClick={() => setConfirmRemoveAnthropicKey(true)}
-                        disabled={orgSecretsReadOnly}
-                        className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-error)]/50 hover:text-[var(--color-error)] transition-all tracking-wider uppercase disabled:opacity-30"
-                      >
-                        <Trash2 className="w-3 h-3" />
-                        remove
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              <div className="border-t border-[var(--color-border)] pt-4">
-                <label htmlFor="anthropic-api-key" className="sr-only">Anthropic API key</label>
-                <p className="mb-3 text-[12px] leading-5 text-[var(--color-text-dim)] tracking-wider">
-                  Set your{" "}
-                  <a
-                    href="https://platform.claude.com"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-[var(--color-text)] underline decoration-[var(--color-border-hover)] underline-offset-4 hover:decoration-[var(--color-text)]"
-                  >
-                    Anthropic API key
-                  </a>{" "}
-                  to enable SignalPilot Agents
-                </p>
-                <div className="flex flex-col gap-2 sm:flex-row">
-                  <input
-                    id="anthropic-api-key"
-                    type="password"
-                    value={anthropicKey}
-                    onChange={(event) => setAnthropicKey(event.target.value)}
-                    onKeyDown={(event) => { if (event.key === "Enter") void handleSaveAnthropicKey(); }}
-                    disabled={savingAnthropicKey || orgSecretsReadOnly}
-                    placeholder="sk-ant-..."
-                    className="min-w-0 flex-1 px-3 py-2 bg-[var(--color-bg-input)] border border-[var(--color-border)] text-xs font-mono focus:outline-none disabled:opacity-40"
-                  />
-                  <button
-                    onClick={handleSaveAnthropicKey}
-                    disabled={!anthropicKey.trim() || savingAnthropicKey || orgSecretsReadOnly}
-                    className="flex items-center justify-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-[12px] tracking-wider uppercase transition-all hover:opacity-90 disabled:opacity-30"
-                  >
-                    {savingAnthropicKey ? <Loader2 className="w-3 h-3 animate-spin" /> : <KeyRound className="w-3 h-3" />}
-                    {orgSecrets?.has_key ? "rotate" : "save"}
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
+        <div className="mb-4"><SectionHeader icon={KeyRound} title="anthropic api key" /></div>
+        <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)]">
+          <AnthropicKeyForm />
         </div>
       </section>
 

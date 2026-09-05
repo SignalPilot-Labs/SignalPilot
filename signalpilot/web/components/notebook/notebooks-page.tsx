@@ -148,7 +148,7 @@ export default function NotebooksPage() {
   );
 
   const isPaid = PAID_TIERS.includes(planTier);
-  const gated = IS_CLOUD_MODE && subLoaded && !isPaid;
+  const gated = IS_CLOUD_MODE && subLoaded && !isPaid && !pathname?.startsWith("/projects");
 
   const nextSearch = searchParams.toString();
   const effectiveSearchParams = useMemo(

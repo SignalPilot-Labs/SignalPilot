@@ -11,14 +11,14 @@ from ..notebook_proxy.constants import SESSION_ID_PATTERN_STR
 from ..notebooks import session_service
 from ..runtime.mode import is_cloud_mode
 from ..security.scope_guard import RequireScope
-from .deps import ProjectsGate, StoreD
+from .deps import NotebookSessionsGate, StoreD
 
 # Single source of truth for session_id charset validation (shared with proxy auth).
 _SESSION_ID_PATTERN = re.compile(SESSION_ID_PATTERN_STR)
 
-# Notebook sessions are part of the paid "projects" feature. In local mode the
-# tier resolves to "unlimited", so the gate is a no-op.
-router = APIRouter(prefix="/api/notebook-sessions", dependencies=[ProjectsGate])
+# User-facing notebook compute is paid. Chat's governed internal runtime does
+# not call these routes and remains available independently.
+router = APIRouter(prefix="/api/notebook-sessions", dependencies=[NotebookSessionsGate])
 
 
 @router.post("", status_code=201, response_model=NotebookSessionInfo, dependencies=[RequireScope("write")])
@@ -65,8 +65,7 @@ async def get_session_by_id(session_id: str, store: StoreD):
     Returns 404 on missing, cross-org, OR cross-user (same-org peers cannot
     read each other's sessions: sharing is a future feature).
     """
-    session = await _owned_session_or_404(session_id, store)
-    return session
+    return await _owned_session_or_404(session_id, store)
 
 
 @router.delete("", status_code=204, response_model=None, dependencies=[RequireScope("write")])

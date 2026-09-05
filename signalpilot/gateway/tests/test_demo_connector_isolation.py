@@ -298,6 +298,14 @@ def test_pinned_edits_are_restricted_to_cosmetic_fields():
     assert "tags" in _PINNED_EDITABLE_FIELDS
 
 
+def test_demo_policy_tags_survive_cosmetic_tag_edits():
+    from gateway.api.connections.crud import _preserve_pinned_system_tags
+
+    assert _preserve_pinned_system_tags(
+        ["sp-demo", "demo:parallax", "old-label"], ["new-label"]
+    ) == ["sp-demo", "demo:parallax", "new-label"]
+
+
 def test_xata_identity_is_carried_into_edit_revalidation():
     """Xata identity lives in extras, not on ConnectionInfo. If an edit does not
     fold it back in, revalidating the merged record fails ('require region and

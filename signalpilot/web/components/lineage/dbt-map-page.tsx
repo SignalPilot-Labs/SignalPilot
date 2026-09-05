@@ -308,7 +308,7 @@ export function DbtMapPage({
             />
           ))}
 
-        <div className="relative min-w-0 flex-1 bg-[var(--color-bg)]" data-testid="lineage-canvas">
+        <div className="relative min-w-0 flex-1 bg-[var(--color-bg)]" data-testid="lineage-canvas" data-tour-id="lineage-canvas">
           {parsed ? (
             <>
               <ReactFlowProvider>

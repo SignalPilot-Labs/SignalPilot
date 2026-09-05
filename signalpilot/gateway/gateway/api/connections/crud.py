@@ -67,6 +67,12 @@ _XATA_IDENTITY_EXTRAS: tuple[str, ...] = (
 )
 
 
+def _preserve_pinned_system_tags(existing: list[str], proposed: list[str]) -> list[str]:
+    """Let sandbox users add labels without removing policy/ownership markers."""
+    required = [tag for tag in existing if tag == "sp-demo" or tag.startswith("demo:")]
+    return list(dict.fromkeys([*required, *proposed]))
+
+
 @router.get("/connections", dependencies=[RequireScope("read")])
 async def get_connections(store: StoreD):
     return await store.list_connections()
@@ -103,11 +109,24 @@ async def get_connection_detail(name: str, store: StoreD):
 
 @router.delete("/connections/{name}", status_code=204, response_model=None, dependencies=[RequireScope("write")])
 async def remove_connection(name: str, store: StoreD, _role: OrgAdmin, request: Request):
-    # Demo connections own a private Xata branch: capture the cleanup (with the
-    # connection's stored credentials) BEFORE the row is deleted, run it after.
-    from gateway.api.demo import prepare_demo_branch_cleanup
+    # Demo branch cleanup is strict and precedes row deletion so a transient
+    # control-plane failure remains retryable instead of leaking private data.
+    from gateway.api.demo import _delete_demo_branch_strict, prepare_demo_branch_cleanup
 
-    demo_cleanup = await prepare_demo_branch_cleanup(store, name)
+    existing = await store.get_connection(name)
+    if existing and "sp-demo" in (existing.tags or []):
+        try:
+            await _delete_demo_branch_strict(store, name)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail="Could not remove private demo data; retry deletion",
+            ) from exc
+        demo_cleanup = None
+    else:
+        demo_cleanup = await prepare_demo_branch_cleanup(store, name)
 
     if not await store.delete_connection(name):
         raise HTTPException(status_code=404, detail=f"Connection '{name}' not found")
@@ -153,6 +172,11 @@ async def edit_connection(name: str, update: ConnectionUpdate, store: StoreD, _r
                     f"{', '.join(moved)} cannot be changed. Remove it and add it again instead."
                 ),
             )
+        if "tags" in update_data:
+            update_data["tags"] = _preserve_pinned_system_tags(
+                existing.tags or [], update_data["tags"]
+            )
+            update = update.model_copy(update={"tags": update_data["tags"]})
 
     if update_data:
         merged_db_type = update_data.get("db_type", existing.db_type)

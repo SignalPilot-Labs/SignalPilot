@@ -106,6 +106,7 @@ export function StandaloneChatComposer({
   return (
     <div
       data-testid="standalone-chat-composer"
+      data-tour-id="chat-composer"
       className="mx-auto w-full max-w-3xl px-6 pb-6 pt-3"
     >
       {/* Plan dock: the run's TodoWrite list, fused to the top of the input

@@ -86,6 +86,9 @@ class ChatBootstrapResponse(BaseModel):
     available_efforts: list[dict[str, str]] = Field(default_factory=list)
     default_effort: str = "medium"
     enterprise_features: dict[str, bool] = Field(default_factory=dict)
+    demo_request_limit: int | None = None
+    demo_requests_used: int = 0
+    demo_requests_remaining: int | None = None
 
 
 class StandaloneConversationCreate(StrictChatRequest):

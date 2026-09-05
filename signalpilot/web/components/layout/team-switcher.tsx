@@ -15,9 +15,10 @@
 import { useRef, useState, useEffect, useCallback } from "react";
 import { useClerk, useUser, useOrganization, useOrganizationList } from "@clerk/nextjs";
 import { Component, type ReactNode } from "react";
-import { LogOut, ChevronDown, Check, Plus } from "lucide-react";
+import { LogOut, ChevronDown, Check, Plus, Map } from "lucide-react";
 import { useCreateTeam } from "~/lib/use-create-team";
 import { PendingButton } from "~/components/ui/pending-button";
+import { GETTING_STARTED_EVENT } from "~/lib/getting-started";
 
 const LIST_MSG_CLASS = "px-3 py-2 text-[10px] text-[var(--color-text-dim)] tracking-wider font-mono";
 
@@ -407,6 +408,18 @@ function TeamSwitcherInner({ displayName }: { displayName: string }) {
             )}
           </div>
           )}
+
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              window.dispatchEvent(new CustomEvent(GETTING_STARTED_EVENT, { detail: { journey: null, expanded: true } }));
+            }}
+            className="w-full flex items-center gap-2 px-3 py-2 text-[11px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] tracking-wider font-mono transition-colors border-t border-[var(--color-border)]"
+          >
+            <Map size={10} aria-hidden="true" />
+            Getting Started
+          </button>
 
           {/* Sign out */}
           <button

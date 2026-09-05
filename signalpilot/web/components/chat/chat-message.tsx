@@ -12,7 +12,7 @@ import {
   Sparkles,
   Wrench,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ChatMarkdown } from "~/components/chat/chat-markdown";
 import {
   openStandaloneNotebookArchive,
@@ -464,16 +464,26 @@ function AssistantMessageReplay({
 function ReplayableAssistantMessage({
   message,
   previousMessageAt,
+  autoReplayRunId,
 }: {
   message: UiMessage;
   previousMessageAt?: number;
+  autoReplayRunId?: string | null;
 }) {
   const { events } = useChatUi();
-  const [replaying, setReplaying] = useState(false);
   const runId = messageRunId(message);
+  const [replaying, setReplaying] = useState(
+    () => Boolean(runId && runId === autoReplayRunId),
+  );
+  const autoStarted = useRef(replaying);
   const canReplay =
     Boolean(runId) &&
     events.some((event) => event.run_id === runId && event.type !== "status");
+  useEffect(() => {
+    if (autoStarted.current || !canReplay || runId !== autoReplayRunId) return;
+    autoStarted.current = true;
+    setReplaying(true);
+  }, [autoReplayRunId, canReplay, runId]);
   if (replaying && runId) {
     return (
       <AssistantMessageReplay
@@ -495,9 +505,11 @@ function ReplayableAssistantMessage({
 export function ChatMessage({
   message,
   previousMessageAt,
+  autoReplayRunId,
 }: {
   message: UiMessage;
   previousMessageAt?: number;
+  autoReplayRunId?: string | null;
 }) {
   return message.role === "user" ? (
     <UserMessage message={message} />
@@ -505,6 +517,7 @@ export function ChatMessage({
     <ReplayableAssistantMessage
       message={message}
       previousMessageAt={previousMessageAt}
+      autoReplayRunId={autoReplayRunId}
     />
   );
 }

@@ -110,5 +110,7 @@ async def get_plan_usage(_user: UserID, org_id: OrgID, store: StoreD):
             "sso": plan.sso,
             "budget_controls": plan.budget_controls,
             "audit_export": plan.audit_export,
+            "projects": plan.projects,
+            "notebook_sessions": plan.notebook_sessions,
         },
     }

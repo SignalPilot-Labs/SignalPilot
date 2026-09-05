@@ -14,11 +14,11 @@ export function NotebooksProjectsPaywall() {
         </div>
         <div className="border border-[var(--color-border)] p-6 space-y-4">
           <p className="text-sm text-[var(--color-text)]">
-            Notebooks &amp; projects are a Pro feature.
+            Interactive notebooks are a Pro feature.
           </p>
           <p className="text-xs text-[var(--color-text-dim)] leading-relaxed">
-            Upgrade to Pro, Team, or Enterprise to create governed notebook
-            workspaces backed by your connections and dbt projects.
+            Free Teams can still import dbt projects, explore lineage, and use
+            Chat Agent. Upgrade for user-managed notebook sessions.
           </p>
           <a
             href="/settings/billing"

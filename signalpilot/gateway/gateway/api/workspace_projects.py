@@ -23,8 +23,8 @@ from .workspace_files import WorkspaceStoreD, _valid_branch
 
 logger = logging.getLogger(__name__)
 
-# All workspace-project routes require the paid "projects" feature.
-# In local mode the tier resolves to "unlimited", so the gate is a no-op.
+# Workspace projects and lineage are available on every current plan.
+# The gate remains the centralized entitlement boundary for future tiers.
 router = APIRouter(prefix="/api", dependencies=[ProjectsGate])
 
 
@@ -176,6 +176,14 @@ async def update_project(project_id: str, body: WorkspaceProjectUpdate, store: S
     updates = body.model_dump(exclude_none=True)
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
+    existing = await _get_project_or_404(store, project_id)
+    if "sp-demo" in (existing.tags or []) and "tags" in updates:
+        required = [
+            tag
+            for tag in (existing.tags or [])
+            if tag == "sp-demo" or tag.startswith(("demo:", "journey:demo-"))
+        ]
+        updates["tags"] = list(dict.fromkeys([*required, *updates["tags"]]))
     proj = await store.update_workspace_project(project_id, updates)
     if not proj:
         raise HTTPException(status_code=404, detail="Project not found")

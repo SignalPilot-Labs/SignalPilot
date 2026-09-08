@@ -2,12 +2,11 @@
 
 // Header of a published dashboard: identity, version and refresh lines,
 // and the action row (Refresh now, Settings, Edit in chat, Download JSON,
-// Share, overflow with Archive/Unarchive and Delete).
+// overflow with Archive/Unarchive and Delete).
 
 import {
   ArrowDownToLine,
   ArrowLeft,
-  Link2,
   MessageSquarePlus,
   MoreHorizontal,
   RefreshCw,
@@ -28,7 +27,6 @@ export type DashboardHeaderActions = {
   onOpenSettings: () => void;
   onEditInChat: () => void;
   onDownloadJson: () => void;
-  onShare: () => void;
   onArchiveToggle: () => void;
   onDelete: () => void;
 };
@@ -163,20 +161,6 @@ export function DashboardHeader({
           >
             <ArrowDownToLine className="h-3.5 w-3.5" strokeWidth={1.5} />
             Download JSON
-          </button>
-          <button
-            type="button"
-            data-testid="dashboard-share"
-            onClick={actions.onShare}
-            className={BUTTON_CLASS}
-            title={
-              dashboard.visibility === "link"
-                ? "Copy the share link"
-                : "Set visibility to Link in Settings to share outside the team"
-            }
-          >
-            <Link2 className="h-3.5 w-3.5" strokeWidth={1.5} />
-            Share
           </button>
           {canEdit && (
             <>

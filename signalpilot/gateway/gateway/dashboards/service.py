@@ -1,4 +1,4 @@
-"""Dashboard lifecycle: publish, versions, settings, share links, edit chats.
+"""Dashboard lifecycle: publish, versions, settings, edit chats.
 
 The service takes a session, a storage facade, and plain inputs. It raises
 ``DashboardError`` with an HTTP status; the API maps it to a response. The
@@ -235,8 +235,6 @@ def apply_settings(
         dashboard.description = (description or "").strip() or None
     if visibility is not None:
         dashboard.visibility = visibility
-        if visibility == "link" and not dashboard.share_token:
-            dashboard.share_token = store.new_share_token()
     if notify_on_failure is not None:
         dashboard.notify_on_failure = bool(notify_on_failure)
     if refresh is not None:

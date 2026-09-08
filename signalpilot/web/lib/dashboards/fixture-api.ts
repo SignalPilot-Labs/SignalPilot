@@ -16,7 +16,6 @@ import { ApiRequestError } from "~/lib/api/client";
 import type { DashboardsApi } from "./api";
 import {
   FIXTURE_NOW,
-  FIXTURE_SHARE_TOKEN,
   FIXTURE_SPEC,
   fixtureArchivedDashboard,
   fixtureDashboard,
@@ -179,10 +178,7 @@ export function createFixtureDashboardsApi(options: FixtureDashboardsOptions = {
       const dashboard = find(dashboardId);
       if (body.name !== undefined) dashboard.name = body.name;
       if (body.description !== undefined) dashboard.description = body.description;
-      if (body.visibility !== undefined) {
-        dashboard.visibility = body.visibility;
-        if (body.visibility === "link" && !dashboard.share_token) dashboard.share_token = FIXTURE_SHARE_TOKEN;
-      }
+      if (body.visibility !== undefined) dashboard.visibility = body.visibility;
       if (body.notify_on_failure !== undefined) dashboard.notify_on_failure = body.notify_on_failure;
       if (body.refresh !== undefined) {
         dashboard.refresh = { ...body.refresh };
@@ -258,14 +254,6 @@ export function createFixtureDashboardsApi(options: FixtureDashboardsOptions = {
       const dashboard = find(dashboardId);
       state.dashboards = state.dashboards.filter((d) => d.id !== dashboard.id);
       await wait(undefined);
-    },
-    async getSharedDashboard(shareToken) {
-      const dashboard = state.dashboards.find(
-        (d) => d.share_token === shareToken && d.visibility === "link" && !d.archived_at,
-      );
-      if (!dashboard) throw new ApiRequestError(404, "This shared dashboard is not available.");
-      const version = versionsOf(dashboard.id)[0];
-      return wait(bundleFor(dashboard, version));
     },
     async openDashboardEditChat(dashboardId) {
       find(dashboardId);

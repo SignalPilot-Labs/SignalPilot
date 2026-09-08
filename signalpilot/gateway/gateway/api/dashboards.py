@@ -1,8 +1,8 @@
-"""Published dashboards API: gallery, detail, bundles, settings, refresh, share.
+"""Published dashboards API: gallery, detail, bundles, settings, refresh.
 
 Auth mirrors the chat file routes: ``RequireScope("read")`` for reads,
 ``RequireScope("query")`` for writes, org scoping through the store. A
-dashboard is visible when its visibility is org or link, or the caller
+dashboard is visible when its visibility is org, or the caller
 created it. It is editable by its creator or an org admin.
 """
 
@@ -24,7 +24,6 @@ from ..dashboards.serializers import (
     UpdateDashboardRequest,
     dashboard_out,
     refresh_out,
-    shared_dashboard_out,
     version_out,
 )
 from ..dashboards.storage import DashboardStorage, dashboard_storage
@@ -258,22 +257,3 @@ async def open_edit_chat(dashboard_id: str, store_: StoreD, role: OrgRole):
     except service.DashboardError as error:
         raise _raise(error) from error
     return {"conversation_id": conversation_id}
-
-
-# ── Share links ─────────────────────────────────────────────────────────────
-
-
-@router.get("/shared-dashboards/{share_token}", dependencies=[RequireScope("read")])
-async def get_shared_dashboard(share_token: str, store_: StoreD):
-    """The bundle behind a share link, with the reduced dashboard view.
-
-    The token is the only credential, so the response carries no owner,
-    source, schedule, or edit information (see ``shared_dashboard_out``).
-    """
-    dashboard = await store.get_dashboard_by_share_token(store_.session, share_token)
-    if dashboard is None:
-        raise HTTPException(status_code=404, detail="Shared dashboard not found")
-    version = await store.current_version(store_.session, dashboard)
-    if version is None:
-        raise HTTPException(status_code=404, detail="Shared dashboard has no version")
-    return await _bundle(shared_dashboard_out(dashboard, current_version_no=version.version_no), version)

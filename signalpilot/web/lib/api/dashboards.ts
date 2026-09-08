@@ -5,7 +5,7 @@ import type { DashboardSpec, DatasetRows } from "~/dashboard-renderer";
 
 import { GATEWAY_URL, getAuthHeaders, request } from "./client";
 
-export type DashboardVisibility = "private" | "org" | "link";
+export type DashboardVisibility = "private" | "org";
 export type DashboardRefreshMode = "sql" | "agent";
 export type DashboardRefreshStatus =
   | "queued"
@@ -45,7 +45,6 @@ export type PublishedDashboard = {
   name: string;
   description: string | null;
   visibility: DashboardVisibility;
-  share_token: string | null;
   project_id: string | null;
   created_by_user_id: string;
   created_by_label: string;
@@ -232,10 +231,6 @@ export async function deleteDashboard(dashboardId: string): Promise<void> {
   await request(`/api/dashboards/${encodeURIComponent(dashboardId)}`, {
     method: "DELETE",
   });
-}
-
-export async function getSharedDashboard(shareToken: string): Promise<DashboardBundle> {
-  return request(`/api/shared-dashboards/${encodeURIComponent(shareToken)}`);
 }
 
 export async function openDashboardEditChat(

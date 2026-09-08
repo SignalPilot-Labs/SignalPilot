@@ -141,20 +141,6 @@ export function DashboardPage({ idOrSlug }: { idOrSlug: string }) {
       router.push(routes.chat(conversation_id));
     }, "Could not open a chat for this dashboard.");
 
-  const onShare = async () => {
-    if (dashboard.visibility !== "link" || !dashboard.share_token) {
-      toast("Set visibility to Link in Settings to get a share link.", "info");
-      return;
-    }
-    const url = `${window.location.origin}${routes.shared(dashboard.share_token)}`;
-    try {
-      await navigator.clipboard.writeText(url);
-      toast("Share link copied.", "success");
-    } catch {
-      toast(url, "info", 8000);
-    }
-  };
-
   const onArchiveToggle = () =>
     run(async () => {
       const result = dashboard.archived_at
@@ -189,7 +175,6 @@ export function DashboardPage({ idOrSlug }: { idOrSlug: string }) {
               if (bundle) downloadSpecJson(bundle, dashboard.slug);
               else toast("The dashboard data has not loaded yet.", "warning");
             },
-            onShare: () => void onShare(),
             onArchiveToggle: () => void onArchiveToggle(),
             onDelete: () => setConfirmDelete(true),
           }}

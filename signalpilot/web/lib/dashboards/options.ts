@@ -8,8 +8,7 @@ export type DashboardOption<T extends string> = { value: T; label: string; hint:
 
 export const DASHBOARD_VISIBILITY_OPTIONS: DashboardOption<DashboardVisibility>[] = [
   { value: "private", label: "Private", hint: "Only you can open it." },
-  { value: "org", label: "Team", hint: "Everyone in your team can open it from the gallery." },
-  { value: "link", label: "Link", hint: "Anyone with the share link can open it." },
+  { value: "org", label: "Team", hint: "Everyone in your organization can open it." },
 ];
 
 export const DASHBOARD_REFRESH_MODE_OPTIONS: DashboardOption<DashboardRefreshMode>[] = [

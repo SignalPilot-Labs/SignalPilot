@@ -11,7 +11,6 @@ apply them through this module.
 from __future__ import annotations
 
 import re
-import secrets
 from datetime import UTC, datetime
 from typing import Any
 
@@ -50,16 +49,11 @@ def aware(value: datetime | None) -> datetime | None:
 
 
 def is_visible(dashboard: GatewayPublishedDashboard, user_id: str) -> bool:
-    return dashboard.visibility in ("org", "link") or dashboard.created_by_user_id == user_id
+    return dashboard.visibility == "org" or dashboard.created_by_user_id == user_id
 
 
 def can_edit(dashboard: GatewayPublishedDashboard, user_id: str, *, is_admin: bool) -> bool:
     return is_admin or dashboard.created_by_user_id == user_id
-
-
-def new_share_token() -> str:
-    """32 url-safe characters."""
-    return secrets.token_urlsafe(24)
 
 
 # ── Slugs ───────────────────────────────────────────────────────────────────
@@ -118,20 +112,6 @@ async def get_dashboard_by_id(db: AsyncSession, dashboard_id: str) -> GatewayPub
     return await db.get(GatewayPublishedDashboard, dashboard_id)
 
 
-async def get_dashboard_by_share_token(db: AsyncSession, token: str) -> GatewayPublishedDashboard | None:
-    if not token:
-        return None
-    return (
-        await db.execute(
-            select(GatewayPublishedDashboard).where(
-                GatewayPublishedDashboard.share_token == token,
-                GatewayPublishedDashboard.visibility == "link",
-                GatewayPublishedDashboard.archived_at.is_(None),
-            )
-        )
-    ).scalar_one_or_none()
-
-
 async def list_dashboards(
     db: AsyncSession,
     *,
@@ -143,7 +123,7 @@ async def list_dashboards(
     query = select(GatewayPublishedDashboard).where(
         GatewayPublishedDashboard.org_id == org_id,
         or_(
-            GatewayPublishedDashboard.visibility.in_(("org", "link")),
+            GatewayPublishedDashboard.visibility == "org",
             GatewayPublishedDashboard.created_by_user_id == user_id,
         ),
     )

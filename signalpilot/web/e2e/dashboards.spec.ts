@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 
 /**
  * Published dashboards: gallery, detail page, settings drawer, version and
- * refresh histories, and the shared view, exercised through the fixture
+ * refresh histories, exercised through the fixture
  * harness at /dashboards/test (in-memory API, no gateway).
  */
 
@@ -125,26 +125,5 @@ test.describe("dashboards (fixture harness)", () => {
     );
     // A running refresh disables Refresh now.
     await expect(page.getByTestId("dashboard-refresh-now")).toBeDisabled();
-  });
-
-  test("the shared view renders read-only without the app chrome", async ({ page }) => {
-    await page.goto(harness("?view=shared"), { waitUntil: "load" });
-    await waitForHydration(page);
-    const shared = page.getByTestId("dashboard-shared");
-    await expect(shared.locator("[data-chart-id]")).toHaveCount(9);
-    await expect(shared).toContainText("Version 3");
-    await expect(page.getByTestId("dashboard-refresh-now")).toHaveCount(0);
-    await expect(page.getByTestId("dashboard-open-settings")).toHaveCount(0);
-  });
-
-  test("the real share route lives under /dashboards/shared and drops the app chrome", async ({ page }) => {
-    // No gateway behind the dev server: the view lands on its error state, which
-    // is enough to prove the route resolves and renders without the sidebar.
-    await page.goto(`${BASE}/dashboards/shared/no-such-token`, { waitUntil: "load" });
-    const shared = page.getByTestId("dashboard-shared");
-    await expect(shared).toBeVisible();
-    await expect(shared.getByRole("alert")).toBeVisible();
-    await expect(page.locator('aside[aria-label="Platform navigation"]')).toHaveCount(0);
-    await expect(page.locator("main")).not.toHaveClass(/md:ml-56/);
   });
 });

@@ -4,7 +4,7 @@
 // chip, the refresh status dot and chip, the version-origin label and the
 // button classes every dashboard action reuses.
 
-import { Building2, Link2, Lock } from "lucide-react";
+import { Building2, Lock } from "lucide-react";
 
 import type {
   DashboardRefreshStatus,
@@ -14,7 +14,7 @@ import type {
 import { isActiveRefreshStatus } from "~/lib/api/dashboards";
 import { dashboardVisibilityOption } from "~/lib/dashboards/options";
 
-const VISIBILITY_ICONS: Record<DashboardVisibility, typeof Lock> = { private: Lock, org: Building2, link: Link2 };
+const VISIBILITY_ICONS: Record<DashboardVisibility, typeof Lock> = { private: Lock, org: Building2 };
 
 export const BUTTON_CLASS =
   "inline-flex h-8 items-center gap-1.5 rounded-[10px] border border-[var(--color-border)] bg-[var(--color-bg-card)] px-3 text-[12px] text-[var(--color-text-muted)] transition-colors hover:border-[var(--color-border-hover)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-text)]";

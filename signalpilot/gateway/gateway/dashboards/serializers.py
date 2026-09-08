@@ -21,7 +21,7 @@ from gateway.db.models import (
 from .schedule import ALLOWED_INTERVALS, DEFAULT_TIMEZONE, valid_anchor, valid_timezone
 from .store import SLUG_RE, can_edit
 
-Visibility = Literal["private", "org", "link"]
+Visibility = Literal["private", "org"]
 RefreshMode = Literal["sql", "agent"]
 
 
@@ -107,7 +107,6 @@ class PublishedDashboardOut(BaseModel):
     name: str
     description: str | None
     visibility: Visibility
-    share_token: str | None
     project_id: str | None
     created_by_user_id: str
     created_by_label: str
@@ -167,14 +166,12 @@ def dashboard_out(
     current_version_no: int | None,
 ) -> PublishedDashboardOut:
     editable = can_edit(row, viewer_user_id, is_admin=is_admin)
-    owner = row.created_by_user_id == viewer_user_id
     return PublishedDashboardOut(
         id=row.id,
         slug=row.slug,
         name=row.name,
         description=row.description,
         visibility=row.visibility,  # type: ignore[arg-type]
-        share_token=row.share_token if owner else None,
         project_id=row.project_id,
         created_by_user_id=row.created_by_user_id,
         # No user directory in the gateway (identity lives in Clerk), so the
@@ -199,38 +196,6 @@ def dashboard_out(
         updated_at=iso(row.updated_at) or "",
         archived_at=iso(row.archived_at),
         can_edit=editable,
-    )
-
-
-def shared_dashboard_out(row: GatewayPublishedDashboard, *, current_version_no: int | None) -> PublishedDashboardOut:
-    """The dashboard as a share-link viewer sees it: the same key set as
-    ``dashboard_out`` so the client needs one type, but only the fields that
-    describe the published page. Ownership, source, schedule, and the share
-    token itself stay hidden from anyone who only holds the link."""
-    return PublishedDashboardOut(
-        id=row.id,
-        slug=row.slug,
-        name=row.name,
-        description=row.description,
-        visibility="link",
-        share_token=None,
-        project_id=None,
-        created_by_user_id="",
-        created_by_label="",
-        source_conversation_id=None,
-        source_file_id=None,
-        current_version_id=row.current_version_id,
-        current_version_no=current_version_no,
-        chart_count=int(row.chart_count or 0),
-        refresh=RefreshSettingsOut(interval_minutes=None, anchor_time=None, timezone=DEFAULT_TIMEZONE, mode="sql"),
-        notify_on_failure=False,
-        next_refresh_at=None,
-        last_refresh_at=iso(row.last_refresh_at),
-        last_refresh_status=row.last_refresh_status,  # type: ignore[arg-type]
-        created_at=iso(row.created_at) or "",
-        updated_at=iso(row.updated_at) or "",
-        archived_at=None,
-        can_edit=False,
     )
 
 

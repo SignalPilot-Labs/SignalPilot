@@ -5,7 +5,7 @@ import { DashboardsTestHarness } from "~/components/dashboards/dashboards-test-h
 export const metadata = { title: "Dashboards test harness" };
 
 /**
- * Fixture-driven gallery, detail and shared views for exercising the
+ * Fixture-driven gallery and detail views for exercising the
  * dashboards UX without a gateway. See the harness for the query switches.
  */
 export default function DashboardsTestPage() {

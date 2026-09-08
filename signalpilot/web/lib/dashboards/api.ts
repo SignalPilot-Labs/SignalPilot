@@ -15,7 +15,6 @@ export type DashboardsApi = {
   archiveDashboard: typeof real.archiveDashboard;
   unarchiveDashboard: typeof real.unarchiveDashboard;
   deleteDashboard: typeof real.deleteDashboard;
-  getSharedDashboard: typeof real.getSharedDashboard;
   openDashboardEditChat: typeof real.openDashboardEditChat;
   fetchDashboardDataset: typeof real.fetchDashboardDataset;
 };
@@ -31,7 +30,6 @@ export const realDashboardsApi: DashboardsApi = {
   archiveDashboard: real.archiveDashboard,
   unarchiveDashboard: real.unarchiveDashboard,
   deleteDashboard: real.deleteDashboard,
-  getSharedDashboard: real.getSharedDashboard,
   openDashboardEditChat: real.openDashboardEditChat,
   fetchDashboardDataset: real.fetchDashboardDataset,
 };
@@ -41,12 +39,10 @@ export type DashboardsRoutes = {
   gallery: string;
   dashboard: (slug: string) => string;
   chat: (conversationId: string) => string;
-  shared: (token: string) => string;
 };
 
 export const realDashboardsRoutes: DashboardsRoutes = {
   gallery: "/dashboards",
   dashboard: (slug) => `/dashboards/${encodeURIComponent(slug)}`,
   chat: (conversationId) => `/chats/${encodeURIComponent(conversationId)}`,
-  shared: (token) => `/dashboards/shared/${encodeURIComponent(token)}`,
 };

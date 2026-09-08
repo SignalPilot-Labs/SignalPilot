@@ -22,7 +22,6 @@ export const FIXTURE_NOW = Date.parse("2026-09-08T15:00:00Z");
 
 export const FIXTURE_DASHBOARD_ID = "dash_fixture0000000000000000000001";
 export const FIXTURE_DASHBOARD_SLUG = "revenue-overview-2024";
-export const FIXTURE_SHARE_TOKEN = "fixture-share-token-0123456789ab";
 export const FIXTURE_AGENT_CONVERSATION_ID = "conv-fixture-agent-refresh";
 export const FIXTURE_USER_ID = "user_fixture_owner";
 
@@ -188,7 +187,6 @@ export function fixtureDashboard(): PublishedDashboard {
     name: FIXTURE_SPEC.title,
     description: FIXTURE_SPEC.description ?? null,
     visibility: "org",
-    share_token: null,
     project_id: "proj-fixture",
     created_by_user_id: FIXTURE_USER_ID,
     created_by_label: "daniel@example.com",

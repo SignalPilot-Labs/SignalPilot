@@ -8,7 +8,7 @@ Module map:
 - ``storage``     object keys and the object-storage facade
 - ``store``       all database access, visibility and edit rules, slugs
 - ``schedule``    next-refresh math
-- ``service``     publish, restore, settings, share links, edit chats
+- ``service``     publish, restore, settings, edit chats
 - ``refresh``     refresh execution in sql and agent mode
 - ``scheduler``   due-refresh loop and agent-run polling
 - ``serializers`` wire shapes matching ``web/lib/api/dashboards.ts``

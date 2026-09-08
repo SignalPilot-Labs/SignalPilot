@@ -1,4 +1,4 @@
-"""Dashboard routes: auth, visibility, 409 on double refresh, share token, serializer shape."""
+"""Dashboard routes: auth, visibility, 409 on double refresh, serializer shape."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from gateway.api import dashboards as routes
 from gateway.api.chat_routes import publish_dashboard as publish_routes
@@ -14,6 +15,7 @@ from gateway.dashboards import service
 from gateway.dashboards.serializers import (
     DashboardRefreshOut,
     DashboardVersionOut,
+    PublishDashboardRequest,
     PublishedDashboardOut,
     UpdateDashboardRequest,
 )
@@ -111,7 +113,6 @@ class TestVisibility:
         await _publish_via_route(db, backend, visibility="org")
         detail = await routes.get_dashboard("revenue", api_store(db, OTHER_USER), "basic_member")
         assert detail["dashboard"].can_edit is False
-        assert detail["dashboard"].share_token is None
         assert len(detail["versions"]) == 1 and detail["refreshes"] == []
         with pytest.raises(HTTPException) as excinfo:
             await routes.update_dashboard(
@@ -193,58 +194,16 @@ class TestRefreshRoutes:
             await routes.get_dashboard(result["dashboard"].id, api_store(db), "basic_member")
 
 
-class TestSharedRoute:
-    async def test_shared_bundle_by_token(self, db, storage) -> None:
-        _, backend = storage
-        result = await _publish_via_route(db, backend, visibility="link")
-        token = result["dashboard"].share_token
-        assert token
-        bundle = await routes.get_shared_dashboard(token, api_store(db, "anyone"))
-        assert bundle["dashboard"].id == result["dashboard"].id
-        assert bundle["spec"]["title"] == "Revenue"
-        assert bundle["version"].version_no == 1
+class TestVisibilityValidation:
+    """``link`` is not a visibility any more: both request models reject it."""
 
-    async def test_shared_view_is_reduced(self, db, storage) -> None:
-        _, backend = storage
-        result = await _publish_via_route(db, backend, visibility="link", description="Monthly revenue")
-        full = result["dashboard"]
-        shared = (await routes.get_shared_dashboard(full.share_token, api_store(db, "anyone")))["dashboard"]
-        assert type(shared) is PublishedDashboardOut
-        populated = {
-            "id": full.id,
-            "slug": full.slug,
-            "name": "Revenue",
-            "description": "Monthly revenue",
-            "chart_count": 3,
-            "visibility": "link",
-            "current_version_id": full.current_version_id,
-            "current_version_no": 1,
-            "created_at": full.created_at,
-            "updated_at": full.updated_at,
-            "last_refresh_at": None,
-            "last_refresh_status": None,
-        }
-        assert {key: getattr(shared, key) for key in populated} == populated
-        assert shared.can_edit is False and shared.share_token is None
-        assert shared.refresh.model_dump() == {"interval_minutes": None, "anchor_time": None, "timezone": "UTC", "mode": "sql"}
-        assert (shared.created_by_label, shared.created_by_user_id, shared.notify_on_failure) == ("", "", False)
-        assert shared.project_id is None and shared.source_conversation_id is None and shared.source_file_id is None
-        assert shared.next_refresh_at is None and shared.archived_at is None
+    def test_update_request_rejects_link(self) -> None:
+        with pytest.raises(ValidationError):
+            UpdateDashboardRequest(visibility="link")
 
-    async def test_shared_route_rejects_non_link_and_archived(self, db, storage) -> None:
-        _, backend = storage
-        result = await _publish_via_route(db, backend, visibility="link")
-        token = result["dashboard"].share_token
-        await routes.update_dashboard(result["dashboard"].id, UpdateDashboardRequest(visibility="org"), api_store(db), "basic_member")
-        with pytest.raises(HTTPException) as excinfo:
-            await routes.get_shared_dashboard(token, api_store(db))
-        assert excinfo.value.status_code == 404
-        await routes.update_dashboard(result["dashboard"].id, UpdateDashboardRequest(visibility="link"), api_store(db), "basic_member")
-        await routes.archive_dashboard(result["dashboard"].id, api_store(db), "basic_member")
-        with pytest.raises(HTTPException):
-            await routes.get_shared_dashboard(token, api_store(db))
-        with pytest.raises(HTTPException):
-            await routes.get_shared_dashboard("bogus", api_store(db))
+    def test_publish_request_rejects_link(self) -> None:
+        with pytest.raises(ValidationError):
+            PublishDashboardRequest.model_validate({**publish_body().model_dump(), "visibility": "link"})
 
 
 class TestEditChat:

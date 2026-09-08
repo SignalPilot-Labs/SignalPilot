@@ -2,13 +2,12 @@
 // list, consumed by the sidebar and the main content wrapper so the two
 // never disagree.
 
-/** Auth, onboarding, the notebook kiosk, and the public dashboard share page. */
+/** Auth, onboarding, and the notebook kiosk. */
 export const CHROMELESS_ROUTE_PREFIXES = [
   "/sign-in",
   "/sign-up",
   "/onboarding",
   "/notebook",
-  "/dashboards/shared",
 ] as const;
 
 /** Exact-or-child match: "/dashboard" does not match "/dashboards". */

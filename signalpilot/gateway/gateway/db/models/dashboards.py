@@ -60,11 +60,8 @@ class GatewayPublishedDashboard(GatewayBase):
     slug: Mapped[str] = mapped_column(String(64), nullable=False)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
-    # private | org | link
+    # private | org
     visibility: Mapped[str] = mapped_column(String(10), nullable=False, default="private", server_default="private")
-    # Set when visibility == link. 32 url-safe characters, never hashed: the
-    # token is the link and the owner can read it back.
-    share_token: Mapped[str | None] = mapped_column(String(64))
     created_by_user_id: Mapped[str] = mapped_column(String, nullable=False)
     source_conversation_id: Mapped[str | None] = mapped_column(String)
     source_file_id: Mapped[str | None] = mapped_column(String)
@@ -96,7 +93,6 @@ class GatewayPublishedDashboard(GatewayBase):
 
     __table_args__ = (
         UniqueConstraint("org_id", "slug", name="uq_gw_pubdash_org_slug"),
-        UniqueConstraint("share_token", name="uq_gw_pubdash_share_token"),
         Index("ix_gw_pubdash_org", "org_id"),
         Index("ix_gw_pubdash_due", "next_refresh_at"),
     )

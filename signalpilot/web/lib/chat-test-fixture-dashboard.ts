@@ -460,7 +460,6 @@ function fixturePublishedDashboard(
     name: FIXTURE_PUBLISHED_DASHBOARD_NAME,
     description: "Pipeline stages and conversion, refreshed nightly.",
     visibility: "org",
-    share_token: null,
     project_id: null,
     created_by_user_id: "user-fixture-me",
     created_by_label: "you",

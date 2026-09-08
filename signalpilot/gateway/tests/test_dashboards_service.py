@@ -109,7 +109,7 @@ class TestPublish:
         dashboard, v1 = await _publish(db, storage, rows)
         updated, v2 = await _publish(
             db, storage, rows,
-            name="Revenue v2", target_dashboard_id=dashboard.id, visibility="link",
+            name="Revenue v2", target_dashboard_id=dashboard.id, visibility="org",
             refresh=RefreshSettingsIn(interval_minutes=None, timezone="UTC", mode="agent"),
         )
         assert updated.id == dashboard.id
@@ -117,8 +117,7 @@ class TestPublish:
         assert updated.slug == "revenue"
         assert v2.version_no == 2
         assert updated.current_version_id == v2.id
-        assert updated.visibility == "link"
-        assert updated.share_token and len(updated.share_token) == 32
+        assert updated.visibility == "org"
         assert updated.refresh_interval_minutes is None
         assert updated.next_refresh_at is None
         assert updated.refresh_mode == "agent"
@@ -174,7 +173,7 @@ class TestLifecycle:
         assert dashboard.current_version_id == restored.id
         assert [v.version_no for v in await store.list_versions(db, dashboard.id)] == [3, 2, 1]
 
-    async def test_update_settings_recomputes_schedule_and_mints_token(self, db) -> None:
+    async def test_update_settings_recomputes_schedule(self, db) -> None:
         storage, backend = fake_storage()
         dashboard, _ = await _publish(db, storage, fake_manifest(backend))
         before = dashboard.next_refresh_at
@@ -182,19 +181,18 @@ class TestLifecycle:
             db,
             dashboard,
             UpdateDashboardRequest(
-                visibility="link",
+                visibility="org",
                 description="  ",
                 refresh=RefreshSettingsIn(interval_minutes=60, anchor_time="06:30", timezone="Europe/Berlin", mode="sql"),
             ),
         )
-        assert dashboard.share_token is not None
+        assert dashboard.visibility == "org"
         assert dashboard.description is None
         assert dashboard.refresh_timezone == "Europe/Berlin"
         assert dashboard.next_refresh_at != before
         assert dashboard.next_refresh_at.minute == 30
-        token = dashboard.share_token
-        await service.update_settings(db, dashboard, UpdateDashboardRequest(visibility="org"))
-        assert dashboard.share_token == token  # stable once minted
+        await service.update_settings(db, dashboard, UpdateDashboardRequest(visibility="private"))
+        assert dashboard.visibility == "private"
 
     async def test_archive_pauses_and_unarchive_reschedules(self, db) -> None:
         storage, backend = fake_storage()

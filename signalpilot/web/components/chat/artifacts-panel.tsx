@@ -1,7 +1,9 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useArtifactsWidth } from "~/components/chat/artifacts-panel-width";
+import { ArtifactsResizeHandle } from "~/components/chat/artifacts-resize-handle";
 import {
   ArrowLeft,
   ExternalLink,
@@ -272,15 +274,35 @@ export function ArtifactsPanel({
     setSelectedTab("files");
     setSelectedFileId(openFileRequest.fileId);
   }, [openFileRequest]);
+  // The row the panel shares with the transcript bounds the drag, so a
+  // stored width never squeezes the transcript out on a small window.
+  const panelRef = useRef<HTMLElement | null>(null);
+  const rowRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    rowRef.current = panelRef.current?.parentElement ?? null;
+  }, []);
+  const { width, measured, bounds, preview, commit, reset, nudge } =
+    useArtifactsWidth(rowRef);
+
   const activeTab =
     selectedTab ??
     (showNotebook ? "notebook" : files.length > 0 ? "files" : "queries");
 
   return (
     <aside
+      ref={panelRef}
       data-testid="live-notebook-panel"
-      className="flex w-[46%] min-w-[420px] max-w-[820px] flex-none flex-col border-l border-[var(--color-border)] bg-[var(--color-bg)]"
+      style={measured ? { width } : undefined}
+      className="relative flex w-[46%] min-w-[360px] flex-none flex-col border-l border-[var(--color-border)] bg-[var(--color-bg)]"
     >
+      <ArtifactsResizeHandle
+        width={width}
+        bounds={bounds}
+        onPreview={preview}
+        onCommit={commit}
+        onReset={reset}
+        onNudge={nudge}
+      />
       <div className="flex h-11 flex-none items-center justify-between border-b border-[var(--color-border)] px-3">
         <div className="flex min-w-0 items-center gap-2">
           <NotebookPen className="h-3.5 w-3.5 flex-none text-[var(--color-text-dim)]" />

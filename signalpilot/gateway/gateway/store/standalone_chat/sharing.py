@@ -1,12 +1,15 @@
-"""Share grants, shared read views, and conversation forking."""
+"""Share grants and the read-only shared views of one standalone chat.
+
+Forking lives in ``forking.py``. This module owns the grant lifecycle and
+every read that a share token unlocks: the transcript snapshot, files, the
+SQL trace, and query result pages.
+"""
 
 from __future__ import annotations
 
 import hashlib
 import secrets
-import time
 import uuid
-from typing import Any
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,38 +19,31 @@ from gateway.db.models import (
     GatewayChatFile,
     GatewayChatMessage,
     GatewayChatRun,
+    GatewayChatRunEvent,
     GatewayChatShareGrant,
-    GatewayChatUserPreference,
+    GatewayStructuredQueryResult,
     GatewayWorkspaceProject,
 )
 from gateway.models.standalone_chat import (
     SharedConversationDetail,
     SharedConversationInfo,
-    SharedMessageInfo,
 )
+from gateway.standalone_chat import config as chat_config
 from gateway.standalone_chat.domain import NONTERMINAL_RUN_STATUSES
-from gateway.standalone_chat.object_storage import (
-    conversation_file_key,
-    conversation_prefix,
-)
+from gateway.standalone_chat.sql_trace import list_sql_trace
 from gateway.store.standalone_chat.files import (
+    file_manifest_entry,
     get_shared_conversation_file,
     list_shared_conversation_files,
 )
 from gateway.store.standalone_chat.helpers import (
+    _event_info,
+    _message_info,
     _now,
     _owned_conversation_row,
+    _token_usage,
 )
 
-
-def _object_storage():
-    """Resolve the storage factory through the package namespace at call time.
-
-    Tests patch chat_object_storage on the package module. Read the name late
-    so the patch takes effect."""
-    from gateway.store import standalone_chat as chat_store
-
-    return chat_store.chat_object_storage()
 
 def _share_token_hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
@@ -159,12 +155,46 @@ async def _shared_grant_row(
     return (await db.execute(query)).one_or_none()
 
 
+async def _nonterminal_runs(
+    db: AsyncSession,
+    *,
+    conversation_id: str,
+) -> list[GatewayChatRun]:
+    """Runs still in flight. Their messages, events, and queries stay private."""
+    return list(
+        (
+            await db.execute(
+                select(GatewayChatRun).where(
+                    GatewayChatRun.conversation_id == conversation_id,
+                    GatewayChatRun.status.in_(NONTERMINAL_RUN_STATUSES),
+                )
+            )
+        ).scalars()
+    )
+
+
+def _belongs_to_run(message: GatewayChatMessage, run_ids: set[str], user_message_ids: set[str]) -> bool:
+    metadata = message.metadata_json or {}
+    if message.id in user_message_ids:
+        return True
+    for key in ("run_id", "clarification_for_run_id", "steering_for_run_id"):
+        value = metadata.get(key)
+        if isinstance(value, str) and value in run_ids:
+            return True
+    return False
+
+
 async def get_shared_conversation(
     db: AsyncSession,
     *,
     org_id: str,
     token: str,
 ) -> SharedConversationDetail | None:
+    """Full read-only snapshot of the finished part of a shared chat.
+
+    Everything that belongs to an in-flight run is left out: its user
+    message, its events, and any file it is still writing.
+    """
     shared = await _shared_grant_row(db, org_id=org_id, token=token)
     if shared is None:
         return None
@@ -177,6 +207,22 @@ async def get_shared_conversation(
             )
         )
     ).scalar_one_or_none()
+    runs = list(
+        (
+            await db.execute(
+                select(GatewayChatRun)
+                .where(GatewayChatRun.conversation_id == conversation.id)
+                .order_by(GatewayChatRun.created_at)
+            )
+        ).scalars()
+    )
+    hidden_run_ids = {run.id for run in runs if run.status in NONTERMINAL_RUN_STATUSES}
+    hidden_message_ids = {run.user_message_id for run in runs if run.id in hidden_run_ids}
+    run_usage = {
+        run.id: usage
+        for run in runs
+        if run.id not in hidden_run_ids and (usage := _token_usage(run.usage_json)) is not None
+    }
     messages = list(
         (
             await db.execute(
@@ -191,23 +237,43 @@ async def get_shared_conversation(
             )
         ).scalars()
     )
+    events = list(
+        (
+            await db.execute(
+                select(GatewayChatRunEvent)
+                .where(
+                    GatewayChatRunEvent.conversation_id == conversation.id,
+                    GatewayChatRunEvent.org_id == org_id,
+                )
+                .order_by(GatewayChatRunEvent.created_at, GatewayChatRunEvent.sequence)
+            )
+        ).scalars()
+    )
+    files = await list_shared_conversation_files(
+        db,
+        org_id=org_id,
+        owner_user_id=conversation.user_id,
+        conversation_id=conversation.id,
+    )
     return SharedConversationDetail(
         conversation=SharedConversationInfo(
             title=conversation.title or "New chat",
             project_name=(project.display_name or project.name) if project else None,
+            origin=conversation.origin,
+            model=conversation.model or chat_config.default_chat_model(),
+            effort=conversation.effort or chat_config.default_chat_effort(),
+            commit_sha=conversation.commit_sha,
+            branch=conversation.branch or "main",
             created_at=conversation.created_at,
             updated_at=conversation.updated_at,
         ),
         messages=[
-            SharedMessageInfo(
-                id=row.id,
-                role=row.role,
-                content=row.content,
-                sequence=row.sequence,
-                created_at=row.created_at,
-            )
+            _message_info(row, run_usage=run_usage)
             for row in messages
+            if not _belongs_to_run(row, hidden_run_ids, hidden_message_ids)
         ],
+        run_events=[_event_info(row) for row in events if row.run_id not in hidden_run_ids],
+        files=[file_manifest_entry(row) for row in files],
         shared_at=grant.created_at,
     )
 
@@ -251,177 +317,53 @@ async def get_shared_file(
     )
 
 
-async def fork_shared_conversation(
+async def list_shared_sql_trace(
     db: AsyncSession,
     *,
     org_id: str,
-    user_id: str,
     token: str,
-    per_query_budget_usd: float,
-    chat_budget_usd: float,
-) -> GatewayChatConversation | None:
-    """Copy the share-safe snapshot into a new private conversation."""
-    shared = await _shared_grant_row(db, org_id=org_id, token=token, lock=True)
-    if shared is None:
-        return None
-    _, source = shared
-    active_run = (
-        await db.execute(
-            select(GatewayChatRun.id).where(
-                GatewayChatRun.conversation_id == source.id,
-                GatewayChatRun.status.in_(NONTERMINAL_RUN_STATUSES),
-            )
-        )
-    ).scalar_one_or_none()
-    if active_run is not None:
-        raise RuntimeError("Wait for the current answer to finish before forking this chat")
-
-    messages = list(
-        (
-            await db.execute(
-                select(GatewayChatMessage)
-                .where(
-                    GatewayChatMessage.conversation_id == source.id,
-                    GatewayChatMessage.org_id == org_id,
-                    GatewayChatMessage.user_id == source.user_id,
-                    GatewayChatMessage.role.in_(("user", "assistant")),
-                )
-                .order_by(GatewayChatMessage.sequence)
-            )
-        ).scalars()
-    )
-    now = time.time()
-    fork = GatewayChatConversation(
-        id=str(uuid.uuid4()),
-        org_id=org_id,
-        user_id=user_id,
-        project_id=source.project_id,
-        surface="standalone",
-        origin=source.origin,
-        branch=source.branch,
-        commit_sha=source.commit_sha,
-        per_query_budget_usd=per_query_budget_usd,
-        chat_budget_usd=chat_budget_usd,
-        model=source.model,
-        effort=source.effort,
-        forked_from_conversation_id=source.id,
-        status="active",
-        title=(source.title or "New chat")[:200],
-        internal_summary=None,
-        message_count=len(messages),
-        total_tokens=0,
-        total_cost_usd=0.0,
-        created_at=now,
-        updated_at=now,
-    )
-    db.add(fork)
-
-    message_ids = {row.id: str(uuid.uuid4()) for row in messages}
-    for sequence, row in enumerate(messages, start=1):
-        db.add(
-            GatewayChatMessage(
-                id=message_ids[row.id],
-                org_id=org_id,
-                user_id=user_id,
-                project_id=source.project_id,
-                conversation_id=fork.id,
-                role=row.role,
-                content=row.content,
-                metadata_json={"surface": "standalone", "forked": True},
-                sequence=sequence,
-                created_at=row.created_at,
-            )
-        )
-
-    files = list(
-        (
-            await db.execute(
-                select(GatewayChatFile)
-                .where(
-                    GatewayChatFile.conversation_id == source.id,
-                    GatewayChatFile.org_id == org_id,
-                    GatewayChatFile.user_id == source.user_id,
-                    GatewayChatFile.status == "active",
-                )
-                .order_by(GatewayChatFile.created_at)
-            )
-        ).scalars()
-    )
-
-    storage = _object_storage()
-    try:
-        # Copy each conversation file under the fork prefix. The hash stays
-        # the same. Only the key and the owner change.
-        for row in files:
-            copied_file_id = str(uuid.uuid4())
-            object_key = conversation_file_key(
-                org_id=org_id,
-                conversation_id=fork.id,
-                file_id=copied_file_id,
-                filename=row.filename,
-            )
-            copied = await storage.copy(source_key=row.object_key, destination_key=object_key)
-            db.add(
-                GatewayChatFile(
-                    id=copied_file_id,
-                    org_id=org_id,
-                    user_id=user_id,
-                    conversation_id=fork.id,
-                    path=row.path,
-                    filename=row.filename,
-                    kind=row.kind,
-                    mime_type=row.mime_type,
-                    byte_size=copied.byte_size or row.byte_size,
-                    content_hash=copied.content_hash or row.content_hash,
-                    object_key=object_key,
-                    origin_run_id=None,
-                    origin="fork",
-                    status="active",
-                )
-            )
-        await db.commit()
-    except Exception:
-        await db.rollback()
-        if files:
-            try:
-                await storage.delete_prefix(conversation_prefix(org_id, fork.id))
-            except Exception:
-                pass
-        raise
-    await db.refresh(fork)
-    return fork
-
-
-async def get_fork_preview(
-    db: AsyncSession,
-    *,
-    org_id: str,
-    user_id: str,
-    token: str,
-) -> dict[str, Any] | None:
+) -> list[dict] | None:
+    """The owner's SQL trace for finished runs. None when the grant is not active."""
     shared = await _shared_grant_row(db, org_id=org_id, token=token)
     if shared is None:
         return None
-    _, source = shared
-    project = await db.get(GatewayWorkspaceProject, source.project_id)
-    if project is None or project.org_id != org_id or not source.commit_sha:
+    _, conversation = shared
+    hidden_run_ids = {run.id for run in await _nonterminal_runs(db, conversation_id=conversation.id)}
+    executions = await list_sql_trace(
+        db,
+        org_id=org_id,
+        user_id=conversation.user_id,
+        conversation_id=conversation.id,
+    )
+    return [entry for entry in executions if entry["run_id"] not in hidden_run_ids]
+
+
+async def get_shared_query_result(
+    db: AsyncSession,
+    *,
+    org_id: str,
+    token: str,
+    result_id: str,
+) -> GatewayStructuredQueryResult | None:
+    """One stored result of the shared chat, scoped to the owner and conversation."""
+    shared = await _shared_grant_row(db, org_id=org_id, token=token)
+    if shared is None:
         return None
-    preference = (
+    _, conversation = shared
+    stored = (
         await db.execute(
-            select(GatewayChatUserPreference).where(
-                GatewayChatUserPreference.org_id == org_id,
-                GatewayChatUserPreference.user_id == user_id,
+            select(GatewayStructuredQueryResult).where(
+                GatewayStructuredQueryResult.id == result_id,
+                GatewayStructuredQueryResult.org_id == org_id,
+                GatewayStructuredQueryResult.conversation_id == conversation.id,
+                GatewayStructuredQueryResult.owner_user_id == conversation.user_id,
             )
         )
     ).scalar_one_or_none()
-    return {
-        "project_id": project.id,
-        "project_name": project.display_name or project.name,
-        "commit_sha": source.commit_sha,
-        "per_query_budget_usd": preference.default_per_query_budget_usd if preference else 0.25,
-        "chat_budget_usd": preference.default_chat_budget_usd if preference else 1.0,
-        "warehouse_cost_notice": (
-            "New questions run against live warehouse data and may incur warehouse cost. "
-            "The dbt project remains frozen at the displayed commit."
-        ),
-    }
+    if stored is None:
+        return None
+    if stored.run_id and any(
+        run.id == stored.run_id for run in await _nonterminal_runs(db, conversation_id=conversation.id)
+    ):
+        return None
+    return stored

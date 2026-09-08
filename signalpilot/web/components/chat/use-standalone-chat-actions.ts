@@ -4,13 +4,7 @@
 // conversation load/select, and rail management.
 
 import { useRouter } from "next/navigation";
-import {
-  useCallback,
-  useRef,
-  type Dispatch,
-  type MutableRefObject,
-  type SetStateAction,
-} from "react";
+import { type Dispatch, type MutableRefObject, type SetStateAction, useCallback, useRef, useState } from "react";
 import { useSWRConfig } from "swr";
 import {
   archiveStandaloneConversation,
@@ -405,20 +399,22 @@ export function useStandaloneChatActions({
       toastRequestError(toast, error, "Could not remove the chat");
     }
   };
+  // The new link opens in a centered dialog (ShareLinkDialog) that copies
+  // it and spells out who can open it. A corner toast was too easy to miss.
+  // `shareLink` drives the dialog: "pending" opens it with a loader the
+  // moment the button is pressed, a string fills in the link, null closes.
+  const [shareLink, setShareLink] = useState<string | "pending" | null>(null);
   const shareConversation = async (conversation: StandaloneConversation) => {
+    setShareLink("pending");
     try {
       const grant = await shareStandaloneConversation(conversation.id);
-      const url = `${window.location.origin}/chats/shared/${grant.token}`;
-      try {
-        await navigator.clipboard.writeText(url);
-        toast("Team link copied", "success");
-      } catch {
-        window.prompt("Copy team link", url);
-      }
+      setShareLink(`${window.location.origin}/chats/shared/${grant.token}`);
     } catch (error) {
+      setShareLink(null);
       toastRequestError(toast, error, "Could not share the chat");
     }
   };
+  const dismissShareLink = () => setShareLink(null);
   const revokeShare = async (conversation: StandaloneConversation) => {
     if (!window.confirm("Revoke all active team links for this chat?")) return;
     try {
@@ -439,6 +435,8 @@ export function useStandaloneChatActions({
     renameConversation,
     archiveConversation,
     shareConversation,
+    shareLink,
+    dismissShareLink,
     revokeShare,
   };
 }

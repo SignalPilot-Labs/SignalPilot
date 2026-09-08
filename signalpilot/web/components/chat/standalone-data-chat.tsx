@@ -2,7 +2,7 @@
 
 // Standalone data chat container; UI details live in sibling modules.
 
-import { Bot, PanelLeft, Share2 } from "lucide-react";
+import { Bot, PanelLeft } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import useSWR from "swr";
@@ -26,6 +26,10 @@ import { pickDefaultNotebook } from "~/lib/chat-live-notebook";
 import { hasArtifactsContent } from "~/lib/chat-artifacts";
 import { ChatUiContext } from "~/components/chat/chat-ui-context";
 import { ChatMessage } from "~/components/chat/chat-message";
+import {
+  ChatReplayView,
+  useReplayMode,
+} from "~/components/chat/chat-replay-view";
 import {
   isImprovementConversation,
   isStreamingStatus,
@@ -53,6 +57,7 @@ import {
   useStandaloneUiMessages,
 } from "~/components/chat/use-standalone-chat-run";
 import { useStandaloneChatActions } from "~/components/chat/use-standalone-chat-actions";
+import { ShareLinkDialog } from "~/components/chat/share-link-dialog";
 import { ChatEmptyHero } from "~/components/chat/chat-empty-hero";
 import {
   chatShellClassName,
@@ -269,6 +274,8 @@ export function StandaloneDataChat({
     renameConversation,
     archiveConversation,
     shareConversation,
+    shareLink,
+    dismissShareLink,
     revokeShare,
   } = useStandaloneChatActions({
     conversationId,
@@ -300,6 +307,11 @@ export function StandaloneDataChat({
 
   const runIsStreaming =
     currentRun?.status === "queued" || currentRun?.status === "running";
+  const { canReplay, replaying, enterReplay, exitReplay } = useReplayMode(
+    conversationId,
+    events,
+    runIsStreaming,
+  );
 
   const disabledReason = composerDisabledReason(
     selectedProjectId,
@@ -424,20 +436,6 @@ export function StandaloneDataChat({
             />
           )}
           <main className="relative flex min-w-0 flex-1 flex-col">
-            {!embedded &&
-              conversationId &&
-              detail &&
-              bootstrap.enterprise_features.organization_sharing && (
-                <button
-                  type="button"
-                  aria-label="Share conversation"
-                  title="Create a new authenticated team link and revoke any previous link"
-                  onClick={() => void shareConversation(detail.conversation)}
-                  className="absolute right-4 top-4 z-20 flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] text-[var(--color-text-muted)] shadow-lg shadow-black/20 hover:border-[var(--color-border-hover)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
-                >
-                  <Share2 className="h-4 w-4" />
-                </button>
-              )}
             {conversationId &&
               isImprovementConversation(detail?.conversation) && (
                 <div className="flex-none px-6 pt-4">
@@ -507,6 +505,12 @@ export function StandaloneDataChat({
                     <StarterQuestionsSkeleton />
                   )}
                 </div>
+              ) : replaying ? (
+                <ChatReplayView
+                  messages={uiMessages}
+                  onExit={exitReplay}
+                  viewportRef={viewportRef}
+                />
               ) : (
                 <div data-testid="standalone-chat-messages">
                   {uiMessages.map((message, index) => (
@@ -518,7 +522,7 @@ export function StandaloneDataChat({
                   ))}
                 </div>
               )}
-              {!isEmptyNewChat && (
+              {!isEmptyNewChat && !replaying && (
                 <div
                   ref={composerDockRef}
                   data-testid="chat-composer-dock"
@@ -547,6 +551,14 @@ export function StandaloneDataChat({
                 dashboardSessionId={dashboardPanel.latestSessionId}
                 dashboardOpen={Boolean(dashboardPanel.sessionId)}
                 onOpenDashboard={dashboardPanel.open}
+                onShare={
+                  !embedded &&
+                  detail &&
+                  bootstrap.enterprise_features.organization_sharing
+                    ? () => void shareConversation(detail.conversation)
+                    : undefined
+                }
+                onReplay={canReplay ? enterReplay : undefined}
               />
             )}
           </main>
@@ -581,6 +593,7 @@ export function StandaloneDataChat({
         </div>
       </div>
     </ChatUiContext.Provider>
+    <ShareLinkDialog url={shareLink} onClose={dismissShareLink} />
     </ConnectorsProvider>
     </ChatTelemetryBoundary>
   );

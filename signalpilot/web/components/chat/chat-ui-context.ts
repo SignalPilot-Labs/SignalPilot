@@ -42,6 +42,12 @@ export type ChatUiContextValue = {
    */
   downloadFile?: (fileId: string, filename: string) => Promise<void>;
   /**
+   * Override for fetching a text file's content. The shared read-only page
+   * injects it so the artifacts panel viewer reads through the share-token
+   * route; owner pages omit it and the viewer uses the conversation route.
+   */
+  getFileText?: (fileId: string) => Promise<string>;
+  /**
    * Override for paging the full rows of a governed query result. The
    * fixture harness injects a deterministic generator; live pages omit it
    * and the table card falls back to the authenticated API helper.
@@ -60,6 +66,13 @@ export type ChatUiContextValue = {
    * it and the cards tick on the real clock.
    */
   nowMs?: number;
+  /** True on read-only surfaces (the shared page): no Stop/Retry actions. */
+  readOnly?: boolean;
+  /**
+   * Replay frame that was paused or scrubbed to: every text block renders
+   * complete, with no smoothing and no caret. Set only by the replay view.
+   */
+  textInstant?: boolean;
   /** Opens the right-side Chat settings panel (connectors, budgets). */
   openChatSettings?: () => void;
   onStop: (runId: string) => Promise<void>;

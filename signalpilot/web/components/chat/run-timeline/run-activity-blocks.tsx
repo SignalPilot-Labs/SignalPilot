@@ -113,19 +113,23 @@ export function RunActivityBlocks({
   running: runningProp,
   live: liveProp,
   trailingCards = [],
+  instantText = false,
 }: {
   blocks: RunBlock[];
   running?: boolean;
   live?: RunLiveInfo;
   /** Cards no step claims; rendered after the last tool group. */
   trailingCards?: ArtifactCardModel[];
+  /** Render every text block complete, with no smoothing and no caret
+   * (a replay frame that was paused or scrubbed to). */
+  instantText?: boolean;
 }) {
   const live =
     liveProp ?? (runningProp ? THINKING_LIVE : IDLE_LIVE);
   // Booting is the runtime card's moment; the transcript stays quiet.
   const running =
     runningProp ?? (live.state !== "idle" && live.state !== "booting");
-  const writing = running && live.state === "writing";
+  const writing = running && live.state === "writing" && !instantText;
   // The caret lingers after the last token and exits with chat-caret-out
   // instead of disappearing on the exact frame the stream ends.
   const caretShown = useSettled(writing, CARET_SETTLE_MS);
@@ -167,8 +171,8 @@ export function RunActivityBlocks({
           <StreamingTextBlock
             key={block.key}
             text={block.text}
-            streaming={running && index === blocks.length - 1}
-            flush={index !== blocks.length - 1}
+            streaming={running && index === blocks.length - 1 && !instantText}
+            flush={index !== blocks.length - 1 || instantText}
             caret={index === blocks.length - 1 ? caret : false}
           />
         ) : block.kind === "thinking" ? (

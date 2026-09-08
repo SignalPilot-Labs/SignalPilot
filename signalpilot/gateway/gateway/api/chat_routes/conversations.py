@@ -8,9 +8,7 @@ from gateway.auth import OrgRole
 from gateway.git.repos import branch_head_sha
 from gateway.models.standalone_chat import (
     ChatShareGrantInfo,
-    ForkConfirmation,
     ForkedConversationInfo,
-    ForkPreviewInfo,
     SharedConversationDetail,
     StandaloneConversationCreate,
     StandaloneConversationDetail,
@@ -334,7 +332,8 @@ async def get_shared_conversation(
     response_model=ForkedConversationInfo,
     dependencies=[RequireScope("write")],
 )
-async def fork_shared_conversation(token: str, body: ForkConfirmation, store: StoreD):
+async def fork_shared_conversation(token: str, store: StoreD):
+    """Copy the whole shared chat into the caller's chats. No body needed."""
     _require_enabled()
     _require_enterprise_feature("forking")
     try:
@@ -343,30 +342,9 @@ async def fork_shared_conversation(token: str, body: ForkConfirmation, store: St
             org_id=store._require_org_id(),
             user_id=store.user_id or "local",
             token=token,
-            per_query_budget_usd=body.per_query_budget_usd,
-            chat_budget_usd=body.chat_budget_usd,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     if conversation is None:
         raise HTTPException(status_code=404, detail="Shared conversation not found")
     return ForkedConversationInfo(id=conversation.id)
-
-
-@router.get(
-    "/shared/{token}/fork-preview",
-    response_model=ForkPreviewInfo,
-    dependencies=[RequireScope("read")],
-)
-async def preview_shared_conversation_fork(token: str, store: StoreD):
-    _require_enabled()
-    _require_enterprise_feature("forking")
-    preview = await chat_store.get_fork_preview(
-        store.session,
-        org_id=store._require_org_id(),
-        user_id=store.user_id or "local",
-        token=token,
-    )
-    if preview is None:
-        raise HTTPException(status_code=404, detail="Shared conversation not found")
-    return preview

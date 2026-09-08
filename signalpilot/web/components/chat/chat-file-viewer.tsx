@@ -1,17 +1,15 @@
 "use client";
 
 import { AlertCircle, Download, Loader2 } from "lucide-react";
-import { useEffect, useState } from "react";
-import {
-  downloadConversationFile,
-  getConversationFileText,
-  type ConversationFileInfo,
-} from "~/lib/api";
+import { useContext, useEffect, useState } from "react";
+import { getConversationFileText, type ConversationFileInfo } from "~/lib/api";
 import { formatByteSize } from "~/lib/chat-artifacts";
 import { ArtifactLightbox } from "~/components/chat/artifact-lightbox";
 import { ChatCode, type ChatCodeLanguage } from "~/components/chat/chat-code";
 import { ChatCsvPreview } from "~/components/chat/chat-csv-preview";
 import { ChatMarkdown } from "~/components/chat/chat-markdown";
+import { ChatUiContext } from "~/components/chat/chat-ui-context";
+import { downloadUiFile } from "~/components/chat/download-ui-file";
 import { SandboxedHtml } from "~/components/chat/sandboxed-html";
 import { useFileObjectUrl } from "~/components/chat/use-file-object-url";
 
@@ -35,10 +33,16 @@ type TextState =
   | { phase: "error"; message: string }
   | { phase: "text"; text: string };
 
+/**
+ * Text of one file version. Honors the ChatUiContext `getFileText`
+ * override (the shared page reads through its share-token route); owner
+ * pages fetch through the conversation route.
+ */
 function useFileText(
   conversationId: string,
   file: ConversationFileInfo,
 ): TextState {
+  const override = useContext(ChatUiContext)?.getFileText;
   // The result is keyed by file version, so a version change reads as
   // loading without a reset inside the effect.
   const key = `${conversationId}:${file.id}:${file.content_hash}`;
@@ -47,7 +51,10 @@ function useFileText(
   );
   useEffect(() => {
     let cancelled = false;
-    getConversationFileText(conversationId, file.id)
+    (override
+      ? override(file.id)
+      : getConversationFileText(conversationId, file.id)
+    )
       .then((text) => {
         if (!cancelled) setLoaded({ key, state: { phase: "text", text } });
       })
@@ -65,7 +72,7 @@ function useFileText(
     return () => {
       cancelled = true;
     };
-  }, [conversationId, file.id, key]);
+  }, [conversationId, file.id, key, override]);
   return loaded?.key === key ? loaded.state : { phase: "loading" };
 }
 
@@ -213,10 +220,14 @@ export function ChatFileViewer({
   conversationId: string;
   file: ConversationFileInfo;
 }) {
+  // Downloads go through the context override when one is set (the shared
+  // page); owner pages use the conversation route.
+  const ui = useContext(ChatUiContext);
   const download = () => {
-    void downloadConversationFile(conversationId, file.id, file.filename).catch(
-      () => undefined,
-    );
+    void downloadUiFile(
+      { conversationId, downloadFile: ui?.downloadFile },
+      file,
+    ).catch(() => undefined);
   };
   return (
     <div

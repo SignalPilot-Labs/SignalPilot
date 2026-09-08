@@ -22,6 +22,7 @@ from gateway.standalone_chat.projects import (
     evaluate_project_readiness,
     resolve_default_project,
 )
+from gateway.store.standalone_chat.preferences import default_chat_budgets
 
 from ..deps import StoreD
 from .common import is_admin as _is_admin
@@ -121,14 +122,9 @@ async def bootstrap_chat(store: StoreD, role: OrgRole):
             project=selected,
             readiness=readiness_by_project[selected_id],
         )
-    preference = (
-        await store.session.execute(
-            select(GatewayChatUserPreference).where(
-                GatewayChatUserPreference.org_id == org_id,
-                GatewayChatUserPreference.user_id == user_id,
-            )
-        )
-    ).scalar_one_or_none()
+    per_query_budget_usd, chat_budget_usd = await default_chat_budgets(
+        store.session, org_id=org_id, user_id=user_id
+    )
     return ChatBootstrapResponse(
         enabled=True,
         projects=[
@@ -155,8 +151,8 @@ async def bootstrap_chat(store: StoreD, role: OrgRole):
         selected_project_id=selected_id,
         is_admin=_is_admin(role),
         starter_questions=starters,
-        default_per_query_budget_usd=(preference.default_per_query_budget_usd if preference else 0.25),
-        default_chat_budget_usd=(preference.default_chat_budget_usd if preference else 1.0),
+        default_per_query_budget_usd=per_query_budget_usd,
+        default_chat_budget_usd=chat_budget_usd,
         available_models=model_options,
         default_model=selected_model,
         available_efforts=effort_options,

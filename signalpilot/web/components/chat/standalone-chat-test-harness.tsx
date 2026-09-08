@@ -3,6 +3,7 @@
 import {
   FastForward,
   FlaskConical,
+  History,
   Pause,
   Play,
   RotateCcw,
@@ -16,6 +17,7 @@ import {
   type UiMessage,
 } from "~/components/chat/standalone-data-chat";
 import { ArtifactsPanel } from "~/components/chat/artifacts-panel";
+import { ChatReplayView } from "~/components/chat/chat-replay-view";
 import { StandaloneChatComposer } from "~/components/chat/standalone-chat-composer";
 import { useDockScrollCompensation } from "~/components/chat/use-dock-scroll-compensation";
 import { selectComposerPlan } from "~/lib/chat-composer-plan";
@@ -85,6 +87,9 @@ export function StandaloneChatTestHarness() {
   // a click that lands before hydration is silently lost.
   const [hydrated, setHydrated] = useState(false);
   useEffect(() => setHydrated(true), []);
+  // Conversation replay mode, as on the chat page (the transcript swaps
+  // for the replay view; the harness clock keeps its own position).
+  const [replaying, setReplaying] = useState(false);
   const [speed, setSpeed] = useState<(typeof SPEEDS)[number]>(1);
   const [selectedModel, setSelectedModel] =
     useState<StandaloneChatModel>("claude-opus-5");
@@ -192,7 +197,9 @@ export function StandaloneChatTestHarness() {
         role: "user",
         content: FIXTURE_USER_PROMPT,
         sequence: 1,
-        created_at: 0,
+        // Epoch seconds, as the gateway records them: the replay anchors
+        // user messages on this clock.
+        created_at: fixtureNowMs(0) / 1_000,
         metadata: {},
       },
       {
@@ -200,7 +207,7 @@ export function StandaloneChatTestHarness() {
         role: "assistant",
         content: fixtureAssembledText(elapsed),
         sequence: 2,
-        created_at: 0,
+        created_at: fixtureNowMs(FIXTURE_TOTAL_MS) / 1_000,
         metadata: { run_id: FIXTURE_RUN_ID },
         runId: FIXTURE_RUN_ID,
         runStatus: status,
@@ -212,7 +219,9 @@ export function StandaloneChatTestHarness() {
               role: "user",
               content: FIXTURE_FOLLOW_UP_PROMPT,
               sequence: 3,
-              created_at: 0,
+              // A minute after the first run ended: the replay collapses
+              // the pause to the gap cap.
+              created_at: fixtureNowMs(FIXTURE_TOTAL_MS + 60_000) / 1_000,
               metadata: {},
             },
             {
@@ -220,7 +229,7 @@ export function StandaloneChatTestHarness() {
               role: "assistant",
               content: "",
               sequence: 4,
-              created_at: 0,
+              created_at: fixtureNowMs(FIXTURE_TOTAL_MS + 60_000) / 1_000,
               metadata: { run_id: FIXTURE_FOLLOW_UP_RUN_ID },
               runId: FIXTURE_FOLLOW_UP_RUN_ID,
               runStatus: "running",
@@ -338,6 +347,20 @@ export function StandaloneChatTestHarness() {
         </span>
         <button
           type="button"
+          aria-label="Replay chat"
+          aria-pressed={replaying}
+          data-testid="chat-replay-button"
+          onClick={() => setReplaying((value) => !value)}
+          className={`flex h-7 w-7 items-center justify-center rounded-lg border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] ${
+            replaying
+              ? "bg-[var(--color-bg-hover)] text-[var(--color-text)]"
+              : "bg-[var(--color-bg-input)] text-[var(--color-text-muted)]"
+          }`}
+        >
+          <History className="h-3.5 w-3.5" />
+        </button>
+        <button
+          type="button"
           aria-label="Chat settings"
           aria-expanded={settingsPanel.open}
           data-testid="chat-settings-gear"
@@ -377,11 +400,20 @@ export function StandaloneChatTestHarness() {
           className="min-h-0 min-w-0 flex-1 overflow-y-auto"
           data-testid="chat-test-viewport"
         >
-          <div className="py-6" data-testid="standalone-chat-messages">
-            {messages.map((message) => (
-              <ChatMessage key={message.id} message={message} />
-            ))}
-          </div>
+          {replaying ? (
+            <ChatReplayView
+              messages={messages}
+              onExit={() => setReplaying(false)}
+              viewportRef={viewportRef}
+            />
+          ) : (
+            <div className="py-6" data-testid="standalone-chat-messages">
+              {messages.map((message) => (
+                <ChatMessage key={message.id} message={message} />
+              ))}
+            </div>
+          )}
+          {!replaying && (
           <div
             ref={composerDockRef}
             data-testid="chat-composer-dock"
@@ -399,6 +431,7 @@ export function StandaloneChatTestHarness() {
               planRunning={composerPlan?.running ?? false}
             />
           </div>
+          )}
         </div>
         {hasArtifactsContent(
           conversationNotebooks,

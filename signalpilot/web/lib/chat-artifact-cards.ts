@@ -110,7 +110,7 @@ type PathTouch = {
 };
 
 /** Paths a tool_started event touches: one for Write/Edit tools. */
-function toolTouchPaths(event: StandaloneChatEvent): string[] {
+export function toolTouchPaths(event: StandaloneChatEvent): string[] {
   const tool = text(event.payload.tool);
   if (!tool || (!WRITE_TOOLS.has(tool) && !EDIT_TOOLS.has(tool))) return [];
   const input =
@@ -135,6 +135,23 @@ function filesChangedTouchPaths(event: StandaloneChatEvent): string[] {
     if (record.deleted === true) continue;
     const path = text(record.path);
     if (path) paths.push(path);
+  }
+  return paths;
+}
+
+/** Every path a `files_changed` event names, in either payload shape: the
+ * runtime capture (`files: [{path}]`, deleted entries skipped) or the legacy
+ * content-free mirror (`changed: [path]`). Unlike `filesChangedTouchPaths`
+ * this carries no anchor semantics; it answers "did the mirror confirm this
+ * path yet", which is what the replay needs to reveal a manifest row. */
+export function filesChangedNamedPaths(event: StandaloneChatEvent): string[] {
+  const paths = filesChangedTouchPaths(event);
+  const changed = event.payload.changed;
+  if (Array.isArray(changed)) {
+    for (const entry of changed) {
+      const path = text(entry);
+      if (path) paths.push(path);
+    }
   }
   return paths;
 }

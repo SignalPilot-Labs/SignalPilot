@@ -15,6 +15,7 @@ from gateway.security.scope_guard import RequireScope
 from gateway.standalone_chat.object_storage import chat_object_storage
 from gateway.standalone_chat.sql_trace import list_sql_trace
 from gateway.store import standalone_chat as chat_store
+from gateway.store.standalone_chat.files import file_manifest_entry
 
 from ..deps import StoreD
 from .common import owned_conversation_or_404 as _owned_conversation_or_404
@@ -40,21 +41,9 @@ _FORCED_DOWNLOAD_MIMES = {
 IfNoneMatchD = Annotated[str | None, Header(alias="If-None-Match")]
 
 
-def _file_info(row: GatewayChatFile) -> dict:
-    return {
-        "id": row.id,
-        "path": row.path,
-        "filename": row.filename,
-        "kind": row.kind,
-        "mime_type": row.mime_type,
-        "byte_size": row.byte_size,
-        "content_hash": row.content_hash,
-        "origin_run_id": row.origin_run_id,
-        "origin": row.origin,
-        "status": row.status,
-        "created_at": row.created_at,
-        "updated_at": row.updated_at,
-    }
+# The manifest wire shape lives in the store so the shared snapshot can
+# embed it without importing this module.
+_file_info = file_manifest_entry
 
 
 def _etag(row: GatewayChatFile) -> str:
@@ -218,4 +207,19 @@ async def get_conversation_sql_trace(conversation_id: str, store: StoreD):
         user_id=store.user_id or "local",
         conversation_id=conversation_id,
     )
+    return {"executions": executions}
+
+
+@router.get("/shared/{token}/sql-trace", dependencies=[RequireScope("read")])
+async def get_shared_conversation_sql_trace(token: str, store: StoreD):
+    """Return the shared chat's governed query executions for finished runs."""
+    _require_enabled()
+    _require_enterprise_feature("organization_sharing")
+    executions = await chat_store.list_shared_sql_trace(
+        store.session,
+        org_id=store._require_org_id(),
+        token=token,
+    )
+    if executions is None:
+        raise HTTPException(status_code=404, detail="Shared conversation not found")
     return {"executions": executions}

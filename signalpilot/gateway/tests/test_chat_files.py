@@ -446,6 +446,22 @@ async def test_sql_trace_route_wraps_the_projection(db_session, enabled):
     assert result == {"executions": []}
 
 
+@pytest.mark.asyncio
+async def test_shared_sql_trace_route_follows_the_grant(db_session, enabled, monkeypatch):
+    conversation = await _conversation(db_session)
+    monkeypatch.setenv("SP_FEATURE_CHAT_ORG_SHARING", "1")
+    with pytest.raises(HTTPException) as exc:
+        await files_routes.get_shared_conversation_sql_trace("x" * 40, _store(db_session, "user-b"))
+    assert exc.value.status_code == 404
+    shared = await chat_store.create_share_grant(
+        db_session, org_id=ORG, user_id=USER, conversation_id=conversation.id
+    )
+    assert shared is not None
+    _, token = shared
+    result = await files_routes.get_shared_conversation_sql_trace(token, _store(db_session, "user-b"))
+    assert result == {"executions": []}
+
+
 # ── Adversarial: sanitization bypass and header safety ───────────────────────
 
 

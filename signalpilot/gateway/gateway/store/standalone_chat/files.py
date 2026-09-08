@@ -48,6 +48,24 @@ _KIND_BY_MIME = {
 }
 
 
+def file_manifest_entry(row: GatewayChatFile) -> dict:
+    """The wire shape of one manifest row. Owner and shared routes share it."""
+    return {
+        "id": row.id,
+        "path": row.path,
+        "filename": row.filename,
+        "kind": row.kind,
+        "mime_type": row.mime_type,
+        "byte_size": row.byte_size,
+        "content_hash": row.content_hash,
+        "origin_run_id": row.origin_run_id,
+        "origin": row.origin,
+        "status": row.status,
+        "created_at": row.created_at,
+        "updated_at": row.updated_at,
+    }
+
+
 def derive_file_kind(filename: str, mime_type: str | None) -> str:
     """Classify a file for the artifacts panel from its extension and MIME type."""
     extension = PurePosixPath(filename.lower()).suffix
@@ -263,8 +281,8 @@ async def conversation_file_usage(
 def _shared_file_query(*, org_id: str, owner_user_id: str, conversation_id: str):
     """Select active files whose origin run is terminal or absent.
 
-    A file written by a running run is not share-safe yet. A forked copy has
-    no origin run and is always safe.
+    A file written by a running run is not share-safe yet. A forked copy
+    points at a copied, already-terminal run and is always safe.
     """
     return (
         select(GatewayChatFile)

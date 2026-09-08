@@ -161,12 +161,18 @@ const useIsoLayoutEffect =
   typeof window === "undefined" ? useEffect : useLayoutEffect;
 
 /**
- * Width of the artifacts panel. `containerRef` is the row the panel shares
- * with the transcript; its measured width sets the bounds, so a stored wide
- * value on a small window still leaves the transcript visible.
+ * Width of the artifacts panel. `panelRef` is the panel itself; the row it
+ * shares with the transcript is its parent, and that row's measured width
+ * sets the bounds, so a stored wide value on a small window still leaves
+ * the transcript visible.
+ *
+ * The row is read inside the layout effect rather than from a ref another
+ * effect fills in: passive effects run after layout effects, so that order
+ * would leave the panel unmeasured on mount in a production build (React's
+ * development double-invoke hides it).
  */
 export function useArtifactsWidth(
-  containerRef: RefObject<HTMLElement | null>,
+  panelRef: RefObject<HTMLElement | null>,
 ): ArtifactsWidthState {
   const [preferred, setPreferred] = useState<number | null>(null);
   const [containerWidth, setContainerWidth] = useState(0);
@@ -181,18 +187,20 @@ export function useArtifactsWidth(
   }, []);
 
   useIsoLayoutEffect(() => {
-    const element = containerRef.current;
-    if (!element) return;
-    const measure = () => setContainerWidth(element.clientWidth);
+    // The panel is attached by the time layout effects run, so its parent
+    // (the transcript + panel row) is available here.
+    const row = panelRef.current?.parentElement ?? null;
+    if (!row) return;
+    const measure = () => setContainerWidth(row.clientWidth);
     measure();
     if (typeof ResizeObserver === "undefined") {
       window.addEventListener("resize", measure);
       return () => window.removeEventListener("resize", measure);
     }
     const observer = new ResizeObserver(measure);
-    observer.observe(element);
+    observer.observe(row);
     return () => observer.disconnect();
-  }, [containerRef]);
+  }, [panelRef]);
 
   const bounds = useMemo(() => widthBounds(containerWidth), [containerWidth]);
   const width = clampWidth(

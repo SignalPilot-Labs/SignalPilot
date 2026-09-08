@@ -275,14 +275,11 @@ export function ArtifactsPanel({
     setSelectedFileId(openFileRequest.fileId);
   }, [openFileRequest]);
   // The row the panel shares with the transcript bounds the drag, so a
-  // stored width never squeezes the transcript out on a small window.
+  // stored width never squeezes the transcript out on a small window. The
+  // hook reads that row from the panel's parent while measuring.
   const panelRef = useRef<HTMLElement | null>(null);
-  const rowRef = useRef<HTMLElement | null>(null);
-  useEffect(() => {
-    rowRef.current = panelRef.current?.parentElement ?? null;
-  }, []);
   const { width, measured, bounds, preview, commit, reset, nudge } =
-    useArtifactsWidth(rowRef);
+    useArtifactsWidth(panelRef);
 
   const activeTab =
     selectedTab ??

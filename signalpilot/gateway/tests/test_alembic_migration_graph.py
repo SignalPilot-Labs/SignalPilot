@@ -35,7 +35,8 @@ def test_real_migration_chain_is_the_tracked_head() -> None:
     config = build_alembic_config("postgresql://unused:unused@localhost/unused")
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_current_head() == "0026"
+    assert scripts.get_current_head() == "0027"
+    assert scripts.get_revision("0027").down_revision == "0026"
 
     revision_0026 = scripts.get_revision("0026")
     assert revision_0026 is not None

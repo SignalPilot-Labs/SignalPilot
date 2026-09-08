@@ -34,7 +34,7 @@ def plain_text(value: Any) -> str:
 def annotations_from_upstream(annotations: Any) -> dict[str, bool]:
     if annotations is None:
         return {}
-    source = annotations if isinstance(annotations, dict) else annotations.model_dump(exclude_none=True)
+    source = annotations if isinstance(annotations, dict) else annotations.model_dump(exclude_none=True, by_alias=True)
     return {
         snake: bool(source[camel])
         for camel, snake in _ANNOTATION_KEYS.items()
@@ -63,7 +63,7 @@ def tool_info_from_upstream(tool: Any, *, discovered_at: str | None = None) -> d
         "title": plain_text(title) or None,
         "description": plain_text(getattr(tool, "description", None)),
         "annotations": annotations,
-        "input_schema": dict(getattr(tool, "inputSchema", None) or {}),
+        "input_schema": dict(getattr(tool, "input_schema", None) or {}),
         "enabled": enabled,
         "policy": policy,
         "discovered_at": discovered_at or datetime.now(UTC).isoformat(),

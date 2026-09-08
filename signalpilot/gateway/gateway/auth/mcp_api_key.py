@@ -195,6 +195,30 @@ class MCPAuthMiddleware:
         receive: Callable,
         send: Callable,
     ) -> None:
+        if scope["type"] != "http":
+            await self._app(scope, receive, send)
+            return
+        # Each transport request begins with an empty identity, including when
+        # an ASGI host reuses the same task. Restore the caller's context even
+        # after cancellation or a failed authentication attempt.
+        from contextvars import ContextVar
+
+        from ..mcp import context as mcp_context
+
+        tokens = [
+            (variable, variable.set(None))
+            for name, variable in vars(mcp_context).items()
+            if name.startswith("mcp_") and isinstance(variable, ContextVar)
+        ]
+        try:
+            await self._authenticate(scope, receive, send)
+        finally:
+            for variable, token in reversed(tokens):
+                variable.reset(token)
+
+    async def _authenticate(
+        self, scope: dict[str, Any], receive: Callable, send: Callable,
+    ) -> None:
         # Only intercept HTTP connections (not lifespan/websocket)
         if scope["type"] != "http":
             await self._app(scope, receive, send)
@@ -232,7 +256,20 @@ class MCPAuthMiddleware:
             )
 
             try:
-                claims = verify_session_jwt(raw_bearer)
+                if raw_bearer.startswith("spa_"):
+                    import jwt
+
+                    from ..agent_execution.auth import verify as verify_agent_token
+                    try:
+                        claims = await verify_agent_token(raw_bearer)
+                    except jwt.InvalidTokenError:
+                        await _send_401(send, "Invalid or inactive agent credential.")
+                        return
+                    except SQLAlchemyError:
+                        await _send_503(send, "Agent authentication unavailable.")
+                        return
+                else:
+                    claims = verify_session_jwt(raw_bearer)
             except NotebookSessionJWTError:
                 await _send_401(send, "Invalid notebook session token.")
                 return

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from gateway.mcp_connectors import icons, ssrf

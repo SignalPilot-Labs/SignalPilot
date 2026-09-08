@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
-import httpx
+import httpx2 as httpx
 from mcp.client.auth.utils import (
     build_oauth_authorization_server_metadata_discovery_urls,
     build_protected_resource_metadata_discovery_urls,

@@ -502,6 +502,8 @@ async def lifespan(app: FastAPI):
     eval_retention_task = asyncio.create_task(_eval_retention_loop())
     improvement_schedule_task = asyncio.create_task(_improvement_schedule_loop())
     dbt_map_reaper_task = asyncio.create_task(_dbt_map_reaper_loop())
+    from gateway.agent_execution.service import AgentService
+    mcp_agent_worker_task = asyncio.create_task(AgentService().worker_loop())
 
     async def _repo_mirror_reconcile_startup() -> None:
         # Heal any GitHub-linked project whose bare mirror is missing (reset
@@ -551,6 +553,8 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        mcp_agent_worker_task.cancel()
+        await asyncio.gather(mcp_agent_worker_task, return_exceptions=True)
         if mcp_ctx is not None:
             await mcp_ctx.__aexit__(None, None, None)
         await dbt_proxy_ctx.__aexit__(None, None, None)
@@ -704,7 +708,8 @@ try:
 
     from .auth.mcp_api_key import MCPAuthMiddleware
 
-    _mcp_http_app = _mcp_instance.streamable_http_app()
+    from .mcp.server import streamable_http_app
+    _mcp_http_app = streamable_http_app()
     _mcp_session_manager = _mcp_instance.session_manager
     _mcp_http_app = MCPAuthMiddleware(_mcp_http_app)
     # MCP streamable-http app has internal route at /mcp.

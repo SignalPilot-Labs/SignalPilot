@@ -1,7 +1,7 @@
 """The proxy: one logical MCP server per connector, served over the SDK's Streamable HTTP transport.
 
 The sandbox talks to ``POST /api/mcp/proxy/{connector_id}/mcp``. Each request
-is served statelessly (the SDK in this venv speaks the 2025-era protocol; the
+is served statelessly across modern and handshake-era clients (the
 transport is created per request with no session id). ``tools/list`` and
 ``tools/call`` delegate to a pooled upstream client session that carries the
 caller's credential. Every ``tools/call`` is re-authorized and audited (R5).
@@ -14,11 +14,9 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-import anyio
-from anyio.abc import TaskStatus
 from mcp import types
 from mcp.server.lowlevel.server import Server
-from mcp.server.streamable_http import StreamableHTTPServerTransport
+from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import Response
 from starlette.types import Receive, Scope, Send
@@ -85,18 +83,15 @@ class ConnectorProxy:
         return f"{self.connector.id}:{self.caller.user_id}"
 
     def build_server(self) -> Server:
-        server: Server = Server(name=self.connector.slug, version="1.0")
         proxy = self
 
-        @server.list_tools()
-        async def _list_tools() -> list[types.Tool]:
-            return await proxy.list_tools()
+        async def _list_tools(ctx, params) -> types.ListToolsResult:
+            return types.ListToolsResult(tools=await proxy.list_tools())
 
-        @server.call_tool(validate_input=False)
-        async def _call_tool(name: str, arguments: dict[str, Any]) -> types.CallToolResult:
-            return await proxy.call_tool(name, arguments)
+        async def _call_tool(ctx, params: types.CallToolRequestParams) -> types.CallToolResult:
+            return await proxy.call_tool(params.name, params.arguments)
 
-        return server
+        return Server(name=self.connector.slug, version="1.0", on_list_tools=_list_tools, on_call_tool=_call_tool)
 
     async def _access(self) -> tuple[policy_mod.Access, GatewayMcpMemberState | None]:
         await self.session.refresh(self.connector)
@@ -191,7 +186,7 @@ class ConnectorProxy:
             message = f'Tool "{name}" failed: {type(exc).__name__}'
             await self._audit(name, "error", started, message)
             return _error_result(message)
-        await self._audit(name, "error" if result.isError else "ok", started, None)
+        await self._audit(name, "error" if result.is_error else "ok", started, None)
         return result
 
     async def _call_with_retry(
@@ -253,23 +248,9 @@ class ConnectorProxy:
 
 async def serve_stateless(server: Server, scope: Scope, receive: Receive, send: Send) -> None:
     """Serve one HTTP request with a fresh stateless Streamable HTTP transport."""
-    transport = StreamableHTTPServerTransport(mcp_session_id=None, is_json_response_enabled=True)
-
-    async def _run(*, task_status: TaskStatus[None] = anyio.TASK_STATUS_IGNORED) -> None:
-        async with transport.connect() as (read_stream, write_stream):
-            task_status.started()
-            try:
-                await server.run(read_stream, write_stream, server.create_initialization_options(), stateless=True)
-            except Exception:
-                logger.exception("Connector proxy server crashed")
-
-    async with anyio.create_task_group() as task_group:
-        await task_group.start(_run)
-        try:
-            await transport.handle_request(scope, receive, send)
-        finally:
-            await transport.terminate()
-            task_group.cancel_scope.cancel()
+    manager = StreamableHTTPSessionManager(server, stateless=True, json_response=True)
+    async with manager.run():
+        await manager.handle_request(scope, receive, send)
 
 
 class McpProxyResponse(Response):

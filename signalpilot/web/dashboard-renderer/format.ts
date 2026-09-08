@@ -1,7 +1,7 @@
 /**
- * Value and axis formatting. Semantics copied from
- * `lib/dashboard/semantic-formatter.ts` (not imported: this package must build
- * without the rest of the web app). Locale is fixed to en-US.
+ * Value and axis formatting (see CONTRACTS "Formatting"). Self-contained on
+ * purpose: this package must build without the rest of the web app. Locale
+ * is fixed to en-US.
  *
  * Print-path module: relative imports only, no React, no DOM.
  */
@@ -10,7 +10,13 @@ import type { DashboardFormat } from "./schema";
 export const LOCALE = "en-US";
 export const NULL_TEXT = "–"; // en dash
 
-const NUMERIC_TEXT = /^-?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i;
+/**
+ * Plain decimals the way Python's `float()` reads them: optional sign, digits
+ * with an optional fraction, optional exponent. Python additionally accepts
+ * digit-group underscores ("1_000") and "inf"/"nan" spellings; the TS side
+ * stays strict, so those cells are strings here and numbers there.
+ */
+export const NUMERIC_TEXT = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i;
 const ISO_DATE =
   /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?)?$/;
 

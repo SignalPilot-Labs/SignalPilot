@@ -19,7 +19,6 @@ from signalpilot._server.ai.dashboard import (
 )
 from signalpilot._server.ai.standalone_chat_dbt import run_inspect_dbt
 from signalpilot._server.ai.standalone_chat_lifecycle import (
-    StandaloneArtifactCollector,
     StandaloneNotebookLifecycle,
 )
 from signalpilot._server.ai.standalone_chat_tool_schemas import (
@@ -31,7 +30,6 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 __all__ = [
-    "StandaloneArtifactCollector",
     "StandaloneNotebookLifecycle",
     "build_standalone_chat_mcp_server",
 ]
@@ -41,7 +39,6 @@ _NOTEBOOK_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,40}$")
 
 
 def build_standalone_chat_mcp_server(
-    collector: StandaloneArtifactCollector,
     *,
     project_directory: Path | None = None,
     scratch_directory: Path | None = None,
@@ -55,9 +52,6 @@ def build_standalone_chat_mcp_server(
     notebook_seeder: Callable[[str], Path] | None = None,
 ) -> Any:
     """Build the isolated in-process tool server used by one run."""
-    # The collector is the extension point for tool-recorded results. The
-    # current tools record nothing; files reach the run via the sweep.
-    del collector
     from claude_agent_sdk import McpSdkServerConfig
     from mcp.server import Server
     from mcp.types import ImageContent, TextContent, Tool
@@ -175,37 +169,37 @@ def build_standalone_chat_mcp_server(
         )
         return [TextContent(type="text", text=json.dumps(inspected))]
 
-    async def sample_dashboard_data(
+    async def dashboard_sample_data_tool(
         arguments: dict[str, Any],
     ) -> list[TextContent | ImageContent]:
         if scratch_directory is None:
-            return _dashboard_unavailable()
+            return _dashboard_unavailable(charts=[])
         return await dashboard_sample_data(
             scratch_directory=scratch_directory,
             path=str(arguments.get("path") or ""),
-            chart_ids=list(arguments.get("chart_ids") or []),
-            limit=int(arguments.get("limit") or 10),
+            chart_ids=_id_list_argument(arguments.get("chart_ids")),
+            limit=_int_argument(arguments.get("limit"), 10),
         )
 
-    async def screenshot_dashboard(
+    async def dashboard_screenshot_tool(
         arguments: dict[str, Any],
     ) -> list[TextContent | ImageContent]:
         if scratch_directory is None:
-            return _dashboard_unavailable()
-        raw_ids = arguments.get("chart_ids")
+            return _dashboard_unavailable(rendered=[], failed=[])
+        chart_ids = _id_list_argument(arguments.get("chart_ids"))
         return await dashboard_screenshot(
             scratch_directory=scratch_directory,
             path=str(arguments.get("path") or ""),
-            chart_ids=list(raw_ids) if raw_ids else None,
-            width=int(arguments.get("width") or 1280),
+            chart_ids=chart_ids or None,
+            width=_int_argument(arguments.get("width"), 1280),
             theme=str(arguments.get("theme") or "light"),
         )
 
     handlers = {
         "start_analysis_notebook": start_analysis_notebook,
         "inspect_dbt": inspect_dbt,
-        "dashboard_sample_data": sample_dashboard_data,
-        "dashboard_screenshot": screenshot_dashboard,
+        "dashboard_sample_data": dashboard_sample_data_tool,
+        "dashboard_screenshot": dashboard_screenshot_tool,
     }
 
     @server.call_tool()
@@ -228,19 +222,50 @@ def build_standalone_chat_mcp_server(
     )
 
 
-def _dashboard_unavailable() -> list[Any]:
+def _int_argument(value: Any, default: int) -> int:
+    """Integer tool argument; the default when it is missing or not a number.
+
+    The dashboard tools never raise into the agent, so a bad argument falls
+    back to the default and the tool reports range problems itself.
+    """
+    if value is None or isinstance(value, bool):
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _id_list_argument(value: Any) -> list[str]:
+    """Chart id list; a lone string is one id, anything else is empty."""
+    if isinstance(value, str):
+        return [value] if value else []
+    if isinstance(value, list | tuple):
+        return [str(item) for item in value if item is not None]
+    return []
+
+
+def _dashboard_unavailable(**shape: Any) -> list[Any]:
+    """The dashboard tools' contract envelope for a run with no scratch dir.
+
+    ``shape`` carries the tool-specific empty collections (``charts`` or
+    ``rendered``/``failed``) so the payload has the same keys as a real answer.
+    """
     from mcp.types import TextContent
 
+    message = (
+        "The scratch directory is unavailable in this run, so dashboard "
+        "files cannot be read."
+    )
     return [
         TextContent(
             type="text",
             text=json.dumps(
                 {
+                    "dashboard": {"valid": False, "errors": [message]},
                     "error": "scratch_unavailable",
-                    "message": (
-                        "The scratch directory is unavailable in this run, "
-                        "so dashboard files cannot be read."
-                    ),
+                    "message": message,
+                    **shape,
                 }
             ),
         )

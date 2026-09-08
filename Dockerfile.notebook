@@ -72,6 +72,14 @@ COPY --from=dashboard-renderer --chown=notebook:notebook /build/dist/render-cli.
 COPY --from=dashboard-renderer --chown=notebook:notebook /build/node_modules/@resvg/ /opt/sp-dashboard/node_modules/@resvg/
 COPY --from=dashboard-renderer --chown=notebook:notebook /build/fonts/ /opt/sp-dashboard/fonts/
 ENV SP_DASHBOARD_RENDER_CLI=/opt/sp-dashboard/render-cli.js
+# Smoke test in the final layer: an empty spec must fail validation with exit
+# code 2 (the CLI's invalid-spec path), which proves node runs, the bundle
+# loads, and the resvg native module resolves from /opt/sp-dashboard.
+RUN set +e; \
+    echo '{"spec":{}}' | node /opt/sp-dashboard/render-cli.js --out /tmp/x.png; \
+    code=$?; set -e; \
+    if [ "$code" -ne 2 ]; then echo "render-cli smoke test: expected exit 2, got $code" >&2; exit 1; fi; \
+    rm -f /tmp/x.png
 
 # Install only the local package after copying source. Source edits should not
 # invalidate the heavyweight dependency layer above.

@@ -8,11 +8,10 @@
  *
  * Print-path module: relative imports only, no React, no DOM.
  */
+import { NUMERIC_TEXT } from "./format";
 import type { DashboardCellValue, DashboardSpec } from "./schema";
 
 export type DatasetRows = Record<string, DashboardCellValue>[];
-
-const NUMERIC_CELL = /^-?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i;
 
 /** Parse RFC 4180 delimited text into records (no header handling). */
 export function parseDelimitedRecords(text: string, delimiter: string): string[][] {
@@ -72,11 +71,15 @@ export function parseDelimitedRecords(text: string, delimiter: string): string[]
   return records;
 }
 
-/** Cells that are fully numeric become numbers; empty cells become null. */
+/**
+ * Cells that are fully numeric become numbers; empty cells become null. The
+ * numeric forms match the Python loader's `float()` for plain decimals (see
+ * NUMERIC_TEXT for the forms Python accepts beyond that).
+ */
 export function coerceCell(cell: string): DashboardCellValue {
   const trimmed = cell.trim();
   if (trimmed === "") return null;
-  if (NUMERIC_CELL.test(trimmed)) {
+  if (NUMERIC_TEXT.test(trimmed)) {
     const parsed = Number(trimmed);
     if (Number.isFinite(parsed)) return parsed;
   }
@@ -122,7 +125,9 @@ function parseJsonRows(text: string, filename: string): DatasetRows {
 /**
  * Parse dataset text by file extension: `.json` -> array of objects,
  * `.tsv` -> tab delimited, anything else -> comma delimited. Delimited files
- * use the first record as the header. Throws on unparseable input.
+ * use the first record as the header: names are trimmed and an empty name
+ * stays "" (the Python loader does the same). Records whose cells are all
+ * blank are skipped. Throws on unparseable input.
  */
 export function parseDatasetText(text: string, filename: string): DatasetRows {
   if (/\.json$/i.test(filename)) return parseJsonRows(text, filename);
@@ -132,16 +137,17 @@ export function parseDatasetText(text: string, filename: string): DatasetRows {
   );
   const header = records[0];
   if (!header || header.length === 0) return [];
-  const names = header.map((name, index) =>
-    name.trim() === "" ? `column_${index + 1}` : name.trim(),
-  );
-  return records.slice(1).map((record) => {
+  const names = header.map((name) => name.trim());
+  const rows: DatasetRows = [];
+  for (const record of records.slice(1)) {
+    if (record.every((cell) => cell.trim() === "")) continue;
     const row: Record<string, DashboardCellValue> = {};
     names.forEach((name, index) => {
       row[name] = index < record.length ? coerceCell(record[index]) : null;
     });
-    return row;
-  });
+    rows.push(row);
+  }
+  return rows;
 }
 
 /** Every dataset backed by a file, with its scratch-relative path. */

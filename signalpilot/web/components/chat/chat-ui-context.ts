@@ -11,6 +11,7 @@ import type {
   StandaloneChatRunStatus,
 } from "~/lib/api";
 import type { StandaloneRunActivity } from "~/lib/standalone-chat-state";
+import type { DashboardPublishApi } from "~/components/chat/dashboard-publish-form";
 
 export type UiMessage = StandaloneChatMessage & {
   runId?: string;
@@ -66,6 +67,12 @@ export type ChatUiContextValue = {
    * it and the cards tick on the real clock.
    */
   nowMs?: number;
+  /**
+   * Override for the dashboards API behind "Publish" on a dashboard file.
+   * The fixture harness injects an in-memory gallery; live pages omit it
+   * and the publish dialog calls the gateway.
+   */
+  dashboardsApi?: DashboardPublishApi;
   /** True on read-only surfaces (the shared page): no Stop/Retry actions. */
   readOnly?: boolean;
   /**

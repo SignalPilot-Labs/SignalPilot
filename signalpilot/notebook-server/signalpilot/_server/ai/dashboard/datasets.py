@@ -44,8 +44,6 @@ def resolve_scratch_path(scratch_directory: Path, relative: str) -> Path:
     text = str(relative or "").strip().replace("\\", "/")
     if not text.startswith(_ARTIFACTS_PREFIX) or text == _ARTIFACTS_PREFIX:
         raise ValueError(f"Path must start with '{_ARTIFACTS_PREFIX}': {text}")
-    if text.startswith("/"):
-        raise ValueError(f"Path must be relative: {text}")
     for segment in text.split("/"):
         if not segment or segment in {".", ".."}:
             raise ValueError(f"Path must not contain '{segment}': {text}")

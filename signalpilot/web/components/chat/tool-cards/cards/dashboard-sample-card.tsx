@@ -6,7 +6,7 @@ import type {
   DashboardSampleResult,
   RunStep,
 } from "~/lib/chat-run-steps";
-import { InputPills, ProgressRail, SkeletonRows } from "../card-primitives";
+import { InputPills, ProgressRail, SkeletonRows, plural } from "../card-primitives";
 import { registerToolCard, type ToolCardContext, type ToolCardSummary } from "../registry";
 import { iconForKind } from "../registry-tools";
 import { DataTable } from "./data-table";
@@ -22,10 +22,6 @@ const CASCADE_CAP = 24;
 
 function sampleResult(step: RunStep): DashboardSampleResult | null {
   return step.result?.kind === "dashboard_sample" ? step.result : null;
-}
-
-function plural(count: number, noun: string): string {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
 export function summarizeDashboardSample(step: RunStep): ToolCardSummary {

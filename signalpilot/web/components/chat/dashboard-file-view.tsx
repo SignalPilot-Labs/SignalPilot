@@ -1,9 +1,17 @@
 "use client";
 
-import { AlertCircle, ArrowDownToLine, Maximize2 } from "lucide-react";
+import { AlertCircle, ArrowDownToLine, Maximize2, Upload } from "lucide-react";
 import { useContext, useMemo, useState } from "react";
 import type { ConversationFileInfo } from "~/lib/api";
 import { normalizeFileRef, resolveFileRef } from "~/lib/chat-file-refs";
+import type { PublishedDashboard } from "~/lib/api/dashboards";
+import {
+  DashboardPublishDialog,
+  DashboardPublishedStrip,
+  useDashboardPublishApi,
+  usePublishedDashboard,
+} from "~/components/chat/dashboard-publish-dialog";
+import type { DashboardPublishApi } from "~/components/chat/dashboard-publish-form";
 import {
   DashboardRenderer,
   datasetFileRefs,
@@ -106,11 +114,15 @@ export function DashboardFileView({
   text,
   files,
   running,
+  publishApi,
 }: {
   file: ConversationFileInfo;
   text: string;
   files: readonly ConversationFileInfo[];
   running: boolean;
+  /** Dashboards API for the publish flow; tests and the fixture harness
+   * inject a fake, live pages use the real module. */
+  publishApi?: DashboardPublishApi | null;
 }) {
   const ui = useContext(ChatUiContext);
   const { toast } = useToast();
@@ -118,6 +130,15 @@ export function DashboardFileView({
   const parsed = useMemo(() => parseDashboardFile(text), [text]);
   const [showRaw, setShowRaw] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const api = useDashboardPublishApi(publishApi);
+  const publishedState = usePublishedDashboard(api, conversationId, file.id);
+  // null = closed; "new" = fresh publish; an id = new version of that one.
+  const [publishTarget, setPublishTarget] = useState<"new" | string | null>(null);
+  const onPublished = ({ dashboard }: { dashboard: PublishedDashboard }) => {
+    publishedState.setPublished(dashboard);
+    setPublishTarget(null);
+    toast("Published", "success");
+  };
   const [filterState, setFilterState] = useState<FilterState>({});
   const [theme] = useState<DashboardTheme>(() => resolveDashboardTheme());
 
@@ -205,6 +226,21 @@ export function DashboardFileView({
             Expand
           </button>
         )}
+        {spec && conversationId && (
+          <button
+            type="button"
+            data-testid="chat-dashboard-publish"
+            aria-label="Publish the dashboard"
+            onClick={() => {
+              void publishedState.reload();
+              setPublishTarget(publishedState.published?.id ?? "new");
+            }}
+            className={ACTION_CLASS}
+          >
+            <Upload className="h-3 w-3" />
+            Publish
+          </button>
+        )}
         <button
           type="button"
           data-testid="chat-dashboard-download"
@@ -216,6 +252,26 @@ export function DashboardFileView({
           Download JSON
         </button>
       </div>
+      {spec && publishedState.published && (
+        <DashboardPublishedStrip
+          dashboard={publishedState.published}
+          onPublishNewVersion={() => setPublishTarget(publishedState.published?.id ?? "new")}
+        />
+      )}
+      {spec && conversationId && (
+        <DashboardPublishDialog
+          open={publishTarget !== null}
+          onClose={() => setPublishTarget(null)}
+          conversationId={conversationId}
+          file={file}
+          spec={spec}
+          files={files}
+          dashboards={publishedState.dashboards}
+          initialTargetId={publishTarget === "new" ? null : publishTarget}
+          onPublished={onPublished}
+          api={api}
+        />
+      )}
       <div className="p-2">
         {parsed.errors && <ErrorBand errors={parsed.errors} />}
         {parsed.errors && showRaw && <RawJson text={text} />}

@@ -31,6 +31,20 @@ describe("parseDatasetText", () => {
     ]);
   });
 
+  it("coerces the numeric forms Python float() reads, and only those", () => {
+    const rows = parseDatasetText("a,b,c,d,e\n+5,5.,1_000,inf,1e3\n", "artifacts/x.csv");
+    // "1_000" and "inf" are numbers in Python; the TS side keeps them as text (documented drift).
+    expect(rows).toEqual([{ a: 5, b: 5, c: "1_000", d: "inf", e: 1000 }]);
+  });
+
+  it("keeps empty header names as \"\" and skips all-blank records", () => {
+    const rows = parseDatasetText("a,,b\n1,2,3\n , ,\n,,\n4,5,6\n", "artifacts/x.csv");
+    expect(rows).toEqual([
+      { a: 1, "": 2, b: 3 },
+      { a: 4, "": 5, b: 6 },
+    ]);
+  });
+
   it("parses JSON arrays of objects", () => {
     const rows = parseDatasetText('[{"a":1,"b":"x","c":null,"d":true}]', "artifacts/x.json");
     expect(rows).toEqual([{ a: 1, b: "x", c: null, d: true }]);

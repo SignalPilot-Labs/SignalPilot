@@ -50,6 +50,7 @@ import {
   FIXTURE_QUERY_RESULT_ID,
   fixtureQueryResultPage,
 } from "~/lib/chat-test-fixture-tools";
+import { createFixtureDashboardPublishApi } from "~/lib/chat-test-fixture-dashboard";
 
 const SPEEDS = [1, 2, 4] as const;
 const TICK_MS = 50;
@@ -78,6 +79,12 @@ export function StandaloneChatTestHarness() {
   const withFollowUp = searchParams.get("followup") === "1";
   const connectorsApi = useMemo(
     () => createFixtureConnectorsApi({ latencyMs: 120 }),
+    [],
+  );
+  // "Publish" on the dashboard file talks to this in-memory gallery
+  // instead of the gateway.
+  const dashboardsApi = useMemo(
+    () => createFixtureDashboardPublishApi({ latencyMs: 120 }),
     [],
   );
   const [elapsed, setElapsed] = useState(initialAt);
@@ -395,6 +402,7 @@ export function StandaloneChatTestHarness() {
           getFileObjectUrl,
           getFileText,
           getToolResultRows,
+          dashboardsApi,
           // Frozen replay clock, so relative timestamps are honest on
           // every frame instead of measuring from the real wall clock.
           nowMs: fixtureNowMs(elapsed),

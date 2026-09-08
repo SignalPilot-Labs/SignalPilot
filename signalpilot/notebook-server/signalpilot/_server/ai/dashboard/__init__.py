@@ -21,7 +21,6 @@ from signalpilot._server.ai.dashboard.prepare import (
 )
 from signalpilot._server.ai.dashboard.schema import (
     DashboardSchemaUnavailable,
-    load_schema,
     locate_schema_file,
     validate_spec,
 )
@@ -40,7 +39,6 @@ __all__ = [
     "infer_column_types",
     "load_dataset",
     "load_datasets",
-    "load_schema",
     "locate_schema_file",
     "parse_dataset_text",
     "prepare_chart_rows",

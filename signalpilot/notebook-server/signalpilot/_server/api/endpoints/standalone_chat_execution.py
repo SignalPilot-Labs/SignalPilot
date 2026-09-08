@@ -21,7 +21,6 @@ from signalpilot._server.ai.claude_session_archive import (
     prepare_claude_session,
 )
 from signalpilot._server.ai.standalone_chat_tools import (
-    StandaloneArtifactCollector,
     StandaloneNotebookLifecycle,
     build_standalone_chat_mcp_server,
 )
@@ -281,7 +280,6 @@ async def execute(*, request: Request) -> StreamingResponse:
             # Non-analysis kernels survive a recovery restart untouched.
             carryover_sessions: dict[str, str] = {}
             for attempt in (1, 2):
-                collector = StandaloneArtifactCollector()
                 lifecycle = StandaloneNotebookLifecycle()
                 lifecycle.sessions.update(carryover_sessions)
                 current_lifecycle = lifecycle
@@ -351,7 +349,6 @@ async def execute(*, request: Request) -> StreamingResponse:
                         return
 
                 artifact_server = build_standalone_chat_mcp_server(
-                    collector,
                     project_directory=project_directory,
                     scratch_directory=scratch,
                     notebook_mcp_app=runtime_app,
@@ -557,7 +554,6 @@ async def execute(*, request: Request) -> StreamingResponse:
                 for line in await final_capture():
                     yield line
                 final_payload = build_final_payload(
-                    collector,
                     accepted_text=accepted_text,
                     agent_cost_usd=state.agent_cost_usd,
                     agent_usage=state.agent_usage,

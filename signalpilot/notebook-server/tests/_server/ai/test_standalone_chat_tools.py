@@ -30,7 +30,6 @@ from signalpilot._server.ai.standalone_chat_tool_schemas import (
     standalone_chat_tools as standalone_chat_tool_definitions,
 )
 from signalpilot._server.ai.standalone_chat_tools import (
-    StandaloneArtifactCollector,
     StandaloneNotebookLifecycle,
     build_standalone_chat_mcp_server,
 )
@@ -101,7 +100,7 @@ def test_internal_notebook_http_headers_include_both_auth_tokens():
 
 @pytest.mark.asyncio
 async def test_publish_tools_are_gone_and_unknown_tools_are_errors():
-    config = build_standalone_chat_mcp_server(StandaloneArtifactCollector())
+    config = build_standalone_chat_mcp_server()
     server = config["instance"]
     listed = await server.request_handlers[ListToolsRequest](
         ListToolsRequest()
@@ -142,9 +141,7 @@ async def test_publish_tools_are_gone_and_unknown_tools_are_errors():
 
 @pytest.mark.asyncio
 async def test_dashboard_tools_report_a_structured_error_without_scratch():
-    server = build_standalone_chat_mcp_server(StandaloneArtifactCollector())[
-        "instance"
-    ]
+    server = build_standalone_chat_mcp_server()["instance"]
     response = await server.request_handlers[CallToolRequest](
         CallToolRequest(
             params=CallToolRequestParams(
@@ -159,6 +156,25 @@ async def test_dashboard_tools_report_a_structured_error_without_scratch():
     assert response.root.isError is False
     payload = json.loads(response.root.content[0].text)
     assert payload["error"] == "scratch_unavailable"
+    assert payload["dashboard"]["valid"] is False
+    assert "scratch directory" in payload["dashboard"]["errors"][0]
+    assert payload["charts"] == []
+
+    screenshot = await server.request_handlers[CallToolRequest](
+        CallToolRequest(
+            params=CallToolRequestParams(
+                name="dashboard_screenshot",
+                arguments={"path": "artifacts/revenue.dashboard.json"},
+            )
+        )
+    )
+    screenshot_payload = json.loads(screenshot.root.content[0].text)
+    assert screenshot_payload["error"] == "scratch_unavailable"
+    assert screenshot_payload["dashboard"]["valid"] is False
+    assert (screenshot_payload["rendered"], screenshot_payload["failed"]) == (
+        [],
+        [],
+    )
 
 
 def test_dashboard_tool_schemas_match_the_contract():
@@ -213,7 +229,6 @@ async def test_analysis_notebook_start_needs_no_plan_and_uses_only_the_seeded_pa
 
     lifecycle = StandaloneNotebookLifecycle()
     config = build_standalone_chat_mcp_server(
-        StandaloneArtifactCollector(),
         notebook_mcp_app=object(),
         analysis_notebook_path=seeded,
         notebook_lifecycle=lifecycle,
@@ -390,9 +405,9 @@ def test_agent_contract_includes_default_signalpilot_mcp_tools():
 
 @pytest.mark.asyncio
 async def test_scratch_python_tool_is_not_exposed():
-    server = build_standalone_chat_mcp_server(
-        StandaloneArtifactCollector(), notebook_mcp_app=None
-    )["instance"]
+    server = build_standalone_chat_mcp_server(notebook_mcp_app=None)[
+        "instance"
+    ]
     response = await server.request_handlers[ListToolsRequest](
         ListToolsRequest()
     )

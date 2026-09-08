@@ -122,7 +122,8 @@ export function applyFilter(
   const column = filter.column;
   switch (filter.type) {
     case "equals": {
-      if (value === null || value === undefined || value === "") return rows;
+      // Only a missing value disables the filter; "" is a real value to match.
+      if (value === null || value === undefined) return rows;
       const wanted = String(value);
       return rows.filter((row) => String(row[column]) === wanted);
     }
@@ -197,12 +198,16 @@ export function sortRows(
     .map((entry) => entry.row);
 }
 
+/**
+ * Share of non-null cells that pass `test`. Empty strings are non-null cells
+ * that fail the numeric and date parsers, matching the Python `_ratio`.
+ */
 function ratioPassing(rows: DatasetRows, column: string, test: (v: unknown) => boolean) {
   let total = 0;
   let passing = 0;
   for (const row of rows) {
     const value = row[column];
-    if (value === null || value === undefined || value === "") continue;
+    if (value === null || value === undefined) continue;
     total += 1;
     if (test(value)) passing += 1;
   }

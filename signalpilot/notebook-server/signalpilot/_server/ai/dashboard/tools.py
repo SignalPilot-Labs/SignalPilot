@@ -19,28 +19,32 @@ from pathlib import Path
 from typing import Any
 
 from signalpilot._server.ai.dashboard.datasets import (
-    LoadedDataset,
     load_datasets,
     resolve_scratch_path,
 )
 from signalpilot._server.ai.dashboard.prepare import (
+    FAILED_CODES,
+    ROW_CAP,
+    chart_is_failed,
     infer_column_types,
     prepare_chart_rows,
 )
 from signalpilot._server.ai.dashboard.schema import (
+    DASHBOARD_PATH_PATTERN,
     DashboardSchemaUnavailable,
     validate_spec,
 )
 
-DASHBOARD_PATH_RE = re.compile(
-    r"^artifacts/[A-Za-z0-9_./-]+\.dashboard\.json$"
-)
+DASHBOARD_PATH_RE = re.compile(DASHBOARD_PATH_PATTERN)
 DEFAULT_RENDER_CLI = "/opt/sp-dashboard/render-cli.js"
 PREVIEW_DIRECTORY = ".dashboard-previews"
 SCREENSHOT_TIMEOUT_SECONDS = 20.0
 MAX_CHART_IDS = 20
 MAX_LIMIT = 200
 MAX_SPEC_BYTES = 5 * 1024 * 1024
+# The renderer reads its whole input from stdin before drawing; past this the
+# tool refuses instead of stalling the run.
+MAX_STDIN_BYTES = 64 * 1024 * 1024
 
 
 def _text(payload: dict[str, Any]) -> Any:
@@ -192,19 +196,15 @@ def _renderer_command() -> tuple[list[str] | None, str | None]:
 
 
 def _preview_name(path: str) -> str:
-    stem = Path(path).name
-    stem = (
-        stem[: -len(".dashboard.json")]
-        if stem.endswith(".dashboard.json")
-        else Path(stem).stem
-    )
+    """``<stem>-<unix ts>.png``; ``_load_spec`` already enforced the suffix."""
+    stem = Path(path).name[: -len(".dashboard.json")]
     return f"{stem}-{int(time.time())}.png"
 
 
 async def _run_renderer(
     command: list[str],
     *,
-    stdin_payload: dict[str, Any],
+    stdin: bytes,
     out_path: Path,
     width: int,
     theme: str,
@@ -224,7 +224,7 @@ async def _run_renderer(
     )
     try:
         stdout, stderr = await asyncio.wait_for(
-            process.communicate(json.dumps(stdin_payload).encode("utf-8")),
+            process.communicate(stdin),
             timeout=SCREENSHOT_TIMEOUT_SECONDS,
         )
     except asyncio.TimeoutError:
@@ -286,22 +286,25 @@ async def _screenshot(
     if spec is None:
         return [_text(_invalid(errors, rendered=[], failed=[]))]
     charts = _charts_by_id(spec)
+    valid_block = {"valid": True, "errors": []}
     ids = [str(item) for item in chart_ids or [] if str(item)] or None
     unknown = [chart_id for chart_id in ids or [] if chart_id not in charts]
     if unknown:
+        # The file itself is valid; only the request named ids it lacks.
         return [
             _text(
-                _invalid(
-                    [
+                {
+                    "dashboard": valid_block,
+                    "error": "unknown_chart",
+                    "message": (
                         f"Unknown chart ids: {', '.join(unknown)}. Valid ids: "
                         f"{', '.join(charts)}."
-                    ],
-                    rendered=[],
-                    failed=[],
-                )
+                    ),
+                    "rendered": [],
+                    "failed": [],
+                }
             )
         ]
-    valid_block = {"valid": True, "errors": []}
     command, reason = _renderer_command()
     if command is None:
         return [
@@ -318,24 +321,38 @@ async def _screenshot(
                 }
             )
         ]
-    loaded = load_datasets(scratch_directory, spec)
-    dataset_rows, unreadable = _split_loaded(loaded)
+    datasets, failed = _render_datasets(scratch_directory, spec, charts, ids)
+    stdin = json.dumps(
+        {"spec": spec, "datasets": datasets, "chart_ids": ids}
+    ).encode("utf-8")
+    if len(stdin) > MAX_STDIN_BYTES:
+        return [
+            _text(
+                {
+                    "dashboard": valid_block,
+                    "error": "payload_too_large",
+                    "message": (
+                        f"The chart data is {len(stdin) >> 20} MB serialized; "
+                        f"the renderer accepts at most "
+                        f"{MAX_STDIN_BYTES >> 20} MB. Add a limit to the "
+                        "charts or request fewer chart_ids."
+                    ),
+                    "rendered": [],
+                    "failed": failed,
+                }
+            )
+        ]
     preview_dir = scratch_directory / PREVIEW_DIRECTORY
     preview_dir.mkdir(parents=True, exist_ok=True)
     preview_name = _preview_name(path)
     out_path = preview_dir / preview_name
     status, error = await _run_renderer(
         command,
-        stdin_payload={
-            "spec": spec,
-            "datasets": dataset_rows,
-            "chart_ids": ids,
-        },
+        stdin=stdin,
         out_path=out_path,
         width=width,
         theme=theme,
     )
-    failed = _unreadable_failures(charts, ids, unreadable)
     if status is None or not status.get("ok"):
         detail = error or ", ".join(
             str(item) for item in (status or {}).get("errors") or []
@@ -387,38 +404,59 @@ async def _screenshot(
     return [image, _text(payload)]
 
 
-def _split_loaded(
-    loaded: dict[str, LoadedDataset],
-) -> tuple[dict[str, list[dict[str, Any]]], dict[str, str]]:
-    rows: dict[str, list[dict[str, Any]]] = {}
-    unreadable: dict[str, str] = {}
-    for name, dataset in loaded.items():
-        if dataset.error:
-            unreadable[name] = dataset.error
-        else:
-            rows[name] = dataset.rows
-    return rows, unreadable
-
-
-def _unreadable_failures(
+def _render_datasets(
+    scratch_directory: Path,
+    spec: dict[str, Any],
     charts: dict[str, dict[str, Any]],
     ids: list[str] | None,
-    unreadable: dict[str, str],
-) -> list[dict[str, str]]:
-    failures: list[dict[str, str]] = []
-    for chart_id, chart in charts.items():
-        if ids is not None and chart_id not in ids:
-            continue
-        dataset = str(chart.get("dataset"))
-        if dataset in unreadable:
-            failures.append(
+) -> tuple[dict[str, list[dict[str, Any]]], list[dict[str, str]]]:
+    """The ``datasets`` map for the renderer and the charts already known to fail.
+
+    Only the datasets the requested charts use are loaded. Each dataset is
+    sent as the prepared rows (filters, sort, limit, cap) that
+    ``dashboard_sample_data`` reports, so the renderer receives what the
+    agent inspected and nothing larger. The renderer applies the same steps
+    again, which is idempotent on prepared rows.
+
+    The stdin contract keys datasets by name, so when two requested charts
+    shape one dataset differently (a different sort or limit) the prepared
+    rows of one would be wrong for the other. That dataset is sent as its raw
+    rows, capped at ``ROW_CAP``, and the renderer sorts and slices per chart.
+    """
+    selected = {
+        chart_id: charts[chart_id] for chart_id in (ids or list(charts))
+    }
+    loaded = load_datasets(
+        scratch_directory,
+        spec,
+        {str(chart.get("dataset")) for chart in selected.values()},
+    )
+    datasets: dict[str, list[dict[str, Any]]] = {}
+    shapes: dict[str, set[str]] = {}
+    failed: list[dict[str, str]] = []
+    for chart_id, chart in selected.items():
+        rows, issues = prepare_chart_rows(chart, spec, loaded)
+        if chart_is_failed(issues):
+            first = next(
+                issue for issue in issues if issue["code"] in FAILED_CODES
+            )
+            failed.append(
                 {
                     "id": chart_id,
-                    "code": "dataset_unreadable",
-                    "message": (
-                        f"Chart '{chart_id}' dataset '{dataset}' is "
-                        f"unreadable: {unreadable[dataset]}"
-                    ),
+                    "code": first["code"],
+                    "message": first["message"],
                 }
             )
-    return failures
+        name = str(chart.get("dataset"))
+        dataset = loaded.get(name)
+        if dataset is None or dataset.error:
+            continue
+        shape = json.dumps(
+            [chart.get("sort"), chart.get("limit")], sort_keys=True
+        )
+        shapes.setdefault(name, set()).add(shape)
+        if len(shapes[name]) > 1:
+            datasets[name] = dataset.rows[:ROW_CAP]
+        elif name not in datasets:
+            datasets[name] = rows
+    return datasets, failed

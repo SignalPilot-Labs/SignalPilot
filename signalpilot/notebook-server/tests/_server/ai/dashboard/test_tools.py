@@ -44,6 +44,8 @@ print(json.dumps({
     "height": 400,
     "theme": theme,
     "dataset_names": sorted(payload["datasets"]),
+    "datasets": payload["datasets"],
+    "stdin_bytes": len(json.dumps(payload)),
 }))
 """
 
@@ -254,8 +256,143 @@ async def test_screenshot_with_fake_cli(
     )
     assert len(unknown) == 1
     unknown_payload = json.loads(unknown[0].text)
-    assert unknown_payload["dashboard"]["valid"] is False
-    assert "ghost" in unknown_payload["dashboard"]["errors"][0]
+    assert unknown_payload["dashboard"] == {"valid": True, "errors": []}
+    assert unknown_payload["error"] == "unknown_chart"
+    assert "ghost" in unknown_payload["message"]
+    assert (unknown_payload["rendered"], unknown_payload["failed"]) == ([], [])
+
+
+ECHO_CLI = FAKE_CLI.replace(
+    "print(json.dumps({",
+    'json.dump(payload, open(out + ".stdin.json", "w"))\nprint(json.dumps({',
+)
+
+
+def _write_shared_dataset_dashboard(scratch: Path) -> None:
+    """Three charts: two shape ``monthly`` differently, one uses ``other``."""
+    artifacts = scratch / "artifacts"
+    artifacts.mkdir(parents=True, exist_ok=True)
+    (artifacts / "monthly.csv").write_text(
+        "month,revenue\n2025-02-01,20\n2025-01-01,10\n2025-03-01,30\n",
+        encoding="utf-8",
+    )
+    (artifacts / "other.csv").write_text("k,v\na,1\nb,2\n", encoding="utf-8")
+    line = {
+        "type": "line",
+        "dataset": "monthly",
+        "x": {"column": "month", "type": "date"},
+        "y": [{"column": "revenue"}],
+    }
+    spec: dict[str, Any] = {
+        "version": 1,
+        "title": "Shared",
+        "datasets": {
+            "monthly": {"file": "artifacts/monthly.csv"},
+            "other": {"file": "artifacts/other.csv"},
+        },
+        "charts": [
+            {
+                "id": "top",
+                "title": "Top",
+                "sort": {"column": "revenue", "direction": "desc"},
+                "limit": 1,
+                **line,
+            },
+            {
+                "id": "asc",
+                "title": "Ascending",
+                "sort": {"column": "month"},
+                **line,
+            },
+            {
+                "id": "table",
+                "type": "table",
+                "title": "Other",
+                "dataset": "other",
+                "columns": [{"column": "k"}],
+            },
+        ],
+    }
+    (artifacts / "shared.dashboard.json").write_text(
+        json.dumps(spec), encoding="utf-8"
+    )
+
+
+async def _stdin_for(scratch: Path, chart_ids: list[str] | None) -> dict:
+    result = await dashboard_screenshot(
+        scratch_directory=scratch,
+        path="artifacts/shared.dashboard.json",
+        chart_ids=chart_ids,
+    )
+    payload = json.loads(result[-1].text)
+    assert "error" not in payload, payload
+    return json.loads(
+        (scratch / (payload["preview_path"] + ".stdin.json")).read_text()
+    )
+
+
+@pytest.mark.asyncio
+async def test_screenshot_sends_prepared_rows_for_used_datasets_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    _write_shared_dataset_dashboard(tmp_path)
+    cli = tmp_path / "render-cli.js"
+    cli.write_text(ECHO_CLI, encoding="utf-8")
+    monkeypatch.setenv("SP_DASHBOARD_RENDER_CLI", str(cli))
+    monkeypatch.setenv("SP_DASHBOARD_NODE", sys.executable)
+
+    # One chart: its dataset arrives prepared (sorted desc, limit 1).
+    stdin = await _stdin_for(tmp_path, ["top"])
+    assert stdin["chart_ids"] == ["top"]
+    assert set(stdin["datasets"]) == {"monthly"}
+    assert stdin["datasets"]["monthly"] == [
+        {"month": "2025-03-01", "revenue": 30}
+    ]
+
+    # Two charts shaping the same dataset differently: raw rows, capped.
+    stdin = await _stdin_for(tmp_path, ["top", "asc"])
+    assert set(stdin["datasets"]) == {"monthly"}
+    assert [row["revenue"] for row in stdin["datasets"]["monthly"]] == [
+        20,
+        10,
+        30,
+    ]
+
+    # All charts: every used dataset, ``other`` prepared (no sort/limit).
+    stdin = await _stdin_for(tmp_path, None)
+    assert stdin["chart_ids"] is None
+    assert set(stdin["datasets"]) == {"monthly", "other"}
+    assert stdin["datasets"]["other"] == [
+        {"k": "a", "v": 1},
+        {"k": "b", "v": 2},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_screenshot_refuses_an_oversized_payload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from signalpilot._server.ai.dashboard import tools
+
+    _write_dashboard(tmp_path)
+    cli = tmp_path / "render-cli.js"
+    cli.write_text(FAKE_CLI, encoding="utf-8")
+    monkeypatch.setenv("SP_DASHBOARD_RENDER_CLI", str(cli))
+    monkeypatch.setenv("SP_DASHBOARD_NODE", sys.executable)
+    monkeypatch.setattr(tools, "MAX_STDIN_BYTES", 64)
+
+    result = await dashboard_screenshot(
+        scratch_directory=tmp_path,
+        path="artifacts/revenue.dashboard.json",
+    )
+    assert len(result) == 1
+    payload = json.loads(result[0].text)
+    assert payload["dashboard"] == {"valid": True, "errors": []}
+    assert payload["error"] == "payload_too_large"
+    assert "64" in payload["message"] or "0 MB" in payload["message"]
+    assert payload["rendered"] == []
+    assert [item["id"] for item in payload["failed"]] == ["lost"]
+    assert not (tmp_path / ".dashboard-previews").exists()
 
 
 @pytest.mark.asyncio

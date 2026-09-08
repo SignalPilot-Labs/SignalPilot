@@ -112,7 +112,8 @@ export async function downloadConversationFile(
   saveBlobAs(await response.blob(), filename);
 }
 
-function saveBlobAs(blob: Blob, filename: string): void {
+/** Trigger a browser download of `blob` under `filename`. */
+export function saveBlobAs(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;

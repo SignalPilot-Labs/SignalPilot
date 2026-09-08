@@ -38,11 +38,19 @@ function run(spec: DashboardSpec, filterState?: Record<string, unknown>, dataset
 const codes = (issues: { code: string }[]) => issues.map((issue) => issue.code);
 
 describe("filters", () => {
-  it("equals keeps matching rows and skips null defaults", () => {
+  it("equals keeps matching rows and skips only null or undefined defaults", () => {
     const filter: DashboardFilter = { id: "f", label: "F", dataset: "sales", column: "region", type: "equals", default: "North" };
     expect(run(specWith({}, [filter])).rows).toHaveLength(1);
     expect(run(specWith({}, [{ ...filter, default: null }])).rows).toHaveLength(4);
+    expect(run(specWith({}, [{ ...filter, default: undefined }])).rows).toHaveLength(4);
     expect(run(specWith({}, [filter]), { f: "South" }).rows[0].region).toBe("South");
+  });
+
+  it("equals treats an empty string as a value to match, like the Python side", () => {
+    const filter: DashboardFilter = { id: "f", label: "F", dataset: "sales", column: "region", type: "equals", default: "" };
+    const blank = [...rows, { day: "2024-01-05", region: "", revenue: 1, note: "n" }];
+    expect(run(specWith({}, [filter]), undefined, { sales: blank }).rows.map((row) => row.day)).toEqual(["2024-01-05"]);
+    expect(run(specWith({}, [{ ...filter, default: "North" }]), { f: "" }, { sales: blank }).rows).toHaveLength(1);
   });
 
   it("in keeps listed values and skips empty lists", () => {
@@ -157,6 +165,22 @@ describe("issues", () => {
     expect(codes(result.issues)).toEqual(["non_numeric_y"]);
     expect(result.issues[0].message).toContain('"note"');
     expect(run(specWith({})).issues).toEqual([]);
+  });
+
+  it("numeric and date ratios count empty-string cells as non-null failures", () => {
+    // 3 numbers, 2 blanks: 60% numeric -> warn. Nulls are excluded as before.
+    const mixed: DatasetRows = [
+      { day: "2024-01-01", revenue: 1 },
+      { day: "2024-01-02", revenue: "2" },
+      { day: "2024-01-03", revenue: "+3" },
+      { day: "", revenue: "" },
+      { day: "", revenue: "" },
+      { day: null, revenue: null },
+    ];
+    const spec = specWith({ x: { column: "day", type: "date" } });
+    const result = prepareChartRows(spec.charts[0], spec, { sales: mixed });
+    expect(codes(result.issues)).toEqual(["non_numeric_y", "unparseable_date"]);
+    expect(result.issues[0].message).toContain("3 of 5");
   });
 
   it("unparseable_date warns for date axes", () => {

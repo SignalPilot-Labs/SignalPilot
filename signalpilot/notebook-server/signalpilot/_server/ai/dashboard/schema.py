@@ -18,6 +18,10 @@ from typing import Any
 SCHEMA_RELATIVE_PATH = Path("skills") / "dashboard" / "dashboard.schema.json"
 _MAX_ERRORS = 50
 
+# Tool-argument patterns. The chart id pattern is the schema's ``$defs.id``.
+DASHBOARD_PATH_PATTERN = r"^artifacts/[A-Za-z0-9_./-]+\.dashboard\.json$"
+CHART_ID_PATTERN = r"^[a-z][a-z0-9_]{0,63}$"
+
 
 class DashboardSchemaUnavailable(RuntimeError):
     """Raised when no schema file can be located or parsed."""
@@ -66,11 +70,6 @@ def _load_validator(schema_path: str) -> Any:
 def schema_validator() -> Any:
     """Return the cached ``Draft202012Validator`` for the dashboard schema."""
     return _load_validator(str(locate_schema_file()))
-
-
-def load_schema() -> dict[str, Any]:
-    """Return the parsed schema document."""
-    return dict(schema_validator().schema)
 
 
 def _json_path(error: Any) -> str:

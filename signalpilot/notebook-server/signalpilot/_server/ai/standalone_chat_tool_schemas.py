@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from mcp.types import Tool
 
-DASHBOARD_PATH_PATTERN = r"^artifacts/[A-Za-z0-9_./-]+\.dashboard\.json$"
-DASHBOARD_ID_PATTERN = r"^[a-z][a-z0-9_]{0,63}$"
+from signalpilot._server.ai.dashboard.schema import (
+    CHART_ID_PATTERN,
+    DASHBOARD_PATH_PATTERN,
+)
 
 _DASHBOARD_PATH_SCHEMA = {
     "type": "string",
@@ -15,7 +17,7 @@ _DASHBOARD_PATH_SCHEMA = {
         "artifacts/revenue.dashboard.json."
     ),
 }
-_CHART_ID_ITEMS_SCHEMA = {"type": "string", "pattern": DASHBOARD_ID_PATTERN}
+_CHART_ID_ITEMS_SCHEMA = {"type": "string", "pattern": CHART_ID_PATTERN}
 
 
 def standalone_chat_tools(*, notebook_enabled: bool) -> list[Tool]:

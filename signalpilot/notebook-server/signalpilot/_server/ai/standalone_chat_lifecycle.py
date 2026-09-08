@@ -6,15 +6,6 @@ from dataclasses import dataclass, field
 
 
 @dataclass
-class StandaloneArtifactCollector:
-    """Run-scoped results the in-process tools record for the final payload.
-
-    Files are captured by the filesystem sweep, so this collector carries no
-    tool-recorded state at the moment. It stays as the extension point.
-    """
-
-
-@dataclass
 class StandaloneNotebookLifecycle:
     # Every live kernel of the run, keyed by notebook name.
     sessions: dict[str, str] = field(default_factory=dict)

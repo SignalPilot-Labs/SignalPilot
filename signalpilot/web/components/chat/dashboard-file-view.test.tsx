@@ -10,6 +10,9 @@ import {
   FIXTURE_DASHBOARD_FILE_ID,
   FIXTURE_DASHBOARD_MONTHLY_FILE_ID,
   FIXTURE_DASHBOARD_REGION_FILE_ID,
+  FIXTURE_PUBLISHED_DASHBOARD_ID,
+  FIXTURE_PUBLISHED_SLUG,
+  createFixtureDashboardPublishApi,
 } from "~/lib/chat-test-fixture-dashboard";
 
 (
@@ -51,6 +54,14 @@ vi.mock("~/dashboard-renderer", async () => {
     ),
   };
 });
+
+vi.mock("next/link", () => ({
+  default: ({ href, children, ...rest }: { href: string; children: React.ReactNode }) => (
+    <a href={href} {...rest}>
+      {children}
+    </a>
+  ),
+}));
 
 import { DashboardFileView, parseDashboardFile, resolveDashboardTheme } from "./dashboard-file-view";
 
@@ -129,7 +140,12 @@ describe("DashboardFileView", () => {
   });
 
   const render = async (
-    props: { text?: string; files?: ConversationFileInfo[]; running?: boolean },
+    props: {
+      text?: string;
+      files?: ConversationFileInfo[];
+      running?: boolean;
+      publishApi?: ReturnType<typeof createFixtureDashboardPublishApi>;
+    },
     ui: Partial<ChatUiContextValue> = {},
   ) => {
     const value = {
@@ -150,12 +166,24 @@ describe("DashboardFileView", () => {
             text={props.text ?? DASHBOARD_SPEC_FILE}
             files={props.files ?? []}
             running={props.running ?? false}
+            publishApi={props.publishApi ?? createFixtureDashboardPublishApi()}
           />
         </ChatUiContext.Provider>,
       );
     });
   };
   const q = (selector: string) => container.querySelector(selector);
+  /** Poll for an element that appears after an async effect settles. */
+  const waitForEl = async (selector: string, attempts = 50) => {
+    for (let i = 0; i < attempts; i += 1) {
+      const found = q(selector);
+      if (found) return found;
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      });
+    }
+    throw new Error(`Timed out waiting for ${selector}`);
+  };
 
   it("fetches the file-backed datasets and renders once they land", async () => {
     await render({ files: [DASHBOARD, MONTHLY, REGION] });
@@ -216,5 +244,69 @@ describe("DashboardFileView", () => {
     expect(lightbox).not.toBeNull();
     expect(lightbox?.querySelector('[data-testid="chat-dashboard-expanded"] [data-testid="renderer-probe"]')).not.toBeNull();
     expect(lightbox?.textContent).toContain("Revenue overview 2024");
+  });
+
+  it("offers Publish next to Expand and opens the dialog prefilled", async () => {
+    await render({ files: [DASHBOARD, MONTHLY, REGION] });
+    const header = q('[data-testid="chat-dashboard-expand"]')?.parentElement;
+    const publish = header?.querySelector('[data-testid="chat-dashboard-publish"]');
+    expect(publish?.textContent).toContain("Publish");
+    expect(q('[data-testid="chat-dashboard-published"]')).toBeNull();
+    await act(async () => (publish as HTMLButtonElement).click());
+    const dialog = document.querySelector('[data-testid="chat-dashboard-publish-dialog"]');
+    expect(dialog).not.toBeNull();
+    expect(
+      dialog?.querySelector<HTMLInputElement>('[data-testid="chat-dashboard-publish-name"]')?.value,
+    ).toBe("Revenue overview 2024");
+    expect(dialog?.querySelectorAll('[data-testid="chat-dashboard-publish-dataset"]').length).toBe(3);
+  });
+
+  it("hides Publish for an invalid spec", async () => {
+    await render({ text: "{oops" });
+    expect(q('[data-testid="chat-dashboard-publish"]')).toBeNull();
+  });
+
+  it("shows the published strip after a successful publish", async () => {
+    const publishApi = createFixtureDashboardPublishApi();
+    await render({ files: [DASHBOARD, MONTHLY, REGION], publishApi });
+    await act(async () => (q('[data-testid="chat-dashboard-publish"]') as HTMLButtonElement).click());
+    await act(async () => {
+      document
+        .querySelector<HTMLButtonElement>('[data-testid="chat-dashboard-publish-submit"]')
+        ?.click();
+    });
+    expect(document.querySelector('[data-testid="chat-dashboard-publish-dialog"]')).toBeNull();
+    const strip = q('[data-testid="chat-dashboard-published"]');
+    expect(strip?.textContent).toContain("Published as Revenue overview 2024");
+    expect(strip?.querySelector("a")?.getAttribute("href")).toBe(`/dashboards/${FIXTURE_PUBLISHED_SLUG}`);
+    expect(publishApi.calls[0].fileId).toBe(FIXTURE_DASHBOARD_FILE_ID);
+    // "Publish new version" reopens the dialog on that dashboard.
+    await act(async () => (q('[data-testid="chat-dashboard-publish-version"]') as HTMLButtonElement).click());
+    expect(
+      document.querySelector<HTMLSelectElement>('[data-testid="chat-dashboard-publish-target"]')?.value,
+    ).toBe("dash_fixture_published");
+  });
+
+  it("shows the already-published state on mount when the gallery has this file", async () => {
+    const publishApi = createFixtureDashboardPublishApi();
+    const original = publishApi.listDashboards.bind(publishApi);
+    publishApi.listDashboards = async () => {
+      const { dashboards } = await original();
+      return {
+        dashboards: dashboards.map((dashboard) => ({
+          ...dashboard,
+          source_conversation_id: "conv-1",
+          source_file_id: FIXTURE_DASHBOARD_FILE_ID,
+        })),
+      };
+    };
+    await render({ files: [DASHBOARD, MONTHLY, REGION], publishApi });
+    const strip = await waitForEl('[data-testid="chat-dashboard-published"]');
+    expect(strip.getAttribute("data-dashboard-slug")).toBe("weekly-pipeline-health");
+    // The header Publish targets the existing dashboard.
+    await act(async () => (q('[data-testid="chat-dashboard-publish"]') as HTMLButtonElement).click());
+    expect(
+      document.querySelector<HTMLSelectElement>('[data-testid="chat-dashboard-publish-target"]')?.value,
+    ).toBe(FIXTURE_PUBLISHED_DASHBOARD_ID);
   });
 });

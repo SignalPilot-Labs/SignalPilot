@@ -1,4 +1,9 @@
 import type { ConversationFileInfo, StandaloneChatEvent } from "~/lib/api";
+import type {
+  DashboardVersion,
+  PublishDashboardRequest,
+  PublishedDashboard,
+} from "~/lib/api/dashboards";
 import type { FixtureEvent } from "./chat-test-fixture-data";
 
 /**
@@ -436,4 +441,101 @@ export function fixtureDashboardFileContent(
 ): { body: string; mime: string } | null {
   const entry = FILE_ENTRIES.find((candidate) => candidate.id === fileId);
   return entry ? { body: entry.body, mime: entry.mime } : null;
+}
+
+/** The dashboard already in the fixture gallery: editable, so the publish
+ * dialog offers it as an "Update existing" target. */
+export const FIXTURE_PUBLISHED_DASHBOARD_ID = "dash_fixture_existing";
+export const FIXTURE_PUBLISHED_DASHBOARD_NAME = "Weekly pipeline health";
+/** Slug the fake gateway answers a publish with. */
+export const FIXTURE_PUBLISHED_SLUG = "revenue-overview-2024";
+
+function fixturePublishedDashboard(
+  overrides: Partial<PublishedDashboard> = {},
+): PublishedDashboard {
+  const at = "2026-09-01T06:00:00Z";
+  return {
+    id: FIXTURE_PUBLISHED_DASHBOARD_ID,
+    slug: "weekly-pipeline-health",
+    name: FIXTURE_PUBLISHED_DASHBOARD_NAME,
+    description: "Pipeline stages and conversion, refreshed nightly.",
+    visibility: "org",
+    share_token: null,
+    project_id: null,
+    created_by_user_id: "user-fixture-me",
+    created_by_label: "you",
+    source_conversation_id: "conversation-fixture-0",
+    source_file_id: "file-fixture-other",
+    current_version_id: "dver_fixture_1",
+    current_version_no: 3,
+    chart_count: 6,
+    refresh: { interval_minutes: 1440, anchor_time: "06:00", timezone: "America/New_York", mode: "sql" },
+    notify_on_failure: true,
+    next_refresh_at: "2026-09-09T10:00:00Z",
+    last_refresh_at: at,
+    last_refresh_status: "succeeded",
+    created_at: at,
+    updated_at: at,
+    archived_at: null,
+    can_edit: true,
+    ...overrides,
+  };
+}
+
+/**
+ * In-memory stand-in for the dashboards API used by the publish dialog at
+ * /chats/test and in unit tests: one editable dashboard in the gallery, and
+ * a publish that answers with a fixed slug (or a new version of the target).
+ */
+export function createFixtureDashboardPublishApi(options: { latencyMs?: number } = {}) {
+  const latency = options.latencyMs ?? 0;
+  const wait = () => new Promise<void>((resolve) => setTimeout(resolve, latency));
+  const gallery: PublishedDashboard[] = [fixturePublishedDashboard()];
+  const calls: { conversationId: string; fileId: string; body: PublishDashboardRequest }[] = [];
+  return {
+    calls,
+    async listDashboards() {
+      await wait();
+      return { dashboards: [...gallery] };
+    },
+    async publishDashboard(conversationId: string, fileId: string, body: PublishDashboardRequest) {
+      await wait();
+      calls.push({ conversationId, fileId, body });
+      const now = new Date().toISOString();
+      const existing = body.target_dashboard_id
+        ? gallery.find((dashboard) => dashboard.id === body.target_dashboard_id)
+        : undefined;
+      const versionNo = (existing?.current_version_no ?? 0) + 1;
+      const dashboard = fixturePublishedDashboard({
+        ...(existing ?? {}),
+        id: existing?.id ?? "dash_fixture_published",
+        slug: existing?.slug ?? FIXTURE_PUBLISHED_SLUG,
+        name: body.name,
+        description: body.description ?? null,
+        visibility: body.visibility,
+        source_conversation_id: conversationId,
+        source_file_id: fileId,
+        current_version_id: `dver_fixture_${versionNo}`,
+        current_version_no: versionNo,
+        chart_count: FIXTURE_DASHBOARD_CHART_IDS.length,
+        refresh: body.refresh,
+        notify_on_failure: body.notify_on_failure ?? true,
+        created_at: existing?.created_at ?? now,
+        updated_at: now,
+      });
+      const index = gallery.findIndex((item) => item.id === dashboard.id);
+      if (index >= 0) gallery[index] = dashboard;
+      else gallery.unshift(dashboard);
+      const version: DashboardVersion = {
+        id: dashboard.current_version_id ?? "",
+        version_no: versionNo,
+        produced_by: "publish",
+        producer_ref: "user-fixture-me",
+        chart_count: dashboard.chart_count,
+        dataset_meta: {},
+        created_at: now,
+      };
+      return { dashboard, version };
+    },
+  };
 }

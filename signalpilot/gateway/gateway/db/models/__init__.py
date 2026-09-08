@@ -45,6 +45,11 @@ from .core import (
     GatewaySetting,
     GatewayUploadSession,
 )
+from .dashboards import (
+    GatewayDashboardRefresh,
+    GatewayPublishedDashboard,
+    GatewayPublishedDashboardVersion,
+)
 from .evals import (
     GatewayEvalAccuracyHistory,
     GatewayEvalConfig,
@@ -135,6 +140,7 @@ __all__ = [
     "GatewayChatUserPreference",
     "GatewayConnection",
     "GatewayCredential",
+    "GatewayDashboardRefresh",
     "GatewayDbtManifest",
     "GatewayEvalAccuracyHistory",
     "GatewayEvalConfig",
@@ -160,6 +166,8 @@ __all__ = [
     "GatewayOrgSecrets",
     "GatewayProject",
     "GatewayProjectBranch",
+    "GatewayPublishedDashboard",
+    "GatewayPublishedDashboardVersion",
     "GatewayQueryApproval",
     "GatewayQueryPlan",
     "GatewayQueryProposal",

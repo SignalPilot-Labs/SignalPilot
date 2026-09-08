@@ -28,8 +28,8 @@ datasets you name, applies filter defaults, the chart `sort`, and the chart
    `issues` of every chart. Fix each issue in the file or in the data.
 4. Call `dashboard_screenshot` with the path. Look at the image. Fix layout,
    axis, format, and series problems in the file.
-5. Repeat steps 3 and 4 at most two times. Stop when no issue remains or
-   when the two loops are used. Report an issue you could not fix.
+5. Repeat steps 3 and 4 at most two times. Stop when no issue remains, or
+   after two loops. Report an issue you could not fix.
 6. Reference the dashboard one time in the reply, directly under the finding
    it supports: `[Revenue overview](artifacts/revenue.dashboard.json)`. Do not
    describe chart values in prose that the dashboard already shows.
@@ -226,8 +226,14 @@ returns `failed` entries with the same codes.
 | `too_many_rows` | warning | More than 50000 rows. Aggregate or add a `limit`. |
 | `unknown_chart` | tool only | The id is not in the file. Use one of the listed ids. |
 
-`dashboard_screenshot` can return `"error": "renderer_unavailable"`. Then
-rely on `dashboard_sample_data` and continue.
+`dashboard_screenshot` can return these `"error"` values:
+
+| Error | What to do |
+|---|---|
+| `renderer_unavailable` | The image has no renderer. Rely on `dashboard_sample_data` and continue. |
+| `render_failed` | Read the message. Fix the cause and call it again. |
+| `unknown_chart` | One id in `chart_ids` is not in the file. Use the listed ids. |
+| `payload_too_large` | The datasets are too big to render. Aggregate the data or add a `limit` to the charts, then call it again. |
 
 ## Rules
 

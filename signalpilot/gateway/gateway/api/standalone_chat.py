@@ -6,6 +6,7 @@ from .chat_routes.conversations import router as conversations_router
 from .chat_routes.files import router as files_router
 from .chat_routes.legacy_artifacts import router as legacy_artifacts_router
 from .chat_routes.projects import router as projects_router
+from .chat_routes.publish_dashboard import router as publish_dashboard_router
 from .chat_routes.query_results import router as query_results_router
 from .chat_routes.runs import router as runs_router
 from .chat_routes.runtime_archives import _sanitize_runtime_archive_html
@@ -18,6 +19,7 @@ router.include_router(conversations_router)
 router.include_router(runs_router)
 router.include_router(runtime_archives_router)
 router.include_router(files_router)
+router.include_router(publish_dashboard_router)
 router.include_router(runtime_files_router)
 router.include_router(legacy_artifacts_router)
 router.include_router(query_results_router)

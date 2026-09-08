@@ -1,7 +1,7 @@
 "use client";
 
 import type { DashboardScreenshotResult, RunStep } from "~/lib/chat-run-steps";
-import { InputPills, ProgressRail, SkeletonRows } from "../card-primitives";
+import { InputPills, ProgressRail, SkeletonRows, plural } from "../card-primitives";
 import { registerToolCard, type ToolCardContext, type ToolCardSummary } from "../registry";
 import { iconForKind } from "../registry-tools";
 
@@ -15,10 +15,6 @@ const INPUT_KEYS = ["path", "chart_ids", "width", "theme"] as const;
 
 function screenshotResult(step: RunStep): DashboardScreenshotResult | null {
   return step.result?.kind === "dashboard_screenshot" ? step.result : null;
-}
-
-function plural(count: number, noun: string): string {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
 export function summarizeDashboardScreenshot(step: RunStep): ToolCardSummary {

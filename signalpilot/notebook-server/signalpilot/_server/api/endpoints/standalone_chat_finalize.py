@@ -214,7 +214,6 @@ async def archive_run_notebooks(
 
 
 def build_final_payload(
-    collector: Any,
     *,
     accepted_text: str,
     agent_cost_usd: float | None,
@@ -222,7 +221,6 @@ def build_final_payload(
     archive_id: str | None,
     kernel_stopped: bool,
 ) -> dict[str, Any]:
-    del collector  # No tool-recorded results at the moment.
     final_payload: dict[str, Any] = {
         "type": "final",
         "content": accepted_text,

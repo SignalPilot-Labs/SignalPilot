@@ -3,8 +3,8 @@
  * No React, no DOM, no window: the same function feeds the browser tile and
  * the server-side SVG print path.
  *
- * Bar/line option structure adapted from the Lightdash extraction in
- * `dashboard/lightdash/LightdashCartesianChart.tsx`. See ../UPSTREAM.md and
+ * Bar/line option structure adapted from the Lightdash extraction formerly
+ * vendored in this repo (removed 2026-09-08). See ../UPSTREAM.md and
  * ../LICENSE.lightdash.
  */
 import type { EChartsOption } from "echarts";
@@ -104,7 +104,7 @@ function seriesData(
   return points;
 }
 
-export function buildCartesianOption(
+function buildCartesianOption(
   chart: CartesianChart,
   rows: DatasetRows,
   theme?: DashboardTheme | ThemeTokens,
@@ -193,7 +193,7 @@ export function buildCartesianOption(
   return option;
 }
 
-export function buildPieOption(
+function buildPieOption(
   chart: PieChart,
   rows: DatasetRows,
   theme?: DashboardTheme | ThemeTokens,
@@ -245,7 +245,7 @@ export function buildPieOption(
   };
 }
 
-export function buildScatterOption(
+function buildScatterOption(
   chart: ScatterChart,
   rows: DatasetRows,
   theme?: DashboardTheme | ThemeTokens,

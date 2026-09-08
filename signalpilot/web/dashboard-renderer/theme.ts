@@ -51,7 +51,7 @@ export const LIGHT_THEME: ThemeTokens = {
   ],
 };
 
-export const DARK_THEME: ThemeTokens = {
+const DARK_THEME: ThemeTokens = {
   name: "dark",
   fontFamily: FONT_FAMILY,
   background: "#0d0d0d",
@@ -75,8 +75,4 @@ export const DARK_THEME: ThemeTokens = {
 
 export function themeTokens(theme: DashboardTheme | undefined): ThemeTokens {
   return theme === "dark" ? DARK_THEME : LIGHT_THEME;
-}
-
-export function paletteColor(tokens: ThemeTokens, index: number): string {
-  return tokens.palette[index % tokens.palette.length];
 }

@@ -37,7 +37,7 @@ export function summarizeDashboardSample(step: RunStep): ToolCardSummary {
   return { title, stat, ok: !failed };
 }
 
-export function DashboardSampleRunning({ step }: ToolCardContext) {
+function DashboardSampleRunning({ step }: ToolCardContext) {
   return (
     <div data-testid="chat-dashboard-sample-card">
       <div className="px-3.5 pt-3">
@@ -116,7 +116,7 @@ function ChartRow({ chart, index }: { chart: DashboardSampleChart; index: number
   );
 }
 
-export function DashboardSampleExpanded({ step }: ToolCardContext) {
+function DashboardSampleExpanded({ step }: ToolCardContext) {
   const result = sampleResult(step);
   if (!result) {
     return (

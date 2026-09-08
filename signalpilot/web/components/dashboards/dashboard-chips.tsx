@@ -41,7 +41,7 @@ export function VisibilityChip({ visibility }: { visibility: DashboardVisibility
   );
 }
 
-export function refreshStatusTone(status: DashboardRefreshStatus | "none" | null | undefined): string {
+function refreshStatusTone(status: DashboardRefreshStatus | "none" | null | undefined): string {
   switch (status) {
     case "succeeded":
       return "var(--color-success)";

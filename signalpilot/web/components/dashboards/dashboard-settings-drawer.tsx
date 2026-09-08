@@ -32,7 +32,7 @@ const FIELD_CLASS =
 const LABEL_CLASS = "mb-1.5 block text-[11px] uppercase tracking-[0.08em] text-[var(--color-text-dim)]";
 const HELP_CLASS = "mt-1 text-[11.5px] leading-4 text-[var(--color-text-dim)]";
 
-export type DashboardSettingsDraft = {
+type DashboardSettingsDraft = {
   name: string;
   description: string;
   visibility: DashboardVisibility;

@@ -1,8 +1,8 @@
 /**
  * Axis, legend, tooltip and grid fragments shared by the option builders.
- * Axis formatting is adapted from the Lightdash extraction in
- * `dashboard/lightdash/LightdashCartesianChart.tsx` (see ../UPSTREAM.md and
- * ../LICENSE.lightdash).
+ * Axis formatting is adapted from the Lightdash extraction formerly vendored
+ * in this repo (removed 2026-09-08). See ../UPSTREAM.md and
+ * ../LICENSE.lightdash.
  *
  * Print-path module: relative imports only, no React, no DOM.
  */
@@ -18,7 +18,7 @@ import {
 import type { DashboardAxis, DashboardFormat } from "../schema";
 import type { ThemeTokens } from "../theme";
 
-export type AxisKind = "category" | "time" | "value";
+type AxisKind = "category" | "time" | "value";
 
 export type XAxisModel = {
   kind: AxisKind;
@@ -31,7 +31,7 @@ export type XAxisModel = {
   monthly: boolean;
 };
 
-export function xAxisKind(axis: DashboardAxis): AxisKind {
+function xAxisKind(axis: DashboardAxis): AxisKind {
   if (axis.type === "date") return "time";
   if (axis.type === "number") return "value";
   return "category";
@@ -132,7 +132,7 @@ export function valueAxisOption(tokens: ThemeTokens, format?: DashboardFormat): 
 }
 
 /** Items up to this count use a plain legend that wraps onto more rows. */
-export const LEGEND_SCROLL_THRESHOLD = 8;
+const LEGEND_SCROLL_THRESHOLD = 8;
 
 export function legendOption(tokens: ThemeTokens, show: boolean, itemCount = 0): AxisOption {
   return show

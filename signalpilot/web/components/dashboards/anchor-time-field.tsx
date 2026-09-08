@@ -6,7 +6,7 @@
 
 import { isValidAnchorTime } from "~/lib/dashboards/format";
 
-export const ANCHOR_TIME_PROBLEM = "Aligned to must be a 24 h time like 06:00.";
+const ANCHOR_TIME_PROBLEM = "Aligned to must be a 24 h time like 06:00.";
 
 /** The problem with an anchor time, or null when it is a valid "HH:MM". */
 export function anchorTimeProblem(value: string): string | null {

@@ -12,8 +12,8 @@ Parts of this package are adapted from the MIT-licensed Lightdash frontend.
 - `charts/options.ts` and `charts/axes.ts`: the ECharts option structure for
   bar and line charts (axis styling, grid margins, legend placement, tooltip
   formatting, bar radius and widths) is adapted from
-  `packages/frontend/src/components/SimpleChart/index.tsx`, previously carried
-  in this repo as `dashboard/lightdash/LightdashCartesianChart.tsx`.
+  `packages/frontend/src/components/SimpleChart/index.tsx`, by way of the
+  Lightdash extraction formerly vendored in this repo (removed 2026-09-08).
 - `charts/echarts-tile.tsx`: the `echarts-for-react` wrapper follows
   `packages/frontend/src/components/EChartsReactWrapper.tsx`.
 

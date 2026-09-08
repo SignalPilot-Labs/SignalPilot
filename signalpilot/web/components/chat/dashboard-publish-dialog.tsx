@@ -57,7 +57,7 @@ export function useDashboardPublishApi(override?: DashboardPublishApi | null): D
   return override ?? ui?.dashboardsApi ?? REAL_DASHBOARD_PUBLISH_API;
 }
 
-export type PublishedDashboardState = {
+type PublishedDashboardState = {
   /** Every dashboard the caller can see; the dialog picks editable targets. */
   dashboards: PublishedDashboard[];
   /** The one published from this chat file, when there is one. */

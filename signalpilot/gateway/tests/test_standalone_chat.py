@@ -1473,7 +1473,6 @@ async def test_claim_completion_and_final_message_are_idempotent(db_session):
     )
     assert first is not None
     assert "report_action_outcome" not in first.metadata_json
-    assert "dashboard_preview" not in first.metadata_json
     assert second is None
     count = await db_session.scalar(
         select(func.count(GatewayChatMessage.id)).where(

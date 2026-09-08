@@ -23,7 +23,7 @@ import { useDashboardsApi, useDashboardsClock, useDashboardsRoutes } from "./das
 import { useDashboardDetail } from "./use-dashboard-detail";
 
 /** Saves the spec as `<slug>.dashboard.json`. */
-export function downloadSpecJson(bundle: DashboardBundle, slug: string) {
+function downloadSpecJson(bundle: DashboardBundle, slug: string) {
   saveBlobAs(
     new Blob([JSON.stringify(bundle.spec, null, 2)], { type: "application/json" }),
     `${slug}.dashboard.json`,

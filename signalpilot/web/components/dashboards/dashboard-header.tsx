@@ -22,7 +22,7 @@ import { BUTTON_CLASS, PRIMARY_BUTTON_CLASS, StatusDot, VisibilityChip } from ".
 import { useDashboardsClock, useDashboardsRoutes } from "./dashboards-api-context";
 import { useOwnerLabel } from "./owner-label";
 
-export type DashboardHeaderActions = {
+type DashboardHeaderActions = {
   onRefreshNow: () => void;
   onOpenSettings: () => void;
   onEditInChat: () => void;

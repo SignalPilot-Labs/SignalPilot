@@ -121,8 +121,6 @@ export type DashboardChart =
   | PieChart
   | ScatterChart;
 
-export type DashboardChartType = DashboardChart["type"];
-
 export type DashboardLayout = { columns?: 12; rowHeight?: number };
 
 export type DashboardSpec = {

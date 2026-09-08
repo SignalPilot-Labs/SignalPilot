@@ -230,7 +230,6 @@ async def test_notebook_stream_does_not_hold_a_database_session(monkeypatch: pyt
 
     assert completed_runs == ["run-a"]
     assert "report_action_outcome" not in completion_payloads[0]
-    assert "dashboard_preview" not in completion_payloads[0]
     assert failed_runs == []
     assert ("cell_executed", {"status": "failed"}) in appended_events
     assert (

@@ -13,7 +13,7 @@ import {
   type DashboardsRoutes,
 } from "~/lib/dashboards/api";
 
-export type DashboardsContextValue = {
+type DashboardsContextValue = {
   api: DashboardsApi;
   routes: DashboardsRoutes;
   /** Clock for relative labels; the fixture pins it so labels are stable. */

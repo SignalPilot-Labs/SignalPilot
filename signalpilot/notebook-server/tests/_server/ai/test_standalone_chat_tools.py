@@ -121,11 +121,6 @@ async def test_publish_tools_are_gone_and_unknown_tools_are_errors():
         "list_saved_report_catalog",
         "load_report_context",
         "propose_report_action",
-        "begin_dashboard_authoring",
-        "set_dashboard_plan",
-        "upsert_dashboard_chart",
-        "apply_dashboard_operations",
-        "create_dashboard_preview",
     ):
         response = await server.request_handlers[CallToolRequest](
             CallToolRequest(
@@ -362,13 +357,6 @@ def test_agent_contract_includes_default_signalpilot_mcp_tools():
     assert "artifacts/<name>.dashboard.json" in _prompt_flat
     assert "`dashboard_sample_data`" in _prompt_flat
     assert "`dashboard_screenshot`" in _prompt_flat
-    for retired in (
-        "dashboard-authoring",
-        "begin_dashboard_authoring",
-        "create_dashboard_preview",
-        "governed preview",
-    ):
-        assert retired not in _prompt_flat, retired
     assert {
         "mcp__signalpilot__get_knowledge",
         "mcp__signalpilot__propose_knowledge",

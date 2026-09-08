@@ -31,7 +31,7 @@ export function summarizeDashboardScreenshot(step: RunStep): ToolCardSummary {
   return { title, stat, ok: !failed };
 }
 
-export function DashboardScreenshotRunning({ step }: ToolCardContext) {
+function DashboardScreenshotRunning({ step }: ToolCardContext) {
   return (
     <div data-testid="chat-dashboard-screenshot-card">
       <div className="px-3.5 pt-3">
@@ -54,7 +54,7 @@ function IdChip({ id }: { id: string }) {
   );
 }
 
-export function DashboardScreenshotExpanded({ step }: ToolCardContext) {
+function DashboardScreenshotExpanded({ step }: ToolCardContext) {
   const result = screenshotResult(step);
   if (!result) {
     return (

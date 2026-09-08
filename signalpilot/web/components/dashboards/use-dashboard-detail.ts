@@ -30,12 +30,12 @@ const POLL_FATAL_STATUSES = new Set([401, 403, 404]);
 
 export const POLL_STOPPED_MESSAGE = "Lost track of the refresh; reload the page to see its outcome.";
 
-export type DashboardDetailState =
+type DashboardDetailState =
   | { phase: "loading" }
   | { phase: "error"; message: string; notFound: boolean }
   | { phase: "ready"; detail: DashboardDetail; bundle: DashboardBundle | null; bundleError: string | null };
 
-export function isActiveRefresh(refresh: DashboardRefresh): boolean {
+function isActiveRefresh(refresh: DashboardRefresh): boolean {
   return isActiveRefreshStatus(refresh.status);
 }
 

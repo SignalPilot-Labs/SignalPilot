@@ -16,7 +16,7 @@ export type DashboardRefreshStatus =
   | "skipped";
 
 /** Statuses of a refresh that is still in flight; mirrors the gateway's ACTIVE_REFRESH_STATUSES. */
-export const DASHBOARD_ACTIVE_REFRESH_STATUSES: readonly DashboardRefreshStatus[] = [
+const DASHBOARD_ACTIVE_REFRESH_STATUSES: readonly DashboardRefreshStatus[] = [
   "queued",
   "running",
   "finalizing",
@@ -28,7 +28,7 @@ export function isActiveRefreshStatus(status: DashboardRefreshStatus): boolean {
 export type DashboardVersionOrigin = "publish" | "refresh" | "restore";
 
 /** Allowed refresh intervals in minutes; null means off. */
-export const DASHBOARD_REFRESH_INTERVALS = [15, 60, 120, 240, 480, 720, 1440] as const;
+const DASHBOARD_REFRESH_INTERVALS = [15, 60, 120, 240, 480, 720, 1440] as const;
 export type DashboardRefreshInterval = (typeof DASHBOARD_REFRESH_INTERVALS)[number];
 
 export type DashboardRefreshSettings = {

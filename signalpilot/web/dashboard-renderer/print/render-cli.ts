@@ -15,8 +15,8 @@ import type { DatasetRows } from "../datasets";
 import { validateDashboardSpec } from "../schema";
 import { composeDashboardSvg } from "./compose";
 
-export const RENDER_TIMEOUT_MS = 10_000;
-export const DEFAULT_WIDTH = 1280;
+const RENDER_TIMEOUT_MS = 10_000;
+const DEFAULT_WIDTH = 1280;
 
 export type CliArgs = { out?: string; width: number; theme: "light" | "dark" };
 
@@ -56,7 +56,7 @@ export type StdinPayload = {
   chart_ids?: string[] | null;
 };
 
-export function svgToPng(svg: string, width: number, fonts: string[]): Buffer {
+function svgToPng(svg: string, width: number, fonts: string[]): Buffer {
   const resvg = new Resvg(svg, {
     fitTo: { mode: "width", value: width },
     font: {

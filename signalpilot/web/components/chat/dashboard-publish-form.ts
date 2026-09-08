@@ -31,11 +31,11 @@ export const REAL_DASHBOARD_PUBLISH_API: DashboardPublishApi = {
   publishDashboard,
 };
 
-export const DASHBOARD_DEFAULT_ANCHOR_TIME = "06:00";
-export const DASHBOARD_DEFAULT_INTERVAL: DashboardRefreshInterval = 1440;
+const DASHBOARD_DEFAULT_ANCHOR_TIME = "06:00";
+const DASHBOARD_DEFAULT_INTERVAL: DashboardRefreshInterval = 1440;
 
 /** "new" or the id of an editable dashboard to publish a new version of. */
-export type PublishTarget = "new" | string;
+type PublishTarget = "new" | string;
 
 export type DashboardPublishForm = {
   name: string;
@@ -124,7 +124,7 @@ export function buildPublishRequest(form: DashboardPublishForm): PublishDashboar
   return body;
 }
 
-export type DatasetFileStatus = "inline" | "found" | "missing";
+type DatasetFileStatus = "inline" | "found" | "missing";
 
 export type PublishDatasetRow = {
   name: string;

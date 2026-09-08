@@ -14,17 +14,17 @@ import type { FixtureEvent } from "./chat-test-fixture-data";
  * paths the agent would really use under `artifacts/`.
  */
 
-export const FIXTURE_DASHBOARD_FILE_PATH = "artifacts/revenue.dashboard.json";
-export const FIXTURE_DASHBOARD_MONTHLY_PATH = "artifacts/revenue_monthly.csv";
-export const FIXTURE_DASHBOARD_REGION_PATH = "artifacts/revenue_by_region.json";
+const FIXTURE_DASHBOARD_FILE_PATH = "artifacts/revenue.dashboard.json";
+const FIXTURE_DASHBOARD_MONTHLY_PATH = "artifacts/revenue_monthly.csv";
+const FIXTURE_DASHBOARD_REGION_PATH = "artifacts/revenue_by_region.json";
 
 export const FIXTURE_DASHBOARD_FILE_ID = "file-fixture-dashboard";
 export const FIXTURE_DASHBOARD_MONTHLY_FILE_ID = "file-fixture-dashboard-monthly";
 export const FIXTURE_DASHBOARD_REGION_FILE_ID = "file-fixture-dashboard-region";
 
-export const FIXTURE_DASHBOARD_TITLE = "Revenue overview 2024";
+const FIXTURE_DASHBOARD_TITLE = "Revenue overview 2024";
 
-export const FIXTURE_DASHBOARD_CHART_IDS = [
+const FIXTURE_DASHBOARD_CHART_IDS = [
   "kpi_revenue",
   "kpi_orders",
   "kpi_aov",
@@ -248,7 +248,7 @@ const FILE_ENTRIES = [
 ];
 
 /** The wire projection of `dashboard_sample_data` for two charts. */
-export function fixtureDashboardSampleResult() {
+function fixtureDashboardSampleResult() {
   const monthlyRows = MONTHLY_ROWS[0].map(([region, revenue, orders, target]) => ({
     month: MONTHS[0],
     region,
@@ -298,7 +298,7 @@ export function fixtureDashboardSampleResult() {
 }
 
 /** The wire projection of `dashboard_screenshot` for the whole dashboard. */
-export function fixtureDashboardScreenshotResult() {
+function fixtureDashboardScreenshotResult() {
   return {
     kind: "dashboard_screenshot" as const,
     dashboard_valid: true,

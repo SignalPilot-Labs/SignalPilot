@@ -25,9 +25,9 @@ export type ChartIssue = { code: ChartIssueCode | string; message: string };
 
 export type FilterState = Record<string, unknown>;
 
-export const MAX_ROWS = 50000;
-export const COLUMN_SAMPLE_ROWS = 50;
-export const NUMERIC_THRESHOLD = 0.9;
+const MAX_ROWS = 50000;
+const COLUMN_SAMPLE_ROWS = 50;
+const NUMERIC_THRESHOLD = 0.9;
 
 const FAILING_CODES = new Set<string>([
   "missing_dataset",
@@ -41,7 +41,7 @@ export function chartIsFailed(issues: ChartIssue[]): boolean {
 }
 
 /** Union of keys across the first 50 rows. */
-export function availableColumns(rows: DatasetRows): string[] {
+function availableColumns(rows: DatasetRows): string[] {
   const seen = new Set<string>();
   for (const row of rows.slice(0, COLUMN_SAMPLE_ROWS)) {
     for (const key of Object.keys(row)) seen.add(key);
@@ -50,7 +50,7 @@ export function availableColumns(rows: DatasetRows): string[] {
 }
 
 /** Every column the chart references, in a stable order, de-duplicated. */
-export function referencedColumns(
+function referencedColumns(
   chart: DashboardChart,
   spec: DashboardSpec,
 ): string[] {
@@ -86,7 +86,7 @@ export function referencedColumns(
 }
 
 /** Numeric (y/value) columns subject to the non_numeric_y check. */
-export function numericColumns(chart: DashboardChart): string[] {
+function numericColumns(chart: DashboardChart): string[] {
   switch (chart.type) {
     case "kpi":
       return [chart.value.column];
@@ -114,7 +114,7 @@ function filterValue(filter: DashboardFilter, filterState?: FilterState): unknow
   return filter.default;
 }
 
-export function applyFilter(
+function applyFilter(
   rows: DatasetRows,
   filter: DashboardFilter,
   value: unknown,

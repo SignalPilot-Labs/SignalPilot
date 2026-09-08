@@ -120,4 +120,3 @@ def test_skill_document_points_at_the_schema_and_tools():
         "unknown_chart",
     ):
         assert f"`{code}`" in text, code
-    assert not (PLUGIN_ROOT / "skills" / "dashboard-authoring").exists()

@@ -311,12 +311,6 @@ class TestOpsTools:
         assert notebook.summary == "Notebook started"
         assert notebook.result["session_id"] == "s_1" and notebook.result["artifact_kind"] == "notebook"
 
-        legacy = project_tool_result(
-            "mcp__signalpilot-notebook__create_dashboard_preview",
-            json.dumps({"status": "preview_ready", "authoring_session_id": "a1", "chart_count": 3}),
-        )
-        assert legacy.result["kind"] == "json" and "dashboard_session_id" not in legacy.result
-
     def test_json_and_text_fallbacks(self) -> None:
         as_json = project_tool_result("mcp__notion__search", json.dumps({"results": [1, 2], "status": "ok"}))
         assert as_json.result["kind"] == "json" and as_json.summary == "Search · ok"

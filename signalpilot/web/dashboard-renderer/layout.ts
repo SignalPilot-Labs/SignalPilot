@@ -9,13 +9,13 @@ import type { DashboardChart, DashboardSpec } from "./schema";
 
 export const GRID_COLUMNS = 12;
 export const GRID_GAP = 12;
-export const DEFAULT_ROW_HEIGHT = 72;
+const DEFAULT_ROW_HEIGHT = 72;
 
 export type PlacedTile = { chartId: string; x: number; y: number; w: number; h: number };
 
 export type PixelRect = { x: number; y: number; width: number; height: number };
 
-export function defaultTileSize(chart: DashboardChart): { w: number; h: number } {
+function defaultTileSize(chart: DashboardChart): { w: number; h: number } {
   if (chart.type === "table") return { w: 12, h: 5 };
   if (chart.type === "kpi") return { w: 3, h: 2 };
   return { w: 6, h: 4 };
@@ -31,8 +31,8 @@ export function rowHeightOf(spec: DashboardSpec): number {
  */
 export type LayoutMode = "full" | "compact" | "narrow";
 
-export const COMPACT_MAX_WIDTH = 720;
-export const NARROW_MAX_WIDTH = 420;
+const COMPACT_MAX_WIDTH = 720;
+const NARROW_MAX_WIDTH = 420;
 
 export function layoutModeForWidth(width: number): LayoutMode {
   if (width < NARROW_MAX_WIDTH) return "narrow";
@@ -41,14 +41,14 @@ export function layoutModeForWidth(width: number): LayoutMode {
 }
 
 /** Tile size for a mode: heights never change, widths widen as space shrinks. */
-export function tileSizeForMode(chart: DashboardChart, mode: LayoutMode): { w: number; h: number } {
+function tileSizeForMode(chart: DashboardChart, mode: LayoutMode): { w: number; h: number } {
   const base = defaultTileSize(chart);
   if (mode === "full") return base;
   if (chart.type === "kpi") return { w: mode === "narrow" ? 12 : 6, h: base.h };
   return { w: 12, h: base.h };
 }
 
-export type PlaceOptions = {
+type PlaceOptions = {
   /** Render only these charts (in spec order). */
   chartIds?: string[] | null;
   /** Ignore every `grid` and auto-flow all tiles (CLI with chart_ids). */

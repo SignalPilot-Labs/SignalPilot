@@ -10,9 +10,9 @@ import type { KpiChart, TableChart } from "../schema";
 import type { ThemeTokens } from "../theme";
 
 /** Average glyph width as a fraction of the font size (DM Sans estimate). */
-export const CHAR_WIDTH_EM = 0.55;
-export const TABLE_MAX_BODY_ROWS = 12;
-export const TABLE_MIN_COLUMN_WIDTH = 60;
+const CHAR_WIDTH_EM = 0.55;
+const TABLE_MAX_BODY_ROWS = 12;
+const TABLE_MIN_COLUMN_WIDTH = 60;
 
 export function escapeXml(text: string): string {
   return text
@@ -23,7 +23,7 @@ export function escapeXml(text: string): string {
     .replace(/'/g, "&apos;");
 }
 
-export function estimateTextWidth(text: string, fontSize: number): number {
+function estimateTextWidth(text: string, fontSize: number): number {
   return text.length * fontSize * CHAR_WIDTH_EM;
 }
 
@@ -35,7 +35,7 @@ export function truncateText(text: string, maxWidth: number, fontSize: number): 
   return fit <= 0 ? "…" : `${text.slice(0, fit)}…`;
 }
 
-export type TextStyle = {
+type TextStyle = {
   size: number;
   color: string;
   weight?: 400 | 500 | 600;
@@ -123,7 +123,7 @@ export function kpiBodySvg(
   return parts.join("");
 }
 
-export function tableColumnWidths(
+function tableColumnWidths(
   columns: { column: string; label?: string }[],
   rows: DatasetRows,
   width: number,

@@ -14,7 +14,7 @@ import type { DashboardCellValue, DashboardSpec } from "./schema";
 export type DatasetRows = Record<string, DashboardCellValue>[];
 
 /** Parse RFC 4180 delimited text into records (no header handling). */
-export function parseDelimitedRecords(text: string, delimiter: string): string[][] {
+function parseDelimitedRecords(text: string, delimiter: string): string[][] {
   const records: string[][] = [];
   let record: string[] = [];
   let field = "";
@@ -76,7 +76,7 @@ export function parseDelimitedRecords(text: string, delimiter: string): string[]
  * numeric forms match the Python loader's `float()` for plain decimals (see
  * NUMERIC_TEXT for the forms Python accepts beyond that).
  */
-export function coerceCell(cell: string): DashboardCellValue {
+function coerceCell(cell: string): DashboardCellValue {
   const trimmed = cell.trim();
   if (trimmed === "") return null;
   if (NUMERIC_TEXT.test(trimmed)) {

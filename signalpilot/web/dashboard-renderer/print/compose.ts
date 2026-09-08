@@ -16,9 +16,9 @@ import type { DashboardChart, DashboardFilter, DashboardSpec } from "../schema";
 import { themeTokens, type DashboardTheme, type ThemeTokens } from "../theme";
 import { escapeXml, kpiBodySvg, svgText, tableBodySvg, truncateText, wrapText } from "./svg-tiles";
 
-export const PAGE_PADDING = 24;
-export const TILE_PADDING = 12;
-export const TILE_TITLE_HEIGHT = 30;
+const PAGE_PADDING = 24;
+const TILE_PADDING = 12;
+const TILE_TITLE_HEIGHT = 30;
 
 export type ComposeInput = {
   spec: DashboardSpec;
@@ -62,7 +62,7 @@ function filterSummary(filters: DashboardFilter[] | undefined): string {
 }
 
 /** Render a chart through ECharts SSR into an SVG fragment of the given size. */
-export function renderChartSvg(
+function renderChartSvg(
   chart: DashboardChart,
   rows: DatasetRows,
   tokens: ThemeTokens,

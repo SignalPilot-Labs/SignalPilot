@@ -7,8 +7,8 @@
  */
 import type { DashboardFormat } from "./schema";
 
-export const LOCALE = "en-US";
-export const NULL_TEXT = "–"; // en dash
+const LOCALE = "en-US";
+const NULL_TEXT = "–"; // en dash
 
 /**
  * Plain decimals the way Python's `float()` reads them: optional sign, digits

@@ -71,15 +71,22 @@ describe("validateDashboardSpec", () => {
     expect(result.errors.some((error) => error.includes('"extra"'))).toBe(true);
   });
 
-  it("rejects a dataset with both file and rows", () => {
-    const result = validateDashboardSpec({
-      version: 1,
-      title: "T",
-      datasets: { d: { file: "artifacts/a.csv", rows: [] } },
-      charts: [{ id: "k", type: "kpi", title: "K", dataset: "d", value: { column: "a" } }],
-    });
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.errors.some((error) => error.startsWith("/datasets/d must match exactly one schema"))).toBe(true);
+  it("accepts a SQL dataset and rejects mixed or partial shapes", () => {
+    const chart = { id: "k", type: "kpi", title: "K", dataset: "d", value: { column: "a" } };
+    const withDataset = (dataset: unknown) =>
+      validateDashboardSpec({ version: 1, title: "T", datasets: { d: dataset }, charts: [chart] });
+    expect(withDataset({ connection: "warehouse", sql: "select 1 as a" }).ok).toBe(true);
+    for (const dataset of [
+      { connection: "warehouse", sql: "select 1", rows: [] },
+      { sql: "select 1" },
+      { connection: "warehouse" },
+      { file: "artifacts/a.csv" },
+      {},
+    ]) {
+      const result = withDataset(dataset);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.errors.some((error) => error.startsWith("/datasets/d must match exactly one schema"))).toBe(true);
+    }
   });
 });

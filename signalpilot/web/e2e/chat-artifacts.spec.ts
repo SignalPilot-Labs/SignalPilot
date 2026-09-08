@@ -13,8 +13,8 @@ import { expect, test } from "@playwright/test";
  * - 15 700ms  run_cells saves artifacts/revenue_by_month.{png,csv}; the
  *             sandbox capture lists them at 20 600ms / 20 700ms (seven files)
  * - 20 000ms  the answer embeds the PNG inline; 20 650ms links the CSV
- * - 20 720ms  the answer links the dashboard; its spec and two datasets
- *             land at 20 750ms (ten files)
+ * - 20 720ms  the answer links the dashboard; its spec and three dataset
+ *             snapshots land at 20 750ms (eleven files)
  * - 20 800ms  archive_completed → second ("forecast") notebook lands
  *
  * The harness stubs both inner viewers (notebook + file) so the specs cover
@@ -65,7 +65,7 @@ test.describe("artifacts panel (fixture harness)", () => {
     await expect(page.getByTestId("live-notebook-panel")).toBeVisible();
     // All three tabs are present; Files and Queries carry count chips.
     await expect(page.getByTestId("artifacts-tab-notebook")).toBeVisible();
-    await expect(page.getByTestId("artifacts-tab-files")).toContainText("10");
+    await expect(page.getByTestId("artifacts-tab-files")).toContainText("11");
     await expect(page.getByTestId("artifacts-tab-queries")).toContainText("1");
     // The notebook has content, so its tab is active by default.
     await expect(page.getByTestId("live-notebook-inline")).toBeVisible();
@@ -80,14 +80,14 @@ test.describe("artifacts panel (fixture harness)", () => {
     await page.getByTestId("live-notebook-toggle").click();
     await page.getByTestId("artifacts-tab-files").click();
     const rows = page.getByTestId("artifacts-file-row");
-    await expect(rows).toHaveCount(10);
+    await expect(rows).toHaveCount(11);
     const row = rows.filter({ hasText: "q3_growth.py" });
     await expect(row).toHaveCount(1);
     await row.click();
     // The harness stubs the file viewer; a back affordance returns to the list.
     await expect(page.getByTestId("chat-file-stub")).toBeVisible();
     await page.getByTestId("artifacts-file-back").click();
-    await expect(page.getByTestId("artifacts-file-row")).toHaveCount(10);
+    await expect(page.getByTestId("artifacts-file-row")).toHaveCount(11);
   });
 
   test("multiple notebooks render a chip strip that switches the view", async ({
@@ -234,7 +234,7 @@ test.describe("inline file references (fixture harness)", () => {
     // The panel still lists every file.
     await page.getByTestId("live-notebook-toggle").click();
     await page.getByTestId("artifacts-tab-files").click();
-    await expect(page.getByTestId("artifacts-file-row")).toHaveCount(10);
+    await expect(page.getByTestId("artifacts-file-row")).toHaveCount(11);
   });
 
   test("a missing image reference renders as a block band after the run ends", async ({

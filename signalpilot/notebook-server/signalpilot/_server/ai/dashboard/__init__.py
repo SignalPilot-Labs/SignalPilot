@@ -1,7 +1,8 @@
 """Dashboard file tools for the standalone chat agent.
 
 A dashboard is ``artifacts/<name>.dashboard.json`` validated by the schema
-in the agent plugin (``skills/dashboard/dashboard.schema.json``).
+in the agent plugin (``skills/dashboard/dashboard.schema.json``). A SQL
+dataset reads its snapshot at ``artifacts/datasets/<name>.csv``.
 """
 
 from __future__ import annotations
@@ -10,7 +11,7 @@ from signalpilot._server.ai.dashboard.datasets import (
     LoadedDataset,
     load_dataset,
     load_datasets,
-    parse_dataset_text,
+    parse_csv,
     resolve_scratch_path,
 )
 from signalpilot._server.ai.dashboard.prepare import (
@@ -21,7 +22,10 @@ from signalpilot._server.ai.dashboard.prepare import (
 )
 from signalpilot._server.ai.dashboard.schema import (
     DashboardSchemaUnavailable,
+    dataset_file_refs,
+    dataset_sql,
     locate_schema_file,
+    snapshot_path,
     validate_spec,
 )
 from signalpilot._server.ai.dashboard.tools import (
@@ -36,12 +40,15 @@ __all__ = [
     "chart_is_failed",
     "dashboard_sample_data",
     "dashboard_screenshot",
+    "dataset_file_refs",
+    "dataset_sql",
     "infer_column_types",
     "load_dataset",
     "load_datasets",
     "locate_schema_file",
-    "parse_dataset_text",
+    "parse_csv",
     "prepare_chart_rows",
     "resolve_scratch_path",
+    "snapshot_path",
     "validate_spec",
 ]

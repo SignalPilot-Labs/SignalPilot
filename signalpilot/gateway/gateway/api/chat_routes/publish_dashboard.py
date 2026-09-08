@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException
 from gateway.auth import OrgRole
 from gateway.auth.user import is_org_admin_role
 from gateway.dashboards import service
+from gateway.dashboards.query import governed_executor
 from gateway.dashboards.serializers import PublishDashboardRequest, dashboard_out, version_out
 from gateway.dashboards.storage import dashboard_storage
 from gateway.security.scope_guard import RequireScope
@@ -55,6 +56,7 @@ async def publish_dashboard(
         dashboard, version = await service.publish(
             store.session,
             dashboard_storage(),
+            governed_executor(),
             org_id=org_id,
             user_id=user_id,
             is_admin=admin,

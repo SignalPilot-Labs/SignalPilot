@@ -1,21 +1,48 @@
-"""Dataset loading: CSV coercion, JSON, and path safety."""
+"""Dataset loading: CSV coercion, snapshot and sidecar checks, path safety."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import json
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from signalpilot._dashboard_sql import sidecar_path, snapshot_path
+from signalpilot._sdk._dashboards import write_sidecar, write_snapshot
 from signalpilot._server.ai.dashboard.datasets import (
     coerce_cell,
     load_dataset,
     load_datasets,
-    parse_dataset_text,
+    parse_csv,
     resolve_scratch_path,
 )
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+SQL = "select month, revenue from m"
+DEFINITION = {"connection": "warehouse", "sql": SQL}
+
+
+def write_dataset(
+    scratch: Path,
+    name: str,
+    rows: list[dict[str, Any]],
+    *,
+    connection: str = "warehouse",
+    sql: str = SQL,
+    columns: list[str] | None = None,
+) -> None:
+    """Write a snapshot and sidecar the way ``sp.dashboard_dataset`` does."""
+    names = columns or (list(rows[0]) if rows else [])
+    write_snapshot(scratch / snapshot_path(name), names, rows)
+    write_sidecar(
+        sidecar_path(scratch, name),
+        connection=connection,
+        sql=sql,
+        columns=names,
+        row_count=len(rows),
+    )
 
 
 def test_coerce_cell_numeric_and_empty():
@@ -31,31 +58,16 @@ def test_coerce_cell_numeric_and_empty():
     assert coerce_cell("2025-01-01") == "2025-01-01"
 
 
-def test_parse_csv_and_tsv_with_quotes():
-    csv_text = 'month,region,revenue\n2025-01-01,"East, US",10.5\n2025-02-01,West,\n\n'
-    rows = parse_dataset_text(csv_text, "artifacts/m.csv")
+def test_parse_csv_with_quotes_and_blank_lines():
+    text = 'month,region,revenue\n2025-01-01,"East, US",10.5\n2025-02-01,West,\n\n'
+    header, rows = parse_csv(text)
+    assert header == ["month", "region", "revenue"]
     assert rows == [
         {"month": "2025-01-01", "region": "East, US", "revenue": 10.5},
         {"month": "2025-02-01", "region": "West", "revenue": None},
     ]
-    tsv_text = "a\tb\n1\tx\n"
-    assert parse_dataset_text(tsv_text, "artifacts/m.tsv") == [
-        {"a": 1, "b": "x"}
-    ]
-    assert parse_dataset_text("", "artifacts/e.csv") == []
-
-
-def test_parse_json_array_of_objects():
-    rows = parse_dataset_text(
-        '[{"a": 1, "b": "x"}, {"a": null}]', "artifacts/m.json"
-    )
-    assert rows == [{"a": 1, "b": "x"}, {"a": None}]
-    with pytest.raises(ValueError, match="array of objects"):
-        parse_dataset_text('{"a": 1}', "artifacts/m.json")
-    with pytest.raises(ValueError, match="item 1 is not an object"):
-        parse_dataset_text("[{}, 3]", "artifacts/m.json")
-    with pytest.raises(ValueError, match="Unsupported"):
-        parse_dataset_text("a,b", "artifacts/m.parquet")
+    assert parse_csv("") == ([], [])
+    assert parse_csv("a,b\n") == (["a", "b"], [])
 
 
 def test_resolve_scratch_path_rejects_escapes(tmp_path: Path):
@@ -76,42 +88,115 @@ def test_resolve_scratch_path_rejects_escapes(tmp_path: Path):
             resolve_scratch_path(tmp_path, bad)
 
 
-def test_load_dataset_file_and_rows(tmp_path: Path):
-    (tmp_path / "artifacts").mkdir()
-    (tmp_path / "artifacts" / "m.csv").write_text(
-        "month,revenue\n2025-01-01,10\n", encoding="utf-8"
+def test_sql_dataset_loads_from_snapshot_with_matching_sidecar(tmp_path: Path):
+    write_dataset(tmp_path, "monthly", [{"month": "2025-01-01", "revenue": 10}])
+    loaded = load_dataset(
+        tmp_path,
+        "monthly",
+        {"connection": "warehouse", "sql": "  select month,\n revenue  from m "},
     )
-    loaded = load_dataset(tmp_path, {"file": "artifacts/m.csv"})
     assert loaded.error is None
-    assert loaded.resolved_file == "artifacts/m.csv"
+    assert loaded.code is None
+    assert loaded.resolved_file == "artifacts/datasets/monthly.csv"
     assert loaded.rows == [{"month": "2025-01-01", "revenue": 10}]
 
-    inline = load_dataset(tmp_path, {"rows": [{"a": 1}, "junk"]})
+
+def test_static_rows_are_inline(tmp_path: Path):
+    inline = load_dataset(tmp_path, "labels", {"rows": [{"a": 1}, "junk"]})
     assert inline.rows == [{"a": 1}]
     assert inline.resolved_file is None
+    assert inline.error is None
 
-    missing = load_dataset(tmp_path, {"file": "artifacts/none.csv"})
-    assert missing.error is not None
-    assert "artifacts/none.csv" in missing.error
 
-    escaped = load_dataset(tmp_path, {"file": "artifacts/../m.csv"})
-    assert escaped.error is not None
+def test_snapshot_missing(tmp_path: Path):
+    loaded = load_dataset(tmp_path, "monthly", DEFINITION)
+    assert loaded.code == "snapshot_missing"
+    assert loaded.resolved_file == "artifacts/datasets/monthly.csv"
+    assert loaded.error == (
+        "Dataset 'monthly' has no snapshot. Call "
+        "sp.dashboard_dataset('monthly', connection=..., sql=...) in the "
+        "notebook."
+    )
 
-    (tmp_path / "artifacts" / "bad.json").write_text("{", encoding="utf-8")
-    broken = load_dataset(tmp_path, {"file": "artifacts/bad.json"})
-    assert broken.error is not None
-    assert "artifacts/bad.json" in broken.error
 
-    assert load_dataset(tmp_path, "nope").error is not None
-    assert load_dataset(tmp_path, {}).error is not None
+def test_snapshot_stale_when_sidecar_is_absent(tmp_path: Path):
+    write_dataset(tmp_path, "monthly", [{"month": "2025-01-01", "revenue": 10}])
+    sidecar_path(tmp_path, "monthly").unlink()
+    loaded = load_dataset(tmp_path, "monthly", DEFINITION)
+    assert loaded.code == "snapshot_stale"
+    assert loaded.rows == []
+    assert "has no record of the SQL that produced it" in loaded.error
+    assert "sp.dashboard_dataset('monthly'" in loaded.error
+
+
+def test_snapshot_stale_when_sql_differs(tmp_path: Path):
+    write_dataset(tmp_path, "monthly", [{"month": "2025-01-01", "revenue": 10}])
+    loaded = load_dataset(
+        tmp_path,
+        "monthly",
+        {"connection": "warehouse", "sql": "select month, revenue * 2 from m"},
+    )
+    assert loaded.code == "snapshot_stale"
+    assert (
+        "the SQL in the dashboard file is not the SQL that produced the snapshot"
+        in loaded.error
+    )
+
+
+def test_snapshot_stale_when_connection_differs(tmp_path: Path):
+    write_dataset(tmp_path, "monthly", [{"month": "2025-01-01", "revenue": 10}])
+    loaded = load_dataset(
+        tmp_path, "monthly", {"connection": "other", "sql": SQL}
+    )
+    assert loaded.code == "snapshot_stale"
+    assert "('other')" in loaded.error
+    assert "('warehouse')" in loaded.error
+
+
+def test_snapshot_stale_when_csv_header_differs_from_sidecar(tmp_path: Path):
+    write_dataset(tmp_path, "monthly", [{"month": "2025-01-01", "revenue": 10}])
+    (tmp_path / snapshot_path("monthly")).write_text(
+        "month,region,revenue\n2025-01-01,east,10\n", encoding="utf-8"
+    )
+    loaded = load_dataset(tmp_path, "monthly", DEFINITION)
+    assert loaded.code == "snapshot_stale"
+    assert "snapshot columns (month, region, revenue)" in loaded.error
+    assert "recorded columns (month, revenue)" in loaded.error
+
+
+def test_unreadable_and_malformed_definitions(tmp_path: Path):
+    write_dataset(tmp_path, "monthly", [{"month": "2025-01-01", "revenue": 10}])
+    (tmp_path / snapshot_path("monthly")).write_bytes(b"\xff\xfe\x00bad")
+    broken = load_dataset(tmp_path, "monthly", DEFINITION)
+    assert broken.code == "dataset_unreadable"
+    assert "artifacts/datasets/monthly.csv" in broken.error
+
+    corrupt_sidecar = sidecar_path(tmp_path, "monthly")
+    write_dataset(tmp_path, "monthly", [{"month": "2025-01-01", "revenue": 10}])
+    corrupt_sidecar.write_text("{", encoding="utf-8")
+    assert load_dataset(tmp_path, "monthly", DEFINITION).code == "snapshot_stale"
+
+    assert load_dataset(tmp_path, "x", "nope").code == "dataset_unreadable"
+    assert load_dataset(tmp_path, "x", {}).code == "dataset_unreadable"
+    assert load_dataset(tmp_path, "x", {"rows": 3}).code == "dataset_unreadable"
+    assert (
+        load_dataset(tmp_path, "x", {"file": "artifacts/x.csv"}).code
+        == "dataset_unreadable"
+    )
 
 
 def test_load_datasets_selects_names(tmp_path: Path):
+    write_dataset(tmp_path, "b", [{"x": 2}])
     spec = {
         "datasets": {
             "a": {"rows": [{"x": 1}]},
-            "b": {"rows": [{"x": 2}]},
+            "b": DEFINITION,
+            "c": DEFINITION,
         }
     }
-    assert set(load_datasets(tmp_path, spec)) == {"a", "b"}
+    everything = load_datasets(tmp_path, spec)
+    assert set(everything) == {"a", "b", "c"}
+    assert everything["b"].rows == [{"x": 2}]
+    assert everything["c"].code == "snapshot_missing"
     assert set(load_datasets(tmp_path, spec, {"b"})) == {"b"}
+    assert json.loads(sidecar_path(tmp_path, "b").read_text())["row_count"] == 1

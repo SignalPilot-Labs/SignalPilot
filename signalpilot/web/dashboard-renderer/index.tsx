@@ -24,10 +24,10 @@ import { themeTokens, type DashboardTheme } from "./theme";
 
 export type { DatasetRows } from "./datasets";
 export type { ChartIssue, FilterState } from "./prepare";
-export type { DashboardChart, DashboardSpec } from "./schema";
+export type { DashboardChart, DashboardDataset, DashboardSpec, DashboardSqlDataset } from "./schema";
 export type { DashboardTheme } from "./theme";
-export { validateDashboardSpec } from "./schema";
-export { parseDatasetText, datasetFileRefs, inlineDatasets } from "./datasets";
+export { isSqlDataset, validateDashboardSpec } from "./schema";
+export { parseDatasetCsv, datasetFileRefs, datasetSnapshotPath, inlineDatasets } from "./datasets";
 export { prepareChartRows, chartIsFailed } from "./prepare";
 export { placeTiles, layoutModeForWidth } from "./layout";
 export type { LayoutMode } from "./layout";

@@ -18,7 +18,7 @@ from fastapi import APIRouter, HTTPException, Query, Response
 from ..auth import OrgRole
 from ..auth.user import is_org_admin_role
 from ..dashboards import service, store
-from ..dashboards.datasets import content_type_for
+from ..dashboards.datasets import CSV_CONTENT_TYPE
 from ..dashboards.refresh import run_refresh
 from ..dashboards.serializers import (
     UpdateDashboardRequest,
@@ -171,7 +171,7 @@ async def download_dataset(dashboard_id: str, version_id: str, name: str, store_
     ascii_name = re.sub(r'[^\x20-\x7e]|["\\]', "_", filename) or "dataset"
     return Response(
         content=data,
-        media_type=content_type_for(filename),
+        media_type=CSV_CONTENT_TYPE,
         headers={
             "Content-Disposition": f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename, safe='')}",
             "X-Content-Type-Options": "nosniff",

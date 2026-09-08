@@ -4,7 +4,7 @@
 // relative labels are stable across runs.
 
 import revenueSpecJson from "~/dashboard-renderer/fixtures/revenue.dashboard.json";
-import { parseDatasetText, validateDashboardSpec, type DashboardSpec, type DatasetRows } from "~/dashboard-renderer";
+import { parseDatasetCsv, validateDashboardSpec, type DashboardSpec, type DatasetRows } from "~/dashboard-renderer";
 import type {
   DashboardBundle,
   DashboardDetail,
@@ -14,7 +14,8 @@ import type {
 } from "~/lib/api/dashboards";
 import {
   DASHBOARD_MONTHLY_CSV_FILE,
-  DASHBOARD_REGION_JSON_FILE,
+  DASHBOARD_REGION_CSV_FILE,
+  DASHBOARD_SUMMARY_CSV_FILE,
 } from "~/lib/chat-test-fixture-dashboard";
 
 /** A fixed "now" (UTC) so every relative label in the fixture is stable. */
@@ -37,27 +38,28 @@ function loadSpec(): DashboardSpec {
 
 export const FIXTURE_SPEC: DashboardSpec = loadSpec();
 
-/** The stored dataset files of every fixture version, as the download route serves them. */
+/** The stored snapshot of every SQL dataset, as the download route serves it. */
 export function fixtureDatasetFiles(): Record<string, { text: string; type: string }> {
   return {
+    summary: { text: DASHBOARD_SUMMARY_CSV_FILE, type: "text/csv" },
     revenue_monthly: { text: DASHBOARD_MONTHLY_CSV_FILE, type: "text/csv" },
-    revenue_by_region: { text: DASHBOARD_REGION_JSON_FILE, type: "application/json" },
+    revenue_by_region: { text: DASHBOARD_REGION_CSV_FILE, type: "text/csv" },
   };
 }
 
-/** The renderer fixture's two data files plus the inline summary rows. */
+/** The parsed rows of the three snapshots. */
 export function fixtureDatasets(): Record<string, DatasetRows> {
-  return {
-    summary: (FIXTURE_SPEC.datasets.summary.rows ?? []) as DatasetRows,
-    revenue_monthly: parseDatasetText(DASHBOARD_MONTHLY_CSV_FILE, "revenue_monthly.csv"),
-    revenue_by_region: parseDatasetText(DASHBOARD_REGION_JSON_FILE, "revenue_by_region.json"),
-  };
+  return Object.fromEntries(
+    Object.entries(fixtureDatasetFiles()).map(([name, file]) => [name, parseDatasetCsv(file.text)]),
+  );
 }
 
-const DATASET_META = {
-  revenue_monthly: { row_count: 48, byte_size: 1_812, filename: "revenue_monthly.csv" },
-  revenue_by_region: { row_count: 4, byte_size: 612, filename: "revenue_by_region.json" },
-};
+const DATASET_META = Object.fromEntries(
+  Object.entries(fixtureDatasetFiles()).map(([name, file]) => [
+    name,
+    { row_count: parseDatasetCsv(file.text).length, byte_size: file.text.length, filename: `${name}.csv` },
+  ]),
+);
 
 export const FIXTURE_VERSION_IDS = {
   v1: "dver_fixture000000000000000000001",
@@ -149,9 +151,10 @@ export function fixtureRefreshes(): DashboardRefresh[] {
       run_id: null,
       conversation_id: null,
       error:
-        "1 of 2 datasets failed: revenue_by_region: column \"region\" is missing from the query result (GovernedQueryError: relation fct_orders does not exist)",
+        "1 of 3 datasets failed: revenue_by_region: column \"region\" is missing from the query result (GovernedQueryError: relation fct_orders does not exist)",
       detail: {
-        revenue_monthly: { status: "carried_forward" },
+        summary: { status: "succeeded", row_count: 1 },
+        revenue_monthly: { status: "succeeded", row_count: 48 },
         revenue_by_region: {
           status: "failed",
           error: "relation fct_orders does not exist",
@@ -172,7 +175,8 @@ export function fixtureRefreshes(): DashboardRefresh[] {
       conversation_id: null,
       error: null,
       detail: {
-        revenue_monthly: { status: "carried_forward" },
+        summary: { status: "succeeded", row_count: 1 },
+        revenue_monthly: { status: "succeeded", row_count: 48 },
         revenue_by_region: { status: "succeeded", row_count: 4 },
       },
       created_at: iso(-1 * DAY - 9 * HOUR),

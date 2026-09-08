@@ -87,27 +87,44 @@ class TestSchema:
         errors = schema.validate_spec(spec)
         assert errors and errors[0].startswith("charts/0")
 
-    def test_helpers(self) -> None:
+    def test_dataset_shapes(self) -> None:
         spec = spec_json()
-        assert schema.dataset_file_refs(spec) == {"monthly": "artifacts/monthly.csv", "regions": "artifacts/regions.csv"}
-        assert list(schema.dataset_sources(spec)) == ["monthly"]
+        assert schema.dataset_sql(spec) == {
+            "monthly": ("warehouse", "select month, revenue from m"),
+            "regions": ("warehouse", "select region, total from r"),
+        }
+        assert schema.dataset_file_refs(spec) == {
+            "monthly": "artifacts/datasets/monthly.csv",
+            "regions": "artifacts/datasets/regions.csv",
+        }
+        assert schema.static_rows(spec["datasets"]["inline"]) == [{"k": "a", "v": 1}]
+        assert schema.static_rows(spec["datasets"]["monthly"]) is None
         assert schema.chart_count(spec) == 3
+
+    def test_dataset_must_be_sql_or_static(self) -> None:
+        spec = spec_json()
+        spec["datasets"]["monthly"] = {"file": "artifacts/monthly.csv"}
+        assert any(error.startswith("datasets/monthly") for error in schema.validate_spec(spec))
+        spec["datasets"]["monthly"] = {"connection": "warehouse", "sql": "select 1", "rows": []}
+        assert any(error.startswith("datasets/monthly") for error in schema.validate_spec(spec))
+        spec["datasets"]["monthly"] = {"connection": "warehouse"}
+        assert any(error.startswith("datasets/monthly") for error in schema.validate_spec(spec))
 
 
 class TestDatasets:
     def test_csv_coercion(self) -> None:
-        rows = datasets.parse_dataset_text("a,b,c\n1,2.5,\nx, ,3\n", "x.csv")
+        rows = datasets.parse_csv("a,b,c\n1,2.5,\nx, ,3\n")
         assert rows == [{"a": 1, "b": 2.5, "c": None}, {"a": "x", "b": None, "c": 3}]
 
-    def test_json_rows(self) -> None:
-        assert datasets.parse_dataset_text('[{"a": 1}]', "x.json") == [{"a": 1}]
+    def test_only_csv_is_parsed(self) -> None:
+        assert datasets.parse_dataset_bytes(b'[{"a": 1}]', "x") == []  # a JSON blob is just a header
         with pytest.raises(ValueError):
-            datasets.parse_dataset_text('{"a": 1}', "x.json")
+            datasets.parse_dataset_bytes(b"\xff\xfe", "x")
 
     def test_csv_round_trip(self) -> None:
         data = datasets.rows_to_csv(["d", "n", "s"], [{"d": datetime(2026, 1, 1, tzinfo=UTC), "n": None, "s": "q,x"}])
         assert data == b'd,n,s\n2026-01-01T00:00:00+00:00,,"q,x"\n'
-        assert datasets.parse_dataset_bytes(data, "r.csv") == [{"d": "2026-01-01T00:00:00+00:00", "n": None, "s": "q,x"}]
+        assert datasets.parse_dataset_bytes(data, "r") == [{"d": "2026-01-01T00:00:00+00:00", "n": None, "s": "q,x"}]
 
     @pytest.mark.parametrize(
         ("value", "expected"),

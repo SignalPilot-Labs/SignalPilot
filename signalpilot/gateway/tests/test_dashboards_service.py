@@ -9,11 +9,15 @@ import pytest
 
 from gateway.dashboards import service, store
 from gateway.dashboards.serializers import RefreshSettingsIn, UpdateDashboardRequest
+from gateway.governance.query_executor import GovernedQueryError
 from tests.dashboards_support import (
     MONTHLY_CSV,
+    MONTHLY_SQL,
     ORG,
     OTHER_USER,
+    REGIONS_SQL,
     USER,
+    FakeExecutor,
     db,
     fake_manifest,
     fake_storage,
@@ -23,10 +27,15 @@ from tests.dashboards_support import (
 )
 
 
-async def _publish(db, storage, rows, **overrides):
+def _dashboard_objects(backend) -> list[str]:
+    return [key for key in backend.objects if "/dashboards/" in key]
+
+
+async def _publish(db, storage, rows, *, executor=None, **overrides):
     return await service.publish(
         db,
         storage,
+        executor or FakeExecutor(),
         org_id=ORG,
         user_id=USER,
         is_admin=False,
@@ -59,9 +68,9 @@ class TestPublish:
         assert version.spec_key.endswith(f"/dashboards/{dashboard.id}/versions/{version.id}/spec.json")
         assert version.dataset_keys["monthly"].endswith("/datasets/monthly.csv")
         assert json.loads(backend.objects[version.spec_key])["title"] == "Revenue"
-        assert backend.objects[version.dataset_keys["regions"]] == backend.objects["chat/artifacts/regions.csv"]
+        assert backend.objects[version.dataset_keys["regions"]] == backend.objects["chat/artifacts/datasets/regions.csv"]
 
-    async def test_missing_dataset_file_is_422_with_names(self, db) -> None:
+    async def test_missing_snapshot_is_422_with_names(self, db) -> None:
         storage, backend = fake_storage()
         rows = fake_manifest(backend)
         rows = [row for row in rows if not row.path.endswith("regions.csv")]
@@ -69,6 +78,75 @@ class TestPublish:
             await _publish(db, storage, rows)
         assert excinfo.value.status_code == 422
         assert excinfo.value.detail["missing_datasets"] == ["regions"]
+
+    async def test_gate_runs_one_row_per_sql_dataset(self, db) -> None:
+        storage, backend = fake_storage()
+        rows = fake_manifest(backend)
+        executor = FakeExecutor()
+        await _publish(db, storage, rows, executor=executor)
+        assert [call["sql"] for call in executor.calls] == [MONTHLY_SQL, REGIONS_SQL]
+        for call in executor.calls:
+            assert call["connection_name"] == "warehouse" and call["row_limit"] == 1
+            assert call["context"].path == "dashboard" and call["context"].project_id == "project-a"
+
+    async def test_gate_missing_columns_is_422_not_repeatable(self, db) -> None:
+        storage, backend = fake_storage()
+        rows = fake_manifest(backend)
+        executor = FakeExecutor(by_sql={MONTHLY_SQL: [{"month": "2026-01-01", "amount": 1}]})
+        with pytest.raises(service.DashboardError) as excinfo:
+            await _publish(db, storage, rows, executor=executor)
+        assert excinfo.value.status_code == 422
+        detail = excinfo.value.detail
+        assert detail["code"] == "not_repeatable"
+        assert detail["datasets"] == {"monthly": {"missing_columns": ["revenue"], "columns": ["month", "amount"]}}
+        assert "monthly" in detail["message"]
+        # The gate runs before any write: no objects, no rows.
+        assert _dashboard_objects(backend) == []
+        assert await store.get_dashboard(db, org_id=ORG, id_or_slug="revenue") is None
+
+    async def test_gate_empty_result_is_not_repeatable(self, db) -> None:
+        storage, backend = fake_storage()
+        rows = fake_manifest(backend)
+        with pytest.raises(service.DashboardError) as excinfo:
+            await _publish(db, storage, rows, executor=FakeExecutor(by_sql={REGIONS_SQL: []}))
+        assert excinfo.value.detail["code"] == "not_repeatable"
+        assert excinfo.value.detail["datasets"]["regions"]["missing_columns"] == ["region", "total"]
+
+    async def test_gate_sql_error_is_422_sql_failed(self, db) -> None:
+        storage, backend = fake_storage()
+        rows = fake_manifest(backend)
+        executor = FakeExecutor(error=GovernedQueryError("query_blocked", "table m is not allowed"))
+        with pytest.raises(service.DashboardError) as excinfo:
+            await _publish(db, storage, rows, executor=executor)
+        assert excinfo.value.status_code == 422
+        detail = excinfo.value.detail
+        assert detail["code"] == "sql_failed"
+        assert detail["datasets"] == {
+            "monthly": "query_blocked: table m is not allowed",
+            "regions": "query_blocked: table m is not allowed",
+        }
+        assert _dashboard_objects(backend) == []
+
+    async def test_gate_counts_filter_columns(self, db) -> None:
+        storage, backend = fake_storage()
+        spec = spec_json()
+        spec["filters"] = [{"id": "region_pick", "label": "Country", "dataset": "regions", "column": "country", "type": "equals"}]
+        rows = fake_manifest(backend, spec)
+        with pytest.raises(service.DashboardError) as excinfo:
+            await _publish(db, storage, rows)
+        assert excinfo.value.detail["datasets"]["regions"]["missing_columns"] == ["country"]
+
+    async def test_gate_skips_static_datasets(self, db) -> None:
+        storage, backend = fake_storage()
+        spec = spec_json()
+        spec["datasets"] = {"inline": spec["datasets"]["inline"]}
+        spec["charts"] = [spec["charts"][2]]
+        rows = fake_manifest(backend, spec)
+        executor = FakeExecutor(error=RuntimeError("must not run"))
+        dashboard, version = await _publish(db, storage, rows, executor=executor)
+        assert executor.calls == []
+        assert version.dataset_keys == {}
+        assert dashboard.chart_count == 1
 
     async def test_invalid_spec_is_422(self, db) -> None:
         storage, backend = fake_storage()
@@ -85,7 +163,7 @@ class TestPublish:
         rows = fake_manifest(backend)
         with pytest.raises(service.DashboardError) as excinfo:
             await service.publish(
-                db, storage, org_id=ORG, user_id=USER, is_admin=False, conversation_id="c",
+                db, storage, FakeExecutor(), org_id=ORG, user_id=USER, is_admin=False, conversation_id="c",
                 file_row=rows[1], manifest=rows, body=publish_body(), project_id=None,
             )
         assert excinfo.value.status_code == 422
@@ -129,7 +207,7 @@ class TestPublish:
         second_rows = fake_manifest(backend, run_id="run-2")
         second_rows[0].id = "file-dash-2"
         updated, _ = await service.publish(
-            db, storage, org_id=ORG, user_id=USER, is_admin=False, conversation_id="conv-2",
+            db, storage, FakeExecutor(), org_id=ORG, user_id=USER, is_admin=False, conversation_id="conv-2",
             file_row=second_rows[0], manifest=second_rows,
             body=publish_body(target_dashboard_id=dashboard.id), project_id="project-b",
         )
@@ -153,7 +231,7 @@ class TestPublish:
         dashboard, _ = await _publish(db, storage, rows)
         with pytest.raises(service.DashboardError) as excinfo:
             await service.publish(
-                db, storage, org_id=ORG, user_id=OTHER_USER, is_admin=False, conversation_id="c",
+                db, storage, FakeExecutor(), org_id=ORG, user_id=OTHER_USER, is_admin=False, conversation_id="c",
                 file_row=rows[0], manifest=rows, body=publish_body(target_dashboard_id=dashboard.id), project_id=None,
             )
         assert excinfo.value.status_code == 403
@@ -220,7 +298,7 @@ class TestLifecycle:
         assert not store.can_edit(dashboard, OTHER_USER, is_admin=False)
         assert await store.list_dashboards(db, org_id=ORG, user_id=OTHER_USER, include_archived=False) == []
 
-    async def test_bundle_datasets_include_inline_rows(self, db) -> None:
+    async def test_bundle_datasets_include_static_rows(self, db) -> None:
         storage, backend = fake_storage()
         dashboard, version = await _publish(db, storage, fake_manifest(backend))
         spec = await storage.get_spec(version.spec_key)
@@ -231,17 +309,15 @@ class TestLifecycle:
 
 
 class TestEditMessage:
-    async def test_message_inlines_spec_and_datasets_under_cap(self, db) -> None:
+    async def test_message_carries_the_spec_and_names_sql_datasets(self, db) -> None:
         storage, backend = fake_storage()
         dashboard, _ = await _publish(db, storage, fake_manifest(backend))
-        big = b"a,b\n" + b"1,2\n" * 60_000
-        message = service.edit_message(
-            dashboard, spec_json(), {"monthly": ("artifacts/monthly.csv", b"month,revenue\n2026-01-01,1\n"), "big": ("artifacts/big.csv", big)}
-        )
+        message = service.edit_message(dashboard, spec_json())
         assert message.startswith('Edit the dashboard "Revenue".')
         assert "artifacts/revenue.dashboard.json" in message
         assert "```json" in message and '"title": "Revenue"' in message
-        assert "Dataset `monthly` at `artifacts/monthly.csv`" in message
-        assert "big (artifacts/big.csv)" in message
-        assert len(message.encode()) < service.EDIT_MESSAGE_CAP_BYTES + 2_000
-        assert "—" not in message
+        assert "- `monthly` on connection `warehouse`" in message
+        assert "- `regions` on connection `warehouse`" in message
+        assert "sp.dashboard_dataset" in message
+        assert "artifacts/datasets/<name>.csv" in message
+        assert "\u2014" not in message

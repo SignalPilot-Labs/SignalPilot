@@ -4,16 +4,14 @@ Scheduler claims, sweeps, and races live in test_dashboards_scheduler.py."""
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 from datetime import UTC, datetime, timedelta
-from types import SimpleNamespace
 
 from gateway.dashboards import refresh as refresh_module
 from gateway.dashboards import scheduler, service, store
 from gateway.dashboards.refresh import finalize_agent_refresh, run_refresh
-from gateway.dashboards.scheduler import poll_agent_refreshes, run_due_dashboard_refreshes
+from gateway.dashboards.scheduler import poll_agent_refreshes
 from gateway.dashboards.serializers import RefreshSettingsIn
 from gateway.dashboards.storage import DashboardStorage
 from gateway.db.models import GatewayChatRun
@@ -21,8 +19,13 @@ from gateway.db.models.dashboards import new_refresh_id
 from gateway.governance.query_executor import GovernedQueryError
 from gateway.store import standalone_chat as chat_store
 from tests.dashboards_support import (
+    MONTHLY_PATH,
+    MONTHLY_SQL,
     ORG,
+    REGIONS_PATH,
+    REGIONS_SQL,
     USER,
+    FakeExecutor,
     add_conversation_with_files,
     db,
     fake_manifest,
@@ -32,28 +35,14 @@ from tests.dashboards_support import (
     spec_json,
 )
 
-
-class FakeExecutor:
-    def __init__(self, rows=None, *, error: Exception | None = None, delay: float = 0.0) -> None:
-        self.rows = rows if rows is not None else [{"month": "2026-03-01", "revenue": 130}]
-        self.error = error
-        self.delay = delay
-        self.calls: list[dict] = []
-
-    async def execute(self, store_, **kwargs):
-        self.calls.append(kwargs)
-        if self.delay:
-            await asyncio.sleep(self.delay)
-        if self.error:
-            raise self.error
-        columns = [{"name": key} for key in self.rows[0]] if self.rows else []
-        return SimpleNamespace(rows=list(self.rows), columns=columns)
+NEW_MONTHLY = [{"month": "2026-03-01", "revenue": 130}]
+NEW_REGIONS = [{"region": "north", "total": 11}, {"region": "south", "total": 12}]
 
 
 async def _published(db, storage, backend, **overrides):
     rows = fake_manifest(backend)
     return await service.publish(
-        db, storage, org_id=ORG, user_id=USER, is_admin=False, conversation_id="conv-1",
+        db, storage, FakeExecutor(), org_id=ORG, user_id=USER, is_admin=False, conversation_id="conv-1",
         file_row=rows[0], manifest=rows, body=publish_body(**overrides), project_id="project-a",
     )
 
@@ -63,11 +52,11 @@ async def _manual_refresh(db, dashboard, mode="sql"):
 
 
 class TestSqlRefresh:
-    async def test_success_writes_version_and_swaps(self, session_factory, db) -> None:
+    async def test_success_reruns_sql_datasets_and_keeps_static_inline(self, session_factory, db) -> None:
         storage, backend = fake_storage()
         dashboard, v1 = await _published(db, storage, backend)
         refresh = await _manual_refresh(db, dashboard)
-        executor = FakeExecutor()
+        executor = FakeExecutor(by_sql={MONTHLY_SQL: NEW_MONTHLY, REGIONS_SQL: NEW_REGIONS})
 
         await run_refresh(session_factory, refresh.id, storage=storage, executor=executor)
 
@@ -79,22 +68,27 @@ class TestSqlRefresh:
         assert v2.version_no == 2 and v2.produced_by == "refresh" and v2.producer_ref == refresh.id
         assert dashboard.current_version_id == v2.id
         assert dashboard.last_refresh_status == "succeeded"
+        assert set(v2.dataset_keys) == {"monthly", "regions"}  # the static dataset stays in the spec
         assert backend.objects[v2.dataset_keys["monthly"]] == b"month,revenue\n2026-03-01,130\n"
-        assert v2.dataset_keys["regions"] == v1.dataset_keys["regions"]  # carried by reference
-        assert v2.dataset_meta["monthly"]["row_count"] == 1
+        assert backend.objects[v2.dataset_keys["regions"]] == b"region,total\nnorth,11\nsouth,12\n"
+        assert v2.dataset_keys["regions"] != v1.dataset_keys["regions"]
+        assert v2.dataset_meta["monthly"] == {"row_count": 1, "byte_size": 29, "filename": "monthly.csv"}
         assert refresh.detail["datasets"]["monthly"] == {"status": "refreshed", "row_count": 1}
-        assert refresh.detail["datasets"]["regions"]["status"] == "carried"
-        assert refresh.detail["datasets"]["inline"]["status"] == "inline"
+        assert refresh.detail["datasets"]["regions"] == {"status": "refreshed", "row_count": 2}
+        assert refresh.detail["datasets"]["inline"] == {"status": "static", "row_count": 1}
         assert "sql_datasets" not in refresh.detail  # replaced by the outcome detail
+        assert [call["sql"] for call in executor.calls] == [MONTHLY_SQL, REGIONS_SQL]
         call = executor.calls[0]
         assert call["connection_name"] == "warehouse" and call["row_limit"] == 50_000
         assert call["context"].path == "dashboard" and call["context"].project_id == "project-a"
+        spec = await storage.get_spec(v2.spec_key)
+        assert spec["datasets"]["inline"] == {"rows": [{"k": "a", "v": 1}]}
 
     async def test_missing_column_keeps_old_version_and_fails(self, session_factory, db) -> None:
         storage, backend = fake_storage()
         dashboard, v1 = await _published(db, storage, backend)
         refresh = await _manual_refresh(db, dashboard)
-        executor = FakeExecutor(rows=[{"month": "2026-03-01", "amount": 5}])
+        executor = FakeExecutor(by_sql={MONTHLY_SQL: [{"month": "2026-03-01", "amount": 5}], REGIONS_SQL: NEW_REGIONS})
 
         await run_refresh(session_factory, refresh.id, storage=storage, executor=executor)
 
@@ -102,6 +96,7 @@ class TestSqlRefresh:
         await db.refresh(dashboard)
         assert refresh.status == "failed"
         assert "revenue" in refresh.error and "rev_line" in refresh.error
+        assert "region_table" not in refresh.error
         assert refresh.version_id is None
         assert dashboard.current_version_id == v1.id
         assert dashboard.last_refresh_status == "failed"
@@ -131,11 +126,11 @@ class TestSqlRefresh:
 
         await db.refresh(refresh)
         assert refresh.status == "failed"
-        assert refresh.error == "monthly: query_blocked: nope"
+        assert refresh.error == "monthly: query_blocked: nope; regions: query_blocked: nope"
         assert "notification" not in refresh.detail
 
     async def test_timeout_fails(self, session_factory, db, monkeypatch) -> None:
-        monkeypatch.setattr(refresh_module, "SQL_TIMEOUT_SECONDS", -30)
+        monkeypatch.setattr(refresh_module, "REFRESH_TIMEOUT_SECONDS", -30)
         storage, backend = fake_storage()
         dashboard, _ = await _published(db, storage, backend)
         refresh = await _manual_refresh(db, dashboard)
@@ -150,7 +145,7 @@ class TestAgentRefresh:
         conversation, run, rows = await add_conversation_with_files(db, backend)
         storage = DashboardStorage(backend)
         dashboard, v1 = await service.publish(
-            db, storage, org_id=ORG, user_id=USER, is_admin=False, conversation_id=conversation.id,
+            db, storage, FakeExecutor(), org_id=ORG, user_id=USER, is_admin=False, conversation_id=conversation.id,
             file_row=rows[0], manifest=rows,
             body=publish_body(refresh=RefreshSettingsIn(interval_minutes=1440, timezone="UTC", mode="agent")),
             project_id="project-a",
@@ -178,7 +173,8 @@ class TestAgentRefresh:
             spec = spec_override or await storage.get_spec(v1.spec_key)
             for path, data in (
                 (f"artifacts/{dashboard.slug}.dashboard.json", json.dumps(spec).encode()),
-                ("artifacts/monthly.csv", b"month,revenue\n2026-04-01,140\n2026-05-01,150\n"),
+                (MONTHLY_PATH, b"month,revenue\n2026-04-01,140\n2026-05-01,150\n"),
+                (REGIONS_PATH, b"region,total\nnorth,20\n"),
             ):
                 backend.objects[f"chat2/{path}"] = data
                 await chat_store.upsert_conversation_file(
@@ -197,7 +193,10 @@ class TestAgentRefresh:
         v2 = await store.get_version(db, dashboard_id=dashboard.id, version_id=refresh.version_id)
         assert v2.version_no == 2
         assert v2.dataset_meta["monthly"]["row_count"] == 2
-        assert v2.dataset_keys["regions"] == v1.dataset_keys["regions"]
+        assert v2.dataset_meta["regions"]["row_count"] == 1
+        assert set(v2.dataset_keys) == {"monthly", "regions"}
+        assert v2.dataset_keys["regions"] != v1.dataset_keys["regions"]
+        assert refresh.detail["datasets"]["inline"]["status"] == "static"
         assert dashboard.current_version_id == v2.id
 
     async def test_finalize_failed_run_fails(self, db) -> None:
@@ -216,6 +215,17 @@ class TestAgentRefresh:
         assert refresh.status == "failed"
         assert "did not write" in refresh.error
 
+    async def test_finalize_missing_snapshot_names_the_convention_path(self, db) -> None:
+        _, backend = fake_storage()
+        storage, dashboard, v1, refresh, run = await self._agent_refresh_with_run(db, backend)
+        await chat_store.mark_conversation_file_deleted(
+            db, org_id=ORG, user_id=USER, conversation_id=refresh.conversation_id, path=REGIONS_PATH
+        )
+        await finalize_agent_refresh(db, refresh, run, storage=storage)
+        assert refresh.status == "failed"
+        assert refresh.error == f"regions: The agent run did not write {REGIONS_PATH}"
+        assert dashboard.current_version_id == v1.id
+
     async def test_finalize_rejects_changed_chart_ids(self, db) -> None:
         _, backend = fake_storage()
         changed = spec_json()
@@ -224,6 +234,16 @@ class TestAgentRefresh:
         await finalize_agent_refresh(db, refresh, run, storage=storage)
         assert refresh.status == "failed"
         assert "chart ids" in refresh.error
+
+    async def test_finalize_rejects_changed_sql(self, db) -> None:
+        _, backend = fake_storage()
+        changed = spec_json()
+        changed["datasets"]["monthly"]["sql"] = "select month, revenue from m where 1 = 1"
+        storage, dashboard, v1, refresh, run = await self._agent_refresh_with_run(db, backend, spec_override=changed)
+        await finalize_agent_refresh(db, refresh, run, storage=storage)
+        assert refresh.status == "failed"
+        assert "connection or sql" in refresh.error
+        assert dashboard.current_version_id == v1.id
 
     async def test_poll_finalizes_terminal_runs_only(self, session_factory, db) -> None:
         _, backend = fake_storage()
@@ -262,7 +282,10 @@ class TestAgentRefresh:
         storage, backend = fake_storage()
         dashboard, _ = await _published(db, storage, backend)
         message = refresh_module.refresh_message(dashboard, spec_json())
-        assert "`monthly` -> `artifacts/monthly.csv` on connection `warehouse`" in message
+        assert f"- `monthly` on connection `warehouse` -> `{MONTHLY_PATH}`" in message
+        assert f"- `regions` on connection `warehouse` -> `{REGIONS_PATH}`" in message
+        assert "`inline`" not in message.split("Full dashboard spec")[0]
+        assert "sp.dashboard_dataset" in message
         assert "artifacts/revenue.dashboard.json" in message
         assert "dashboard_sample_data" in message
         assert "—" not in message

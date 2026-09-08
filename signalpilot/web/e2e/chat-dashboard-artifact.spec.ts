@@ -6,7 +6,8 @@ import { expect, test } from "@playwright/test";
  *
  * Fixture timeline (lib/chat-test-fixture-dashboard.ts):
  * - 20 720ms  the answer links `artifacts/revenue.dashboard.json`
- * - 20 750ms  the sandbox capture lists the spec and its two datasets
+ * - 20 750ms  the sandbox capture lists the spec and its three dataset
+ *             snapshots (`artifacts/datasets/<name>.csv`)
  * - 20 950ms  dashboard_sample_data checks two charts (done at 21 050ms)
  * - 21 080ms  dashboard_screenshot renders all nine tiles (done at 21 180ms)
  *
@@ -159,7 +160,7 @@ test.describe("dashboard artifact (fixture harness)", () => {
     const card = page
       .getByTestId("chat-artifact-card")
       .filter({ hasText: "revenue.dashboard.json" });
-    // Ten files in the run: the dashboard may sit in the compact rows.
+    // Eleven files in the run: the dashboard may sit in the compact rows.
     const row = page
       .getByTestId("chat-artifact-card-row")
       .filter({ hasText: "revenue.dashboard.json" });
@@ -212,29 +213,21 @@ test.describe("publish from chat (fixture gallery)", () => {
     await expect(dialog).not.toBeVisible();
   });
 
-  test("the dataset table tells SQL-backed datasets from static snapshots", async ({
+  test("the dataset table shows each SQL dataset's connection and found snapshot", async ({
     page,
   }) => {
     await openDashboard(page);
     await page.getByTestId("chat-dashboard-publish").click();
     const rows = page.getByTestId("chat-dashboard-publish-dataset");
     await expect(rows).toHaveCount(3);
-    const summary = page.locator(
-      '[data-testid="chat-dashboard-publish-dataset"][data-dataset="summary"]',
-    );
-    await expect(summary).toContainText("Static snapshot");
-    await expect(summary).toContainText("Inline rows");
-    const monthly = page.locator(
-      '[data-testid="chat-dashboard-publish-dataset"][data-dataset="revenue_monthly"]',
-    );
-    await expect(monthly).toContainText("Static snapshot");
-    await expect(monthly).toHaveAttribute("data-status", "found");
-    await expect(monthly).toContainText("artifacts/revenue_monthly.csv");
-    const region = page.locator(
-      '[data-testid="chat-dashboard-publish-dataset"][data-dataset="revenue_by_region"]',
-    );
-    await expect(region).toContainText("Refreshable (SQL)");
-    await expect(region).toHaveAttribute("data-status", "found");
+    for (const name of ["summary", "revenue_monthly", "revenue_by_region"]) {
+      const row = page.locator(
+        `[data-testid="chat-dashboard-publish-dataset"][data-dataset="${name}"]`,
+      );
+      await expect(row).toContainText("SQL · warehouse");
+      await expect(row).toHaveAttribute("data-status", "found");
+      await expect(row).toContainText(`Found artifacts/datasets/${name}.csv`);
+    }
     await expect(page.getByTestId("chat-dashboard-publish-error")).toHaveCount(0);
     await expect(page.getByTestId("chat-dashboard-publish-submit")).toBeEnabled();
   });

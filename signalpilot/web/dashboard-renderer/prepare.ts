@@ -8,10 +8,11 @@
 import type { DatasetRows } from "./datasets";
 import { isIsoDate, isNumeric, parseIsoDate, toNumber } from "./format";
 import type { DashboardChart, DashboardFilter, DashboardSpec } from "./schema";
-import { isCartesianChart } from "./schema";
+import { isCartesianChart, isSqlDataset } from "./schema";
 
 export type ChartIssueCode =
   | "missing_dataset"
+  | "snapshot_missing"
   | "dataset_unreadable"
   | "empty_dataset"
   | "missing_column"
@@ -31,6 +32,7 @@ const NUMERIC_THRESHOLD = 0.9;
 
 const FAILING_CODES = new Set<string>([
   "missing_dataset",
+  "snapshot_missing",
   "dataset_unreadable",
   "missing_column",
   "series_with_multi_y",
@@ -239,11 +241,21 @@ export function prepareChartRows(
   }
   const source = datasets[datasetName];
   if (!Array.isArray(source)) {
-    const file = spec.datasets[datasetName]?.file;
-    issues.push({
-      code: "dataset_unreadable",
-      message: `Chart "${id}": dataset "${datasetName}"${file ? ` (${file})` : ""} could not be read.`,
-    });
+    // The web viewer cannot see the sandbox sidecars, so a SQL dataset with
+    // no rows means its snapshot file is absent (the Python side also
+    // reports snapshot_stale). Static rows always come from the spec, so a
+    // static dataset without rows is a loading failure.
+    issues.push(
+      isSqlDataset(spec.datasets[datasetName])
+        ? {
+            code: "snapshot_missing",
+            message: `Dataset '${datasetName}' has no snapshot. Call sp.dashboard_dataset('${datasetName}', connection=..., sql=...) in the notebook.`,
+          }
+        : {
+            code: "dataset_unreadable",
+            message: `Chart "${id}": dataset "${datasetName}" could not be read.`,
+          },
+    );
     return { rows: [], issues };
   }
 

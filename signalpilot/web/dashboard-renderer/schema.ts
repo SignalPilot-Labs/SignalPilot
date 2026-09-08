@@ -40,17 +40,23 @@ export type DashboardSort = {
 
 export type DashboardGrid = { x: number; y: number; w: number; h: number };
 
-export type DashboardDatasetSource = {
-  kind: "sql";
-  connection?: string;
-  sql?: string;
+/**
+ * A dataset defined by one SQL query on a named connection. Its rows are
+ * the query result; the chat renders the snapshot the sandbox helper wrote
+ * at `artifacts/datasets/<name>.csv` (see `datasetSnapshotPath`).
+ */
+export type DashboardSqlDataset = { connection: string; sql: string };
+
+/** Static rows for constants that never refresh. */
+export type DashboardStaticDataset = {
+  rows: Record<string, DashboardCellValue>[];
 };
 
-export type DashboardDataset = {
-  file?: string;
-  rows?: Record<string, DashboardCellValue>[];
-  source?: DashboardDatasetSource;
-};
+export type DashboardDataset = DashboardSqlDataset | DashboardStaticDataset;
+
+export function isSqlDataset(dataset: DashboardDataset): dataset is DashboardSqlDataset {
+  return "sql" in dataset;
+}
 
 export type DashboardFilterType =
   | "equals"

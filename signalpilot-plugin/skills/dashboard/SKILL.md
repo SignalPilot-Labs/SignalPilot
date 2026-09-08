@@ -1,6 +1,6 @@
 ---
 name: dashboard
-description: "Load when the user asks for a dashboard. Covers the dashboard JSON file, datasets, chart types, and the two check tools."
+description: "Load when the user asks for a dashboard. Covers the dashboard JSON file, SQL datasets, chart types, and the two check tools."
 type: skill
 ---
 
@@ -13,19 +13,43 @@ reports a schema error.
 
 The renderer does not aggregate, join, or compute. It reads rows from the
 datasets you name, applies filter defaults, the chart `sort`, and the chart
-`limit`, then draws. Aggregate the data before you write it.
+`limit`, then draws. Aggregate the data in SQL before you write the file.
+
+## Datasets
+
+Every dataset comes from one SQL query. The query defines the dataset. The
+rows the dashboard shows are only the cached result of that query.
+
+- Put all derivations in the SQL. Use window functions for trailing sums and
+  year-over-year change. Use `CASE` for groupings such as region. Use CTEs
+  for shares and ranks.
+- Do not transform rows in pandas. A dataset that is shaped outside SQL
+  cannot be refreshed, and the check tools report it as stale.
+- Call `sp.dashboard_dataset("monthly", connection="warehouse", sql="...")`
+  once per dataset in the notebook. It runs the query on the governed path,
+  writes the snapshot at `artifacts/datasets/monthly.csv`, records the SQL
+  that produced it, and returns a DataFrame you can inspect.
+- Copy the same connection and SQL into the dashboard file. The check tools
+  compare the file against the record. A different SQL or connection is
+  `snapshot_stale`.
+- Use `rows` only for constants that never change. Inline `rows` hold at
+  most 5000 flat objects.
+- Never write `artifacts/datasets/*.csv` by hand.
 
 ## Workflow
 
-1. Compute each dataset in the analysis notebook. Aggregate to the grain the
-   chart shows: one row per bar, per point, per pie slice, or per table row.
-   Write each dataset with
-   `dataframe.to_csv(sp.artifact_path("name.csv"), index=False)`.
-2. Write `artifacts/<name>.dashboard.json`. Give every chart a stable `id`
-   that matches `^[a-z][a-z0-9_]{0,63}$`. Keep the same ids when you change
-   the file later.
+1. Write one SQL query per dataset. Aggregate to the grain the chart shows:
+   one row per bar, per point, per pie slice, or per table row. Run
+   `sp.dashboard_dataset(name, connection=..., sql=...)` for each. Read the
+   returned DataFrame and fix the SQL until the columns and rows are right.
+2. Write `artifacts/<name>.dashboard.json` with the same connection and SQL
+   in `datasets`. Give every chart a stable `id` that matches
+   `^[a-z][a-z0-9_]{0,63}$`. Keep the same ids when you change the file
+   later.
 3. Call `dashboard_sample_data` with the path and all chart ids. Read the
-   `issues` of every chart. Fix each issue in the file or in the data.
+   `issues` of every chart. Fix each issue in the file or in the SQL. After
+   a SQL change, call `sp.dashboard_dataset` again and copy the SQL into the
+   file again.
 4. Call `dashboard_screenshot` with the path. Look at the image. Fix layout,
    axis, format, and series problems in the file.
 5. Repeat steps 3 and 4 at most two times. Stop when no issue remains, or
@@ -34,7 +58,46 @@ datasets you name, applies filter defaults, the chart `sort`, and the chart
    it supports: `[Revenue overview](artifacts/revenue.dashboard.json)`. Do not
    describe chart values in prose that the dashboard already shows.
 
-## The file
+## Worked example
+
+The notebook cell:
+
+```python
+monthly_sql = """
+with monthly as (
+  select
+    date_trunc('month', order_date) as month,
+    case
+      when country in ('US', 'CA', 'MX') then 'North America'
+      when country in ('GB', 'DE', 'FR', 'NL') then 'Europe'
+      else 'Rest of world'
+    end as region,
+    sum(net_revenue) as revenue
+  from fct_orders
+  where order_status = 'completed' and order_date >= '2024-01-01'
+  group by 1, 2
+)
+select
+  month,
+  region,
+  revenue,
+  sum(revenue) over (
+    partition by region
+    order by month
+    rows between 11 preceding and current row
+  ) as revenue_ttm
+from monthly
+where month >= '2025-01-01'
+order by month, region
+"""
+monthly = sp.dashboard_dataset("monthly", connection="warehouse", sql=monthly_sql)
+monthly.head()
+```
+
+The `CASE` maps countries to regions. The window function computes the
+trailing twelve month sum. The query reads from 2024 so the first months of
+2025 have a full window, then keeps only 2025 rows. The dashboard file
+carries the same SQL:
 
 ```json
 {
@@ -44,26 +107,36 @@ datasets you name, applies filter defaults, the chart `sort`, and the chart
   "layout": { "columns": 12, "rowHeight": 72 },
   "datasets": {
     "monthly": {
-      "file": "artifacts/revenue_monthly.csv",
-      "source": { "kind": "sql", "connection": "warehouse", "sql": "select ..." }
+      "connection": "warehouse",
+      "sql": "with monthly as (select date_trunc('month', order_date) as month, case when country in ('US', 'CA', 'MX') then 'North America' when country in ('GB', 'DE', 'FR', 'NL') then 'Europe' else 'Rest of world' end as region, sum(net_revenue) as revenue from fct_orders where order_status = 'completed' and order_date >= '2024-01-01' group by 1, 2) select month, region, revenue, sum(revenue) over (partition by region order by month rows between 11 preceding and current row) as revenue_ttm from monthly where month >= '2025-01-01' order by month, region"
     },
     "totals": { "rows": [ { "revenue": 1234567.8, "orders": 8123 } ] }
   },
   "filters": [],
-  "charts": []
+  "charts": [
+    {
+      "id": "revenue_ttm", "type": "line", "title": "Trailing twelve month revenue",
+      "dataset": "monthly",
+      "x": { "column": "month", "type": "date" },
+      "y": [ { "column": "revenue_ttm", "format": "currency:USD" } ],
+      "series": { "column": "region" },
+      "sort": { "column": "month" }
+    }
+  ]
 }
 ```
 
+Whitespace differences between the notebook SQL and the file SQL are
+allowed. Any other difference is `snapshot_stale`.
+
+## The file
+
 - `version` is always `1`.
 - `datasets` keys match `^[a-z][a-z0-9_]{0,63}$`. Each dataset is
-  `{ "file": "artifacts/x.csv" }`, `{ "file": "artifacts/x.tsv" }`,
-  `{ "file": "artifacts/x.json" }`, or `{ "rows": [ ... ] }`. A file has a
-  header row. A JSON file is an array of flat objects. Inline `rows` hold at
-  most 5000 objects.
-- Record `source: { "kind": "sql", "connection": "<name>", "sql": "<query>" }`
-  on every dataset you produced with SQL. The renderer never runs it. It is
-  kept so the dashboard can be refreshed later.
-- Use ISO dates: `YYYY-MM-DD` or a full ISO datetime.
+  `{ "connection": "<name>", "sql": "<query>" }` or `{ "rows": [ ... ] }`.
+  No other keys are allowed.
+- Use ISO dates: `YYYY-MM-DD` or a full ISO datetime. Cast in SQL when the
+  warehouse returns another format.
 - Write numbers as numbers, not as formatted strings.
 
 ## Chart types
@@ -122,7 +195,7 @@ is allowed only when `y` has exactly one entry.
 ```json
 {
   "id": "revenue_by_region", "type": "bar", "title": "Revenue by region",
-  "dataset": "monthly_region",
+  "dataset": "monthly",
   "x": { "column": "month", "type": "date" },
   "y": [ { "column": "revenue", "format": "compact" } ],
   "series": { "column": "region", "stack": true }
@@ -185,7 +258,7 @@ Filters live at the top level and bind to one dataset and one column. The
 | `number_range` | `{ "min": 0, "max": 100 }`, each optional |
 
 ```json
-{ "id": "region", "label": "Region", "dataset": "monthly_region",
+{ "id": "region", "label": "Region", "dataset": "monthly",
   "column": "region", "type": "in", "default": [] }
 ```
 
@@ -217,13 +290,15 @@ returns `failed` entries with the same codes.
 | Code | Effect | What to do |
 |---|---|---|
 | `missing_dataset` | chart fails | Add the dataset to `datasets` or fix the chart `dataset` name. |
-| `dataset_unreadable` | chart fails | The file is missing or not parseable. Write the file again. Check the path starts with `artifacts/`. |
-| `missing_column` | chart fails | Use a column from the listed columns, or add the column to the data. |
+| `snapshot_missing` | chart fails | No snapshot at `artifacts/datasets/<name>.csv`. Call `sp.dashboard_dataset` for that dataset in the notebook. |
+| `snapshot_stale` | chart fails | The connection or SQL in the file is not the one that produced the snapshot. Call `sp.dashboard_dataset` again with the SQL from the file, or copy the notebook SQL into the file. |
+| `dataset_unreadable` | chart fails | The snapshot is not parseable. Call `sp.dashboard_dataset` again. |
+| `missing_column` | chart fails | Use a column from the listed columns, or add the column to the SQL. |
 | `series_with_multi_y` | chart fails | Keep one y column with `series`, or remove `series`. |
-| `empty_dataset` | warning | No rows after filters, sort, and limit. Check the filter defaults and the data. |
-| `non_numeric_y` | warning | The y or value column has text. Write numbers, not formatted strings. |
-| `unparseable_date` | warning | Write dates as `YYYY-MM-DD`, or set `x.type` to `category`. |
-| `too_many_rows` | warning | More than 50000 rows. Aggregate or add a `limit`. |
+| `empty_dataset` | warning | No rows after filters, sort, and limit. Check the filter defaults and the SQL. |
+| `non_numeric_y` | warning | The y or value column has text. Cast to a number in SQL. |
+| `unparseable_date` | warning | Cast dates to `YYYY-MM-DD` in SQL, or set `x.type` to `category`. |
+| `too_many_rows` | warning | More than 50000 rows. Aggregate in SQL or add a `limit`. |
 | `unknown_chart` | tool only | The id is not in the file. Use one of the listed ids. |
 
 `dashboard_screenshot` can return these `"error"` values:
@@ -233,15 +308,17 @@ returns `failed` entries with the same codes.
 | `renderer_unavailable` | The image has no renderer. Rely on `dashboard_sample_data` and continue. |
 | `render_failed` | Read the message. Fix the cause and call it again. |
 | `unknown_chart` | One id in `chart_ids` is not in the file. Use the listed ids. |
-| `payload_too_large` | The datasets are too big to render. Aggregate the data or add a `limit` to the charts, then call it again. |
+| `payload_too_large` | The datasets are too big to render. Aggregate in SQL or add a `limit` to the charts, then call it again. |
 
 ## Rules
 
-- Aggregate before you write. The renderer does not aggregate.
+- One SQL query per dataset. All derivations in SQL. No pandas transforms.
+- Aggregate in SQL. The renderer does not aggregate.
 - One finding per chart. Keep the series count at 8 or fewer and the
   category count at 24 or fewer.
-- Sort time series by date in the data, and set `sort` on the chart.
-- Keep the file small. Put large tables in files, not in inline `rows`.
+- Sort time series by date in SQL, and set `sort` on the chart.
+- Keep the file small. Put large tables in SQL datasets, not in inline
+  `rows`.
 - Do not write HTML dashboards. Do not draw dashboards with matplotlib.
 - Never write into the dbt project. The file goes under `artifacts/`.
 

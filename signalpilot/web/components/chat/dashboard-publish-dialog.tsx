@@ -1,9 +1,9 @@
 "use client";
 
 // Publish a chat dashboard artifact to the team gallery. The dialog owns
-// the form (see dashboard-publish-form.ts for the model), validates the
-// dataset files against the conversation manifest before it lets the user
-// submit, and reports gateway failures inline where the fix is.
+// the form (see dashboard-publish-form.ts for the model), checks that every
+// SQL dataset's snapshot is in the conversation manifest before it lets the
+// user submit, and reports gateway failures inline where the fix is.
 
 import { AlertCircle, CheckCircle2, ExternalLink, Loader2, Upload, X } from "lucide-react";
 import Link from "next/link";
@@ -37,12 +37,12 @@ import { TimezoneField } from "~/components/dashboards/timezone-field";
 import {
   REAL_DASHBOARD_PUBLISH_API,
   buildPublishRequest,
+  datasetKindLabel,
   describePublishError,
   findPublishedDashboard,
   initialPublishForm,
   publishDatasetRows,
   publishFormProblems,
-  refreshableLabel,
   retargetPublishForm,
   type DashboardPublishApi,
   type DashboardPublishForm,
@@ -226,8 +226,8 @@ function DatasetTable({ rows }: { rows: PublishDatasetRow[] }) {
       <thead>
         <tr className="text-[10.5px] uppercase tracking-[0.06em] text-[var(--color-text-dim)]">
           <th className="pb-1 pr-2 font-medium">Dataset</th>
-          <th className="pb-1 pr-2 font-medium">Refresh</th>
-          <th className="pb-1 font-medium">File</th>
+          <th className="pb-1 pr-2 font-medium">Source</th>
+          <th className="pb-1 font-medium">Snapshot</th>
         </tr>
       </thead>
       <tbody>
@@ -240,12 +240,12 @@ function DatasetTable({ rows }: { rows: PublishDatasetRow[] }) {
             className="border-t border-[var(--color-border)]"
           >
             <td className="py-1 pr-2 font-mono text-[var(--color-text)]">{row.name}</td>
-            <td className="py-1 pr-2 text-[var(--color-text-muted)]">{refreshableLabel(row)}</td>
+            <td className="py-1 pr-2 text-[var(--color-text-muted)]">{datasetKindLabel(row)}</td>
             <td className="py-1">
               {row.status === "inline" && <span className="text-[var(--color-text-dim)]">Inline rows</span>}
               {row.status === "found" && (
                 <span className="text-[var(--color-text-muted)]">
-                  Found <span className="font-mono text-[var(--color-text-dim)]">{row.file?.path}</span>
+                  Found <span className="font-mono text-[var(--color-text-dim)]">{row.path}</span>
                 </span>
               )}
               {row.status === "missing" && (
@@ -317,7 +317,7 @@ function DashboardPublishDialogBody({
     [spec, files, file.origin_run_id],
   );
   const missing = rows.filter((row) => row.status === "missing");
-  const anyRefreshable = rows.some((row) => row.refreshable);
+  const anySql = rows.some((row) => row.connection !== null);
   const problems = publishFormProblems(form);
   const blocked = missing.length > 0 || problems.length > 0 || submitting;
 
@@ -489,9 +489,9 @@ function DashboardPublishDialogBody({
               options={DASHBOARD_REFRESH_MODE_OPTIONS}
               onChange={(value) => update("mode", value)}
             />
-            {!anyRefreshable && form.mode === "sql" && (
+            {!anySql && form.mode === "sql" && (
               <p className="text-[10.5px] leading-4 text-[var(--color-warning)]">
-                No dataset carries a SQL source, so a SQL re-run keeps every dataset as it is now.
+                Every dataset is static, so a SQL re-run has nothing to refresh.
               </p>
             )}
             <label className="flex cursor-pointer items-center gap-2 text-[12px] text-[var(--color-text)]">
@@ -519,13 +519,30 @@ function DashboardPublishDialogBody({
             >
               {missing.length > 0 && (
                 <p>
-                  Cannot publish: {missing.length === 1 ? "the dataset file" : "these dataset files"} {missing.map((row) => row.path).join(", ")} {missing.length === 1 ? "is" : "are"} not in this chat. Ask the agent to write {missing.length === 1 ? "it" : "them"} again, then publish.
+                  Cannot publish: {missing.length === 1 ? "the snapshot" : "the snapshots"} {missing.map((row) => row.path).join(", ")} {missing.length === 1 ? "is" : "are"} not in this chat. Ask the agent to call sp.dashboard_dataset for {missing.length === 1 ? "it" : "them"} again, then publish.
                 </p>
               )}
               {problems.map((problem) => (
                 <p key={problem}>{problem}</p>
               ))}
-              {error && <p data-testid="chat-dashboard-publish-api-error">{error.message}</p>}
+              {error && (
+                <div data-testid="chat-dashboard-publish-api-error">
+                  <p>{error.message}</p>
+                  {error.datasets.length > 0 && (
+                    <ul className="mt-1 list-disc space-y-0.5 pl-5">
+                      {error.datasets.map((dataset) => (
+                        <li
+                          key={dataset.name}
+                          data-testid="chat-dashboard-publish-error-dataset"
+                          data-dataset={dataset.name}
+                        >
+                          <span className="font-mono">{dataset.name}</span>: {dataset.problem}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </form>

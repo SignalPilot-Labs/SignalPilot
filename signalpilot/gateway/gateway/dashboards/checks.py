@@ -121,6 +121,24 @@ def referenced_columns(chart: dict[str, Any], spec: dict[str, Any]) -> list[str]
     return names
 
 
+def referenced_columns_by_dataset(spec: dict[str, Any]) -> dict[str, list[str]]:
+    """{dataset name: columns} that charts and filters reference, in first-seen order."""
+    columns: dict[str, list[str]] = {}
+    for chart in spec.get("charts") or []:
+        if not isinstance(chart, dict) or not chart.get("dataset"):
+            continue
+        names = columns.setdefault(str(chart["dataset"]), [])
+        names.extend(name for name in referenced_columns(chart, spec) if name not in names)
+    for filter_def in spec.get("filters") or []:
+        if not isinstance(filter_def, dict) or not filter_def.get("dataset"):
+            continue
+        column = filter_def.get("column")
+        names = columns.setdefault(str(filter_def["dataset"]), [])
+        if isinstance(column, str) and column and column not in names:
+            names.append(column)
+    return columns
+
+
 def y_columns(chart: dict[str, Any]) -> list[str]:
     chart_type = chart.get("type")
     if chart_type in CARTESIAN_TYPES:

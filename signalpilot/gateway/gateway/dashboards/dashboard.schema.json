@@ -4,42 +4,80 @@
   "title": "SignalPilot dashboard definition, version 1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["version", "title", "datasets", "charts"],
+  "required": [
+    "version",
+    "title",
+    "datasets",
+    "charts"
+  ],
   "properties": {
-    "$schema": { "type": "string" },
-    "version": { "const": 1 },
-    "title": { "type": "string", "minLength": 1, "maxLength": 200 },
-    "description": { "type": "string", "maxLength": 2000 },
+    "$schema": {
+      "type": "string"
+    },
+    "version": {
+      "const": 1
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 2000
+    },
     "layout": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "columns": { "const": 12 },
-        "rowHeight": { "type": "integer", "minimum": 40, "maximum": 200, "default": 72 }
+        "columns": {
+          "const": 12
+        },
+        "rowHeight": {
+          "type": "integer",
+          "minimum": 40,
+          "maximum": 200,
+          "default": 72
+        }
       }
     },
     "datasets": {
       "type": "object",
       "minProperties": 1,
       "maxProperties": 50,
-      "propertyNames": { "pattern": "^[a-z][a-z0-9_]{0,63}$" },
-      "additionalProperties": { "$ref": "#/$defs/dataset" }
+      "propertyNames": {
+        "pattern": "^[a-z][a-z0-9_]{0,63}$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/dataset"
+      }
     },
     "filters": {
       "type": "array",
       "maxItems": 12,
-      "items": { "$ref": "#/$defs/filter" }
+      "items": {
+        "$ref": "#/$defs/filter"
+      }
     },
     "charts": {
       "type": "array",
       "minItems": 1,
       "maxItems": 40,
-      "items": { "$ref": "#/$defs/chart" }
+      "items": {
+        "$ref": "#/$defs/chart"
+      }
     }
   },
   "$defs": {
-    "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$" },
-    "column": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{0,63}$"
+    },
+    "column": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
     "format": {
       "type": "string",
       "pattern": "^(integer|decimal|compact|percentage|currency:[A-Z]{3})$"
@@ -48,46 +86,101 @@
       "type": "object",
       "additionalProperties": false,
       "oneOf": [
-        { "required": ["file"] },
-        { "required": ["rows"] }
+        {
+          "required": [
+            "connection",
+            "sql"
+          ],
+          "not": {
+            "required": [
+              "rows"
+            ]
+          }
+        },
+        {
+          "required": [
+            "rows"
+          ],
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "connection"
+                ]
+              },
+              {
+                "required": [
+                  "sql"
+                ]
+              }
+            ]
+          }
+        }
       ],
       "properties": {
-        "file": {
+        "connection": {
           "type": "string",
-          "pattern": "^artifacts/[A-Za-z0-9_./-]+\\.(csv|tsv|json)$",
-          "description": "Path relative to the scratch directory. CSV and TSV have a header row. JSON is an array of flat objects."
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "Name of the data connection the SQL runs on."
+        },
+        "sql": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 50000,
+          "description": "The query that defines this dataset. Its result rows are the dataset. The snapshot the chat renders lives at artifacts/datasets/<name>.csv and is written by sp.dashboard_dataset."
         },
         "rows": {
           "type": "array",
           "maxItems": 5000,
           "items": {
             "type": "object",
-            "additionalProperties": { "type": ["string", "number", "boolean", "null"] }
-          }
-        },
-        "source": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind"],
-          "properties": {
-            "kind": { "enum": ["sql"] },
-            "connection": { "type": "string", "minLength": 1 },
-            "sql": { "type": "string", "minLength": 1, "maxLength": 50000 }
+            "additionalProperties": {
+              "type": [
+                "string",
+                "number",
+                "boolean",
+                "null"
+              ]
+            }
           },
-          "description": "How the rows were produced. Recorded for later refresh. Never executed by the renderer."
+          "description": "Static rows for constants that never refresh."
         }
       }
     },
     "filter": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "label", "dataset", "column", "type"],
+      "required": [
+        "id",
+        "label",
+        "dataset",
+        "column",
+        "type"
+      ],
       "properties": {
-        "id": { "$ref": "#/$defs/id" },
-        "label": { "type": "string", "minLength": 1, "maxLength": 100 },
-        "dataset": { "$ref": "#/$defs/id" },
-        "column": { "$ref": "#/$defs/column" },
-        "type": { "enum": ["equals", "in", "date_range", "number_range"] },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "dataset": {
+          "$ref": "#/$defs/id"
+        },
+        "column": {
+          "$ref": "#/$defs/column"
+        },
+        "type": {
+          "enum": [
+            "equals",
+            "in",
+            "date_range",
+            "number_range"
+          ]
+        },
         "default": {
           "description": "equals: scalar. in: array of scalars (empty means no filter). date_range: {from?, to?} ISO dates. number_range: {min?, max?}."
         }
@@ -96,157 +189,369 @@
     "grid": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["x", "y", "w", "h"],
+      "required": [
+        "x",
+        "y",
+        "w",
+        "h"
+      ],
       "properties": {
-        "x": { "type": "integer", "minimum": 0, "maximum": 11 },
-        "y": { "type": "integer", "minimum": 0, "maximum": 400 },
-        "w": { "type": "integer", "minimum": 1, "maximum": 12 },
-        "h": { "type": "integer", "minimum": 1, "maximum": 20 }
+        "x": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 11
+        },
+        "y": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 400
+        },
+        "w": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 12
+        },
+        "h": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20
+        }
       }
     },
     "axis": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["column"],
+      "required": [
+        "column"
+      ],
       "properties": {
-        "column": { "$ref": "#/$defs/column" },
-        "label": { "type": "string", "maxLength": 100 },
-        "type": { "enum": ["category", "date", "number"], "default": "category" }
+        "column": {
+          "$ref": "#/$defs/column"
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "type": {
+          "enum": [
+            "category",
+            "date",
+            "number"
+          ],
+          "default": "category"
+        }
       }
     },
     "series": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["column"],
+      "required": [
+        "column"
+      ],
       "properties": {
-        "column": { "$ref": "#/$defs/column" },
-        "label": { "type": "string", "maxLength": 100 },
-        "format": { "$ref": "#/$defs/format" }
+        "column": {
+          "$ref": "#/$defs/column"
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "format": {
+          "$ref": "#/$defs/format"
+        }
       }
     },
     "sort": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["column"],
+      "required": [
+        "column"
+      ],
       "properties": {
-        "column": { "$ref": "#/$defs/column" },
-        "direction": { "enum": ["asc", "desc"], "default": "asc" }
+        "column": {
+          "$ref": "#/$defs/column"
+        },
+        "direction": {
+          "enum": [
+            "asc",
+            "desc"
+          ],
+          "default": "asc"
+        }
       }
     },
     "chartBase": {
       "type": "object",
-      "required": ["id", "type", "title", "dataset"],
+      "required": [
+        "id",
+        "type",
+        "title",
+        "dataset"
+      ],
       "properties": {
-        "id": { "$ref": "#/$defs/id" },
-        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
-        "description": { "type": "string", "maxLength": 1000 },
-        "dataset": { "$ref": "#/$defs/id" },
-        "sort": { "$ref": "#/$defs/sort" },
-        "limit": { "type": "integer", "minimum": 1, "maximum": 50000 },
-        "grid": { "$ref": "#/$defs/grid" }
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "dataset": {
+          "$ref": "#/$defs/id"
+        },
+        "sort": {
+          "$ref": "#/$defs/sort"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50000
+        },
+        "grid": {
+          "$ref": "#/$defs/grid"
+        }
       }
     },
     "chart": {
       "oneOf": [
-        { "$ref": "#/$defs/kpiChart" },
-        { "$ref": "#/$defs/tableChart" },
-        { "$ref": "#/$defs/cartesianChart" },
-        { "$ref": "#/$defs/pieChart" },
-        { "$ref": "#/$defs/scatterChart" }
+        {
+          "$ref": "#/$defs/kpiChart"
+        },
+        {
+          "$ref": "#/$defs/tableChart"
+        },
+        {
+          "$ref": "#/$defs/cartesianChart"
+        },
+        {
+          "$ref": "#/$defs/pieChart"
+        },
+        {
+          "$ref": "#/$defs/scatterChart"
+        }
       ]
     },
     "kpiChart": {
-      "allOf": [{ "$ref": "#/$defs/chartBase" }],
+      "allOf": [
+        {
+          "$ref": "#/$defs/chartBase"
+        }
+      ],
       "type": "object",
       "additionalProperties": false,
-      "required": ["value"],
+      "required": [
+        "value"
+      ],
       "properties": {
-        "id": true, "title": true, "description": true, "dataset": true, "sort": true, "limit": true, "grid": true,
-        "type": { "const": "kpi" },
-        "value": { "$ref": "#/$defs/series" },
+        "id": true,
+        "title": true,
+        "description": true,
+        "dataset": true,
+        "sort": true,
+        "limit": true,
+        "grid": true,
+        "type": {
+          "const": "kpi"
+        },
+        "value": {
+          "$ref": "#/$defs/series"
+        },
         "comparison": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["column"],
+          "required": [
+            "column"
+          ],
           "properties": {
-            "column": { "$ref": "#/$defs/column" },
-            "label": { "type": "string", "maxLength": 100 },
-            "format": { "$ref": "#/$defs/format" }
+            "column": {
+              "$ref": "#/$defs/column"
+            },
+            "label": {
+              "type": "string",
+              "maxLength": 100
+            },
+            "format": {
+              "$ref": "#/$defs/format"
+            }
           },
           "description": "Optional second value from the same first row, shown small under the main value."
         }
       }
     },
     "tableChart": {
-      "allOf": [{ "$ref": "#/$defs/chartBase" }],
+      "allOf": [
+        {
+          "$ref": "#/$defs/chartBase"
+        }
+      ],
       "type": "object",
       "additionalProperties": false,
-      "required": ["columns"],
+      "required": [
+        "columns"
+      ],
       "properties": {
-        "id": true, "title": true, "description": true, "dataset": true, "sort": true, "limit": true, "grid": true,
-        "type": { "const": "table" },
+        "id": true,
+        "title": true,
+        "description": true,
+        "dataset": true,
+        "sort": true,
+        "limit": true,
+        "grid": true,
+        "type": {
+          "const": "table"
+        },
         "columns": {
           "type": "array",
           "minItems": 1,
           "maxItems": 30,
-          "items": { "$ref": "#/$defs/series" }
+          "items": {
+            "$ref": "#/$defs/series"
+          }
         }
       }
     },
     "cartesianChart": {
-      "allOf": [{ "$ref": "#/$defs/chartBase" }],
+      "allOf": [
+        {
+          "$ref": "#/$defs/chartBase"
+        }
+      ],
       "type": "object",
       "additionalProperties": false,
-      "required": ["x", "y"],
+      "required": [
+        "x",
+        "y"
+      ],
       "properties": {
-        "id": true, "title": true, "description": true, "dataset": true, "sort": true, "limit": true, "grid": true,
-        "type": { "enum": ["bar", "line", "area"] },
-        "x": { "$ref": "#/$defs/axis" },
+        "id": true,
+        "title": true,
+        "description": true,
+        "dataset": true,
+        "sort": true,
+        "limit": true,
+        "grid": true,
+        "type": {
+          "enum": [
+            "bar",
+            "line",
+            "area"
+          ]
+        },
+        "x": {
+          "$ref": "#/$defs/axis"
+        },
         "y": {
           "type": "array",
           "minItems": 1,
           "maxItems": 8,
-          "items": { "$ref": "#/$defs/series" }
+          "items": {
+            "$ref": "#/$defs/series"
+          }
         },
         "series": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["column"],
+          "required": [
+            "column"
+          ],
           "properties": {
-            "column": { "$ref": "#/$defs/column" },
-            "stack": { "type": "boolean", "default": false }
+            "column": {
+              "$ref": "#/$defs/column"
+            },
+            "stack": {
+              "type": "boolean",
+              "default": false
+            }
           },
           "description": "Split the single y series by the values of this column. Only allowed when y has exactly one entry."
         },
-        "stack": { "type": "boolean", "default": false, "description": "Stack multiple y series." },
-        "horizontal": { "type": "boolean", "default": false, "description": "bar only." }
+        "stack": {
+          "type": "boolean",
+          "default": false,
+          "description": "Stack multiple y series."
+        },
+        "horizontal": {
+          "type": "boolean",
+          "default": false,
+          "description": "bar only."
+        }
       }
     },
     "pieChart": {
-      "allOf": [{ "$ref": "#/$defs/chartBase" }],
+      "allOf": [
+        {
+          "$ref": "#/$defs/chartBase"
+        }
+      ],
       "type": "object",
       "additionalProperties": false,
-      "required": ["label", "value"],
+      "required": [
+        "label",
+        "value"
+      ],
       "properties": {
-        "id": true, "title": true, "description": true, "dataset": true, "sort": true, "limit": true, "grid": true,
-        "type": { "const": "pie" },
-        "label": { "$ref": "#/$defs/column" },
-        "value": { "$ref": "#/$defs/series" },
-        "donut": { "type": "boolean", "default": false }
+        "id": true,
+        "title": true,
+        "description": true,
+        "dataset": true,
+        "sort": true,
+        "limit": true,
+        "grid": true,
+        "type": {
+          "const": "pie"
+        },
+        "label": {
+          "$ref": "#/$defs/column"
+        },
+        "value": {
+          "$ref": "#/$defs/series"
+        },
+        "donut": {
+          "type": "boolean",
+          "default": false
+        }
       }
     },
     "scatterChart": {
-      "allOf": [{ "$ref": "#/$defs/chartBase" }],
+      "allOf": [
+        {
+          "$ref": "#/$defs/chartBase"
+        }
+      ],
       "type": "object",
       "additionalProperties": false,
-      "required": ["x", "y"],
+      "required": [
+        "x",
+        "y"
+      ],
       "properties": {
-        "id": true, "title": true, "description": true, "dataset": true, "sort": true, "limit": true, "grid": true,
-        "type": { "const": "scatter" },
-        "x": { "$ref": "#/$defs/axis" },
-        "y": { "$ref": "#/$defs/series" },
-        "size": { "$ref": "#/$defs/column" },
-        "color": { "$ref": "#/$defs/column" }
+        "id": true,
+        "title": true,
+        "description": true,
+        "dataset": true,
+        "sort": true,
+        "limit": true,
+        "grid": true,
+        "type": {
+          "const": "scatter"
+        },
+        "x": {
+          "$ref": "#/$defs/axis"
+        },
+        "y": {
+          "$ref": "#/$defs/series"
+        },
+        "size": {
+          "$ref": "#/$defs/column"
+        },
+        "color": {
+          "$ref": "#/$defs/column"
+        }
       }
     }
   }

@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from signalpilot._dashboard_sql import sidecar_path, snapshot_path
+from signalpilot._sdk._dashboards import write_sidecar, write_snapshot
 from signalpilot._server.ai.dashboard.tools import (
     dashboard_sample_data,
     dashboard_screenshot,
@@ -50,20 +52,42 @@ print(json.dumps({
 """
 
 
+MONTHLY = {"connection": "warehouse", "sql": "select month, revenue from m"}
+MONTHLY_ROWS = [
+    {"month": "2025-02-01", "revenue": 20},
+    {"month": "2025-01-01", "revenue": 10},
+    {"month": "2025-03-01", "revenue": 30},
+]
+
+
+def _write_snapshot(
+    scratch: Path,
+    name: str,
+    rows: list[dict[str, Any]],
+    definition: dict[str, str],
+) -> None:
+    columns = list(rows[0])
+    write_snapshot(scratch / snapshot_path(name), columns, rows)
+    write_sidecar(
+        sidecar_path(scratch, name),
+        connection=definition["connection"],
+        sql=definition["sql"],
+        columns=columns,
+        row_count=len(rows),
+    )
+
+
 def _write_dashboard(scratch: Path) -> None:
     artifacts = scratch / "artifacts"
     artifacts.mkdir(parents=True, exist_ok=True)
-    (artifacts / "monthly.csv").write_text(
-        "month,revenue\n2025-02-01,20\n2025-01-01,10\n2025-03-01,30\n",
-        encoding="utf-8",
-    )
+    _write_snapshot(scratch, "monthly", MONTHLY_ROWS, MONTHLY)
     spec: dict[str, Any] = {
         "version": 1,
         "title": "Revenue",
         "datasets": {
-            "monthly": {"file": "artifacts/monthly.csv"},
+            "monthly": MONTHLY,
             "totals": {"rows": [{"revenue": 60}]},
-            "broken": {"file": "artifacts/missing.csv"},
+            "broken": {"connection": "warehouse", "sql": "select 1"},
         },
         "charts": [
             {
@@ -113,7 +137,7 @@ async def test_sample_data_happy_path_and_unknown_id(tmp_path: Path):
     assert rev["id"] == "rev"
     assert rev["type"] == "line"
     assert rev["dataset"] == "monthly"
-    assert rev["resolved_file"] == "artifacts/monthly.csv"
+    assert rev["resolved_file"] == "artifacts/datasets/monthly.csv"
     assert rev["columns"] == [
         {"name": "month", "inferred_type": "date"},
         {"name": "revenue", "inferred_type": "number"},
@@ -135,8 +159,9 @@ async def test_sample_data_happy_path_and_unknown_id(tmp_path: Path):
             }
         ],
     }
-    assert lost["issues"][0]["code"] == "dataset_unreadable"
-    assert "artifacts/missing.csv" in lost["issues"][0]["message"]
+    assert lost["resolved_file"] == "artifacts/datasets/broken.csv"
+    assert lost["issues"][0]["code"] == "snapshot_missing"
+    assert "sp.dashboard_dataset('broken'" in lost["issues"][0]["message"]
 
 
 @pytest.mark.asyncio
@@ -229,10 +254,11 @@ async def test_screenshot_with_fake_cli(
     assert payload["failed"] == [
         {
             "id": "lost",
-            "code": "dataset_unreadable",
+            "code": "snapshot_missing",
             "message": (
-                "Chart 'lost' dataset 'broken' is unreadable: Dataset file "
-                "not found: artifacts/missing.csv"
+                "Chart 'lost': Dataset 'broken' has no snapshot. Call "
+                "sp.dashboard_dataset('broken', connection=..., sql=...) in "
+                "the notebook."
             ),
         }
     ]
@@ -272,11 +298,11 @@ def _write_shared_dataset_dashboard(scratch: Path) -> None:
     """Three charts: two shape ``monthly`` differently, one uses ``other``."""
     artifacts = scratch / "artifacts"
     artifacts.mkdir(parents=True, exist_ok=True)
-    (artifacts / "monthly.csv").write_text(
-        "month,revenue\n2025-02-01,20\n2025-01-01,10\n2025-03-01,30\n",
-        encoding="utf-8",
+    other = {"connection": "warehouse", "sql": "select k, v from o"}
+    _write_snapshot(scratch, "monthly", MONTHLY_ROWS, MONTHLY)
+    _write_snapshot(
+        scratch, "other", [{"k": "a", "v": 1}, {"k": "b", "v": 2}], other
     )
-    (artifacts / "other.csv").write_text("k,v\na,1\nb,2\n", encoding="utf-8")
     line = {
         "type": "line",
         "dataset": "monthly",
@@ -286,10 +312,7 @@ def _write_shared_dataset_dashboard(scratch: Path) -> None:
     spec: dict[str, Any] = {
         "version": 1,
         "title": "Shared",
-        "datasets": {
-            "monthly": {"file": "artifacts/monthly.csv"},
-            "other": {"file": "artifacts/other.csv"},
-        },
+        "datasets": {"monthly": MONTHLY, "other": other},
         "charts": [
             {
                 "id": "top",

@@ -3,9 +3,9 @@
 Keys live in the chat objects bucket under the organization prefix:
 
     organizations/<sha256(org_id)[:24]>/dashboards/<dashboard_id>/versions/<version_id>/spec.json
-    organizations/<sha256(org_id)[:24]>/dashboards/<dashboard_id>/versions/<version_id>/datasets/<name>.<ext>
+    organizations/<sha256(org_id)[:24]>/dashboards/<dashboard_id>/versions/<version_id>/datasets/<name>.csv
 
-Inline-row datasets are never stored: they stay in the spec.
+Only SQL datasets are stored; static datasets stay inline in the spec.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from gateway.standalone_chat.object_storage import (
     organization_prefix,
 )
 
-from .datasets import content_type_for
+from .datasets import CSV_CONTENT_TYPE
 
 SPEC_CONTENT_TYPE = "application/json"
 MAX_SPEC_BYTES = 5 * 1024 * 1024
@@ -39,8 +39,8 @@ def spec_key(org_id: str, dashboard_id: str, version_id: str) -> str:
     return f"{version_prefix(org_id, dashboard_id, version_id)}/spec.json"
 
 
-def dataset_key(org_id: str, dashboard_id: str, version_id: str, name: str, extension: str) -> str:
-    return f"{version_prefix(org_id, dashboard_id, version_id)}/datasets/{name}.{extension}"
+def dataset_key(org_id: str, dashboard_id: str, version_id: str, name: str) -> str:
+    return f"{version_prefix(org_id, dashboard_id, version_id)}/datasets/{name}.csv"
 
 
 class ObjectStore(Protocol):
@@ -76,8 +76,8 @@ class DashboardStorage:
             raise ValueError("Stored dashboard spec is not an object")
         return spec
 
-    async def put_dataset(self, key: str, data: bytes, *, filename: str) -> StoredObject:
-        return await self.backend.put_bytes(key=key, data=data, content_type=content_type_for(filename))
+    async def put_dataset(self, key: str, data: bytes) -> StoredObject:
+        return await self.backend.put_bytes(key=key, data=data, content_type=CSV_CONTENT_TYPE)
 
     async def get_dataset(self, key: str) -> bytes:
         return await self.backend.get_bytes(key, max_bytes=MAX_DATASET_BYTES)

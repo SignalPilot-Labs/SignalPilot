@@ -9,6 +9,7 @@ import {
   FIXTURE_DASHBOARD_FILE_ID,
   FIXTURE_DASHBOARD_MONTHLY_FILE_ID,
   FIXTURE_DASHBOARD_REGION_FILE_ID,
+  FIXTURE_DASHBOARD_SUMMARY_FILE_ID,
   FIXTURE_PUBLISHED_DASHBOARD_ID,
   FIXTURE_PUBLISHED_DASHBOARD_NAME,
   FIXTURE_PUBLISHED_SLUG,
@@ -31,6 +32,7 @@ vi.mock("next/link", () => ({
 import { DashboardPublishDialog, DashboardPublishedStrip } from "./dashboard-publish-dialog";
 import {
   buildPublishRequest,
+  datasetKindLabel,
   describePublishError,
   findPublishedDashboard,
   initialPublishForm,
@@ -54,14 +56,27 @@ const file = (id: string, path: string, kind: ConversationFileInfo["kind"]): Con
 });
 
 const DASHBOARD = file(FIXTURE_DASHBOARD_FILE_ID, "artifacts/revenue.dashboard.json", "dashboard");
-const MONTHLY = file(FIXTURE_DASHBOARD_MONTHLY_FILE_ID, "artifacts/revenue_monthly.csv", "data");
-const REGION = file(FIXTURE_DASHBOARD_REGION_FILE_ID, "artifacts/revenue_by_region.json", "data");
-const ALL_FILES = [DASHBOARD, MONTHLY, REGION];
+const SUMMARY = file(FIXTURE_DASHBOARD_SUMMARY_FILE_ID, "artifacts/datasets/summary.csv", "data");
+const MONTHLY = file(FIXTURE_DASHBOARD_MONTHLY_FILE_ID, "artifacts/datasets/revenue_monthly.csv", "data");
+const REGION = file(FIXTURE_DASHBOARD_REGION_FILE_ID, "artifacts/datasets/revenue_by_region.csv", "data");
+const ALL_FILES = [DASHBOARD, SUMMARY, MONTHLY, REGION];
 
 function spec(): DashboardSpec {
   const result = validateDashboardSpec(JSON.parse(DASHBOARD_SPEC_FILE));
   if (!result.ok) throw new Error(result.errors.join("\n"));
   return result.spec;
+}
+
+/** The fixture spec with the KPI totals frozen as static rows. */
+function specWithStaticSummary(): DashboardSpec {
+  const base = spec();
+  return {
+    ...base,
+    datasets: {
+      ...base.datasets,
+      summary: { rows: [{ total_revenue: 5896400, prior_revenue: 5210000, orders: 28410, avg_order_value: 207.55, growth: 0.1318 }] },
+    },
+  };
 }
 
 describe("publish form model", () => {
@@ -100,13 +115,18 @@ describe("publish form model", () => {
     });
   });
 
-  it("classifies datasets by source and resolves their files", () => {
+  it("resolves each SQL dataset's snapshot by convention path and labels static rows", () => {
     const rows = publishDatasetRows(spec(), [DASHBOARD, MONTHLY], { runId: "run-1" });
-    expect(rows.map((row) => [row.name, row.refreshable, row.status])).toEqual([
-      ["summary", false, "inline"],
-      ["revenue_monthly", false, "found"],
-      ["revenue_by_region", true, "missing"],
+    expect(rows.map((row) => [row.name, row.connection, row.path, row.status])).toEqual([
+      ["summary", "warehouse", "artifacts/datasets/summary.csv", "missing"],
+      ["revenue_monthly", "warehouse", "artifacts/datasets/revenue_monthly.csv", "found"],
+      ["revenue_by_region", "warehouse", "artifacts/datasets/revenue_by_region.csv", "missing"],
     ]);
+    expect(rows[1].file?.id).toBe(FIXTURE_DASHBOARD_MONTHLY_FILE_ID);
+    expect(rows.map(datasetKindLabel)).toEqual(["SQL · warehouse", "SQL · warehouse", "SQL · warehouse"]);
+    const withStatic = publishDatasetRows(specWithStaticSummary(), ALL_FILES, { runId: "run-1" });
+    expect(withStatic[0]).toEqual({ name: "summary", connection: null, path: null, status: "inline", file: null });
+    expect(datasetKindLabel(withStatic[0])).toBe("Static");
   });
 
   it("adopts the target dashboard's settings on retarget", async () => {
@@ -122,14 +142,57 @@ describe("publish form model", () => {
     expect(findPublishedDashboard(dashboards, "conversation-x", "file-fixture-other")).toBeNull();
   });
 
-  it("describes gateway failures with their status and missing names", () => {
+  it("describes gateway failures with their status and missing snapshots", () => {
     const missing = describePublishError(
-      new ApiRequestError(422, JSON.stringify({ detail: { message: "Dataset files not found", missing_datasets: ["a", "b"] } })),
+      new ApiRequestError(422, JSON.stringify({ detail: { message: "Dataset snapshots not found", missing_datasets: ["a", "b"] } })),
     );
-    expect(missing).toEqual({ status: 422, missing: ["a", "b"], message: "Dataset files not found Missing: a, b." });
+    expect(missing).toEqual({
+      status: 422,
+      message: "Dataset snapshots not found Missing: a, b.",
+      datasets: [
+        { name: "a", problem: "no snapshot at artifacts/datasets/a.csv" },
+        { name: "b", problem: "no snapshot at artifacts/datasets/b.csv" },
+      ],
+    });
     expect(describePublishError(new ApiRequestError(409, JSON.stringify({ detail: "Slug taken" }))).message).toBe("Slug taken");
     expect(describePublishError(new ApiRequestError(409, "")).message).toMatch(/name is taken/);
     expect(describePublishError(new Error("boom")).message).toBe("boom");
+  });
+
+  it("lists the missing columns of a not_repeatable 422 per dataset", () => {
+    const info = describePublishError(
+      new ApiRequestError(
+        422,
+        JSON.stringify({
+          detail: {
+            code: "not_repeatable",
+            message: "The SQL does not return every column the charts use.",
+            datasets: { revenue_by_region: { missing_columns: ["target", "growth"] }, summary: { missing_columns: [] } },
+          },
+        }),
+      ),
+    );
+    expect(info.status).toBe(422);
+    expect(info.message).toBe("The SQL does not return every column the charts use.");
+    expect(info.datasets).toEqual([
+      { name: "revenue_by_region", problem: "missing columns: target, growth" },
+      { name: "summary", problem: "missing columns" },
+    ]);
+    const bare = describePublishError(
+      new ApiRequestError(422, JSON.stringify({ detail: { code: "not_repeatable", datasets: { a: { missing_columns: ["x"] } } } })),
+    );
+    expect(bare.message).toMatch(/sp\.dashboard_dataset/);
+  });
+
+  it("lists the error of a sql_failed 422 per dataset", () => {
+    const info = describePublishError(
+      new ApiRequestError(
+        422,
+        JSON.stringify({ detail: { code: "sql_failed", datasets: { revenue_by_region: "relation fct_orders does not exist" } } }),
+      ),
+    );
+    expect(info.message).toMatch(/SQL of these datasets failed/);
+    expect(info.datasets).toEqual([{ name: "revenue_by_region", problem: "relation fct_orders does not exist" }]);
   });
 });
 
@@ -149,6 +212,7 @@ describe("DashboardPublishDialog", () => {
 
   const render = async (props: {
     files?: ConversationFileInfo[];
+    spec?: DashboardSpec;
     api: ReturnType<typeof createFixtureDashboardPublishApi>;
     dashboards?: PublishedDashboard[];
     initialTargetId?: string | null;
@@ -162,7 +226,7 @@ describe("DashboardPublishDialog", () => {
           onClose={props.onClose ?? (() => undefined)}
           conversationId="conv-1"
           file={DASHBOARD}
-          spec={spec()}
+          spec={props.spec ?? spec()}
           files={props.files ?? ALL_FILES}
           dashboards={props.dashboards ?? []}
           initialTargetId={props.initialTargetId ?? null}
@@ -195,20 +259,34 @@ describe("DashboardPublishDialog", () => {
     expect(q<HTMLInputElement>('[data-testid="chat-dashboard-publish-timezone"]')?.value).toBe("Europe/London");
     const rows = document.querySelectorAll('[data-testid="chat-dashboard-publish-dataset"]');
     expect(rows.length).toBe(3);
-    expect(rows[2].textContent).toContain("Refreshable (SQL)");
-    expect(rows[1].textContent).toContain("Static snapshot");
-    expect(rows[1].getAttribute("data-status")).toBe("found");
+    for (const row of rows) {
+      expect(row.textContent).toContain("SQL · warehouse");
+      expect(row.getAttribute("data-status")).toBe("found");
+    }
+    expect(rows[1].textContent).toContain("Found artifacts/datasets/revenue_monthly.csv");
     expect(q('[data-testid="chat-dashboard-publish-error"]')).toBeNull();
     expect(q<HTMLButtonElement>('[data-testid="chat-dashboard-publish-submit"]')?.disabled).toBe(false);
   });
 
-  it("disables submit while a file-backed dataset is missing and says why", async () => {
+  it("labels static rows and needs no snapshot for them", async () => {
     const api = createFixtureDashboardPublishApi();
-    await render({ api, files: [DASHBOARD, MONTHLY] });
+    await render({ api, spec: specWithStaticSummary(), files: [DASHBOARD, MONTHLY, REGION] });
+    const row = q('[data-testid="chat-dashboard-publish-dataset"][data-dataset="summary"]');
+    expect(row?.textContent).toContain("Static");
+    expect(row?.textContent).toContain("Inline rows");
+    expect(row?.getAttribute("data-status")).toBe("inline");
+    expect(q<HTMLButtonElement>('[data-testid="chat-dashboard-publish-submit"]')?.disabled).toBe(false);
+  });
+
+  it("disables submit while a SQL dataset's snapshot is missing and says why", async () => {
+    const api = createFixtureDashboardPublishApi();
+    await render({ api, files: [DASHBOARD, SUMMARY, MONTHLY] });
     const row = q('[data-testid="chat-dashboard-publish-dataset"][data-dataset="revenue_by_region"]');
     expect(row?.getAttribute("data-status")).toBe("missing");
+    expect(row?.textContent).toContain("Missing artifacts/datasets/revenue_by_region.csv");
     expect(q<HTMLButtonElement>('[data-testid="chat-dashboard-publish-submit"]')?.disabled).toBe(true);
-    expect(q('[data-testid="chat-dashboard-publish-error"]')?.textContent).toContain("artifacts/revenue_by_region.json");
+    expect(q('[data-testid="chat-dashboard-publish-error"]')?.textContent).toContain("artifacts/datasets/revenue_by_region.csv");
+    expect(q('[data-testid="chat-dashboard-publish-error"]')?.textContent).toContain("sp.dashboard_dataset");
     await act(async () => q<HTMLButtonElement>('[data-testid="chat-dashboard-publish-submit"]')?.click());
     expect(api.calls).toHaveLength(0);
   });
@@ -265,7 +343,7 @@ describe("DashboardPublishDialog", () => {
   it("renders gateway errors inline and keeps the form", async () => {
     const api = createFixtureDashboardPublishApi();
     api.publishDashboard = async () => {
-      throw new ApiRequestError(422, JSON.stringify({ detail: { message: "Dataset files not found", missing_datasets: ["revenue_by_region"] } }));
+      throw new ApiRequestError(422, JSON.stringify({ detail: { message: "Dataset snapshots not found", missing_datasets: ["revenue_by_region"] } }));
     };
     const onPublished = vi.fn();
     await render({ api, onPublished });
@@ -274,6 +352,30 @@ describe("DashboardPublishDialog", () => {
     expect(q('[data-testid="chat-dashboard-publish-api-error"]')?.textContent).toContain("revenue_by_region");
     expect(q<HTMLButtonElement>('[data-testid="chat-dashboard-publish-submit"]')?.disabled).toBe(false);
     expect(q<HTMLInputElement>('[data-testid="chat-dashboard-publish-name"]')?.value).toBe("Revenue overview 2024");
+  });
+
+  it("renders a not_repeatable 422 with one line per dataset", async () => {
+    const api = createFixtureDashboardPublishApi();
+    api.publishDashboard = async () => {
+      throw new ApiRequestError(
+        422,
+        JSON.stringify({
+          detail: {
+            code: "not_repeatable",
+            message: "The SQL does not return every column the charts use.",
+            datasets: { revenue_by_region: { missing_columns: ["target", "growth"] } },
+          },
+        }),
+      );
+    };
+    await render({ api });
+    await act(async () => q<HTMLButtonElement>('[data-testid="chat-dashboard-publish-submit"]')?.click());
+    const error = q('[data-testid="chat-dashboard-publish-api-error"]');
+    expect(error?.textContent).toContain("does not return every column");
+    const lines = document.querySelectorAll('[data-testid="chat-dashboard-publish-error-dataset"]');
+    expect(lines.length).toBe(1);
+    expect(lines[0].getAttribute("data-dataset")).toBe("revenue_by_region");
+    expect(lines[0].textContent).toBe("revenue_by_region: missing columns: target, growth");
   });
 
   it("closes on Escape", async () => {

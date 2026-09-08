@@ -4,25 +4,25 @@ import type {
   PublishDashboardRequest,
   PublishedDashboard,
 } from "~/lib/api/dashboards";
+import revenueSpecJson from "~/dashboard-renderer/fixtures/revenue.dashboard.json";
+import { datasetSnapshotPath } from "~/dashboard-renderer";
 import type { FixtureEvent } from "./chat-test-fixture-data";
 
 /**
  * Fixture extension: the dashboard artifact the scripted agent writes from
- * the notebook cell (a `*.dashboard.json` spec plus its two datasets) and
- * the two dashboard tools that check and render it. The spec is a copy of
- * `dashboard-renderer/fixtures/revenue.dashboard.json` with the dataset
- * paths the agent would really use under `artifacts/`.
+ * the notebook cell (the `*.dashboard.json` spec plus the snapshot of each
+ * of its three SQL datasets, written by `sp.dashboard_dataset` at
+ * `artifacts/datasets/<name>.csv`) and the two dashboard tools that check
+ * and render it. The spec is `dashboard-renderer/fixtures/revenue.dashboard.json`
+ * verbatim; the snapshot texts below mirror `fixtures/datasets/*.csv`.
  */
 
 const FIXTURE_DASHBOARD_FILE_PATH = "artifacts/revenue.dashboard.json";
-const FIXTURE_DASHBOARD_MONTHLY_PATH = "artifacts/revenue_monthly.csv";
-const FIXTURE_DASHBOARD_REGION_PATH = "artifacts/revenue_by_region.json";
 
 export const FIXTURE_DASHBOARD_FILE_ID = "file-fixture-dashboard";
+export const FIXTURE_DASHBOARD_SUMMARY_FILE_ID = "file-fixture-dashboard-summary";
 export const FIXTURE_DASHBOARD_MONTHLY_FILE_ID = "file-fixture-dashboard-monthly";
 export const FIXTURE_DASHBOARD_REGION_FILE_ID = "file-fixture-dashboard-region";
-
-const FIXTURE_DASHBOARD_TITLE = "Revenue overview 2024";
 
 const FIXTURE_DASHBOARD_CHART_IDS = [
   "kpi_revenue",
@@ -36,150 +36,7 @@ const FIXTURE_DASHBOARD_CHART_IDS = [
   "top_months",
 ] as const;
 
-export const DASHBOARD_SPEC_FILE = JSON.stringify(
-  {
-    version: 1,
-    title: FIXTURE_DASHBOARD_TITLE,
-    description:
-      "Monthly revenue by region with targets, share of revenue and customer economics.",
-    layout: { columns: 12, rowHeight: 72 },
-    datasets: {
-      summary: {
-        rows: [
-          {
-            total_revenue: 5896400,
-            prior_revenue: 5210000,
-            orders: 28410,
-            avg_order_value: 207.55,
-            growth: 0.1318,
-          },
-        ],
-      },
-      revenue_monthly: { file: FIXTURE_DASHBOARD_MONTHLY_PATH },
-      revenue_by_region: {
-        file: FIXTURE_DASHBOARD_REGION_PATH,
-        source: {
-          kind: "sql",
-          connection: "warehouse",
-          sql: "select region, sum(revenue) as revenue from fct_orders group by 1",
-        },
-      },
-    },
-    filters: [
-      {
-        id: "period",
-        label: "Period",
-        dataset: "revenue_monthly",
-        column: "month",
-        type: "date_range",
-        default: { from: "2024-01-01", to: "2024-12-01" },
-      },
-      {
-        id: "regions",
-        label: "Regions",
-        dataset: "revenue_by_region",
-        column: "region",
-        type: "in",
-        default: ["North", "South", "East", "West"],
-      },
-    ],
-    charts: [
-      {
-        id: "kpi_revenue",
-        type: "kpi",
-        title: "Total revenue",
-        dataset: "summary",
-        value: { column: "total_revenue", format: "currency:USD" },
-        comparison: { column: "prior_revenue", label: "Prior year", format: "currency:USD" },
-        grid: { x: 0, y: 0, w: 3, h: 2 },
-      },
-      {
-        id: "kpi_orders",
-        type: "kpi",
-        title: "Orders",
-        dataset: "summary",
-        value: { column: "orders", format: "integer" },
-        grid: { x: 3, y: 0, w: 3, h: 2 },
-      },
-      {
-        id: "kpi_aov",
-        type: "kpi",
-        title: "Average order value",
-        dataset: "summary",
-        value: { column: "avg_order_value", format: "currency:USD" },
-        grid: { x: 6, y: 0, w: 3, h: 2 },
-      },
-      {
-        id: "kpi_growth",
-        type: "kpi",
-        title: "Growth vs prior year",
-        description: "Year over year revenue growth.",
-        dataset: "summary",
-        value: { column: "growth", format: "percentage" },
-        grid: { x: 9, y: 0, w: 3, h: 2 },
-      },
-      {
-        id: "revenue_trend",
-        type: "line",
-        title: "Monthly revenue by region",
-        dataset: "revenue_monthly",
-        x: { column: "month", type: "date", label: "Month" },
-        y: [{ column: "revenue", label: "Revenue", format: "currency:USD" }],
-        series: { column: "region" },
-        grid: { x: 0, y: 2, w: 8, h: 4 },
-      },
-      {
-        id: "region_share",
-        type: "pie",
-        title: "Revenue share by region",
-        dataset: "revenue_by_region",
-        label: "region",
-        value: { column: "revenue", format: "currency:USD" },
-        donut: true,
-        grid: { x: 8, y: 2, w: 4, h: 4 },
-      },
-      {
-        id: "region_vs_target",
-        type: "bar",
-        title: "Revenue vs target by region",
-        dataset: "revenue_by_region",
-        x: { column: "region", type: "category" },
-        y: [
-          { column: "revenue", label: "Revenue", format: "currency:USD" },
-          { column: "target", label: "Target", format: "currency:USD" },
-        ],
-        sort: { column: "revenue", direction: "desc" },
-      },
-      {
-        id: "customers_vs_revenue",
-        type: "scatter",
-        title: "Customers vs revenue",
-        dataset: "revenue_by_region",
-        x: { column: "customers", type: "number", label: "Customers" },
-        y: { column: "revenue", label: "Revenue", format: "currency:USD" },
-        size: "avg_order_value",
-        color: "region",
-      },
-      {
-        id: "top_months",
-        type: "table",
-        title: "Top months by revenue",
-        dataset: "revenue_monthly",
-        columns: [
-          { column: "month", label: "Month" },
-          { column: "region", label: "Region" },
-          { column: "revenue", label: "Revenue", format: "currency:USD" },
-          { column: "orders", label: "Orders", format: "integer" },
-          { column: "target", label: "Target", format: "currency:USD" },
-        ],
-        sort: { column: "revenue", direction: "desc" },
-        limit: 10,
-      },
-    ],
-  },
-  null,
-  2,
-);
+export const DASHBOARD_SPEC_FILE = JSON.stringify(revenueSpecJson, null, 2);
 
 const MONTHS = [
   "2024-01-01", "2024-02-01", "2024-03-01", "2024-04-01", "2024-05-01", "2024-06-01",
@@ -215,7 +72,18 @@ const REGION_ROWS = [
   { region: "West", revenue: 1084800, target: 1056000, customers: 2490, avg_order_value: 240, growth: -0.03 },
 ];
 
-export const DASHBOARD_REGION_JSON_FILE = JSON.stringify(REGION_ROWS, null, 2);
+const csvFile = (rows: Record<string, string | number>[]): string => {
+  const columns = Object.keys(rows[0]);
+  return [columns.join(","), ...rows.map((row) => columns.map((column) => row[column]).join(",")), ""].join("\n");
+};
+
+export const DASHBOARD_REGION_CSV_FILE = csvFile(REGION_ROWS);
+
+const SUMMARY_ROWS = [
+  { total_revenue: 5896400, prior_revenue: 5210000, orders: 28410, avg_order_value: 207.55, growth: 0.1318 },
+];
+
+export const DASHBOARD_SUMMARY_CSV_FILE = csvFile(SUMMARY_ROWS);
 
 /** Millisecond offsets shared by the events and the simulated manifest. */
 const DASHBOARD_CAPTURED_AT = 20_750;
@@ -232,18 +100,25 @@ const FILE_ENTRIES = [
     body: DASHBOARD_SPEC_FILE,
   },
   {
+    id: FIXTURE_DASHBOARD_SUMMARY_FILE_ID,
+    path: datasetSnapshotPath("summary"),
+    kind: "data" as const,
+    mime: "text/csv",
+    body: DASHBOARD_SUMMARY_CSV_FILE,
+  },
+  {
     id: FIXTURE_DASHBOARD_MONTHLY_FILE_ID,
-    path: FIXTURE_DASHBOARD_MONTHLY_PATH,
+    path: datasetSnapshotPath("revenue_monthly"),
     kind: "data" as const,
     mime: "text/csv",
     body: DASHBOARD_MONTHLY_CSV_FILE,
   },
   {
     id: FIXTURE_DASHBOARD_REGION_FILE_ID,
-    path: FIXTURE_DASHBOARD_REGION_PATH,
+    path: datasetSnapshotPath("revenue_by_region"),
     kind: "data" as const,
-    mime: "application/json",
-    body: DASHBOARD_REGION_JSON_FILE,
+    mime: "text/csv",
+    body: DASHBOARD_REGION_CSV_FILE,
   },
 ];
 
@@ -312,7 +187,7 @@ function fixtureDashboardScreenshotResult() {
 
 /**
  * The dashboard segment of the scripted run: the sandbox capture that lists
- * the spec and its datasets (anchored to the run_cells call), then the
+ * the spec and its three snapshots (anchored to the run_cells call), then the
  * data check and the render. Slots after the runtime capture (20.7s) and
  * before the follow-up verification chain (21.2s).
  */

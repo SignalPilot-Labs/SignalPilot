@@ -17,7 +17,7 @@ import { normalizeFileRef, resolveFileRef } from "~/lib/chat-file-refs";
 import { browserTimeZone } from "~/lib/dashboards/timezones";
 import { anchorTimeProblem } from "~/components/dashboards/anchor-time-field";
 import { timeZoneProblem } from "~/components/dashboards/timezone-field";
-import type { DashboardSpec } from "~/dashboard-renderer";
+import { datasetSnapshotPath, isSqlDataset, type DashboardSpec } from "~/dashboard-renderer";
 
 /** The slice of `lib/api/dashboards` the publish flow calls. Injectable so
  * the fixture harness and unit tests can stand in a fake. */
@@ -124,20 +124,22 @@ export function buildPublishRequest(form: DashboardPublishForm): PublishDashboar
   return body;
 }
 
-type DatasetFileStatus = "inline" | "found" | "missing";
+/** A SQL dataset's snapshot is found or missing in the chat; static rows
+ * travel inline in the spec. */
+type DatasetSnapshotStatus = "inline" | "found" | "missing";
 
 export type PublishDatasetRow = {
   name: string;
-  /** True when the spec carries a SQL source the refresh can re-run. */
-  refreshable: boolean;
-  /** The spec's file reference, when the dataset is file-backed. */
+  /** The connection the dataset's SQL runs on; null for static rows. */
+  connection: string | null;
+  /** Scratch-relative snapshot path (`artifacts/datasets/<name>.csv`); null for static rows. */
   path: string | null;
-  status: DatasetFileStatus;
-  /** The manifest row backing the dataset, when found. */
+  status: DatasetSnapshotStatus;
+  /** The manifest row holding the snapshot, when found. */
   file: ConversationFileInfo | null;
 };
 
-/** One row per dataset: refreshability from the spec, file status from the
+/** One row per dataset: kind from the spec, snapshot status from the
  * manifest (the same resolution the viewer uses). */
 export function publishDatasetRows(
   spec: DashboardSpec,
@@ -145,23 +147,24 @@ export function publishDatasetRows(
   options: { runId?: string | null } = {},
 ): PublishDatasetRow[] {
   return Object.entries(spec.datasets).map(([name, dataset]) => {
-    const refreshable = dataset.source?.kind === "sql";
-    if (typeof dataset.file !== "string") {
-      return { name, refreshable, path: null, status: "inline", file: null };
+    if (!isSqlDataset(dataset)) {
+      return { name, connection: null, path: null, status: "inline", file: null };
     }
-    const file = resolveFileRef(normalizeFileRef(dataset.file), files, options);
+    const path = datasetSnapshotPath(name);
+    const file = resolveFileRef(normalizeFileRef(path), files, options);
     return {
       name,
-      refreshable,
-      path: dataset.file,
+      connection: dataset.connection,
+      path,
       status: file ? "found" : "missing",
       file,
     };
   });
 }
 
-export function refreshableLabel(row: Pick<PublishDatasetRow, "refreshable">): string {
-  return row.refreshable ? "Refreshable (SQL)" : "Static snapshot";
+/** "SQL · <connection>" for a SQL dataset, "Static" for inline rows. */
+export function datasetKindLabel(row: Pick<PublishDatasetRow, "connection">): string {
+  return row.connection === null ? "Static" : `SQL · ${row.connection}`;
 }
 
 /** The dashboard already published from this exact chat file, if any. */
@@ -183,8 +186,9 @@ export function findPublishedDashboard(
 export type PublishErrorInfo = {
   status: number | null;
   message: string;
-  /** Dataset names the gateway could not find (422). */
-  missing: string[];
+  /** Per-dataset problems the gateway reported (422): a missing snapshot,
+   * columns the SQL does not return, or the SQL error text. */
+  datasets: { name: string; problem: string }[];
 };
 
 /** True when `text` names `word` as a whole token. */
@@ -198,10 +202,33 @@ function collectStrings(value: unknown): string[] {
   return [];
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * The per-dataset map of the publish gate's 422s:
+ * `not_repeatable` -> `{name: {missing_columns: [...]}}`,
+ * `sql_failed` -> `{name: "error text"}`.
+ */
+function datasetProblems(code: string, datasets: unknown): PublishErrorInfo["datasets"] {
+  if (!isRecord(datasets)) return [];
+  return Object.entries(datasets).map(([name, value]) => {
+    if (code === "not_repeatable") {
+      const columns = isRecord(value) ? collectStrings(value.missing_columns) : [];
+      return { name, problem: columns.length ? `missing columns: ${columns.join(", ")}` : "missing columns" };
+    }
+    return { name, problem: typeof value === "string" ? value : "the SQL failed" };
+  });
+}
+
 /**
  * Turns an API failure into something the dialog can show inline. The
- * gateway answers 422 with the missing dataset names and 409 for a slug or
- * refresh conflict; both carry a `detail` that is a string or an object.
+ * gateway answers 422 with a `detail` object: `missing_datasets` names
+ * snapshots absent from the chat, `code: "not_repeatable"` lists the
+ * columns each dataset's SQL does not return, `code: "sql_failed"` carries
+ * each dataset's error; 409 is a slug or refresh conflict. `detail` may
+ * also be a plain string.
  */
 export function describePublishError(error: unknown): PublishErrorInfo {
   const status = error instanceof ApiRequestError ? error.status : null;
@@ -215,17 +242,29 @@ export function describePublishError(error: unknown): PublishErrorInfo {
   }
   let message = "";
   let missing: string[] = [];
+  let datasets: PublishErrorInfo["datasets"] = [];
   if (typeof detail === "string") {
     message = detail;
-  } else if (detail && typeof detail === "object") {
-    const record = detail as Record<string, unknown>;
-    missing = collectStrings(record.missing_datasets ?? record.missing ?? record.datasets);
-    const text = record.message ?? record.error ?? record.detail;
+  } else if (isRecord(detail)) {
+    const code = typeof detail.code === "string" ? detail.code : "";
+    const text = detail.message ?? detail.error ?? detail.detail;
     message = typeof text === "string" ? text : "";
+    if (code === "not_repeatable" || code === "sql_failed") {
+      datasets = datasetProblems(code, detail.datasets);
+      if (!message) {
+        message =
+          code === "not_repeatable"
+            ? "The SQL of these datasets does not return every column the charts use. Fix the SQL, run sp.dashboard_dataset again, and publish."
+            : "The SQL of these datasets failed when the gateway ran it.";
+      }
+    } else {
+      missing = collectStrings(detail.missing_datasets ?? detail.missing ?? detail.datasets);
+      datasets = missing.map((name) => ({ name, problem: `no snapshot at ${datasetSnapshotPath(name)}` }));
+    }
   }
   if (!message) {
     if (status === 422 && missing.length > 0) {
-      message = `The gateway could not find these dataset files: ${missing.join(", ")}.`;
+      message = `The gateway could not find the snapshot of these datasets: ${missing.join(", ")}.`;
     } else if (status === 422) {
       message = "The gateway rejected the dashboard file.";
     } else if (status === 409) {
@@ -238,5 +277,5 @@ export function describePublishError(error: unknown): PublishErrorInfo {
   } else if (status === 422 && missing.length > 0 && !missing.every((name) => mentions(message, name))) {
     message = `${message} Missing: ${missing.join(", ")}.`;
   }
-  return { status, message, missing };
+  return { status, message, datasets };
 }

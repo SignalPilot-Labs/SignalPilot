@@ -16,7 +16,7 @@ import {
   DashboardRenderer,
   datasetFileRefs,
   inlineDatasets,
-  parseDatasetText,
+  parseDatasetCsv,
   validateDashboardSpec,
   type DashboardSpec,
   type DashboardTheme,
@@ -104,10 +104,11 @@ const ACTION_CLASS =
 
 /**
  * Renders a `*.dashboard.json` conversation file: validates the spec,
- * resolves its file-backed datasets against the manifest, fetches and
- * parses them, then hands everything to the shared DashboardRenderer with
- * live filters. Missing datasets are left out of the map so the renderer
- * reports them per tile; while the run still streams they show as pending.
+ * resolves each SQL dataset's snapshot (`artifacts/datasets/<name>.csv`)
+ * against the manifest, fetches and parses them, then hands everything to
+ * the shared DashboardRenderer with live filters. Missing snapshots are
+ * left out of the map so the renderer reports them per tile; while the run
+ * still streams they show as pending.
  */
 export function DashboardFileView({
   file,
@@ -168,11 +169,7 @@ export function DashboardFileView({
       if (!entry.file) continue;
       const state = texts[entry.file.id];
       if (!state || state.phase !== "text") continue;
-      try {
-        out[entry.name] = parseDatasetText(state.text, entry.file.filename);
-      } catch {
-        // Unparseable: leave it out so the tile reports dataset_unreadable.
-      }
+      out[entry.name] = parseDatasetCsv(state.text);
     }
     return out;
   }, [spec, resolved, texts]);

@@ -1,8 +1,12 @@
-"""Dashboard spec schema: the bundled copy and validation helpers.
+"""Dashboard spec schema: the bundled copy, validation, and dataset shapes.
 
 ``dashboard.schema.json`` next to this module is a byte-identical copy of
 ``signalpilot-plugin/skills/dashboard/dashboard.schema.json``. A test asserts
 the identity; update both files together.
+
+A dataset is either SQL (``connection`` + ``sql``; its rows are the query
+result, cached as a snapshot at ``artifacts/datasets/<name>.csv`` in the
+chat) or static (``rows`` inline in the spec; never refreshed).
 """
 
 from __future__ import annotations
@@ -15,6 +19,7 @@ from typing import Any
 from jsonschema import Draft202012Validator
 
 SCHEMA_PATH = Path(__file__).with_name("dashboard.schema.json")
+SNAPSHOT_DIR = "artifacts/datasets"
 
 _MAX_ERRORS = 20
 
@@ -62,28 +67,39 @@ def dataset_definitions(spec: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {str(name): value for name, value in definitions.items() if isinstance(value, dict)}
 
 
+def static_rows(definition: dict[str, Any]) -> list[dict[str, Any]] | None:
+    """Rows of a static dataset, or None when the dataset is SQL."""
+    rows = definition.get("rows")
+    if rows is None:
+        return None
+    if not isinstance(rows, list):
+        return []
+    return [dict(item) for item in rows if isinstance(item, dict)]
+
+
+def dataset_sql(spec: dict[str, Any]) -> dict[str, tuple[str, str]]:
+    """{dataset name: (connection, sql)} for every SQL dataset."""
+    result: dict[str, tuple[str, str]] = {}
+    for name, definition in dataset_definitions(spec).items():
+        if static_rows(definition) is not None:
+            continue
+        connection = str(definition.get("connection") or "").strip()
+        sql = str(definition.get("sql") or "").strip()
+        if connection and sql:
+            result[name] = (connection, sql)
+    return result
+
+
+def snapshot_path(name: str) -> str:
+    """Where a chat keeps the cached result of a SQL dataset."""
+    return f"{SNAPSHOT_DIR}/{name}.csv"
+
+
 def dataset_file_refs(spec: dict[str, Any]) -> dict[str, str]:
-    """{dataset name: file path} for every dataset backed by a file."""
-    refs: dict[str, str] = {}
-    for name, definition in dataset_definitions(spec).items():
-        file_ref = definition.get("file")
-        if isinstance(file_ref, str) and file_ref:
-            refs[name] = file_ref
-    return refs
-
-
-def dataset_sources(spec: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    """{dataset name: source} for every dataset that records how it was produced."""
-    sources: dict[str, dict[str, Any]] = {}
-    for name, definition in dataset_definitions(spec).items():
-        source = definition.get("source")
-        if isinstance(source, dict) and source.get("kind"):
-            sources[name] = source
-    return sources
+    """{dataset name: snapshot path} for every SQL dataset."""
+    return {name: snapshot_path(name) for name in dataset_sql(spec)}
 
 
 def chart_count(spec: dict[str, Any]) -> int:
     charts = spec.get("charts")
     return len(charts) if isinstance(charts, list) else 0
-
-

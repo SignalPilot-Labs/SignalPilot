@@ -131,12 +131,21 @@ describe("issues", () => {
     expect(chartIsFailed(result.issues)).toBe(true);
   });
 
-  it("dataset_unreadable fails when rows were not loaded", () => {
+  it("snapshot_missing fails a SQL dataset whose rows were not loaded", () => {
     const spec = specWith({});
-    spec.datasets.sales = { file: "artifacts/sales.csv" };
+    spec.datasets.sales = { connection: "warehouse", sql: "select 1" };
     const result = prepareChartRows(spec.charts[0], spec, {});
+    expect(codes(result.issues)).toEqual(["snapshot_missing"]);
+    expect(result.issues[0].message).toBe(
+      "Dataset 'sales' has no snapshot. Call sp.dashboard_dataset('sales', connection=..., sql=...) in the notebook.",
+    );
+    expect(chartIsFailed(result.issues)).toBe(true);
+  });
+
+  it("dataset_unreadable fails a static dataset whose rows were not passed", () => {
+    const result = prepareChartRows(specWith({}).charts[0], specWith({}), {});
     expect(codes(result.issues)).toEqual(["dataset_unreadable"]);
-    expect(result.issues[0].message).toContain("artifacts/sales.csv");
+    expect(result.issues[0].message).toContain('"sales"');
   });
 
   it("missing_column names the column and the available columns", () => {

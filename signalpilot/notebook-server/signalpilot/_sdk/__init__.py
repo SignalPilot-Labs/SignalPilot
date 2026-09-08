@@ -11,6 +11,9 @@ from signalpilot._sdk._artifacts import (
 from signalpilot._sdk._checks import checks as checks
 from signalpilot._sdk._client import GatewayClient, _is_local_url
 from signalpilot._sdk._connection import Connection, DatasetRef
+from signalpilot._sdk._dashboards import (
+    dashboard_dataset as _dashboard_dataset,
+)
 from signalpilot._sdk._runtime_publication import (
     PublishedResult,
     open_dataset as _open_dataset,
@@ -91,6 +94,26 @@ def publish_result(
         source_result_ids=source_result_ids,
         completeness=completeness,
         reconciliation=reconciliation,
+    )
+
+
+def dashboard_dataset(
+    name: str,
+    *,
+    connection: str,
+    sql: str,
+    row_limit: int = 50_000,
+) -> Any:
+    """Run one governed query and write the snapshot a dashboard reads.
+
+    Writes ``artifacts/datasets/<name>.csv`` and records the connection and
+    SQL that produced it. Put every derivation in the SQL; the dashboard
+    file must carry the same connection and SQL. Returns a DataFrame.
+    """
+    _require_init()
+    assert _gw is not None
+    return _dashboard_dataset(
+        Connection(connection, _gw), name, sql=sql, row_limit=row_limit
     )
 
 

@@ -5,10 +5,11 @@ never aggregates: it applies the filters bound to the chart's dataset (using
 each filter's ``default``), then the chart's ``sort``, then ``limit``, then a
 hard cap of 50 000 rows.
 
-Issue codes: ``missing_dataset``, ``dataset_unreadable``, ``empty_dataset``,
-``missing_column``, ``non_numeric_y``, ``unparseable_date``,
-``too_many_rows``, ``series_with_multi_y``. The first, second, fourth, and
-last make the chart ``failed``; the rest are warnings.
+Issue codes: ``missing_dataset``, ``snapshot_missing``, ``snapshot_stale``,
+``dataset_unreadable``, ``empty_dataset``, ``missing_column``,
+``non_numeric_y``, ``unparseable_date``, ``too_many_rows``,
+``series_with_multi_y``. The dataset codes, ``missing_column``, and
+``series_with_multi_y`` make the chart ``failed``; the rest are warnings.
 """
 
 from __future__ import annotations
@@ -32,6 +33,8 @@ PARSE_THRESHOLD = 0.9
 FAILED_CODES = frozenset(
     {
         "missing_dataset",
+        "snapshot_missing",
+        "snapshot_stale",
         "dataset_unreadable",
         "missing_column",
         "series_with_multi_y",
@@ -251,6 +254,32 @@ def _ratio(values: list[Any], parser: Any) -> float | None:
     return parsed / len(non_null)
 
 
+def _dataset_issue(
+    chart_id: str, dataset_name: str, loaded: LoadedDataset | None
+) -> Issue:
+    """The failing issue for a dataset that could not be loaded.
+
+    A snapshot problem keeps the loader's message, which already names the
+    dataset and the fix. Any other load error is ``dataset_unreadable``.
+    """
+    if loaded is not None and loaded.code in {
+        "snapshot_missing",
+        "snapshot_stale",
+    }:
+        return {
+            "code": loaded.code,
+            "message": f"Chart '{chart_id}': {loaded.error}",
+        }
+    detail = loaded.error if loaded is not None else "not loaded"
+    return {
+        "code": "dataset_unreadable",
+        "message": (
+            f"Chart '{chart_id}' dataset '{dataset_name}' is "
+            f"unreadable: {detail}"
+        ),
+    }
+
+
 def prepare_chart_rows(
     chart: dict[str, Any],
     spec: dict[str, Any],
@@ -280,16 +309,7 @@ def prepare_chart_rows(
         return [], issues
     loaded = datasets.get(dataset_name)
     if loaded is None or loaded.error:
-        detail = loaded.error if loaded is not None else "not loaded"
-        issues.append(
-            {
-                "code": "dataset_unreadable",
-                "message": (
-                    f"Chart '{chart_id}' dataset '{dataset_name}' is "
-                    f"unreadable: {detail}"
-                ),
-            }
-        )
+        issues.append(_dataset_issue(chart_id, dataset_name, loaded))
         return [], issues
     raw_rows = loaded.rows
     if not raw_rows:

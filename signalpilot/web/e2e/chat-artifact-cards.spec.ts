@@ -164,8 +164,9 @@ test.describe("inline artifact cards (fixture harness)", () => {
   }) => {
     await page.goto(at(24_800));
     await waitForHydration(page);
-    // The code-and-notebook group produced all seven files. Collapsed, it
-    // hoists them into one footer: 3 full cards + 4 compact rows.
+    // The code-and-notebook group produced all eleven files. Collapsed, it
+    // hoists them into one footer: 3 full cards + 8 compact rows (the four
+    // remaining originals, then the dashboard spec and its three snapshots).
     const footer = page.getByTestId("chat-group-artifact-cards");
     await expect(footer).toHaveCount(1);
     await expect(page.getByTestId("chat-step-artifact-cards")).toHaveCount(0);
@@ -176,13 +177,15 @@ test.describe("inline artifact cards (fixture harness)", () => {
     await expect(cards.nth(1)).toContainText("q3_regional_review.html");
     await expect(cards.nth(2)).toContainText("q3_growth_by_region.svg");
     const rows = page.getByTestId("chat-artifact-card-row");
-    await expect(rows).toHaveCount(4);
+    await expect(rows).toHaveCount(8);
     await expect(rows.nth(0)).toContainText("q3_revenue_by_region.csv");
     await expect(rows.nth(1)).toContainText("q3_summary.md");
     // The files the answer embeds inline get a card too: the figure and
     // the timeline card are two surfaces.
     await expect(rows.nth(2)).toContainText("revenue_by_month.png");
     await expect(rows.nth(3)).toContainText("revenue_by_month.csv");
+    await expect(rows.nth(4)).toContainText("revenue.dashboard.json");
+    await expect(rows.nth(5)).toContainText("summary.csv");
     await expect(page.getByTestId("chat-md-figure")).toHaveCount(1);
     // The Edit at 14.3s updated the script in place — same card, badged
     // once (the meta line shows only the time, no second "Updated").
@@ -252,7 +255,7 @@ test.describe("inline artifact cards (fixture harness)", () => {
     await expect(page.getByTestId("chat-artifact-card")).toHaveCount(3);
     await page.reload();
     await expect(page.getByTestId("chat-artifact-card")).toHaveCount(3);
-    await expect(page.getByTestId("chat-artifact-card-row")).toHaveCount(4);
+    await expect(page.getByTestId("chat-artifact-card-row")).toHaveCount(8);
     await expect(
       page.getByTestId("chat-artifact-card-pending"),
     ).toHaveCount(0);

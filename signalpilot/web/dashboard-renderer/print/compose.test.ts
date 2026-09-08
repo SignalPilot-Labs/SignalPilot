@@ -4,9 +4,9 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { parseDatasetText, type DatasetRows } from "../datasets";
+import { datasetSnapshotPath, parseDatasetCsv, type DatasetRows } from "../datasets";
 import type { DashboardSpec } from "../schema";
-import { validateDashboardSpec } from "../schema";
+import { isSqlDataset, validateDashboardSpec } from "../schema";
 import { composeDashboardSvg, nestSvg } from "./compose";
 import { fontFiles, parseArgs, renderFromPayload } from "./render-cli";
 import { truncateText, wrapText } from "./svg-tiles";
@@ -21,11 +21,12 @@ function loadFixture(): { spec: DashboardSpec; datasets: Record<string, DatasetR
   const spec = validation.spec;
   const datasets: Record<string, DatasetRows> = {};
   for (const [name, dataset] of Object.entries(spec.datasets)) {
-    if (dataset.rows) datasets[name] = dataset.rows;
-    if (dataset.file) {
-      const file = join(fixtures, dataset.file.replace(/^artifacts\//, ""));
-      datasets[name] = parseDatasetText(readFileSync(file, "utf8"), dataset.file);
+    if (!isSqlDataset(dataset)) {
+      datasets[name] = dataset.rows;
+      continue;
     }
+    const file = join(fixtures, datasetSnapshotPath(name).replace(/^artifacts\//, ""));
+    datasets[name] = parseDatasetCsv(readFileSync(file, "utf8"));
   }
   return { spec, datasets };
 }

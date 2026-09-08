@@ -30,6 +30,10 @@ import {
   setChatTelemetryEnabled,
   useChatTelemetrySetting,
 } from "~/components/chat/use-chat-telemetry-setting";
+import {
+  setChatReplayEnabled,
+  useChatReplaySetting,
+} from "~/components/chat/use-chat-replay-setting";
 
 export type ChatBudgetSettings = {
   perQueryBudgetUsd: number;
@@ -311,6 +315,34 @@ function ModelSection({ model }: { model: ChatModelSettings }) {
   );
 }
 
+function ReplaySection() {
+  const enabled = useChatReplaySetting();
+  return (
+    <section aria-labelledby="chat-settings-replay" className="space-y-3">
+      <Eyebrow>
+        <span id="chat-settings-replay">Replay</span>
+      </Eyebrow>
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <p className="text-[12.5px] font-medium text-[var(--color-text)]">
+            Enable replay
+          </p>
+          <p className="mt-0.5 text-[11.5px] leading-5 text-[var(--color-text-dim)]">
+            Adds a &ldquo;Replay chat&rdquo; button that plays a finished chat
+            back as it happened. Saved only in this browser.
+          </p>
+        </div>
+        <Switch
+          checked={enabled}
+          onCheckedChange={setChatReplayEnabled}
+          aria-label="Enable replay"
+          data-testid="chat-settings-replay-toggle"
+        />
+      </div>
+    </section>
+  );
+}
+
 function TelemetrySection() {
   const enabled = useChatTelemetrySetting();
   if (!CHAT_TELEMETRY_AVAILABLE) return null;
@@ -426,6 +458,7 @@ export function ChatSettingsPanel({
           </section>
         )}
         {budgets && <BudgetsSection budgets={budgets} />}
+        <ReplaySection />
         <TelemetrySection />
       </div>
     </aside>

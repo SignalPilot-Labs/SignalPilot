@@ -1,15 +1,19 @@
 "use client";
 
 import { Pause, Play, RotateCcw, X } from "lucide-react";
+import { REPLAY_SPEEDS, type ReplaySpeed } from "~/lib/chat-replay";
 
 /**
- * Control bar shown above a message while its run is being replayed.
- * Timing is "smart" compressed: 4x speed with tool waits capped at 10s.
+ * Control bar shown above the transcript while the conversation is being
+ * replayed. Timing is "smart" compressed: the chosen speed, with any single
+ * wait capped at 10s.
  */
 export function ReplayControls({
   elapsed,
   totalMs,
   playing,
+  speed,
+  onSpeedChange,
   onTogglePlay,
   onRestart,
   onScrub,
@@ -18,6 +22,8 @@ export function ReplayControls({
   elapsed: number;
   totalMs: number;
   playing: boolean;
+  speed: ReplaySpeed;
+  onSpeedChange: (speed: ReplaySpeed) => void;
   onTogglePlay: () => void;
   onRestart: () => void;
   onScrub: (ms: number) => void;
@@ -26,7 +32,7 @@ export function ReplayControls({
   return (
     <div
       data-testid="chat-replay-controls"
-      className="mb-3 flex items-center gap-2 rounded-xl border border-[var(--color-success)]/25 bg-[var(--color-bg-card)] px-3 py-2"
+      className="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-[var(--color-success)]/25 bg-[var(--color-bg-card)] px-3 py-2"
     >
       <span className="inline-flex flex-none items-center gap-1.5 rounded-full border border-[var(--color-success)]/25 bg-[var(--color-success)]/5 px-2 py-0.5 text-[10px] uppercase tracking-[0.1em] text-[var(--color-success)]">
         Replay
@@ -47,6 +53,30 @@ export function ReplayControls({
       >
         <RotateCcw className="h-3.5 w-3.5" />
       </button>
+      <div
+        role="group"
+        aria-label="Replay speed"
+        data-testid="chat-replay-speeds"
+        className="flex flex-none items-center gap-0.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-input)] p-0.5"
+      >
+        {REPLAY_SPEEDS.map((value) => (
+          <button
+            key={value}
+            type="button"
+            aria-label={`Replay at ${value}x`}
+            aria-pressed={speed === value}
+            data-testid={`chat-replay-speed-${value}`}
+            onClick={() => onSpeedChange(value)}
+            className={`rounded-md px-1.5 py-0.5 text-[11px] tabular-nums ${
+              speed === value
+                ? "bg-[var(--color-bg-hover)] text-[var(--color-text)]"
+                : "text-[var(--color-text-dim)] hover:text-[var(--color-text)]"
+            }`}
+          >
+            {value}×
+          </button>
+        ))}
+      </div>
       <input
         type="range"
         aria-label="Replay position"

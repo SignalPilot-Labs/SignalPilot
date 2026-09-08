@@ -197,7 +197,9 @@ export function ChatFileViewer({
   return (
     <div
       data-testid="chat-file-viewer"
-      className="overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-card)]"
+      // flex-none: the card grows with its content so the panel scrolls it;
+      // as a shrinking flex child it would clip tall views like dashboards.
+      className="flex-none overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-card)]"
     >
       <div className="flex items-center justify-between gap-3 border-b border-[var(--color-border)] px-3.5 py-2">
         <div className="flex min-w-0 items-baseline gap-2">

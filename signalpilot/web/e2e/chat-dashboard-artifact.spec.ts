@@ -49,6 +49,22 @@ test.describe("dashboard artifact (fixture harness)", () => {
     );
   });
 
+  test("the panel scrolls the dashboard when it is taller than the panel", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1600, height: 900 });
+    await page.goto(at(24_800));
+    await waitForHydration(page);
+    await page.locator('[data-testid="chat-md-file-chip"][data-kind="dashboard"]').click();
+    await expect(page.getByTestId("chat-dashboard-view")).toHaveAttribute("data-pending", "0");
+    const view = page.getByTestId("artifacts-file-view");
+    const overflow = await view.evaluate((el) => el.scrollHeight - el.clientHeight);
+    expect(overflow).toBeGreaterThan(200);
+    await view.hover();
+    await page.mouse.wheel(0, 600);
+    await expect.poll(() => view.evaluate((el) => el.scrollTop)).toBeGreaterThan(300);
+  });
+
   test("the panel renders the dashboard with nine tiles and live charts", async ({
     page,
   }) => {

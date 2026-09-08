@@ -7,11 +7,13 @@ import { normalizeFileRef, resolveFileRef } from "~/lib/chat-file-refs";
 import type { PublishedDashboard } from "~/lib/api/dashboards";
 import {
   DashboardPublishDialog,
-  DashboardPublishedStrip,
   useDashboardPublishApi,
-  usePublishedDashboard,
 } from "~/components/chat/dashboard-publish-dialog";
 import type { DashboardPublishApi } from "~/components/chat/dashboard-publish-form";
+import {
+  DashboardSourceStrip,
+  useDashboardSource,
+} from "~/components/chat/dashboard-publish-source";
 import {
   DashboardRenderer,
   datasetFileRefs,
@@ -132,11 +134,14 @@ export function DashboardFileView({
   const [showRaw, setShowRaw] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const api = useDashboardPublishApi(publishApi);
-  const publishedState = usePublishedDashboard(api, conversationId, file.id);
+  const sourceState = useDashboardSource(api, conversationId, file);
+  // The dashboard a publish versions by default: the one published from
+  // this file, else the one the file was loaded from.
+  const sourceId = sourceState.source?.dashboard.id ?? "new";
   // null = closed; "new" = fresh publish; an id = new version of that one.
   const [publishTarget, setPublishTarget] = useState<"new" | string | null>(null);
   const onPublished = ({ dashboard }: { dashboard: PublishedDashboard }) => {
-    publishedState.setPublished(dashboard);
+    sourceState.setPublished(dashboard);
     setPublishTarget(null);
     toast("Published", "success");
   };
@@ -229,8 +234,8 @@ export function DashboardFileView({
             data-testid="chat-dashboard-publish"
             aria-label="Publish the dashboard"
             onClick={() => {
-              void publishedState.reload();
-              setPublishTarget(publishedState.published?.id ?? "new");
+              void sourceState.reload();
+              setPublishTarget(sourceId);
             }}
             className={ACTION_CLASS}
           >
@@ -249,10 +254,10 @@ export function DashboardFileView({
           Download JSON
         </button>
       </div>
-      {spec && publishedState.published && (
-        <DashboardPublishedStrip
-          dashboard={publishedState.published}
-          onPublishNewVersion={() => setPublishTarget(publishedState.published?.id ?? "new")}
+      {spec && sourceState.source && (
+        <DashboardSourceStrip
+          source={sourceState.source}
+          onPublishNewVersion={() => setPublishTarget(sourceId)}
         />
       )}
       {spec && conversationId && (
@@ -263,7 +268,7 @@ export function DashboardFileView({
           file={file}
           spec={spec}
           files={files}
-          dashboards={publishedState.dashboards}
+          dashboards={sourceState.dashboards}
           initialTargetId={publishTarget === "new" ? null : publishTarget}
           onPublished={onPublished}
           api={api}

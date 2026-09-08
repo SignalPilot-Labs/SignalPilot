@@ -12,12 +12,17 @@ import type { FixtureEvent } from "./chat-test-fixture-data";
  * Fixture extension: the dashboard artifact the scripted agent writes from
  * the notebook cell (the `*.dashboard.json` spec plus the snapshot of each
  * of its three SQL datasets, written by `sp.dashboard_dataset` at
- * `artifacts/datasets/<name>.csv`) and the two dashboard tools that check
- * and render it. The spec is `dashboard-renderer/fixtures/revenue.dashboard.json`
- * verbatim; the snapshot texts below mirror `fixtures/datasets/*.csv`.
+ * `artifacts/datasets/<name>.csv`) and the dashboard tools around it: the
+ * load of the published dashboard the file is a new version of, then the
+ * check and the render. The spec is
+ * `dashboard-renderer/fixtures/revenue.dashboard.json` verbatim; the
+ * snapshot texts below mirror `fixtures/datasets/*.csv`.
  */
 
-const FIXTURE_DASHBOARD_FILE_PATH = "artifacts/revenue.dashboard.json";
+/** Slug of the published dashboard the agent loaded; the file stem matches
+ * it, so the publish flow preselects that dashboard as the target. */
+export const FIXTURE_LOADED_DASHBOARD_SLUG = "revenue";
+const FIXTURE_DASHBOARD_FILE_PATH = `artifacts/${FIXTURE_LOADED_DASHBOARD_SLUG}.dashboard.json`;
 
 export const FIXTURE_DASHBOARD_FILE_ID = "file-fixture-dashboard";
 export const FIXTURE_DASHBOARD_SUMMARY_FILE_ID = "file-fixture-dashboard-summary";
@@ -88,6 +93,7 @@ export const DASHBOARD_SUMMARY_CSV_FILE = csvFile(SUMMARY_ROWS);
 /** Millisecond offsets shared by the events and the simulated manifest. */
 const DASHBOARD_CAPTURED_AT = 20_750;
 const RUN_CELLS_TOOL_CALL_ID = "t10b";
+const LOAD_TOOL_CALL_ID = "t10d";
 const SAMPLE_TOOL_CALL_ID = "t11d";
 const SCREENSHOT_TOOL_CALL_ID = "t12d";
 
@@ -121,6 +127,26 @@ const FILE_ENTRIES = [
     body: DASHBOARD_REGION_CSV_FILE,
   },
 ];
+
+/** The wire projection of `dashboard_load_published` for the fixture
+ * dashboard: the spec landed at the file path with one snapshot per dataset. */
+function fixtureDashboardLoadResult() {
+  const rows = { summary: SUMMARY_ROWS.length, revenue_monthly: MONTHS.length * 4, revenue_by_region: REGION_ROWS.length };
+  return {
+    kind: "dashboard_load" as const,
+    path: FIXTURE_DASHBOARD_FILE_PATH,
+    dashboard: {
+      id: FIXTURE_PUBLISHED_DASHBOARD_ID,
+      slug: FIXTURE_LOADED_DASHBOARD_SLUG,
+      name: FIXTURE_PUBLISHED_DASHBOARD_NAME,
+      version_no: FIXTURE_PUBLISHED_VERSION_NO,
+      chart_count: FIXTURE_DASHBOARD_CHART_IDS.length,
+    },
+    datasets: Object.fromEntries(
+      Object.entries(rows).map(([name, count]) => [name, { rows: count, snapshot: datasetSnapshotPath(name) }]),
+    ),
+  };
+}
 
 /** The wire projection of `dashboard_sample_data` for two charts. */
 function fixtureDashboardSampleResult() {
@@ -186,15 +212,45 @@ function fixtureDashboardScreenshotResult() {
 }
 
 /**
- * The dashboard segment of the scripted run: the sandbox capture that lists
- * the spec and its three snapshots (anchored to the run_cells call), then the
- * data check and the render. Slots after the runtime capture (20.7s) and
- * before the follow-up verification chain (21.2s).
+ * The dashboard segment of the scripted run: the load of the published
+ * dashboard the file revises, the sandbox capture that lists the spec and
+ * its three snapshots (anchored to the run_cells call), then the data check
+ * and the render. Slots after the runtime capture (20.7s) and before the
+ * follow-up verification chain (21.2s).
  */
 export function dashboardFixtureEvents(runId: string): FixtureEvent[] {
+  const loadResult = fixtureDashboardLoadResult();
   const sampleResult = fixtureDashboardSampleResult();
   const screenshotResult = fixtureDashboardScreenshotResult();
   return [
+    {
+      at: 20_730,
+      run_id: runId,
+      sequence: 0,
+      type: "tool_started",
+      payload: {
+        tool: "mcp__standalone-chat__dashboard_load_published",
+        tool_call_id: LOAD_TOOL_CALL_ID,
+        input: { slug: FIXTURE_LOADED_DASHBOARD_SLUG },
+      },
+    },
+    {
+      at: 20_745,
+      run_id: runId,
+      sequence: 0,
+      type: "tool_completed",
+      payload: {
+        tool_call_id: LOAD_TOOL_CALL_ID,
+        tool: "mcp__standalone-chat__dashboard_load_published",
+        error: false,
+        summary: `Loaded ${FIXTURE_PUBLISHED_DASHBOARD_NAME} v${FIXTURE_PUBLISHED_VERSION_NO}`,
+        result: loadResult,
+        result_text: JSON.stringify(loadResult),
+        result_chars: JSON.stringify(loadResult).length,
+        truncated: false,
+        v: 1,
+      },
+    },
     {
       at: DASHBOARD_CAPTURED_AT,
       run_id: runId,
@@ -318,11 +374,13 @@ export function fixtureDashboardFileContent(
   return entry ? { body: entry.body, mime: entry.mime } : null;
 }
 
-/** The dashboard already in the fixture gallery: editable, so the publish
- * dialog offers it as an "Update existing" target. */
+/** The dashboard already in the fixture gallery: editable, and the one the
+ * scripted agent loaded (its slug is the fixture file's stem), so the
+ * publish dialog preselects it as the "Update existing" target. */
 export const FIXTURE_PUBLISHED_DASHBOARD_ID = "dash_fixture_existing";
-export const FIXTURE_PUBLISHED_DASHBOARD_NAME = "Weekly pipeline health";
-/** Slug the fake gateway answers a publish with. */
+export const FIXTURE_PUBLISHED_DASHBOARD_NAME = "Revenue overview";
+export const FIXTURE_PUBLISHED_VERSION_NO = 3;
+/** Slug the fake gateway answers a fresh publish with. */
 export const FIXTURE_PUBLISHED_SLUG = "revenue-overview-2024";
 
 function fixturePublishedDashboard(
@@ -331,9 +389,9 @@ function fixturePublishedDashboard(
   const at = "2026-09-01T06:00:00Z";
   return {
     id: FIXTURE_PUBLISHED_DASHBOARD_ID,
-    slug: "weekly-pipeline-health",
+    slug: FIXTURE_LOADED_DASHBOARD_SLUG,
     name: FIXTURE_PUBLISHED_DASHBOARD_NAME,
-    description: "Pipeline stages and conversion, refreshed nightly.",
+    description: "Monthly revenue by region, refreshed nightly.",
     visibility: "org",
     project_id: null,
     created_by_user_id: "user-fixture-me",
@@ -341,8 +399,8 @@ function fixturePublishedDashboard(
     source_conversation_id: "conversation-fixture-0",
     source_file_id: "file-fixture-other",
     current_version_id: "dver_fixture_1",
-    current_version_no: 3,
-    chart_count: 6,
+    current_version_no: FIXTURE_PUBLISHED_VERSION_NO,
+    chart_count: FIXTURE_DASHBOARD_CHART_IDS.length,
     refresh: { interval_minutes: 1440, anchor_time: "06:00", timezone: "America/New_York", mode: "sql" },
     notify_on_failure: true,
     next_refresh_at: "2026-09-09T10:00:00Z",

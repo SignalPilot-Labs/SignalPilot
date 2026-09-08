@@ -198,3 +198,142 @@ class TestDashboardScreenshot:
         projected = project_tool_result(_SCREENSHOT, invalid)
         assert projected.summary == "Dashboard spec invalid · 2 errors"
         assert projected.result["dashboard_valid"] is False and projected.result["errors"] == ["bad", "worse"]
+
+
+_LIST = "mcp__standalone-chat__dashboard_list_published"
+_LOAD = "mcp__standalone-chat__dashboard_load_published"
+
+
+def _list_entry(i: int, description: str | None = "Monthly revenue") -> dict:
+    return {
+        "id": f"dash_{i:04d}",
+        "slug": f"revenue-{i}",
+        "name": f"Revenue {i}",
+        "description": description,
+        "chart_count": 3,
+        "visibility": "org",
+        "updated_at": "2026-09-08T10:00:00+00:00",
+        "last_refresh_at": None,
+        "can_edit": i % 2 == 0,
+    }
+
+
+class TestDashboardList:
+    def test_projects_entries_with_the_contract_fields(self) -> None:
+        text = json.dumps({"dashboards": [_list_entry(0), _list_entry(1, None)]})
+        projected = project_tool_result(_LIST, text)
+
+        assert projected.summary == "2 dashboards"
+        assert projected.result["kind"] == "dashboard_list"
+        assert projected.result["dashboards"][0] == _list_entry(0)
+        assert projected.result["dashboards"][1]["description"] is None
+        assert "dashboards_truncated" not in projected.result
+
+    def test_empty_and_single(self) -> None:
+        assert project_tool_result(_LIST, json.dumps({"dashboards": []})).summary == "No dashboards"
+        assert project_tool_result(_LIST, json.dumps({"dashboards": [_list_entry(0)]})).summary == "1 dashboard"
+
+    def test_caps_entries_and_description(self) -> None:
+        text = json.dumps({"dashboards": [_list_entry(i, "d" * 500) for i in range(60)]})
+        projected = project_tool_result(_LIST, text)
+
+        assert projected.summary == "60 dashboards"
+        assert len(projected.result["dashboards"]) == 50
+        assert projected.result["dashboards_truncated"] is True
+        assert len(projected.result["dashboards"][0]["description"]) == 200
+
+    def test_non_json_falls_back_to_text(self) -> None:
+        projected = project_tool_result(_LIST, "Error: gateway unreachable")
+        assert projected.result == {"kind": "text"}
+
+    def test_finalize_shrinks_the_list_before_dropping_the_kind(self) -> None:
+        text = json.dumps({"dashboards": [_list_entry(i, "d" * 200) for i in range(50)]})
+        projected = project_tool_result(_LIST, text)
+        payload = finalize_payload(
+            {
+                "tool": _LIST,
+                "summary": projected.summary,
+                "result": projected.result,
+                "result_text": "x" * (PAYLOAD_MAX - 2000),
+                "v": 1,
+            }
+        )
+        assert len(json.dumps(payload, separators=(",", ":")).encode()) <= PAYLOAD_MAX
+        assert payload["truncated"] is True
+        assert payload["result"]["kind"] == "dashboard_list"
+        assert len(payload["result"]["dashboards"]) == 10
+        assert payload["result"]["dashboards_truncated"] is True
+
+
+def _load_payload() -> dict:
+    return {
+        "path": "artifacts/revenue.dashboard.json",
+        "dashboard": {"id": "dash_0001", "slug": "revenue", "name": "Revenue", "version_no": 3, "chart_count": 4, "extra": 1},
+        "datasets": {
+            "monthly": {"rows": 12, "snapshot": "artifacts/datasets/monthly.csv"},
+            "regions": {"rows": 4, "snapshot": "artifacts/datasets/regions.csv"},
+        },
+        "next": "Edit the file, then run dashboard_sample_data.",
+    }
+
+
+class TestDashboardLoad:
+    def test_projects_a_loaded_dashboard(self) -> None:
+        projected = project_tool_result(_LOAD, json.dumps(_load_payload()))
+
+        assert projected.summary == "Loaded Revenue v3"
+        assert projected.result == {
+            "kind": "dashboard_load",
+            "path": "artifacts/revenue.dashboard.json",
+            "dashboard": {"id": "dash_0001", "slug": "revenue", "name": "Revenue", "version_no": 3, "chart_count": 4},
+            "datasets": {
+                "monthly": {"rows": 12, "snapshot": "artifacts/datasets/monthly.csv"},
+                "regions": {"rows": 4, "snapshot": "artifacts/datasets/regions.csv"},
+            },
+        }
+
+    def test_projects_a_failed_load(self) -> None:
+        text = json.dumps({"error": "not_found", "message": "No dashboard with slug 'ghost'"})
+        projected = project_tool_result(_LOAD, text)
+
+        assert projected.summary == "Load failed: No dashboard with slug 'ghost'"
+        assert projected.result == {
+            "kind": "dashboard_load",
+            "error": "not_found",
+            "message": "No dashboard with slug 'ghost'",
+        }
+
+    def test_error_without_message_uses_the_code(self) -> None:
+        projected = project_tool_result(_LOAD, json.dumps({"error": "forbidden"}))
+        assert projected.summary == "Load failed: forbidden"
+        assert projected.result["message"] == "forbidden"
+
+    def test_finalize_drops_datasets_first(self) -> None:
+        payload_in = _load_payload()
+        payload_in["datasets"] = {f"d{i}": {"rows": i, "snapshot": f"artifacts/datasets/d{i}.csv"} for i in range(50)}
+        projected = project_tool_result(_LOAD, json.dumps(payload_in))
+        payload = finalize_payload(
+            {
+                "tool": _LOAD,
+                "summary": projected.summary,
+                "result": projected.result,
+                "result_text": "x" * (PAYLOAD_MAX - 1500),
+                "v": 1,
+            }
+        )
+        assert len(json.dumps(payload, separators=(",", ":")).encode()) <= PAYLOAD_MAX
+        assert payload["truncated"] is True
+        assert payload["result"]["kind"] == "dashboard_load"
+        assert payload["result"]["datasets"] == {} and payload["result"]["datasets_truncated"] is True
+        assert payload["result"]["dashboard"]["slug"] == "revenue"
+
+
+def test_screenshot_parses_past_the_flattened_image_marker():
+    """The runtime hands the projector an "[image]" line followed by the JSON text."""
+    text = "[image]\n" + json.dumps(
+        {"dashboard": {"valid": True, "errors": []}, "rendered": ["a", "b"], "failed": [], "width": 1280, "height": 400}
+    )
+    projected = project_tool_result("mcp__standalone-chat__dashboard_screenshot", text)
+    assert projected.result["kind"] == "dashboard_screenshot"
+    assert projected.result["rendered"] == ["a", "b"]
+    assert projected.summary == "Rendered 2 charts"

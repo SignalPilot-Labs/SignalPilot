@@ -21,6 +21,8 @@ export type ToolResultKind =
   | "artifact"
   | "dashboard_sample"
   | "dashboard_screenshot"
+  | "dashboard_list"
+  | "dashboard_load"
   | "json"
   | "text";
 
@@ -225,6 +227,57 @@ export type DashboardScreenshotResult = ToolResultBase & {
   error: string | null;
 };
 
+export type DashboardListEntry = {
+  id: string;
+  slug: string;
+  name: string;
+  description: string | null;
+  chartCount: number;
+  visibility: string | null;
+  updatedAt: string | null;
+  lastRefreshAt: string | null;
+  canEdit: boolean;
+};
+
+/** `dashboard_list_published`: the gallery as the agent sees it. */
+export type DashboardListResult = ToolResultBase & {
+  kind: "dashboard_list";
+  dashboards: DashboardListEntry[];
+  /** Gallery size when the projector reported it; else the entries shown. */
+  total: number;
+  /** The projector capped the entry list. */
+  dashboardsTruncated: boolean;
+};
+
+export type DashboardLoadDataset = {
+  name: string;
+  rows: number | null;
+  /** Scratch-relative snapshot path the tool wrote, when it wrote one. */
+  snapshot: string | null;
+};
+
+/** `dashboard_load_published`: the spec the agent pulled into the sandbox
+ * (`artifacts/<slug>.dashboard.json`) or the refusal. */
+export type DashboardLoadResult = ToolResultBase & {
+  kind: "dashboard_load";
+  path: string | null;
+  dashboard: {
+    id: string;
+    slug: string;
+    name: string;
+    versionNo: number | null;
+    chartCount: number | null;
+  } | null;
+  datasets: DashboardLoadDataset[];
+  /** The projector dropped the dataset list to fit the event. */
+  datasetsTruncated: boolean;
+  /** The tool's hint on what to do next. */
+  next: string | null;
+  /** Error code when the load was refused (`not_found`, `forbidden`, ...). */
+  error: string | null;
+  message: string | null;
+};
+
 export type JsonResult = ToolResultBase & { kind: "json"; value: unknown };
 
 export type TextResult = ToolResultBase & { kind: "text" };
@@ -244,6 +297,8 @@ export type ToolResult =
   | ArtifactResult
   | DashboardSampleResult
   | DashboardScreenshotResult
+  | DashboardListResult
+  | DashboardLoadResult
   | JsonResult
   | TextResult
   | LegacyResult;

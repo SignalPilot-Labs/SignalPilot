@@ -9,8 +9,12 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from signalpilot._dashboard_sql import sidecar_path, snapshot_path
-from signalpilot._sdk._dashboards import write_sidecar, write_snapshot
+from signalpilot._dashboard_sql import (
+    sidecar_path,
+    snapshot_path,
+    write_sidecar,
+    write_snapshot,
+)
 from signalpilot._server.ai.dashboard.tools import (
     dashboard_sample_data,
     dashboard_screenshot,

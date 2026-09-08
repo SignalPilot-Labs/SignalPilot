@@ -183,6 +183,55 @@ export function findPublishedDashboard(
   return [...matches].sort((a, b) => b.updated_at.localeCompare(a.updated_at))[0];
 }
 
+const DASHBOARD_FILE_SUFFIX = ".dashboard.json";
+
+/** `revenue.dashboard.json` -> `revenue`; null for any other filename. */
+export function dashboardFileStem(filename: string): string | null {
+  const base = filename.split("/").pop() ?? filename;
+  if (!base.toLowerCase().endsWith(DASHBOARD_FILE_SUFFIX)) return null;
+  const stem = base.slice(0, -DASHBOARD_FILE_SUFFIX.length);
+  return stem || null;
+}
+
+/**
+ * The published dashboard this file was loaded from: `dashboard_load_published`
+ * writes `artifacts/<slug>.dashboard.json`, so a stem that equals the slug
+ * of a dashboard the user can edit is that dashboard. Read-only and
+ * archived dashboards never match: the user could not version them.
+ */
+export function findLoadedDashboard(
+  dashboards: readonly PublishedDashboard[],
+  filename: string,
+): PublishedDashboard | null {
+  const stem = dashboardFileStem(filename);
+  if (!stem) return null;
+  return (
+    dashboards.find(
+      (dashboard) => dashboard.slug === stem && dashboard.can_edit && !dashboard.archived_at,
+    ) ?? null
+  );
+}
+
+/** Where a chat dashboard file came from, for the strip and the publish
+ * target: already published from this exact file, or loaded from the
+ * gallery by slug. */
+export type DashboardSource = {
+  dashboard: PublishedDashboard;
+  origin: "published" | "loaded";
+};
+
+/** A publish from this conversation+file wins; else the slug match. */
+export function resolveDashboardSource(
+  dashboards: readonly PublishedDashboard[],
+  conversationId: string,
+  file: { id: string; filename: string },
+): DashboardSource | null {
+  const published = findPublishedDashboard(dashboards, conversationId, file.id);
+  if (published) return { dashboard: published, origin: "published" };
+  const loaded = findLoadedDashboard(dashboards, file.filename);
+  return loaded ? { dashboard: loaded, origin: "loaded" } : null;
+}
+
 export type PublishErrorInfo = {
   status: number | null;
   message: string;

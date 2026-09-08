@@ -193,6 +193,10 @@ save them as CSV first. Use `dashboard_sample_data` to check every chart and
 Reference the dashboard once in the reply as
 `[Title](artifacts/<name>.dashboard.json)`.
 
+To edit a published dashboard, call `dashboard_list_published`, then
+`dashboard_load_published`, then edit the file. The user publishes the new
+version.
+
 Save a file again after you change it. The chat shows the newest version.
 
 ## Ask rarely, disclose always

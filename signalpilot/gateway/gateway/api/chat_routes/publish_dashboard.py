@@ -14,7 +14,7 @@ from gateway.security.scope_guard import RequireScope
 from gateway.store import standalone_chat as chat_store
 
 from ..deps import StoreD
-from .common import owned_conversation_or_404, require_enabled
+from .common import RequireInteractiveUser, owned_conversation_or_404, require_enabled
 
 router = APIRouter()
 
@@ -22,7 +22,7 @@ router = APIRouter()
 @router.post(
     "/conversations/{conversation_id}/files/{file_id}/publish-dashboard",
     status_code=201,
-    dependencies=[RequireScope("query")],
+    dependencies=[RequireScope("query"), RequireInteractiveUser],
 )
 async def publish_dashboard(
     conversation_id: str,

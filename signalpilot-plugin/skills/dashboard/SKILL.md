@@ -58,6 +58,31 @@ rows the dashboard shows are only the cached result of that query.
    it supports: `[Revenue overview](artifacts/revenue.dashboard.json)`. Do not
    describe chart values in prose that the dashboard already shows.
 
+## Edit a published dashboard
+
+When the user asks to edit, update, or change a dashboard that already
+exists, do not write a new file from scratch. Load the published one.
+
+1. Call `dashboard_list_published`. Find the dashboard by name, slug, or
+   description. If none matches, tell the user which dashboards exist.
+2. Call `dashboard_load_published` with the id or slug. It writes
+   `artifacts/<slug>.dashboard.json` and the snapshot of every SQL dataset
+   from the current version. The result names the file path and the row
+   count of each dataset.
+3. Edit that file. Keep the chart ids that stay. Add, remove, or change
+   charts, filters, and datasets as the user asked.
+4. For each dataset whose SQL or connection you changed, call
+   `sp.dashboard_dataset` in the notebook with the new SQL. Copy the same
+   SQL into the file. Unchanged datasets keep their loaded snapshots.
+5. Call `dashboard_sample_data` with the path and all chart ids. Fix every
+   issue.
+6. Call `dashboard_screenshot` with the path. Look at the image. Fix the
+   layout.
+7. Reference the file one time in the reply:
+   `[Title](artifacts/<slug>.dashboard.json)`.
+8. Tell the user to publish the file as a new version of the same
+   dashboard from the chat panel. Do not create a second dashboard.
+
 ## Worked example
 
 The notebook cell:

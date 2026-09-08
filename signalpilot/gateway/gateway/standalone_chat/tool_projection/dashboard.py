@@ -2,8 +2,10 @@
 
 ``dashboard_sample_data`` returns one JSON document; ``dashboard_screenshot``
 returns ``[image, text-JSON]`` content, of which only the text part reaches
-the projector. Both projections keep row previews small so the
-``tool_completed`` event stays well under ``PAYLOAD_MAX``.
+the projector. ``dashboard_list_published`` and ``dashboard_load_published``
+read the published gallery through the gateway on the user's behalf. Every
+projection keeps previews small so the ``tool_completed`` event stays well
+under ``PAYLOAD_MAX``.
 """
 
 from __future__ import annotations
@@ -18,11 +20,23 @@ SAMPLE_COLUMNS_MAX = 40
 ISSUES_MAX = 10
 ISSUE_MESSAGE_MAX = 300
 CHART_IDS_MAX = 50
+LIST_ENTRIES_MAX = 50
+LIST_DESCRIPTION_MAX = 200
+LOAD_DATASETS_MAX = 50
+LIST_FIELDS = ("id", "slug", "name", "description", "chart_count", "visibility", "updated_at", "last_refresh_at", "can_edit")
+LOAD_DASHBOARD_FIELDS = ("id", "slug", "name", "version_no", "chart_count")
 
 
 def _payload(text: str) -> dict[str, Any] | None:
-    """Return the tool's JSON document, unwrapping a content-block list if present."""
+    """Return the tool's JSON document.
+
+    The runtime flattens a mixed content list into text: an image block
+    becomes an "[image]" line followed by the text block. Drop everything
+    before the first "{" so the JSON document parses.
+    """
     parsed = try_json(text)
+    if parsed is None and "{" in text:
+        parsed = try_json(text[text.index("{") :])
     if isinstance(parsed, list):
         for block in parsed:
             if isinstance(block, dict) and isinstance(block.get("text"), str):
@@ -165,4 +179,64 @@ def project_dashboard_screenshot(content: str, tool_input: dict[str, Any] | None
         summary = f"Rendered {_plural(len(rendered), 'chart')}"
         if failed:
             summary += f", {len(failed)} failed"
+    return build(result, summary=summary, text=text)
+
+
+def _list_entry(raw: dict[str, Any]) -> dict[str, Any]:
+    entry: dict[str, Any] = {name: raw.get(name) for name in LIST_FIELDS}
+    description = entry.get("description")
+    entry["description"] = str(description)[:LIST_DESCRIPTION_MAX] if isinstance(description, str) else None
+    return entry
+
+
+def project_dashboard_list(content: str, tool_input: dict[str, Any] | None) -> ProjectedResult:
+    text = content or ""
+    parsed = _payload(text)
+    if parsed is None:
+        return text_result(text, summary=summary_text(text, "Published dashboards"))
+    raw = parsed.get("dashboards")
+    entries = [_list_entry(item) for item in raw[:LIST_ENTRIES_MAX] if isinstance(item, dict)] if isinstance(raw, list) else []
+    result: dict[str, Any] = {"kind": "dashboard_list", "dashboards": entries}
+    total = len(raw) if isinstance(raw, list) else 0
+    if total > len(entries):
+        result["dashboards_truncated"] = True
+    summary = _plural(total, "dashboard") if total else "No dashboards"
+    return build(result, summary=summary, text=text)
+
+
+def _load_datasets(raw: Any) -> dict[str, dict[str, Any]]:
+    if not isinstance(raw, dict):
+        return {}
+    datasets: dict[str, dict[str, Any]] = {}
+    for name, value in list(raw.items())[:LOAD_DATASETS_MAX]:
+        if isinstance(value, dict):
+            rows = value.get("rows")
+            datasets[str(name)] = {
+                "rows": rows if isinstance(rows, int) and not isinstance(rows, bool) else 0,
+                "snapshot": str(value.get("snapshot") or ""),
+            }
+    return datasets
+
+
+def project_dashboard_load(content: str, tool_input: dict[str, Any] | None) -> ProjectedResult:
+    text = content or ""
+    parsed = _payload(text)
+    if parsed is None:
+        return text_result(text, summary=summary_text(text, "Published dashboard"))
+    result: dict[str, Any] = {"kind": "dashboard_load"}
+    error = parsed.get("error")
+    if isinstance(error, str) and error:
+        message = str(parsed.get("message") or error)[:ISSUE_MESSAGE_MAX]
+        result["error"] = error[:ISSUE_MESSAGE_MAX]
+        result["message"] = message
+        return build(result, summary=f"Load failed: {message}", text=text)
+    dashboard_raw = parsed.get("dashboard")
+    dashboard = {name: dashboard_raw.get(name) for name in LOAD_DASHBOARD_FIELDS} if isinstance(dashboard_raw, dict) else {}
+    if isinstance(parsed.get("path"), str):
+        result["path"] = parsed["path"]
+    result["dashboard"] = dashboard
+    result["datasets"] = _load_datasets(parsed.get("datasets"))
+    name = str(dashboard.get("name") or dashboard.get("slug") or "dashboard")
+    version_no = dashboard.get("version_no")
+    summary = f"Loaded {name} v{version_no}" if isinstance(version_no, int) else f"Loaded {name}"
     return build(result, summary=summary, text=text)

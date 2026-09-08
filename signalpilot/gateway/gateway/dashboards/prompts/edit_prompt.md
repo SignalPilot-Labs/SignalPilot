@@ -1,23 +1,13 @@
-Edit the dashboard "{{dashboard_name}}".
+Edit the dashboard "{{dashboard_name}}" (slug `{{dashboard_slug}}`, id `{{dashboard_id}}`).
 
-The current dashboard spec is below. Do these steps first:
+Do these steps first:
 
-1. Write the spec to `{{dashboard_path}}` exactly as given.
-2. For each SQL dataset in `datasets`, call `sp.dashboard_dataset("<name>", connection="<connection>", sql="<sql>")` in the notebook with the values from the spec. This writes the snapshot at `artifacts/datasets/<name>.csv`. Do not write these files by hand.
-3. Run `dashboard_sample_data` on all charts to confirm the datasets load.
+1. Call `dashboard_load_published("{{dashboard_slug}}")`. It writes the dashboard file and the dataset snapshots at `artifacts/datasets/<name>.csv` into this chat. Its result gives the `path` of the dashboard file.
+2. Run `dashboard_sample_data` on all charts to confirm the datasets load.
 
 Then wait for my edit request. When I ask for a change, do these steps:
 
-1. Update the spec. When a dataset changes, change its `sql` and call `sp.dashboard_dataset` again with the new SQL. Put every derivation in the SQL. Do not transform rows in pandas.
-2. Run `dashboard_sample_data` again.
-3. Tell me what changed.
-
-SQL datasets:
-
-{{dataset_list}}
-
-Dashboard spec:
-
-```json
-{{spec_json}}
-```
+1. Edit the file that `dashboard_load_published` wrote. Do not write a second dashboard file.
+2. If you change a dataset's SQL, call `sp.dashboard_dataset("<name>", connection="<connection>", sql="<sql>")` again with the new SQL. Put every derivation in the SQL. Do not transform rows in pandas.
+3. Run `dashboard_sample_data` again.
+4. Tell me what changed. Tell me to publish the new version from the chat panel.

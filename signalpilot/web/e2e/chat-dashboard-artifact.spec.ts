@@ -6,6 +6,8 @@ import { expect, test } from "@playwright/test";
  *
  * Fixture timeline (lib/chat-test-fixture-dashboard.ts):
  * - 20 720ms  the answer links `artifacts/revenue.dashboard.json`
+ * - 20 730ms  dashboard_load_published pulls the published "Revenue
+ *             overview" (slug `revenue`, v3) into the sandbox (done at 20 745ms)
  * - 20 750ms  the sandbox capture lists the spec and its three dataset
  *             snapshots (`artifacts/datasets/<name>.csv`)
  * - 20 950ms  dashboard_sample_data checks two charts (done at 21 050ms)
@@ -135,23 +137,54 @@ test.describe("dashboard artifact (fixture harness)", () => {
   }) => {
     await page.goto(at(24_800));
     await waitForHydration(page);
-    // A chip renders in the strip and again as the expanded card's header,
-    // so match the first of each rather than an exact count.
-    const chips = page.getByTestId("chat-tool-chip");
-    await expect(chips.filter({ hasText: "2 charts checked, 0 issues" }).first()).toBeVisible();
-    await expect(chips.filter({ hasText: "Rendered 9 charts" }).first()).toBeVisible();
-    await chips.filter({ hasText: "2 charts checked" }).first().click();
+    // The trailing chain has eight card kinds, more than the strip shows,
+    // so the check and render chips sit behind "+2 more". Picking it opens
+    // the group and expands the first hidden card (the data check); the
+    // render card is then one compact chip away.
+    const strip = page.getByTestId("chat-tool-chip-strip").last();
+    await expect(strip.getByTestId("chat-tool-chip-more")).toHaveText("+2 more");
+    await strip.getByTestId("chat-tool-chip-more").click();
+    const frameOf = (kind: string) =>
+      page.locator(`[data-testid="chat-tool-card"][data-kind="${kind}"]`);
+    await expect(frameOf("dashboard_sample")).toHaveAttribute("data-density", "expanded");
     const sample = page.getByTestId("chat-dashboard-sample-card");
     await expect(sample).toBeVisible();
     await expect(sample.getByTestId("chat-dashboard-sample-chart")).toHaveCount(2);
     await expect(sample).toContainText("revenue_trend");
     await expect(sample.getByTestId("chat-data-table").first()).toBeVisible();
-    await chips.filter({ hasText: "Rendered 9 charts" }).first().click();
+    await expect(frameOf("dashboard_screenshot")).toHaveAttribute("data-density", "compact");
+    await frameOf("dashboard_screenshot").getByTestId("chat-tool-chip").click();
+    await expect(frameOf("dashboard_screenshot")).toHaveAttribute("data-density", "expanded");
     const shot = page.getByTestId("chat-dashboard-screenshot-card");
     await expect(shot).toBeVisible();
     await expect(shot.getByTestId("chat-dashboard-screenshot-rendered")).toHaveCount(9);
     await expect(shot.getByTestId("chat-dashboard-screenshot-failed")).toHaveCount(0);
     await expect(shot.locator("img")).toHaveCount(0);
+  });
+
+  test("the load card names the version it pulled, the path and the dataset rows", async ({
+    page,
+  }) => {
+    await page.goto(at(24_800));
+    await waitForHydration(page);
+    const chips = page.getByTestId("chat-tool-chip");
+    const chip = chips.filter({ hasText: "Loaded Revenue overview v3" }).first();
+    await expect(chip).toBeVisible();
+    await chip.click();
+    const card = page.getByTestId("chat-dashboard-load-card");
+    await expect(card).toBeVisible();
+    await expect(card.getByTestId("chat-dashboard-load-name")).toHaveText("Revenue overview v3");
+    await expect(card.getByTestId("chat-dashboard-load-path")).toHaveText(
+      "artifacts/revenue.dashboard.json",
+    );
+    const rows = card.getByTestId("chat-dashboard-load-dataset");
+    await expect(rows).toHaveCount(3);
+    const monthly = card.locator(
+      '[data-testid="chat-dashboard-load-dataset"][data-dataset="revenue_monthly"]',
+    );
+    await expect(monthly).toContainText("48");
+    await expect(monthly).toContainText("artifacts/datasets/revenue_monthly.csv");
+    await expect(card.getByTestId("chat-dashboard-load-error")).toHaveCount(0);
   });
 
   test("the dashboard file gets a timeline card labelled Dashboard", async ({ page }) => {
@@ -184,31 +217,63 @@ test.describe("publish from chat (fixture gallery)", () => {
     await expect(page.getByTestId("chat-dashboard-view")).toHaveAttribute("data-pending", "0");
   };
 
-  test("Publish sits next to Expand and opens the dialog prefilled from the spec", async ({
+  test("the strip says which dashboard the file was loaded from, before any publish", async ({
+    page,
+  }) => {
+    await openDashboard(page);
+    // Nothing from this chat is in the fixture gallery yet, but the file
+    // stem (`revenue`) is the slug of the dashboard the agent loaded.
+    await expect(page.getByTestId("chat-dashboard-published")).toHaveCount(0);
+    const strip = page.getByTestId("chat-dashboard-loaded");
+    await expect(strip).toBeVisible();
+    await expect(strip).toHaveAttribute("data-dashboard-slug", "revenue");
+    await expect(strip).toContainText("Loaded from Revenue overview");
+    await expect(strip).toContainText("(v3)");
+    await expect(strip.getByTestId("chat-dashboard-loaded-open")).toHaveAttribute(
+      "href",
+      "/dashboards/revenue",
+    );
+    // The strip's action opens the dialog on that dashboard.
+    await strip.getByTestId("chat-dashboard-publish-version").click();
+    const dialog = page.getByTestId("chat-dashboard-publish-dialog");
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByTestId("chat-dashboard-publish-target")).toHaveValue(
+      "dash_fixture_existing",
+    );
+    await expect(dialog.getByTestId("chat-dashboard-publish-submit")).toHaveText(
+      /Publish version/,
+    );
+  });
+
+  test("Publish sits next to Expand and opens the dialog on the loaded dashboard", async ({
     page,
   }) => {
     await openDashboard(page);
     const header = page.getByTestId("chat-dashboard-expand").locator("..");
     const publish = header.getByTestId("chat-dashboard-publish");
     await expect(publish).toBeVisible();
-    // Nothing from this chat is in the fixture gallery yet.
-    await expect(page.getByTestId("chat-dashboard-published")).toHaveCount(0);
+    await expect(page.getByTestId("chat-dashboard-loaded")).toBeVisible();
     await publish.click();
     const dialog = page.getByTestId("chat-dashboard-publish-dialog");
     await expect(dialog).toBeVisible();
-    await expect(dialog.getByTestId("chat-dashboard-publish-name")).toHaveValue(
-      "Revenue overview 2024",
-    );
+    // The fixture gallery's editable dashboard is the preselected target,
+    // and the form adopts its settings.
+    const target = dialog.getByTestId("chat-dashboard-publish-target");
+    await expect(target.locator("option")).toHaveText(["New dashboard", "Revenue overview"]);
+    await expect(target).toHaveValue("dash_fixture_existing");
+    await expect(dialog).toContainText("Publish a new version");
+    await expect(dialog.getByTestId("chat-dashboard-publish-name")).toHaveValue("Revenue overview");
     await expect(dialog.getByTestId("chat-dashboard-publish-description")).toHaveValue(
       /^Monthly revenue by region/,
     );
     await expect(dialog.getByTestId("chat-dashboard-publish-interval")).toHaveValue("1440");
     await expect(dialog.getByTestId("chat-dashboard-publish-anchor")).toHaveValue("06:00");
-    await expect(dialog.getByTestId("chat-dashboard-publish-timezone")).not.toHaveValue("");
-    // The fixture gallery's editable dashboard is offered as a target.
-    await expect(
-      dialog.getByTestId("chat-dashboard-publish-target").locator("option"),
-    ).toHaveText(["New dashboard", "Weekly pipeline health"]);
+    await expect(dialog.getByTestId("chat-dashboard-publish-timezone")).toHaveValue(
+      "America/New_York",
+    );
+    // A fresh publish is one select away.
+    await target.selectOption("new");
+    await expect(dialog).toContainText("Publish to the dashboards gallery");
     await page.keyboard.press("Escape");
     await expect(dialog).not.toBeVisible();
   });
@@ -238,11 +303,15 @@ test.describe("publish from chat (fixture gallery)", () => {
     await openDashboard(page);
     await page.getByTestId("chat-dashboard-publish").click();
     const dialog = page.getByTestId("chat-dashboard-publish-dialog");
+    // Publish a fresh dashboard rather than a version of the loaded one.
+    await dialog.getByTestId("chat-dashboard-publish-target").selectOption("new");
     await dialog.getByTestId("chat-dashboard-publish-name").fill("Revenue overview (team)");
     await dialog.getByTestId("chat-dashboard-publish-submit").click();
     await expect(dialog).not.toBeVisible();
     const strip = page.getByTestId("chat-dashboard-published");
     await expect(strip).toBeVisible();
+    // The publish from this file replaces the "Loaded from" strip.
+    await expect(page.getByTestId("chat-dashboard-loaded")).toHaveCount(0);
     await expect(strip).toContainText("Published as Revenue overview (team)");
     await expect(strip).toContainText("v1");
     await expect(strip.getByTestId("chat-dashboard-published-open")).toHaveAttribute(

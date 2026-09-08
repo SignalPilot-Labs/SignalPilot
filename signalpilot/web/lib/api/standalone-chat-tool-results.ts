@@ -168,6 +168,41 @@ export type ToolResult =
       preview_path?: string | null;
       error?: string;
     }
+  | {
+      /** `dashboard_list_published`: the gallery entries the agent may read. */
+      kind: "dashboard_list";
+      dashboards: {
+        id: string;
+        slug: string;
+        name: string;
+        description?: string | null;
+        chart_count?: number;
+        visibility?: string;
+        updated_at?: string | null;
+        last_refresh_at?: string | null;
+        can_edit?: boolean;
+      }[];
+      total?: number;
+      dashboards_truncated?: boolean;
+    }
+  | {
+      /** `dashboard_load_published`: the spec written into the sandbox, or
+       * the refusal (`error` + `message`). */
+      kind: "dashboard_load";
+      path?: string | null;
+      dashboard?: {
+        id: string;
+        slug: string;
+        name: string;
+        version_no?: number | null;
+        chart_count?: number | null;
+      } | null;
+      datasets?: Record<string, { rows?: number | null; snapshot?: string | null }>;
+      datasets_truncated?: boolean;
+      next?: string | null;
+      error?: string;
+      message?: string;
+    }
   | { kind: "json"; value: unknown }
   | { kind: "text" };
 

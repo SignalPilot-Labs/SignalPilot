@@ -309,15 +309,15 @@ class TestLifecycle:
 
 
 class TestEditMessage:
-    async def test_message_carries_the_spec_and_names_sql_datasets(self, db) -> None:
+    async def test_message_names_the_dashboard_and_the_load_tool(self, db) -> None:
         storage, backend = fake_storage()
         dashboard, _ = await _publish(db, storage, fake_manifest(backend))
-        message = service.edit_message(dashboard, spec_json())
-        assert message.startswith('Edit the dashboard "Revenue".')
-        assert "artifacts/revenue.dashboard.json" in message
-        assert "```json" in message and '"title": "Revenue"' in message
-        assert "- `monthly` on connection `warehouse`" in message
-        assert "- `regions` on connection `warehouse`" in message
+        message = service.edit_message(dashboard)
+        assert message.startswith('Edit the dashboard "Revenue" (slug `revenue`, id `dash_')
+        assert dashboard.id in message
+        assert 'dashboard_load_published("revenue")' in message
         assert "sp.dashboard_dataset" in message
-        assert "artifacts/datasets/<name>.csv" in message
-        assert "\u2014" not in message
+        assert "publish the new version from the chat panel" in message
+        # The spec no longer travels in the message.
+        assert "```" not in message and '"title"' not in message and "select " not in message
+        assert "—" not in message

@@ -12,7 +12,9 @@ import {
   FIXTURE_DASHBOARD_MONTHLY_FILE_ID,
   FIXTURE_DASHBOARD_REGION_FILE_ID,
   FIXTURE_DASHBOARD_SUMMARY_FILE_ID,
+  FIXTURE_LOADED_DASHBOARD_SLUG,
   FIXTURE_PUBLISHED_DASHBOARD_ID,
+  FIXTURE_PUBLISHED_DASHBOARD_NAME,
   FIXTURE_PUBLISHED_SLUG,
   createFixtureDashboardPublishApi,
 } from "~/lib/chat-test-fixture-dashboard";
@@ -178,6 +180,16 @@ describe("DashboardFileView", () => {
     });
   };
   const q = (selector: string) => container.querySelector(selector);
+  /** Set a controlled input/select through the native setter so React sees it. */
+  const setField = async (selector: string, value: string) => {
+    const element = document.querySelector<HTMLInputElement | HTMLSelectElement>(selector);
+    if (!element) throw new Error(`missing ${selector}`);
+    const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(element) as object, "value")?.set;
+    await act(async () => {
+      setter?.call(element, value);
+      element.dispatchEvent(new Event(element instanceof HTMLSelectElement ? "change" : "input", { bubbles: true }));
+    });
+  };
   /** Poll for an element that appears after an async effect settles. */
   const waitForEl = async (selector: string, attempts = 50) => {
     for (let i = 0; i < attempts; i += 1) {
@@ -255,11 +267,19 @@ describe("DashboardFileView", () => {
   });
 
   it("offers Publish next to Expand and opens the dialog prefilled", async () => {
-    await render({ files: ALL_FILES });
+    // A gallery with no slug match, so the form fills from the spec.
+    const publishApi = createFixtureDashboardPublishApi();
+    const original = publishApi.listDashboards.bind(publishApi);
+    publishApi.listDashboards = async () => {
+      const { dashboards } = await original();
+      return { dashboards: dashboards.map((dashboard) => ({ ...dashboard, slug: "pipeline" })) };
+    };
+    await render({ files: ALL_FILES, publishApi });
     const header = q('[data-testid="chat-dashboard-expand"]')?.parentElement;
     const publish = header?.querySelector('[data-testid="chat-dashboard-publish"]');
     expect(publish?.textContent).toContain("Publish");
     expect(q('[data-testid="chat-dashboard-published"]')).toBeNull();
+    expect(q('[data-testid="chat-dashboard-loaded"]')).toBeNull();
     await act(async () => (publish as HTMLButtonElement).click());
     const dialog = document.querySelector('[data-testid="chat-dashboard-publish-dialog"]');
     expect(dialog).not.toBeNull();
@@ -278,6 +298,10 @@ describe("DashboardFileView", () => {
     const publishApi = createFixtureDashboardPublishApi();
     await render({ files: ALL_FILES, publishApi });
     await act(async () => (q('[data-testid="chat-dashboard-publish"]') as HTMLButtonElement).click());
+    // The file stem matches the fixture gallery's slug, so the dialog opens
+    // on that dashboard; this publish is a fresh one under the spec's title.
+    await setField('[data-testid="chat-dashboard-publish-target"]', "new");
+    await setField('[data-testid="chat-dashboard-publish-name"]', "Revenue overview 2024");
     await act(async () => {
       document
         .querySelector<HTMLButtonElement>('[data-testid="chat-dashboard-publish-submit"]')
@@ -288,6 +312,9 @@ describe("DashboardFileView", () => {
     expect(strip?.textContent).toContain("Published as Revenue overview 2024");
     expect(strip?.querySelector("a")?.getAttribute("href")).toBe(`/dashboards/${FIXTURE_PUBLISHED_SLUG}`);
     expect(publishApi.calls[0].fileId).toBe(FIXTURE_DASHBOARD_FILE_ID);
+    expect(publishApi.calls[0].body.target_dashboard_id).toBeUndefined();
+    // The publish from this file now wins over the slug match.
+    expect(q('[data-testid="chat-dashboard-loaded"]')).toBeNull();
     // "Publish new version" reopens the dialog on that dashboard.
     await act(async () => (q('[data-testid="chat-dashboard-publish-version"]') as HTMLButtonElement).click());
     expect(
@@ -310,11 +337,37 @@ describe("DashboardFileView", () => {
     };
     await render({ files: ALL_FILES, publishApi });
     const strip = await waitForEl('[data-testid="chat-dashboard-published"]');
-    expect(strip.getAttribute("data-dashboard-slug")).toBe("weekly-pipeline-health");
+    expect(strip.getAttribute("data-dashboard-slug")).toBe(FIXTURE_LOADED_DASHBOARD_SLUG);
+    expect(q('[data-testid="chat-dashboard-loaded"]')).toBeNull();
     // The header Publish targets the existing dashboard.
     await act(async () => (q('[data-testid="chat-dashboard-publish"]') as HTMLButtonElement).click());
     expect(
       document.querySelector<HTMLSelectElement>('[data-testid="chat-dashboard-publish-target"]')?.value,
     ).toBe(FIXTURE_PUBLISHED_DASHBOARD_ID);
+  });
+
+  it("shows where the file was loaded from and preselects that dashboard", async () => {
+    await render({ files: ALL_FILES });
+    const strip = await waitForEl('[data-testid="chat-dashboard-loaded"]');
+    expect(strip.getAttribute("data-dashboard-slug")).toBe(FIXTURE_LOADED_DASHBOARD_SLUG);
+    expect(strip.textContent).toContain(`Loaded from ${FIXTURE_PUBLISHED_DASHBOARD_NAME}`);
+    expect(strip.textContent).toContain("(v3)");
+    expect(strip.querySelector('[data-testid="chat-dashboard-loaded-open"]')?.getAttribute("href")).toBe(
+      `/dashboards/${FIXTURE_LOADED_DASHBOARD_SLUG}`,
+    );
+    expect(q('[data-testid="chat-dashboard-published"]')).toBeNull();
+    // Both the header Publish and the strip action open on that dashboard.
+    await act(async () => (q('[data-testid="chat-dashboard-publish"]') as HTMLButtonElement).click());
+    const target = () => document.querySelector<HTMLSelectElement>('[data-testid="chat-dashboard-publish-target"]');
+    expect(target()?.value).toBe(FIXTURE_PUBLISHED_DASHBOARD_ID);
+    expect(document.querySelector('[data-testid="chat-dashboard-publish-name"]')?.getAttribute("value")).toBe(
+      FIXTURE_PUBLISHED_DASHBOARD_NAME,
+    );
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    });
+    expect(document.querySelector('[data-testid="chat-dashboard-publish-dialog"]')).toBeNull();
+    await act(async () => (q('[data-testid="chat-dashboard-publish-version"]') as HTMLButtonElement).click());
+    expect(target()?.value).toBe(FIXTURE_PUBLISHED_DASHBOARD_ID);
   });
 });

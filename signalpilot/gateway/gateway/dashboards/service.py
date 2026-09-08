@@ -12,7 +12,6 @@ column the charts and filters read from that dataset.
 
 from __future__ import annotations
 
-import json
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -440,22 +439,20 @@ async def delete(db: AsyncSession, storage: DashboardStorage, dashboard: Gateway
 # ── Edit chat ───────────────────────────────────────────────────────────────
 
 
-def edit_message(dashboard: GatewayPublishedDashboard, spec: dict[str, Any]) -> str:
+def edit_message(dashboard: GatewayPublishedDashboard) -> str:
     """The first user message of an edit chat.
 
-    Only the spec travels. Static datasets are inside it; SQL datasets are
-    their SQL, and the agent rebuilds each snapshot with
-    ``sp.dashboard_dataset`` so the sandbox checks see a fresh sidecar.
+    Nothing of the spec travels in the message. The agent loads the published
+    version into the chat with the ``dashboard_load_published`` sandbox tool,
+    which writes the dashboard file and every SQL snapshot, and the user
+    publishes the edited file as a new version from the chat panel.
     """
-    queries = schema.dataset_sql(spec)
-    listed = [f"- `{name}` on connection `{connection}`" for name, (connection, _sql) in queries.items()]
     return render_prompt(
         "edit_prompt.md",
         {
             "dashboard_name": dashboard.name,
-            "dashboard_path": dashboard_artifact_path(dashboard),
-            "spec_json": json.dumps(spec, indent=2, ensure_ascii=False),
-            "dataset_list": "\n".join(listed) or "- (none)",
+            "dashboard_slug": dashboard.slug,
+            "dashboard_id": dashboard.id,
         },
     )
 
@@ -514,19 +511,16 @@ async def seed_dashboard_chat(
 
 async def create_edit_chat(
     db: AsyncSession,
-    storage: DashboardStorage,
     dashboard: GatewayPublishedDashboard,
-    version: GatewayPublishedDashboardVersion,
     *,
     user_id: str,
 ) -> str:
-    """Create a conversation seeded with the current spec."""
-    spec = await storage.get_spec(version.spec_key)
+    """Create a conversation whose first message loads the published dashboard."""
     conversation_id, _run_id = await seed_dashboard_chat(
         db,
         dashboard,
         user_id=user_id,
-        message=edit_message(dashboard, spec),
+        message=edit_message(dashboard),
         title=f"Edit dashboard: {dashboard.name}",
         origin=EDIT_CHAT_ORIGIN,
         chat_budget_usd=EDIT_CHAT_BUDGET_USD,

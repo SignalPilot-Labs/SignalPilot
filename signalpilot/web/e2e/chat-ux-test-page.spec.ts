@@ -103,8 +103,8 @@ test.describe("chat UX test harness", () => {
     );
     // The trailing discovery chain folds to a plain count with one chip per
     // card kind (table list, column profile, dbt run, knowledge, connector,
-    // and the two dashboard tools).
-    await expect(groups.nth(2)).toContainText("Worked through 7 steps");
+    // and the three dashboard tools).
+    await expect(groups.nth(2)).toContainText("Worked through 8 steps");
     await expect(groups.nth(2)).toContainText("dbt run");
     await expect(groups.nth(2)).toContainText("47 tables");
     await expect(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from mcp.types import Tool
 
+from signalpilot._server.ai.dashboard.published import DASHBOARD_REF_PATTERN
 from signalpilot._server.ai.dashboard.schema import (
     CHART_ID_PATTERN,
     DASHBOARD_PATH_PATTERN,
@@ -119,6 +120,48 @@ def standalone_chat_tools(*, notebook_enabled: bool) -> list[Tool]:
                     },
                 },
                 "required": ["path"],
+                "additionalProperties": False,
+            },
+        ),
+        Tool(
+            name="dashboard_list_published",
+            description=(
+                "List the dashboards the user has published: id, slug, name, "
+                "description, chart count, visibility, and whether the user "
+                "can edit it. Call this first when the user asks to edit, "
+                "update, or change an existing dashboard, then call "
+                "dashboard_load_published with the id or slug."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            },
+        ),
+        Tool(
+            name="dashboard_load_published",
+            description=(
+                "Load one published dashboard into the scratch directory for "
+                "editing. Writes artifacts/<slug>.dashboard.json and the "
+                "snapshot of every SQL dataset from its current version, so "
+                "the check tools see them as current. Edit that file. If you "
+                "change a dataset's SQL, call sp.dashboard_dataset for it "
+                "again. The user publishes the edited file as a new version "
+                "of the same dashboard; do not create a second dashboard."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "dashboard": {
+                        "type": "string",
+                        "pattern": DASHBOARD_REF_PATTERN,
+                        "description": (
+                            "The dashboard id or slug from "
+                            "dashboard_list_published."
+                        ),
+                    }
+                },
+                "required": ["dashboard"],
                 "additionalProperties": False,
             },
         ),

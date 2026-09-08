@@ -12,6 +12,7 @@ import {
   FIXTURE_DASHBOARD_SUMMARY_FILE_ID,
   FIXTURE_PUBLISHED_DASHBOARD_ID,
   FIXTURE_PUBLISHED_DASHBOARD_NAME,
+  FIXTURE_LOADED_DASHBOARD_SLUG,
   FIXTURE_PUBLISHED_SLUG,
   createFixtureDashboardPublishApi,
 } from "~/lib/chat-test-fixture-dashboard";
@@ -29,16 +30,20 @@ vi.mock("next/link", () => ({
   ),
 }));
 
-import { DashboardPublishDialog, DashboardPublishedStrip } from "./dashboard-publish-dialog";
+import { DashboardPublishDialog } from "./dashboard-publish-dialog";
 import {
   buildPublishRequest,
+  dashboardFileStem,
   datasetKindLabel,
   describePublishError,
+  findLoadedDashboard,
   findPublishedDashboard,
   initialPublishForm,
   publishDatasetRows,
+  resolveDashboardSource,
   retargetPublishForm,
 } from "./dashboard-publish-form";
+import { DashboardSourceStrip } from "./dashboard-publish-source";
 
 const file = (id: string, path: string, kind: ConversationFileInfo["kind"]): ConversationFileInfo => ({
   id,
@@ -140,6 +145,44 @@ describe("publish form model", () => {
       FIXTURE_PUBLISHED_DASHBOARD_ID,
     );
     expect(findPublishedDashboard(dashboards, "conversation-x", "file-fixture-other")).toBeNull();
+  });
+
+  it("derives the slug from the dashboard file stem", () => {
+    expect(dashboardFileStem("artifacts/revenue.dashboard.json")).toBe("revenue");
+    expect(dashboardFileStem("Revenue.DASHBOARD.json")).toBe("Revenue");
+    expect(dashboardFileStem("revenue.json")).toBeNull();
+    expect(dashboardFileStem(".dashboard.json")).toBeNull();
+  });
+
+  it("matches the file stem to the slug of an editable dashboard", async () => {
+    const api = createFixtureDashboardPublishApi();
+    const { dashboards } = await api.listDashboards();
+    expect(dashboards[0].slug).toBe(FIXTURE_LOADED_DASHBOARD_SLUG);
+    expect(findLoadedDashboard(dashboards, DASHBOARD.filename)?.id).toBe(FIXTURE_PUBLISHED_DASHBOARD_ID);
+    expect(findLoadedDashboard(dashboards, "artifacts/other.dashboard.json")).toBeNull();
+    expect(findLoadedDashboard(dashboards, "revenue.csv")).toBeNull();
+    // Read-only and archived dashboards cannot be versioned, so they never match.
+    expect(findLoadedDashboard([{ ...dashboards[0], can_edit: false }], DASHBOARD.filename)).toBeNull();
+    expect(
+      findLoadedDashboard([{ ...dashboards[0], archived_at: "2026-09-01T00:00:00Z" }], DASHBOARD.filename),
+    ).toBeNull();
+  });
+
+  it("resolves the source: a publish from this file wins over the slug match", async () => {
+    const api = createFixtureDashboardPublishApi();
+    const { dashboards } = await api.listDashboards();
+    const loaded = resolveDashboardSource(dashboards, "conv-1", DASHBOARD);
+    expect(loaded).toEqual({ dashboard: dashboards[0], origin: "loaded" });
+    const fromThisFile: PublishedDashboard = {
+      ...dashboards[0],
+      id: "dash_mine",
+      slug: "revenue-overview-2024",
+      source_conversation_id: "conv-1",
+      source_file_id: DASHBOARD.id,
+    };
+    const published = resolveDashboardSource([dashboards[0], fromThisFile], "conv-1", DASHBOARD);
+    expect(published).toEqual({ dashboard: fromThisFile, origin: "published" });
+    expect(resolveDashboardSource([], "conv-1", DASHBOARD)).toBeNull();
   });
 
   it("describes gateway failures with their status and missing snapshots", () => {
@@ -389,8 +432,8 @@ describe("DashboardPublishDialog", () => {
   });
 });
 
-describe("DashboardPublishedStrip", () => {
-  it("names the dashboard, links to it, and offers a new version", async () => {
+describe("DashboardSourceStrip", () => {
+  const mount = async (origin: "published" | "loaded") => {
     const api = createFixtureDashboardPublishApi();
     const { dashboards } = await api.listDashboards();
     const container = document.createElement("div");
@@ -398,17 +441,45 @@ describe("DashboardPublishedStrip", () => {
     const root = createRoot(container);
     const onPublishNewVersion = vi.fn();
     await act(async () => {
-      root.render(<DashboardPublishedStrip dashboard={dashboards[0]} onPublishNewVersion={onPublishNewVersion} />);
+      root.render(
+        <DashboardSourceStrip source={{ dashboard: dashboards[0], origin }} onPublishNewVersion={onPublishNewVersion} />,
+      );
     });
+    return {
+      container,
+      onPublishNewVersion,
+      unmount: async () => {
+        await act(async () => root.unmount());
+        container.remove();
+      },
+    };
+  };
+
+  it("names a published dashboard, links to it, and offers a new version", async () => {
+    const { container, onPublishNewVersion, unmount } = await mount("published");
     const strip = container.querySelector('[data-testid="chat-dashboard-published"]');
     expect(strip?.textContent).toContain(`Published as ${FIXTURE_PUBLISHED_DASHBOARD_NAME}`);
     expect(strip?.textContent).toContain("v3");
     expect(container.querySelector('[data-testid="chat-dashboard-published-open"]')?.getAttribute("href")).toBe(
-      "/dashboards/weekly-pipeline-health",
+      `/dashboards/${FIXTURE_LOADED_DASHBOARD_SLUG}`,
     );
     await act(async () => (container.querySelector('[data-testid="chat-dashboard-publish-version"]') as HTMLButtonElement).click());
     expect(onPublishNewVersion).toHaveBeenCalledTimes(1);
-    await act(async () => root.unmount());
-    container.remove();
+    await unmount();
+  });
+
+  it("says where a loaded dashboard came from before any publish", async () => {
+    const { container, onPublishNewVersion, unmount } = await mount("loaded");
+    expect(container.querySelector('[data-testid="chat-dashboard-published"]')).toBeNull();
+    const strip = container.querySelector('[data-testid="chat-dashboard-loaded"]');
+    expect(strip?.getAttribute("data-dashboard-slug")).toBe(FIXTURE_LOADED_DASHBOARD_SLUG);
+    expect(strip?.textContent).toContain(`Loaded from ${FIXTURE_PUBLISHED_DASHBOARD_NAME}`);
+    expect(strip?.textContent).toContain("(v3)");
+    expect(container.querySelector('[data-testid="chat-dashboard-loaded-open"]')?.getAttribute("href")).toBe(
+      `/dashboards/${FIXTURE_LOADED_DASHBOARD_SLUG}`,
+    );
+    await act(async () => (container.querySelector('[data-testid="chat-dashboard-publish-version"]') as HTMLButtonElement).click());
+    expect(onPublishNewVersion).toHaveBeenCalledTimes(1);
+    await unmount();
   });
 });

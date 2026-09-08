@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import HTTPException, Request
+from fastapi import Depends, HTTPException, Request
 from sqlalchemy import select
 
 from gateway.db.models import GatewayChatRun
@@ -57,6 +57,21 @@ async def running_run_for_execution_identity(store: StoreD, request: Request) ->
     if run is None:
         raise HTTPException(status_code=403, detail="Chat run scope mismatch")
     return run
+
+
+def reject_execution_identity(request: Request) -> None:
+    """Refuse sandbox tokens: a token that carries an execution identity.
+
+    The chat sandbox authenticates with a run-scoped token whose subject is
+    the run's user. Read routes may serve it on the user's behalf; routes
+    that change state require the user to act from the browser.
+    """
+    claims = getattr(request.state, "_jwt_claims", {}) or {}
+    if claims.get("execution_identity"):
+        raise HTTPException(status_code=403, detail="This action requires an interactive user")
+
+
+RequireInteractiveUser = Depends(reject_execution_identity)
 
 
 def require_enterprise_feature(name: str) -> None:

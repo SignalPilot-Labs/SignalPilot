@@ -20,6 +20,10 @@ from signalpilot._server.ai.dashboard.prepare import (
     infer_column_types,
     prepare_chart_rows,
 )
+from signalpilot._server.ai.dashboard.published import (
+    list_published,
+    load_published,
+)
 from signalpilot._server.ai.dashboard.schema import (
     DashboardSchemaUnavailable,
     dataset_file_refs,
@@ -43,8 +47,10 @@ __all__ = [
     "dataset_file_refs",
     "dataset_sql",
     "infer_column_types",
+    "list_published",
     "load_dataset",
     "load_datasets",
+    "load_published",
     "locate_schema_file",
     "parse_csv",
     "prepare_chart_rows",

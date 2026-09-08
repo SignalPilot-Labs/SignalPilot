@@ -14,7 +14,12 @@ const NOTEBOOK_TOOLS = new Set([
   "edit_notebook",
   "save_data_snapshot",
 ]);
-const DASHBOARD_TOOLS = new Set(["dashboard_sample_data", "dashboard_screenshot"]);
+const DASHBOARD_TOOLS = new Set([
+  "dashboard_sample_data",
+  "dashboard_screenshot",
+  "dashboard_list_published",
+  "dashboard_load_published",
+]);
 const FILE_WRITE_TOOLS = new Set(["Write", "NotebookEdit"]);
 const FILE_EDIT_TOOLS = new Set(["Edit", "MultiEdit"]);
 const FILE_READ_TOOLS = new Set(["Read", "Glob", "Grep", "LS"]);
@@ -76,6 +81,8 @@ export function humanizeTool(tool: string): string {
     sandbox_read_file: "Read a file in the sandbox",
     dashboard_sample_data: "Checking dashboard data",
     dashboard_screenshot: "Rendering dashboard",
+    dashboard_list_published: "Listing dashboards",
+    dashboard_load_published: "Loading dashboard",
     Bash: "Ran a command",
     Write: "Generated a file",
     Edit: "Edited a file",

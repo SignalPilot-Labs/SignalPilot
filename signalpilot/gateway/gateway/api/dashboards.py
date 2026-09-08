@@ -4,6 +4,11 @@ Auth mirrors the chat file routes: ``RequireScope("read")`` for reads,
 ``RequireScope("query")`` for writes, org scoping through the store. A
 dashboard is visible when its visibility is org, or the caller
 created it. It is editable by its creator or an org admin.
+
+The chat sandbox calls the read routes with its run-scoped token
+(``execution_identity == "chat:<run_id>"``, subject = the run's user), so
+the sandbox sees exactly what the user sees. Every write route also carries
+``RequireInteractiveUser``, which refuses that token.
 """
 
 from __future__ import annotations
@@ -31,6 +36,7 @@ from ..db.engine import get_session_factory
 from ..db.models import GatewayPublishedDashboard, GatewayPublishedDashboardVersion
 from ..db.models.dashboards import new_refresh_id
 from ..security.scope_guard import RequireScope
+from .chat_routes.common import RequireInteractiveUser
 from .deps import StoreD
 
 logger = logging.getLogger(__name__)
@@ -183,14 +189,14 @@ async def download_dataset(dashboard_id: str, version_id: str, name: str, store_
 # ── Settings and lifecycle ──────────────────────────────────────────────────
 
 
-@router.patch("/dashboards/{dashboard_id}", dependencies=[RequireScope("query")])
+@router.patch("/dashboards/{dashboard_id}", dependencies=[RequireScope("query"), RequireInteractiveUser])
 async def update_dashboard(dashboard_id: str, body: UpdateDashboardRequest, store_: StoreD, role: OrgRole):
     dashboard = await _editable_or_error(store_, role, dashboard_id)
     await service.update_settings(store_.session, dashboard, body)
     return {"dashboard": await _serialize(store_, role, dashboard)}
 
 
-@router.post("/dashboards/{dashboard_id}/refresh", status_code=202, dependencies=[RequireScope("query")])
+@router.post("/dashboards/{dashboard_id}/refresh", status_code=202, dependencies=[RequireScope("query"), RequireInteractiveUser])
 async def refresh_now(dashboard_id: str, store_: StoreD, role: OrgRole):
     dashboard = await _editable_or_error(store_, role, dashboard_id)
     if dashboard.archived_at is not None:
@@ -215,7 +221,7 @@ async def list_refreshes(dashboard_id: str, store_: StoreD, limit: int = Query(2
     return {"refreshes": [refresh_out(row) for row in rows]}
 
 
-@router.post("/dashboards/{dashboard_id}/versions/{version_id}/restore", dependencies=[RequireScope("query")])
+@router.post("/dashboards/{dashboard_id}/versions/{version_id}/restore", dependencies=[RequireScope("query"), RequireInteractiveUser])
 async def restore_version(dashboard_id: str, version_id: str, store_: StoreD, role: OrgRole):
     dashboard = await _editable_or_error(store_, role, dashboard_id)
     version = await _version_or_404(store_, dashboard, version_id)
@@ -223,37 +229,34 @@ async def restore_version(dashboard_id: str, version_id: str, store_: StoreD, ro
     return {"dashboard": await _serialize(store_, role, dashboard), "version": version_out(restored)}
 
 
-@router.post("/dashboards/{dashboard_id}/archive", dependencies=[RequireScope("query")])
+@router.post("/dashboards/{dashboard_id}/archive", dependencies=[RequireScope("query"), RequireInteractiveUser])
 async def archive_dashboard(dashboard_id: str, store_: StoreD, role: OrgRole):
     dashboard = await _editable_or_error(store_, role, dashboard_id)
     await service.set_archived(store_.session, dashboard, True)
     return {"dashboard": await _serialize(store_, role, dashboard)}
 
 
-@router.post("/dashboards/{dashboard_id}/unarchive", dependencies=[RequireScope("query")])
+@router.post("/dashboards/{dashboard_id}/unarchive", dependencies=[RequireScope("query"), RequireInteractiveUser])
 async def unarchive_dashboard(dashboard_id: str, store_: StoreD, role: OrgRole):
     dashboard = await _editable_or_error(store_, role, dashboard_id)
     await service.set_archived(store_.session, dashboard, False)
     return {"dashboard": await _serialize(store_, role, dashboard)}
 
 
-@router.delete("/dashboards/{dashboard_id}", status_code=204, response_model=None, dependencies=[RequireScope("query")])
+@router.delete("/dashboards/{dashboard_id}", status_code=204, response_model=None, dependencies=[RequireScope("query"), RequireInteractiveUser])
 async def delete_dashboard(dashboard_id: str, store_: StoreD, role: OrgRole):
     dashboard = await _editable_or_error(store_, role, dashboard_id)
     await service.delete(store_.session, storage(), dashboard)
     return Response(status_code=204)
 
 
-@router.post("/dashboards/{dashboard_id}/edit-chat", dependencies=[RequireScope("query")])
+@router.post("/dashboards/{dashboard_id}/edit-chat", dependencies=[RequireScope("query"), RequireInteractiveUser])
 async def open_edit_chat(dashboard_id: str, store_: StoreD, role: OrgRole):
     dashboard = await _visible_or_404(store_, dashboard_id)
-    version = await store.current_version(store_.session, dashboard)
-    if version is None:
+    if await store.current_version(store_.session, dashboard) is None:
         raise HTTPException(status_code=409, detail="Dashboard has no current version")
     try:
-        conversation_id = await service.create_edit_chat(
-            store_.session, storage(), dashboard, version, user_id=_user(store_)
-        )
+        conversation_id = await service.create_edit_chat(store_.session, dashboard, user_id=_user(store_))
     except service.DashboardError as error:
         raise _raise(error) from error
     return {"conversation_id": conversation_id}

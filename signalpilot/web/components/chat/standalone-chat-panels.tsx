@@ -5,7 +5,7 @@
 // or the dashboard preview). The container owns the open/close state; this
 // module only renders it.
 
-import { LayoutDashboard, Loader2, NotebookPen } from "lucide-react";
+import { History, LayoutDashboard, Loader2, NotebookPen, Share2 } from "lucide-react";
 import type {
   ConversationFileInfo,
   ConversationNotebook,
@@ -21,7 +21,7 @@ import {
 } from "~/components/chat/chat-settings-panel";
 
 const TOGGLE_CLASS =
-  "absolute top-4 z-20 flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] text-[var(--color-text-muted)] shadow-lg shadow-black/20 hover:border-[var(--color-border-hover)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]";
+  "flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] text-[var(--color-text-muted)] shadow-lg shadow-black/20 hover:border-[var(--color-border-hover)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]";
 
 export function ChatPanelToggles({
   artifactsAvailable,
@@ -31,7 +31,13 @@ export function ChatPanelToggles({
   dashboardSessionId,
   dashboardOpen,
   onOpenDashboard,
+  onShare,
+  onReplay,
 }: {
+  /** Owner pages with team sharing: the share-link action. */
+  onShare?: () => void;
+  /** Offered only when the conversation has something to replay. */
+  onReplay?: () => void;
   artifactsAvailable: boolean;
   artifactsLoading: boolean;
   artifactsOpen: boolean;
@@ -41,8 +47,33 @@ export function ChatPanelToggles({
   dashboardOpen: boolean;
   onOpenDashboard: (sessionId: string) => void;
 }) {
+  // One floating row, outermost action last, so absent toggles leave no gap.
   return (
-    <>
+    <div className="absolute right-4 top-4 z-20 flex items-center gap-3">
+      {onReplay && (
+        <button
+          type="button"
+          aria-label="Replay chat"
+          title="Replay this conversation as it happened"
+          data-testid="chat-replay-button"
+          onClick={onReplay}
+          className={TOGGLE_CLASS}
+        >
+          <History className="h-4 w-4" />
+        </button>
+      )}
+      {dashboardSessionId && !dashboardOpen && (
+        <button
+          type="button"
+          aria-label="Open the dashboard preview"
+          title="Open the dashboard preview"
+          data-testid="chat-dashboard-toggle"
+          onClick={() => onOpenDashboard(dashboardSessionId)}
+          className={TOGGLE_CLASS}
+        >
+          <LayoutDashboard className="h-4 w-4" />
+        </button>
+      )}
       {(artifactsLoading || artifactsAvailable) && !artifactsOpen && (
         <button
           type="button"
@@ -50,7 +81,7 @@ export function ChatPanelToggles({
           title="Open the artifacts panel"
           data-testid="live-notebook-toggle"
           onClick={onOpenArtifacts}
-          className={`${TOGGLE_CLASS} right-16`}
+          className={TOGGLE_CLASS}
         >
           {artifactsLoading ? (
             <Loader2
@@ -62,19 +93,18 @@ export function ChatPanelToggles({
           )}
         </button>
       )}
-      {dashboardSessionId && !dashboardOpen && (
+      {onShare && (
         <button
           type="button"
-          aria-label="Open the dashboard preview"
-          title="Open the dashboard preview"
-          data-testid="chat-dashboard-toggle"
-          onClick={() => onOpenDashboard(dashboardSessionId)}
-          className={`${TOGGLE_CLASS} right-28`}
+          aria-label="Share conversation"
+          title="Create a new authenticated team link and revoke any previous link"
+          onClick={onShare}
+          className={TOGGLE_CLASS}
         >
-          <LayoutDashboard className="h-4 w-4" />
+          <Share2 className="h-4 w-4" />
         </button>
       )}
-    </>
+    </div>
   );
 }
 

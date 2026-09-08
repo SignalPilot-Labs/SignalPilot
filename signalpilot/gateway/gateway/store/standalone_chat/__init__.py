@@ -44,7 +44,6 @@ from gateway.models.standalone_chat import (
     ChatRunInfo,
     SharedConversationDetail,
     SharedConversationInfo,
-    SharedMessageInfo,
     StandaloneConversationDetail,
     StandaloneConversationInfo,
     StandaloneMessageInfo,
@@ -87,6 +86,10 @@ from gateway.store.standalone_chat.files import (
     mark_conversation_file_deleted,
     upsert_conversation_file,
 )
+from gateway.store.standalone_chat.forking import (
+    fork_shared_conversation,
+    remap_ids,
+)
 from gateway.store.standalone_chat.helpers import (
     _append_status_message,
     _event_info,
@@ -108,6 +111,7 @@ from gateway.store.standalone_chat.notebooks import (
     list_conversation_notebooks,
     upsert_conversation_notebook,
 )
+from gateway.store.standalone_chat.preferences import default_chat_budgets
 from gateway.store.standalone_chat.runs import (
     append_event,
     create_run,
@@ -125,11 +129,11 @@ from gateway.store.standalone_chat.sharing import (
     _share_token_hash,
     _shared_grant_row,
     create_share_grant,
-    fork_shared_conversation,
-    get_fork_preview,
     get_shared_conversation,
     get_shared_file,
+    get_shared_query_result,
     list_shared_files,
+    list_shared_sql_trace,
     revoke_share_grants,
 )
 from gateway.store.standalone_chat.worker import (
@@ -171,7 +175,6 @@ __all__ = [
     "RunStatus",
     "SharedConversationDetail",
     "SharedConversationInfo",
-    "SharedMessageInfo",
     "StandaloneConversationDetail",
     "StandaloneConversationInfo",
     "StandaloneMessageInfo",
@@ -203,6 +206,7 @@ __all__ = [
     "create_run",
     "create_share_grant",
     "datetime",
+    "default_chat_budgets",
     "delete",
     "derive_file_kind",
     "enterprise_chat_feature_flags",
@@ -214,11 +218,11 @@ __all__ = [
     "get_conversation_detail",
     "get_conversation_file",
     "get_conversation_file_by_path",
-    "get_fork_preview",
     "get_owned_conversation",
     "get_shared_conversation",
     "get_shared_conversation_file",
     "get_shared_file",
+    "get_shared_query_result",
     "get_worker_run",
     "hashlib",
     "list_conversation_files",
@@ -226,6 +230,7 @@ __all__ = [
     "list_conversations",
     "list_shared_conversation_files",
     "list_shared_files",
+    "list_shared_sql_trace",
     "list_run_events",
     "mark_conversation_file_deleted",
     "mark_steering_message_picked_up",
@@ -238,6 +243,7 @@ __all__ = [
     "rename_conversation",
     "update_conversation_effort",
     "update_conversation_model",
+    "remap_ids",
     "renew_lease",
     "request_cancellation",
     "retry_run",

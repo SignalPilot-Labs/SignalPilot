@@ -28,18 +28,14 @@ import { useToast } from "~/components/ui/toast";
 import { toastRequestError } from "~/components/chat/toast-request-error";
 import {
   applyStandaloneChatEvent,
-  assembleStandaloneRunText,
   containsStandaloneSubmission,
-  deriveStandaloneRunActivity,
   isStandaloneRunReconciled,
   type OptimisticUserMessage,
 } from "~/lib/standalone-chat-state";
+import { buildStandaloneUiMessages } from "~/lib/standalone-chat-ui-messages";
 import type { UiMessage } from "~/components/chat/chat-ui-context";
 import type { ChatEventArrival } from "~/lib/chat-telemetry";
-import {
-  eventText,
-  isStreamingStatus,
-} from "~/components/chat/standalone-chat-helpers";
+import { eventText } from "~/components/chat/standalone-chat-helpers";
 
 export type DetailMutator = KeyedMutator<StandaloneConversationDetail>;
 export type HistoryMutator = KeyedMutator<{
@@ -203,110 +199,17 @@ export function useStandaloneUiMessages({
   pendingSubmission: OptimisticUserMessage | null;
   setPendingSubmission: (value: OptimisticUserMessage | null) => void;
 }) {
-  const uiMessages = useMemo<UiMessage[]>(() => {
-    const messages: UiMessage[] = [...(detailMessages ?? [])];
-    if (currentRun) {
-      const runMessages = messages.filter(
-        (message) => message.metadata.run_id === currentRun.id,
-      );
-      const hasTerminalMessage = runMessages.some(
-        (message) =>
-          message.role === "assistant" &&
-          ["completed", "failed", "cancelled"].includes(
-            typeof message.metadata.status === "string"
-              ? message.metadata.status
-              : "",
-          ),
-      );
-      const hasWaitingMessage = runMessages.some(
-        (message) =>
-          message.role === "assistant" &&
-          message.metadata.status === "waiting_for_user",
-      );
-      if (
-        !hasTerminalMessage &&
-        !(currentRun.status === "waiting_for_user" && hasWaitingMessage)
-      ) {
-        const runEvents = events.filter(
-          (event) => event.run_id === currentRun.id,
-        );
-        const resetSequence = runEvents.reduce(
-          (latest, event) =>
-            event.type === "status" && event.payload?.reset_text === true
-              ? Math.max(latest, event.sequence)
-              : latest,
-          0,
-        );
-        const streamed = assembleStandaloneRunText(
-          runEvents,
-          currentRun.id,
-          resetSequence,
-        );
-        const clarification = [...runEvents]
-          .reverse()
-          .find((event) => event.type === "clarification_requested");
-        const error = [...runEvents]
-          .reverse()
-          .find((event) => event.type === "error");
-        const content =
-          (clarification && eventText(clarification, "message")) ||
-          streamed ||
-          (error && eventText(error, "message")) ||
-          (currentRun.status === "cancelled"
-            ? "This run was stopped."
-            : currentRun.status === "completed"
-              ? "Finalizing your answer…"
-              : "");
-        messages.push({
-          id: `run-${currentRun.id}`,
-          role: "assistant",
-          content,
-          sequence: Number.MAX_SAFE_INTEGER,
-          created_at: Date.parse(currentRun.created_at) / 1_000,
-          metadata: {
-            run_id: currentRun.id,
-            optimistic: true,
-            ...(currentRun.usage ? { token_usage: currentRun.usage } : {}),
-          },
-          runId: currentRun.id,
-          runStatus: currentRun.status,
-          activity: deriveStandaloneRunActivity(runEvents, currentRun.id),
-          synthetic: true,
-        });
-      }
-    }
-    if (
-      pendingSubmission &&
-      !containsStandaloneSubmission(messages, pendingSubmission)
-    ) {
-      messages.push({
-        id: pendingSubmission.id,
-        role: "user",
-        content: pendingSubmission.content,
-        sequence: Number.MAX_SAFE_INTEGER - 1,
-        created_at: pendingSubmission.createdAt,
-        metadata: { optimistic: true },
-      });
-    }
-    if (
-      pendingSubmission &&
-      isSubmitting &&
-      !isStreamingStatus(currentRun?.status)
-    ) {
-      messages.push({
-        id: `pending-assistant-${pendingSubmission.id}`,
-        role: "assistant",
-        content: "",
-        sequence: Number.MAX_SAFE_INTEGER,
-        created_at: pendingSubmission.createdAt,
-        metadata: { optimistic: true },
-        runStatus: "queued",
-        activity: deriveStandaloneRunActivity([], ""),
-        synthetic: true,
-      });
-    }
-    return messages;
-  }, [currentRun, detailMessages, events, isSubmitting, pendingSubmission]);
+  const uiMessages = useMemo<UiMessage[]>(
+    () =>
+      buildStandaloneUiMessages({
+        detailMessages,
+        currentRun,
+        events,
+        isSubmitting,
+        pendingSubmission,
+      }),
+    [currentRun, detailMessages, events, isSubmitting, pendingSubmission],
+  );
 
   useEffect(() => {
     if (

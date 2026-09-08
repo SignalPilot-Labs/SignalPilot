@@ -263,42 +263,33 @@ class ChatShareGrantInfo(BaseModel):
 
 
 class SharedConversationInfo(BaseModel):
+    """Share-safe conversation header. No owner ids, no budgets, no spend."""
+
     title: str
     project_name: str | None = None
+    origin: str = "user"
+    model: str
+    effort: str = "medium"
+    commit_sha: str | None = None
+    branch: str
     created_at: float
     updated_at: float
 
 
-class SharedMessageInfo(BaseModel):
-    id: str
-    role: Literal["user", "assistant"]
-    content: str
-    sequence: int
-    created_at: float
-
-
 class SharedConversationDetail(BaseModel):
+    """Read-only snapshot of a shared chat: finished runs only.
+
+    Messages and events carry the same shapes the owner sees so the shared
+    page renders through the same components. Files are the share-safe
+    manifest in the same dict shape as the owner file routes.
+    """
+
     conversation: SharedConversationInfo
-    messages: list[SharedMessageInfo]
+    messages: list[StandaloneMessageInfo]
+    run_events: list[ChatRunEventInfo] = Field(default_factory=list)
+    files: list[dict[str, Any]] = Field(default_factory=list)
     shared_at: datetime
 
 
 class ForkedConversationInfo(BaseModel):
     id: str
-
-
-class ForkPreviewInfo(BaseModel):
-    project_id: str
-    project_name: str
-    commit_sha: str
-    per_query_budget_usd: float
-    chat_budget_usd: float
-    warehouse_cost_notice: str
-
-
-class ForkConfirmation(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    confirmed: Literal[True]
-    per_query_budget_usd: float = Field(ge=0)
-    chat_budget_usd: float = Field(ge=0)

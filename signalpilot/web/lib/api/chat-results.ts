@@ -33,3 +33,18 @@ export const getConversationToolResult = (
     `/api/chat/conversations/${encodeURIComponent(conversationId)}/results/${encodeURIComponent(resultId)}${query ? `?${query}` : ""}`,
   );
 };
+
+/** The same page for a shared chat, scoped by the share grant. */
+export const getSharedToolResult = (
+  token: string,
+  resultId: string,
+  opts: { offset?: number; limit?: number } = {},
+) => {
+  const params = new URLSearchParams();
+  if (opts.offset !== undefined) params.set("offset", String(opts.offset));
+  if (opts.limit !== undefined) params.set("limit", String(opts.limit));
+  const query = params.toString();
+  return request<ConversationToolResultPage>(
+    `/api/chat/shared/${encodeURIComponent(token)}/results/${encodeURIComponent(resultId)}${query ? `?${query}` : ""}`,
+  );
+};

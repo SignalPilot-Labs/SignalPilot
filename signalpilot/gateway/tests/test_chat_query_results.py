@@ -336,3 +336,59 @@ async def test_structured_results_flag_off_does_not_block(db_session, enabled, m
     await _result(db_session, conversation, run, _rows(3))
     page = await _get(db_session, conversation.id, "res-1")
     assert len(page["rows"]) == 3
+
+
+# ── Route: shared (read-only) access ────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_shared_route_pages_the_owners_result_for_a_teammate(db_session, enabled, monkeypatch):
+    monkeypatch.setenv("SP_FEATURE_CHAT_ORG_SHARING", "1")
+    conversation, run = await _conversation(db_session)
+    run.status = "completed"
+    await db_session.commit()
+    await _result(db_session, conversation, run, _rows(7))
+    shared = await chat_store.create_share_grant(
+        db_session, org_id=ORG, user_id=USER, conversation_id=conversation.id
+    )
+    assert shared is not None
+    _, token = shared
+    page = await results_routes.get_shared_query_result(
+        token, "res-1", _store(db_session, user_id="user-b"), offset=2, limit=3
+    )
+    assert page["result_id"] == "res-1"
+    assert [row["id"] for row in page["rows"]] == [2, 3, 4]
+    assert page["saved_row_count"] == 7
+    assert page["connection_name"] == "production"
+
+    with pytest.raises(HTTPException) as exc:
+        await results_routes.get_shared_query_result(
+            token, "missing", _store(db_session, user_id="user-b")
+        )
+    assert exc.value.status_code == 404
+    with pytest.raises(HTTPException) as exc:
+        await results_routes.get_shared_query_result(
+            "x" * 40, "res-1", _store(db_session, user_id="user-b")
+        )
+    assert exc.value.status_code == 404
+    foreign = SimpleNamespace(session=db_session, user_id="user-b", _require_org_id=lambda: "org-b")
+    with pytest.raises(HTTPException) as exc:
+        await results_routes.get_shared_query_result(token, "res-1", foreign)
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_shared_route_hides_results_of_a_running_run(db_session, enabled, monkeypatch):
+    monkeypatch.setenv("SP_FEATURE_CHAT_ORG_SHARING", "1")
+    conversation, run = await _conversation(db_session)
+    await _result(db_session, conversation, run, _rows(2))
+    shared = await chat_store.create_share_grant(
+        db_session, org_id=ORG, user_id=USER, conversation_id=conversation.id
+    )
+    assert shared is not None
+    _, token = shared
+    with pytest.raises(HTTPException) as exc:
+        await results_routes.get_shared_query_result(
+            token, "res-1", _store(db_session, user_id="user-b")
+        )
+    assert exc.value.status_code == 404

@@ -216,6 +216,7 @@ def extract_models_from_yml(data: dict, yml_rel_path: str, project_dir: Path) ->
                     name=col_name,
                     data_type=_coerce_str(col.get("data_type") or col.get("type")),
                     description=_coerce_str(col.get("description")),
+                    meta=dict(col.get("meta") or {}) if isinstance(col.get("meta"), dict) else {},
                 )
                 tests_raw = col.get("tests") or col.get("data_tests") or []
                 if isinstance(tests_raw, list):

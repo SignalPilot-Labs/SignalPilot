@@ -34,6 +34,7 @@ class ColumnSpec:
     data_type: str | None = None
     description: str | None = None
     tests: list[str] = field(default_factory=list)
+    meta: dict = field(default_factory=dict)
 
 
 @dataclass

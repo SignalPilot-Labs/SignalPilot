@@ -77,7 +77,6 @@ export type ChatUiContextValue = {
   openChatSettings?: () => void;
   onStop: (runId: string) => Promise<void>;
   onRetry: (runId: string) => Promise<void>;
-  onOpenDashboardPreview: (sessionId: string) => void;
 };
 
 export const ChatUiContext = createContext<ChatUiContextValue | null>(null);

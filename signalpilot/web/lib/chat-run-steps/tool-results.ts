@@ -2,6 +2,8 @@ import { asRecord, chatToolSummary, text } from "./payload";
 import {
   parseArtifact,
   parseColumnProfile,
+  parseDashboardSample,
+  parseDashboardScreenshot,
   parseDbtRun,
   parseKnowledge,
   parseSchema,
@@ -49,7 +51,8 @@ const KIND_BY_TOOL: Record<string, ToolResultKind> = {
   dbt_execute: "dbt_run", refresh_mart: "dbt_run",
   sandbox_exec: "terminal", Bash: "terminal",
   get_knowledge: "knowledge", search_knowledge: "knowledge", read_knowledge: "knowledge",
-  create_dashboard_preview: "artifact", start_analysis_notebook: "artifact",
+  start_analysis_notebook: "artifact",
+  dashboard_sample_data: "dashboard_sample", dashboard_screenshot: "dashboard_screenshot",
   inspect_dbt: "json", run_cells: "json", edit_notebook: "json",
   get_lightweight_cell_map: "json", get_notebook_errors: "json",
 };
@@ -118,6 +121,8 @@ function parseUnsafe(
     case "terminal": return { ...base, ...parseTerminal(result) };
     case "knowledge": return { ...base, ...parseKnowledge(result) };
     case "artifact": return { ...base, ...parseArtifact(result) };
+    case "dashboard_sample": return { ...base, ...parseDashboardSample(result) };
+    case "dashboard_screenshot": return { ...base, ...parseDashboardScreenshot(result) };
     case "json": return { ...base, kind: "json", value: result.value } satisfies JsonResult;
     case "text": return { ...base, kind: "text" };
     default:

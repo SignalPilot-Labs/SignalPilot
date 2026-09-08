@@ -130,7 +130,7 @@ export type ToolResult =
     }
   | {
       kind: "artifact";
-      artifact_kind: "dashboard" | "notebook";
+      artifact_kind: "notebook";
       published: boolean;
       filename?: string;
       artifact_index?: number;
@@ -139,7 +139,34 @@ export type ToolResult =
       session_id?: string;
       notebook_path?: string;
       notebook?: string;
-      dashboard_session_id?: string;
+    }
+  | {
+      /** `dashboard_sample_data`: prepared sample rows per chart. */
+      kind: "dashboard_sample";
+      dashboard_valid: boolean;
+      errors?: string[];
+      charts: {
+        id: string;
+        type?: string;
+        dataset?: string;
+        row_count: number;
+        issue_count: number;
+        columns: ({ name: string; inferred_type?: string } | string)[];
+        rows: Record<string, ToolResultCell>[];
+        issues?: { code: string; message: string }[];
+      }[];
+    }
+  | {
+      /** `dashboard_screenshot`: render outcome (the PNG is not projected). */
+      kind: "dashboard_screenshot";
+      dashboard_valid?: boolean;
+      errors?: string[];
+      rendered: string[];
+      failed: { id: string; code: string; message: string }[];
+      width?: number | null;
+      height?: number | null;
+      preview_path?: string | null;
+      error?: string;
     }
   | { kind: "json"; value: unknown }
   | { kind: "text" };

@@ -162,6 +162,15 @@ export function StandaloneChatTestHarness() {
     if (!content) throw new Error(`No fixture content for file ${fileId}`);
     return URL.createObjectURL(new Blob([content.body], { type: content.mime }));
   }, []);
+  // Text stub for the same files: the dashboard viewer reads its spec and
+  // datasets through it, so the real DashboardRenderer runs at /chats/test.
+  const getFileText = useCallback(async (fileId: string) => {
+    const content = fixtureFileContent(fileId);
+    if (!content) throw new Error(`No fixture content for file ${fileId}`);
+    return typeof content.body === "string"
+      ? content.body
+      : new TextDecoder().decode(content.body);
+  }, []);
   // Full-rows stub for the governed query result: the table card's "Load
   // all rows" pages the same deterministic 1,204 rows the gateway would.
   const getToolResultRows = useCallback(
@@ -384,6 +393,7 @@ export function StandaloneChatTestHarness() {
           files: conversationFiles,
           openArtifact,
           getFileObjectUrl,
+          getFileText,
           getToolResultRows,
           // Frozen replay clock, so relative timestamps are honest on
           // every frame instead of measuring from the real wall clock.
@@ -391,7 +401,6 @@ export function StandaloneChatTestHarness() {
           openChatSettings: settingsPanel.openPanel,
           onStop: async () => undefined,
           onRetry: async () => undefined,
-          onOpenDashboardPreview: () => undefined,
         }}
       >
       <div className="relative flex min-h-0 flex-1 overflow-hidden">
@@ -494,13 +503,17 @@ export function StandaloneChatTestHarness() {
                 Live notebook view stub
               </div>
             }
-            fileViewOverride={
-              <div
-                data-testid="chat-file-stub"
-                className="flex h-full items-center justify-center text-xs text-[var(--color-text-dim)]"
-              >
-                File viewer stub
-              </div>
+            fileViewOverride={(file) =>
+              // Dashboards render for real (their viewer needs no gateway);
+              // every other kind keeps the stub.
+              file.kind === "dashboard" ? undefined : (
+                <div
+                  data-testid="chat-file-stub"
+                  className="flex h-full items-center justify-center text-xs text-[var(--color-text-dim)]"
+                >
+                  File viewer stub
+                </div>
+              )
             }
           />
         )}

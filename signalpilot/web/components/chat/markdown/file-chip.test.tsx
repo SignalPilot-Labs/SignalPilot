@@ -52,7 +52,6 @@ function ui(overrides: Partial<ChatUiContextValue>): ChatUiContextValue {
     openArtifact: vi.fn(),
     onStop: async () => undefined,
     onRetry: async () => undefined,
-    onOpenDashboardPreview: () => undefined,
     ...overrides,
   };
 }
@@ -89,6 +88,7 @@ describe("FileChip", () => {
     expect(chipActionLabel("data")).toBe("Preview");
     expect(chipActionLabel("html")).toBe("Open");
     expect(chipActionLabel("markdown")).toBe("Open");
+    expect(chipActionLabel("dashboard")).toBe("Open");
     expect(chipActionLabel("image")).toBe("Download");
     expect(chipActionLabel("code")).toBe("Download");
     expect(chipActionLabel("other")).toBe("Download");

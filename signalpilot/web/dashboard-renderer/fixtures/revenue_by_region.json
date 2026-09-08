@@ -1,0 +1,34 @@
+[
+  {
+    "region": "North",
+    "revenue": 1627200,
+    "target": 1584000,
+    "customers": 1200,
+    "avg_order_value": 180,
+    "growth": 0.12
+  },
+  {
+    "region": "South",
+    "revenue": 1288200,
+    "target": 1254000,
+    "customers": 1630,
+    "avg_order_value": 200,
+    "growth": 0.08
+  },
+  {
+    "region": "East",
+    "revenue": 1898400,
+    "target": 1848000,
+    "customers": 2060,
+    "avg_order_value": 220,
+    "growth": 0.21
+  },
+  {
+    "region": "West",
+    "revenue": 1084800,
+    "target": 1056000,
+    "customers": 2490,
+    "avg_order_value": 240,
+    "growth": -0.03
+  }
+]

@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
 
 
 @dataclass
 class StandaloneArtifactCollector:
-    """Run-scoped results the in-process tools record for the final payload."""
+    """Run-scoped results the in-process tools record for the final payload.
 
-    dashboard_preview: dict[str, Any] | None = None
+    Files are captured by the filesystem sweep, so this collector carries no
+    tool-recorded state at the moment. It stays as the extension point.
+    """
 
 
 @dataclass

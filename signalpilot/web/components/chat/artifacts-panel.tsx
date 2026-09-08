@@ -12,6 +12,7 @@ import {
   FileText,
   File as FileIcon,
   Globe,
+  LayoutDashboard,
   Loader2,
   NotebookPen,
   Table2,
@@ -50,6 +51,12 @@ const ChatNotebookView = dynamic(
 
 type ArtifactsTab = "notebook" | "files" | "queries";
 
+/** Test-only replacement for the file viewer: a node, or a function of the
+ * selected file that returns `undefined` to keep the real viewer. */
+export type FileViewOverride =
+  | ReactNode
+  | ((file: ConversationFileInfo) => ReactNode | undefined);
+
 export function kindIcon(
   kind: string,
   className = "h-3.5 w-3.5 flex-none text-[var(--color-text-dim)]",
@@ -67,6 +74,8 @@ export function kindIcon(
       return <NotebookPen className={className} />;
     case "data":
       return <Table2 className={className} />;
+    case "dashboard":
+      return <LayoutDashboard className={className} />;
     default:
       return <FileIcon className={className} />;
   }
@@ -130,9 +139,15 @@ function FilesTab({
   /** Controlled by the panel; null means "show the list". */
   selectedFileId: string | null;
   onSelectFile: (fileId: string | null) => void;
-  fileViewOverride?: ReactNode;
+  fileViewOverride?: FileViewOverride;
 }) {
   const selected = files.find((file) => file.id === selectedFileId) ?? null;
+  const override =
+    typeof fileViewOverride === "function" && selected
+      ? fileViewOverride(selected)
+      : typeof fileViewOverride === "function"
+        ? undefined
+        : fileViewOverride;
 
   if (files.length === 0) {
     return (
@@ -162,7 +177,7 @@ function FilesTab({
           <ArrowLeft className="h-3 w-3" />
           All files
         </button>
-        {fileViewOverride ?? (
+        {override ?? (
           <ChatFileViewer conversationId={conversationId} file={selected} />
         )}
       </div>
@@ -230,7 +245,7 @@ export function ArtifactsPanel({
   /** Test-only: rendered instead of the notebook view (the fixture harness has no gateway). */
   liveViewOverride?: ReactNode;
   /** Test-only: rendered instead of the file viewer (the fixture harness has no gateway). */
-  fileViewOverride?: ReactNode;
+  fileViewOverride?: FileViewOverride;
 }) {
   // The agent's one-line query descriptions live in the run events; the
   // trace rows come from the gateway without them, so join here.

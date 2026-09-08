@@ -1,4 +1,4 @@
-"""Reports MCP tools for rendered HTML reports and dashboards."""
+"""Reports MCP tools for rendered HTML reports."""
 
 from __future__ import annotations
 
@@ -122,80 +122,3 @@ async def manage_report(
             return f"Error: invalid input — {exc.error_count()} validation error(s): {str(exc)[:300]}"
         return f"Error: {sanitize_mcp_error(str(exc))}"
 
-
-@audited_tool(mcp)
-async def manage_dashboard(
-    action: str,
-    title: str | None = None,
-    html: str | None = None,
-    data_json: str | None = None,
-    dashboard_id: str | None = None,
-    scope_ref: str | None = None,
-) -> str:
-    """Create, edit, or permanently delete an HTML dashboard.
-
-    action="create": requires title, html, and data_json.
-    action="edit": requires dashboard_id and at least one of title, html,
-    data_json.
-    action="delete": requires dashboard_id.
-    """
-    try:
-        act = (action or "").strip().lower()
-        if act in ("create", "edit", "delete"):
-            err = _require_mcp_admin_scope()
-            if err:
-                return err
-
-        if act == "create":
-            if not title or not html or data_json is None:
-                return "Error: action 'create' requires title, html, and data_json"
-            payload = ReportCreate(
-                title=title,
-                html=html,
-                scope_ref=scope_ref,
-                kind="dashboard",
-                data_json=_parse_data_json(data_json),
-            )
-            async with _store_session() as store:
-                report = await store.insert_report(payload, user_id=None, agent="manage_dashboard")
-            return json.dumps(
-                {
-                    "status": "created",
-                    "id": report.id,
-                    "url": f"{_web_base_url()}/reports?report={report.id}",
-                }
-            )
-
-        if act == "edit":
-            if not dashboard_id:
-                return "Error: action 'edit' requires dashboard_id"
-            if title is None and html is None and data_json is None:
-                return "Error: action 'edit' requires title, html, or data_json"
-            payload = _report_update_payload(title=title, html=html, data_json=data_json)
-            async with _store_session() as store:
-                report = await store.update_report_html(dashboard_id.strip(), payload)
-            return json.dumps(
-                {
-                    "status": "edited",
-                    "id": report.id,
-                    "url": f"{_web_base_url()}/reports?report={report.id}",
-                }
-            )
-
-        if act == "delete":
-            if not dashboard_id:
-                return "Error: action 'delete' requires dashboard_id"
-            async with _store_session() as store:
-                deleted = await store.delete_report(dashboard_id.strip())
-            if not deleted:
-                return json.dumps({"status": "not_found", "id": dashboard_id})
-            return json.dumps({"status": "deleted", "id": dashboard_id})
-
-        return "Error: action must be 'create', 'edit', or 'delete'"
-
-    except Exception as exc:
-        from pydantic import ValidationError
-
-        if isinstance(exc, ValidationError):
-            return f"Error: invalid input — {exc.error_count()} validation error(s): {str(exc)[:300]}"
-        return f"Error: {sanitize_mcp_error(str(exc))}"

@@ -14,6 +14,7 @@ const NOTEBOOK_TOOLS = new Set([
   "edit_notebook",
   "save_data_snapshot",
 ]);
+const DASHBOARD_TOOLS = new Set(["dashboard_sample_data", "dashboard_screenshot"]);
 const FILE_WRITE_TOOLS = new Set(["Write", "NotebookEdit"]);
 const FILE_EDIT_TOOLS = new Set(["Edit", "MultiEdit"]);
 const FILE_READ_TOOLS = new Set(["Read", "Glob", "Grep", "LS"]);
@@ -38,10 +39,11 @@ export function normalizeToolName(raw: string): {
 }
 
 export function categorizeTool(tool: string): RunStepCategory {
-  if (tool === "create_dashboard_preview") return "dashboard";
   if (SQL_TOOLS.has(tool)) return "sql";
   if (PYTHON_TOOLS.has(tool)) return "python";
   if (NOTEBOOK_TOOLS.has(tool)) return "notebook";
+  // Dashboard tools run in the notebook sandbox next to the notebook tools.
+  if (DASHBOARD_TOOLS.has(tool)) return "notebook";
   if (tool === "Bash" || tool.startsWith("sandbox_")) return "terminal";
   if (FILE_WRITE_TOOLS.has(tool)) return "file-write";
   if (FILE_EDIT_TOOLS.has(tool)) return "file-edit";
@@ -72,11 +74,8 @@ export function humanizeTool(tool: string): string {
     sandbox_exec: "Ran a command in the sandbox",
     sandbox_write_file: "Wrote a file in the sandbox",
     sandbox_read_file: "Read a file in the sandbox",
-    create_dashboard_preview: "Creating dashboard preview",
-    begin_dashboard_authoring: "Resolving dashboard fields",
-    set_dashboard_plan: "Validating dashboard plan",
-    upsert_dashboard_chart: "Validating dashboard chart",
-    apply_dashboard_operations: "Applying dashboard refinements",
+    dashboard_sample_data: "Checking dashboard data",
+    dashboard_screenshot: "Rendering dashboard",
     Bash: "Ran a command",
     Write: "Generated a file",
     Edit: "Edited a file",

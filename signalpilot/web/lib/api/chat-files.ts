@@ -10,6 +10,7 @@ export type ConversationFileKind =
   | "image"
   | "notebook"
   | "data"
+  | "dashboard"
   | "other";
 
 /** One agent-produced file in a conversation, manifest only. */

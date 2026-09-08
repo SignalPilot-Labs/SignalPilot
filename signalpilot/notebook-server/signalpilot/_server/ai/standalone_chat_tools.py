@@ -1,8 +1,10 @@
 """In-process MCP tools for one standalone data-chat run.
 
-The tools cover notebooks, read-only dbt inspection, and typed governed
-dashboard authoring. Files the agent saves under the scratch directory are
-captured by the filesystem sweep, not by a tool.
+The tools cover notebooks, read-only dbt inspection, and the two dashboard
+check tools (`dashboard_sample_data`, `dashboard_screenshot`). Files the agent
+saves under the scratch directory are captured by the filesystem sweep, not by
+a tool. A dashboard is a plain `artifacts/<name>.dashboard.json` file; the
+check tools read it and never write into `artifacts/`.
 """
 
 from __future__ import annotations
@@ -11,6 +13,10 @@ import json
 import re
 from typing import TYPE_CHECKING, Any
 
+from signalpilot._server.ai.dashboard import (
+    dashboard_sample_data,
+    dashboard_screenshot,
+)
 from signalpilot._server.ai.standalone_chat_dbt import run_inspect_dbt
 from signalpilot._server.ai.standalone_chat_lifecycle import (
     StandaloneArtifactCollector,
@@ -32,61 +38,6 @@ __all__ = [
 
 # Mirrors the start_analysis_notebook input schema pattern.
 _NOTEBOOK_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,40}$")
-_DASHBOARD_AUTHORING_TOOLS = {
-    "begin_dashboard_authoring",
-    "set_dashboard_plan",
-    "upsert_dashboard_chart",
-    "apply_dashboard_operations",
-    "create_dashboard_preview",
-}
-
-
-def _dashboard_preview_summary(
-    created: dict[str, Any], session_id: str
-) -> dict[str, Any]:
-    """Shape the gateway's dashboard authoring response for the agent."""
-    definition = created.get("definition")
-    definition = definition if isinstance(definition, dict) else {}
-    charts = definition.get("charts")
-    charts = charts if isinstance(charts, list) else []
-    plan = created.get("plan")
-    plan = plan if isinstance(plan, dict) else {}
-    chart_drafts = created.get("chart_drafts")
-    chart_drafts = chart_drafts if isinstance(chart_drafts, list) else []
-    failed_charts = [
-        {
-            "label": str(
-                ((draft.get("intent") or {}).get("label"))
-                or draft.get("chart_id")
-                or "Chart"
-            ),
-            "error": str(draft.get("safe_error") or "Chart generation failed"),
-        }
-        for draft in chart_drafts
-        if isinstance(draft, dict) and draft.get("status") == "failed"
-    ]
-    created_status = str(created.get("status") or "preview")
-    return {
-        "status": (
-            "partial_failed"
-            if created_status == "partial_failed"
-            else "preview_ready"
-        ),
-        "authoring_session_id": session_id,
-        "summary": str(created.get("summary") or ""),
-        "dashboard_name": str(
-            definition.get("name") or plan.get("name") or "Dashboard preview"
-        ),
-        "chart_count": len(charts),
-        "chart_titles": [
-            str(chart.get("title") or "Untitled chart")
-            for chart in charts[:12]
-            if isinstance(chart, dict)
-        ],
-        **({"failed_charts": failed_charts} if failed_charts else {}),
-        "requires_review": True,
-        "apply_required": True,
-    }
 
 
 def build_standalone_chat_mcp_server(
@@ -102,51 +53,23 @@ def build_standalone_chat_mcp_server(
     notebook_starter: Callable[[Any, dict[str, Any]], list[Any]] | None = None,
     notebook_session_resolver: Callable[[str], Any] | None = None,
     notebook_seeder: Callable[[str], Path] | None = None,
-    dashboard_authoring_handler: Callable[
-        [str, dict[str, Any]], Awaitable[dict[str, Any]]
-    ]
-    | None = None,
 ) -> Any:
     """Build the isolated in-process tool server used by one run."""
+    # The collector is the extension point for tool-recorded results. The
+    # current tools record nothing; files reach the run via the sweep.
+    del collector
     from claude_agent_sdk import McpSdkServerConfig
     from mcp.server import Server
-    from mcp.types import TextContent, Tool
+    from mcp.types import ImageContent, TextContent, Tool
 
     server = Server("standalone-chat", version="1.0.0")
     tools = standalone_chat_tools(
         notebook_enabled=notebook_mcp_app is not None
     )
-    dashboard_preview_result: dict[str, Any] | None = None
 
     @server.list_tools()
     async def list_tools() -> list[Tool]:
         return tools
-
-    async def author_dashboard(
-        name: str,
-        arguments: dict[str, Any],
-    ) -> list[TextContent]:
-        nonlocal dashboard_preview_result
-        if dashboard_authoring_handler is None:
-            raise ValueError("Dashboard authoring is unavailable")
-        result = await dashboard_authoring_handler(name, arguments)
-        if (
-            name != "create_dashboard_preview"
-            or result.get("status") != "preview_ready"
-        ):
-            return [TextContent(type="text", text=json.dumps(result))]
-        session = result.get("session")
-        session = session if isinstance(session, dict) else {}
-        session_id = str(result.get("authoring_session_id") or "").strip()
-        if not session_id:
-            raise ValueError("Dashboard authoring returned no preview")
-        dashboard_preview_result = _dashboard_preview_summary(
-            session, session_id
-        )
-        collector.dashboard_preview = dashboard_preview_result
-        return [
-            TextContent(type="text", text=json.dumps(dashboard_preview_result))
-        ]
 
     async def start_analysis_notebook(
         arguments: dict[str, Any],
@@ -252,18 +175,44 @@ def build_standalone_chat_mcp_server(
         )
         return [TextContent(type="text", text=json.dumps(inspected))]
 
+    async def sample_dashboard_data(
+        arguments: dict[str, Any],
+    ) -> list[TextContent | ImageContent]:
+        if scratch_directory is None:
+            return _dashboard_unavailable()
+        return await dashboard_sample_data(
+            scratch_directory=scratch_directory,
+            path=str(arguments.get("path") or ""),
+            chart_ids=list(arguments.get("chart_ids") or []),
+            limit=int(arguments.get("limit") or 10),
+        )
+
+    async def screenshot_dashboard(
+        arguments: dict[str, Any],
+    ) -> list[TextContent | ImageContent]:
+        if scratch_directory is None:
+            return _dashboard_unavailable()
+        raw_ids = arguments.get("chart_ids")
+        return await dashboard_screenshot(
+            scratch_directory=scratch_directory,
+            path=str(arguments.get("path") or ""),
+            chart_ids=list(raw_ids) if raw_ids else None,
+            width=int(arguments.get("width") or 1280),
+            theme=str(arguments.get("theme") or "light"),
+        )
+
     handlers = {
         "start_analysis_notebook": start_analysis_notebook,
         "inspect_dbt": inspect_dbt,
+        "dashboard_sample_data": sample_dashboard_data,
+        "dashboard_screenshot": screenshot_dashboard,
     }
 
     @server.call_tool()
     async def call_tool(
         name: str, arguments: dict[str, Any]
-    ) -> list[TextContent]:
+    ) -> list[TextContent | ImageContent]:
         try:
-            if name in _DASHBOARD_AUTHORING_TOOLS:
-                return await author_dashboard(name, arguments)
             handler = handlers.get(name)
             if handler is None:
                 raise ValueError(f"Unknown tool: {name}")
@@ -277,3 +226,22 @@ def build_standalone_chat_mcp_server(
     return McpSdkServerConfig(
         type="sdk", name="standalone-chat", instance=server
     )
+
+
+def _dashboard_unavailable() -> list[Any]:
+    from mcp.types import TextContent
+
+    return [
+        TextContent(
+            type="text",
+            text=json.dumps(
+                {
+                    "error": "scratch_unavailable",
+                    "message": (
+                        "The scratch directory is unavailable in this run, "
+                        "so dashboard files cannot be read."
+                    ),
+                }
+            ),
+        )
+    ]

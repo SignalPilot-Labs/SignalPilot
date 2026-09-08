@@ -35,7 +35,6 @@ async def complete_run(
     worker_id: str,
     content: str,
     report_proposal: dict[str, Any] | None = None,
-    dashboard_preview: dict[str, Any] | None = None,
 ) -> GatewayChatMessage | None:
     run = (
         await db.execute(
@@ -115,20 +114,6 @@ async def complete_run(
             report_suggestion = validated.model_dump(mode="json") if validated else None
         except (LookupError, RuntimeError, ValueError):
             report_suggestion = None
-    safe_dashboard_preview = None
-    if isinstance(dashboard_preview, dict):
-        session_id = str(dashboard_preview.get("authoring_session_id") or "").strip()
-        if session_id:
-            safe_dashboard_preview = {
-                "authoring_session_id": session_id,
-                "dashboard_name": str(
-                    dashboard_preview.get("dashboard_name") or "Dashboard preview"
-                )[:200],
-                "summary": str(dashboard_preview.get("summary") or "")[:2000],
-                "chart_count": max(0, int(dashboard_preview.get("chart_count") or 0)),
-                "requires_review": True,
-                "apply_required": True,
-            }
     sequence = conversation.message_count + 1
     message = GatewayChatMessage(
         id=str(uuid.uuid4()),
@@ -144,7 +129,6 @@ async def complete_run(
             "status": "completed",
             "runtime_archive_available": bool(run.runtime_archive_id),
             **({"report_suggestion": report_suggestion} if report_suggestion else {}),
-            **({"dashboard_preview": safe_dashboard_preview} if safe_dashboard_preview else {}),
         },
         idempotency_key=f"chat-run:{run.id}:final",
         sequence=sequence,

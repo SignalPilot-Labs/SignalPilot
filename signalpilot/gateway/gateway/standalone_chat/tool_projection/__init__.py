@@ -11,7 +11,7 @@ import json
 import logging
 from typing import Any
 
-from gateway.standalone_chat.tool_projection import builtins, ops, query, schema
+from gateway.standalone_chat.tool_projection import builtins, dashboard, ops, query, schema
 from gateway.standalone_chat.tool_projection.base import ProjectedResult, text_result
 from gateway.standalone_chat.tool_projection.limits import (
     PAYLOAD_MAX,
@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 _SCHEMA_TEXT_TOOLS = frozenset(
     {"schema_overview", "get_date_boundaries", "find_join_path", "get_relationships", "schema_link"}
 )
-_ARTIFACT_TOOLS = frozenset({"create_dashboard_preview", "start_analysis_notebook"})
+_ARTIFACT_TOOLS = frozenset({"start_analysis_notebook"})
 _LIST_TABLE_TOOLS = frozenset({"list_tables", "list_all_tables"})
 _SCHEMA_TOOLS = frozenset({"describe_table", "get_table_schema"})
 
@@ -88,6 +88,10 @@ def _dispatch(tool_name: str, base: str, text: str, tool_input: dict[str, Any] |
         return ops.project_knowledge(text, tool_input, mode="read")
     if base in _ARTIFACT_TOOLS:
         return ops.project_artifact(text, tool_input, tool=base)
+    if base == "dashboard_sample_data":
+        return dashboard.project_dashboard_sample(text, tool_input)
+    if base == "dashboard_screenshot":
+        return dashboard.project_dashboard_screenshot(text, tool_input)
     return ops.project_json_or_text(text, tool_input, fallback=_humanize(base))
 
 
@@ -161,6 +165,11 @@ def _shrink_result(result: dict[str, Any]) -> bool:
     if kind == "dbt_run" and len(result.get("log") or "") > RESULT_TEXT_SHRUNK:
         result["log"] = result["log"][-RESULT_TEXT_SHRUNK:]
         result["log_truncated"] = True
+        return True
+    if kind == "dashboard_sample" and any(chart.get("rows") for chart in result.get("charts") or []):
+        for chart in result["charts"]:
+            chart["rows"] = []
+        result["rows_truncated"] = True
         return True
     if kind == "terminal":
         changed = False

@@ -11,33 +11,6 @@ import pytest
 from gateway.standalone_chat import worker, worker_context
 
 
-def test_dashboard_tool_completion_exposes_only_safe_native_progress() -> None:
-    completion = worker._dashboard_authoring_completion(
-        "mcp__standalone-chat__upsert_dashboard_chart",
-        '{"status":"ready","authoring_session_id":"session-a","draft_revision":4,'
-        '"ready_count":2,"failed_count":0,"expected_count":3,"session":{"definition":{"sql":"secret"}}}',
-    )
-
-    assert completion == {
-        "dashboard_authoring": {
-            "label": "Building dashboard (2 of 3 charts)",
-            "phase": "upsert_dashboard_chart",
-            "authoring_session_id": "session-a",
-            "draft_revision": 4,
-            "status": "ready",
-            "ready_count": 2,
-            "failed_count": 0,
-            "expected_count": 3,
-        }
-    }
-    assert "secret" not in str(completion)
-
-
-def test_dashboard_tool_completion_ignores_untyped_or_unrelated_results() -> None:
-    assert worker._dashboard_authoring_completion("query_database", "{}") == {}
-    assert worker._dashboard_authoring_completion("create_dashboard_preview", "not-json") == {}
-
-
 def test_public_error_message_preserves_upstream_text_verbatim() -> None:
     error = RuntimeError(
         "CLIConnectionError: OAuth token expired\n"
@@ -108,86 +81,6 @@ def test_public_full_trace_is_expandable_safe_diagnostic_content() -> None:
         "raw": {"unknownFutureField": "preserved"},
     }
     assert context["environment"] == {"CLAUDE_CONFIG_DIR": "configured"}
-
-
-def test_dashboard_chart_reference_is_preloaded_into_existing_chat_runtime(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    reference = {
-        "dashboard_id": "dashboard-a",
-        "dashboard_version_id": "version-a",
-        "dashboard_result_id": "result-a",
-        "execution_id": "execution-a",
-    }
-    context = {
-        "conversation": SimpleNamespace(
-            branch="main",
-            commit_sha="a" * 40,
-            internal_summary=None,
-        ),
-        "project": SimpleNamespace(
-            id="project-a",
-            name="pilot",
-            display_name="Pilot",
-            description=None,
-            connection_name="production",
-        ),
-        "messages": [
-            SimpleNamespace(
-                role="user",
-                metadata_json={"dashboard_chart_reference": reference},
-            )
-        ],
-        "query_approvals": [],
-        "query_proposals": [],
-        "query_executions": [],
-        "query_results": [],
-    }
-    monkeypatch.setattr(worker_context, "project_metadata_context", lambda *_args: {"models": []})
-
-    warm = worker._warm_context(context)
-
-    assert warm["dashboard_chart_reference"] == reference
-    assert warm["project"]["commit_sha"] == "a" * 40
-
-
-def test_dashboard_authoring_session_is_preloaded_for_chat_refinement(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    context = {
-        "conversation": SimpleNamespace(branch="main", commit_sha="a" * 40, internal_summary=None),
-        "project": SimpleNamespace(
-            id="project-a",
-            name="pilot",
-            display_name="Pilot",
-            description=None,
-            connection_name="production",
-        ),
-        "messages": [],
-        "query_approvals": [],
-        "query_proposals": [],
-        "query_executions": [],
-        "query_results": [],
-        "dashboard_authoring_session": SimpleNamespace(
-            id="session-a",
-            dashboard_id="dashboard-a",
-            definition_json={"name": "Executive dashboard"},
-            draft_revision=3,
-            status="preview",
-        ),
-    }
-    monkeypatch.setattr(worker_context, "project_metadata_context", lambda *_args: {"models": []})
-
-    warm = worker._warm_context(context)
-
-    assert warm["dashboard_authoring"] == {
-        "authoring_session_id": "session-a",
-        "dashboard_id": "dashboard-a",
-        "dashboard_name": "Executive dashboard",
-        "draft_revision": 3,
-        "status": "preview",
-        "instruction": "Refine this dashboard session when the user asks for dashboard changes.",
-    }
 
 
 @pytest.mark.asyncio
@@ -290,11 +183,6 @@ async def test_notebook_stream_does_not_hold_a_database_session(monkeypatch: pyt
         yield {
             "type": "final",
             "content": "Analysis complete",
-                "dashboard_preview": {
-                "authoring_session_id": "authoring-session-1",
-                "dashboard_name": "Executive Revenue",
-                "chart_count": 2,
-            },
         }
 
     async def prepare_execution(*_args: Any, **_kwargs: Any) -> object:
@@ -342,11 +230,7 @@ async def test_notebook_stream_does_not_hold_a_database_session(monkeypatch: pyt
 
     assert completed_runs == ["run-a"]
     assert "report_action_outcome" not in completion_payloads[0]
-    assert completion_payloads[0]["dashboard_preview"] == {
-        "authoring_session_id": "authoring-session-1",
-        "dashboard_name": "Executive Revenue",
-        "chart_count": 2,
-    }
+    assert "dashboard_preview" not in completion_payloads[0]
     assert failed_runs == []
     assert ("cell_executed", {"status": "failed"}) in appended_events
     assert (

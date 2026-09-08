@@ -299,6 +299,8 @@ def test_classify_downgrades_fake_images_and_keeps_text_kinds():
     assert routes.classify("rows.csv", b"a,b\n") == ("data", "text/csv")
     assert routes.classify("report.html", b"<html>") == ("html", "text/html")
     assert routes.classify("notes.md", b"# hi") == ("markdown", "text/markdown")
+    assert routes.classify("revenue.dashboard.json", b"{}") == ("dashboard", "application/vnd.signalpilot.dashboard+json")
+    assert routes.classify("rows.json", b"{}") == ("code", "application/json")
     assert routes.classify("blob", b"\x00\x01")[0] == "other"
 
 

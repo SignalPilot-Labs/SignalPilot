@@ -62,9 +62,6 @@ from gateway.standalone_chat.worker_tool_results import (
     cache_tool_input,
     handle_tool_result,
 )
-from gateway.standalone_chat.worker_tool_results import (
-    dashboard_authoring_completion as _dashboard_authoring_completion,  # noqa: F401
-)
 from gateway.store import standalone_chat as chat_store
 
 logger = logging.getLogger(__name__)
@@ -118,7 +115,6 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
     final_text = ""
     streamed_text = ""
     report_proposal: dict[str, Any] | None = None
-    dashboard_preview: dict[str, Any] | None = None
     starts_new_text_block = False
     tool_names_by_id: dict[str, str] = {}
     tool_inputs_by_id: dict[str, dict[str, Any]] = {}
@@ -384,8 +380,6 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                                     )
                         raw_report_proposal = event.get("report_proposal")
                         report_proposal = raw_report_proposal if isinstance(raw_report_proposal, dict) else None
-                        raw_dashboard_preview = event.get("dashboard_preview")
-                        dashboard_preview = raw_dashboard_preview if isinstance(raw_dashboard_preview, dict) else None
                         if event.get("kernel_stopped"):
                             await _append(run_id, "kernel_stopped", {"status": "stopped"})
                 last_error = None
@@ -432,7 +426,6 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                 worker_id=worker_id,
                 content=answer,
                 report_proposal=report_proposal,
-                dashboard_preview=dashboard_preview,
             )
         if message is not None:
             await _update_summary(run_id)

@@ -72,7 +72,6 @@ describe("ChatComposerPanel plan dock", () => {
             openArtifact: () => undefined,
             onStop: async () => undefined,
             onRetry: async () => undefined,
-            onOpenDashboardPreview: () => undefined,
           }}
         >
           <ChatComposerPanel

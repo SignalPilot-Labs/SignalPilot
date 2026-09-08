@@ -13,3 +13,5 @@ import "./table-card";
 import "./table-list-card";
 import "./schema-card";
 import "./column-profile-card";
+import "./dashboard-sample-card";
+import "./dashboard-screenshot-card";

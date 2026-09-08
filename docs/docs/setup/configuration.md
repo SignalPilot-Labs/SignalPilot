@@ -142,7 +142,7 @@ Required to clone private repositories — project repos, and private eval sets.
 | `NOTION_OAUTH_CLIENT_ID` / `NOTION_OAUTH_CLIENT_SECRET` | — | Notion integration credentials. Required for the Notion connect flow. |
 | `NOTION_OAUTH_REDIRECT_URI` | — | Redirect URI registered with the integration. |
 | `NOTION_WEBHOOK_VERIFICATION_TOKEN` | — | Verification token for Notion webhooks. |
-| `NOTION_DASHBOARD_MAX_BYTES` | — | Ceiling on a dashboard payload written to Notion. |
+| `NOTION_DASHBOARD_MAX_BYTES` | — | Ceiling on an HTML deliverable written to Notion. |
 
 ## Evals
 

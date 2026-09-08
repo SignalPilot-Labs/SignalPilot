@@ -1,4 +1,4 @@
-"""Define governed query, dashboard, runtime dataset, and trace models."""
+"""Define governed query, runtime dataset, and trace models."""
 
 from __future__ import annotations
 
@@ -10,7 +10,6 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     Float,
-    ForeignKey,
     Index,
     Integer,
     String,
@@ -18,7 +17,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
 
 from .base import GatewayBase, TZDateTime
 
@@ -94,177 +93,6 @@ class GatewayStructuredQueryResult(GatewayBase):
     created_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now())
 
     __table_args__ = (Index("ix_gw_structured_result_owner", "org_id", "owner_user_id", "created_at"),)
-
-
-class GatewayDashboard(GatewayBase):
-    """Stable dashboard identity; content lives in immutable versions."""
-
-    __tablename__ = "gateway_dashboards"
-
-    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    org_id: Mapped[str] = mapped_column(String, nullable=False)
-    owner_user_id: Mapped[str] = mapped_column(String, nullable=False)
-    project_id: Mapped[str] = mapped_column(String, nullable=False)
-    connection_name: Mapped[str] = mapped_column(String(100), nullable=False)
-    name: Mapped[str] = mapped_column(String(200), nullable=False)
-    description: Mapped[str | None] = mapped_column(Text)
-    timezone: Mapped[str] = mapped_column(String(100), nullable=False)
-    current_version_id: Mapped[str | None] = mapped_column(String)
-    visibility: Mapped[str] = mapped_column(String(20), nullable=False, default="private", server_default="private")
-    parent_dashboard_id: Mapped[str | None] = mapped_column(String)
-    parent_version_id: Mapped[str | None] = mapped_column(String)
-    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
-    archived_at: Mapped[datetime | None] = mapped_column(TZDateTime)
-    created_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now(), onupdate=func.now())
-
-    __table_args__ = (
-        Index("ix_gw_dashboards_private", "org_id", "owner_user_id", "updated_at"),
-        Index("ix_gw_dashboards_visibility", "org_id", "visibility", "updated_at"),
-        Index("ix_gw_dashboards_project", "org_id", "project_id"),
-    )
-
-
-class GatewayDashboardVersion(GatewayBase):
-    """Immutable, normalized DashboardDefinition publication."""
-
-    __tablename__ = "gateway_dashboard_versions"
-
-    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    dashboard_id: Mapped[str] = mapped_column(String, nullable=False)
-    org_id: Mapped[str] = mapped_column(String, nullable=False)
-    owner_user_id: Mapped[str] = mapped_column(String, nullable=False)
-    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
-    definition_json: Mapped[dict] = mapped_column(JSON, nullable=False)
-    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    project_id: Mapped[str] = mapped_column(String, nullable=False)
-    commit_sha: Mapped[str] = mapped_column(String(40), nullable=False)
-    semantic_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
-    connection_name: Mapped[str] = mapped_column(String(100), nullable=False)
-    authoring_provenance_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    created_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now())
-
-    __table_args__ = (
-        UniqueConstraint("dashboard_id", "ordinal", name="uq_gw_dashboard_version_ordinal"),
-        UniqueConstraint("dashboard_id", "content_hash", name="uq_gw_dashboard_version_content"),
-        Index("ix_gw_dashboard_versions_dashboard", "org_id", "dashboard_id", "ordinal"),
-    )
-
-
-class GatewayDashboardAuthoringSession(GatewayBase):
-    """Private durable authoring conversation with one current unsaved draft."""
-
-    __tablename__ = "gateway_dashboard_authoring_sessions"
-
-    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    thread_id: Mapped[str] = mapped_column(String, nullable=False, default=lambda: str(uuid.uuid4()))
-    conversation_id: Mapped[str | None] = mapped_column(String)
-    dashboard_id: Mapped[str | None] = mapped_column(String)
-    base_version_id: Mapped[str | None] = mapped_column(String)
-    org_id: Mapped[str] = mapped_column(String, nullable=False)
-    owner_user_id: Mapped[str] = mapped_column(String, nullable=False)
-    project_id: Mapped[str] = mapped_column(String, nullable=False)
-    connection_name: Mapped[str] = mapped_column(String(100), nullable=False)
-    commit_sha: Mapped[str] = mapped_column(String(40), nullable=False)
-    semantic_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
-    prompt: Mapped[str] = mapped_column(Text, nullable=False)
-    definition_json: Mapped[dict | None] = mapped_column(JSON)
-    plan_json: Mapped[dict | None] = mapped_column(JSON)
-    expected_chart_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
-    authoring_contract_version: Mapped[str] = mapped_column(
-        String(40), nullable=False, default="2026-09-02.1", server_default="2026-09-02.1"
-    )
-    plan_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
-    operations_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
-    events_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
-    agent_runs_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
-    confirmations_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
-    pending_custom_sql_chart_ids_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
-    draft_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
-    summary: Mapped[str] = mapped_column(Text, nullable=False)
-    agent_run_id: Mapped[str] = mapped_column(String, nullable=False)
-    model: Mapped[str] = mapped_column(String(100), nullable=False)
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="preview", server_default="preview")
-    requires_custom_sql_confirmation: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    custom_sql_confirmed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    applied_version_id: Mapped[str | None] = mapped_column(String)
-    created_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now(), onupdate=func.now())
-    applied_at: Mapped[datetime | None] = mapped_column(TZDateTime)
-    discarded_at: Mapped[datetime | None] = mapped_column(TZDateTime)
-    chart_drafts: Mapped[list[GatewayDashboardChartDraft]] = relationship(
-        back_populates="session",
-        lazy="selectin",
-        order_by="GatewayDashboardChartDraft.ordinal",
-    )
-
-    __table_args__ = (
-        Index("ix_gw_dashboard_authoring_owner", "org_id", "owner_user_id", "created_at"),
-        Index("ix_gw_dashboard_authoring_dashboard", "org_id", "dashboard_id", "created_at"),
-        Index("ix_gw_dashboard_authoring_thread", "org_id", "owner_user_id", "thread_id", "created_at"),
-        Index("ix_gw_dashboard_authoring_conversation", "org_id", "owner_user_id", "conversation_id", "updated_at"),
-    )
-
-
-class GatewayDashboardChartDraft(GatewayBase):
-    """One private, independently validated chart in a progressive build."""
-
-    __tablename__ = "gateway_dashboard_chart_drafts"
-
-    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    session_id: Mapped[str] = mapped_column(
-        String,
-        ForeignKey("gateway_dashboard_authoring_sessions.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    chart_id: Mapped[str] = mapped_column(String(200), nullable=False)
-    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
-    intent_json: Mapped[dict] = mapped_column(JSON, nullable=False)
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending", server_default="pending")
-    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
-    definition_json: Mapped[dict | None] = mapped_column(JSON)
-    safe_error: Mapped[str | None] = mapped_column(Text)
-    model_usage_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    payload_hash: Mapped[str | None] = mapped_column(String(64))
-    tool_call_id: Mapped[str | None] = mapped_column(String(200))
-    validation_outcome_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    created_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now(), onupdate=func.now())
-    session: Mapped[GatewayDashboardAuthoringSession] = relationship(back_populates="chart_drafts")
-
-    __table_args__ = (
-        UniqueConstraint("session_id", "chart_id", name="uq_gw_dashboard_chart_draft"),
-        UniqueConstraint("session_id", "ordinal", name="uq_gw_dashboard_chart_ordinal"),
-        Index("ix_gw_dashboard_chart_drafts_session", "session_id", "ordinal"),
-    )
-
-
-class GatewayDashboardResult(GatewayBase):
-    """Dashboard-authorized pointer to one governed structured query result."""
-
-    __tablename__ = "gateway_dashboard_results"
-
-    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    dashboard_id: Mapped[str] = mapped_column(String, nullable=False)
-    version_id: Mapped[str] = mapped_column(String, nullable=False)
-    chart_id: Mapped[str] = mapped_column(String, nullable=False)
-    org_id: Mapped[str] = mapped_column(String, nullable=False)
-    execution_id: Mapped[str] = mapped_column(String, nullable=False)
-    structured_result_id: Mapped[str] = mapped_column(String, nullable=False)
-    cache_key: Mapped[str] = mapped_column(String(64), nullable=False)
-    sql_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    parameter_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    tables_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
-    semantic_definition_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    completeness: Mapped[str] = mapped_column(String(20), nullable=False)
-    freshness_at: Mapped[datetime | None] = mapped_column(TZDateTime)
-    expires_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(TZDateTime, server_default=func.now())
-
-    __table_args__ = (
-        Index("ix_gw_dashboard_result_cache", "org_id", "dashboard_id", "version_id", "cache_key"),
-        Index("ix_gw_dashboard_result_access", "org_id", "dashboard_id", "id"),
-    )
 
 
 class GatewayQueryPlan(GatewayBase):

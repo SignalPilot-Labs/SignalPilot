@@ -19,6 +19,8 @@ export type ToolResultKind =
   | "terminal"
   | "knowledge"
   | "artifact"
+  | "dashboard_sample"
+  | "dashboard_screenshot"
   | "json"
   | "text";
 
@@ -177,7 +179,7 @@ export type KnowledgeResult = ToolResultBase & {
 
 export type ArtifactResult = ToolResultBase & {
   kind: "artifact";
-  artifactKind: "dashboard" | "notebook";
+  artifactKind: "notebook";
   published: boolean;
   filename: string | null;
   artifactIndex: number | null;
@@ -186,7 +188,41 @@ export type ArtifactResult = ToolResultBase & {
   sessionId: string | null;
   notebookPath: string | null;
   notebook: string | null;
-  dashboardSessionId: string | null;
+};
+
+export type DashboardIssue = { code: string; message: string };
+
+export type DashboardSampleChart = {
+  id: string;
+  type: string | null;
+  dataset: string | null;
+  rowCount: number;
+  issueCount: number;
+  columns: { name: string; inferredType: string | null }[];
+  rows: Record<string, ToolResultCell>[];
+  issues: DashboardIssue[];
+};
+
+/** `dashboard_sample_data`: the prepared rows and checks per chart. */
+export type DashboardSampleResult = ToolResultBase & {
+  kind: "dashboard_sample";
+  dashboardValid: boolean;
+  errors: string[];
+  charts: DashboardSampleChart[];
+};
+
+/** `dashboard_screenshot`: which tiles rendered; the PNG itself is not
+ * carried on the event. */
+export type DashboardScreenshotResult = ToolResultBase & {
+  kind: "dashboard_screenshot";
+  dashboardValid: boolean;
+  errors: string[];
+  rendered: string[];
+  failed: { id: string; code: string; message: string }[];
+  width: number | null;
+  height: number | null;
+  previewPath: string | null;
+  error: string | null;
 };
 
 export type JsonResult = ToolResultBase & { kind: "json"; value: unknown };
@@ -206,6 +242,8 @@ export type ToolResult =
   | TerminalResult
   | KnowledgeResult
   | ArtifactResult
+  | DashboardSampleResult
+  | DashboardScreenshotResult
   | JsonResult
   | TextResult
   | LegacyResult;

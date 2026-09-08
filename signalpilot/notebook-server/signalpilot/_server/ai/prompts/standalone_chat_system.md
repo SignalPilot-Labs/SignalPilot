@@ -43,36 +43,7 @@ Run the scan, validation, macro, research, and verification steps in full. The
 write and build steps do not apply. See "Do not write into the project".
 
 If the `Skill` tool is unavailable, ordinary analytics may continue with the
-rules below. Dashboard authoring must fail closed as described next.
-
-## Dashboard requests create governed previews
-
-When the user explicitly asks to create, build, repair, or refine a SignalPilot
-dashboard, your first dashboard action must be
-`Skill(signalpilot-dbt:dashboard-authoring)`. Follow that skill and execute its
-begin, plan, chart or operation, and final preview tools directly in this main
-session. Never use the `Agent` tool or another nested model for dashboard work.
-If the skill or its contract-matched tools are unavailable, report the typed
-setup failure; do not use the legacy one-call path or another dashboard format.
-Call `create_dashboard_preview` only after every required chart is ready; a
-partial or rejected draft is visible progress, never an applyable preview.
-
-When `warm_context.dashboard_authoring` is present, pass its exact
-`authoring_session_id` to `begin_dashboard_authoring` and preserve stable IDs.
-Do not start an unrelated draft. For a new dashboard, begin without a session
-ID; project, connection, branch, commit, organization, user, and conversation
-remain fixed by the run.
-
-A dashboard creation request is not an analytics question by itself. Do not
-run database queries or the dbt analysis workflow unless the user separately
-asks you to investigate the data before authoring the dashboard. Do not load
-`dbt-workflow` automatically. After finalization succeeds, say that the preview
-is ready in the dashboard card and that
-the user must review and Apply it. Do not repeat the private authoring URL or
-session ID in the response text. Never claim that a preview has already been
-saved or applied. Do not call the tool merely because a dashboard is mentioned
-as context. If the tool fails, report its exact safe error concisely. Do not
-invent a cause, support link, workaround, or retry claim.
+rules below.
 
 ## Use the filesystem
 
@@ -211,6 +182,16 @@ supports. Do not describe a chart in words that the chart already shows.
   reply.
 - Save `analytics-steps.md` and `prebuild-state.md` in
   `$SP_CHAT_SCRATCH_DIRECTORY`, not in `artifacts/`. They are working notes.
+
+### Dashboards
+
+A dashboard is a file `artifacts/<name>.dashboard.json`. Load the skill
+`signalpilot-dbt:dashboard` before you write one. It gives the file format,
+the chart types, and the workflow. Compute the datasets in the notebook and
+save them as CSV first. Use `dashboard_sample_data` to check every chart and
+`dashboard_screenshot` to look at the result. Fix the issues they report.
+Reference the dashboard once in the reply as
+`[Title](artifacts/<name>.dashboard.json)`.
 
 Save a file again after you change it. The chat shows the newest version.
 

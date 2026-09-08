@@ -111,7 +111,6 @@ export function useSharedChatUi(
       readOnly: true,
       onStop: noop,
       onRetry: noop,
-      onOpenDashboardPreview: () => undefined,
     }),
     [
       downloadFile,

@@ -35,7 +35,22 @@ def test_real_migration_chain_is_the_tracked_head() -> None:
     config = build_alembic_config("postgresql://unused:unused@localhost/unused")
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_current_head() == "0026"
+    assert scripts.get_current_head() == "0029"
+
+    # 0029 drops the dashboard share token (link visibility removed).
+    revision_0029 = scripts.get_revision("0029")
+    assert revision_0029 is not None
+    assert revision_0029.down_revision == "0028"
+
+    # 0028 adds the published dashboard gallery tables on top of the drop.
+    revision_0028 = scripts.get_revision("0028")
+    assert revision_0028 is not None
+    assert revision_0028.down_revision == "0027"
+
+    # 0027 drops the governed dashboard tables (0012, 0020, 0021, 0025).
+    revision_0027 = scripts.get_revision("0027")
+    assert revision_0027 is not None
+    assert revision_0027.down_revision == "0026"
 
     revision_0026 = scripts.get_revision("0026")
     assert revision_0026 is not None

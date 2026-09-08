@@ -4,7 +4,7 @@ sidebar_position: 1
 
 # Tools Reference
 
-All 54 SignalPilot MCP tools across 12 categories. The catalog below groups every tool by category (click a category for full parameter and example documentation). The [Tools by workflow stage](#tools-by-workflow-stage) section then maps the same tools onto the four stages of a governed dbt/SQL run — Scan/Map, Explore/Research, Write, and Verify.
+All 53 SignalPilot MCP tools across 12 categories. The catalog below groups every tool by category (click a category for full parameter and example documentation). The [Tools by workflow stage](#tools-by-workflow-stage) section then maps the same tools onto the four stages of a governed dbt/SQL run — Scan/Map, Explore/Research, Write, and Verify.
 
 ## Tools by workflow stage
 
@@ -175,12 +175,13 @@ See [Operational tools](/docs/reference/tools-ops).
 | `propose_knowledge` | Propose a new knowledge entry, or edit one in place with `overwrite=true` |
 | `archive_knowledge` | Archive (soft-delete) a knowledge entry by ID |
 
-## Reporting (2 tools)
+## Reporting (1 tool)
 
 | Tool | Description |
 |------|-------------|
 | `manage_report` | Create or permanently delete a rendered HTML report |
-| `manage_dashboard` | Create or delete a saved dashboard |
+
+Dashboards are `artifacts/<name>.dashboard.json` files written in the chat sandbox and checked with the sandbox tools `dashboard_sample_data` and `dashboard_screenshot`.
 
 ## Semantic layer (2 tools)
 

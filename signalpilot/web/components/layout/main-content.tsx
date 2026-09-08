@@ -3,16 +3,12 @@
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 
-/** Routes where the sidebar is hidden — main content should be full-width. */
-const FULL_WIDTH_PREFIXES = ["/sign-in", "/sign-up", "/onboarding", "/notebook"];
+import { isChromelessRoute } from "~/lib/route-chrome";
 
-function matchesRoutePrefix(pathname: string, prefix: string) {
-  return pathname === prefix || pathname.startsWith(`${prefix}/`);
-}
-
+/** Offsets the page for the sidebar, except on routes that render without it. */
 export function MainContent({ children }: { children: ReactNode }) {
   const pathname = usePathname();
-  const fullWidth = FULL_WIDTH_PREFIXES.some((prefix) => matchesRoutePrefix(pathname, prefix));
+  const fullWidth = isChromelessRoute(pathname);
 
   return (
     <main className={`${fullWidth ? "" : "md:ml-56"} min-h-screen relative z-10`}>

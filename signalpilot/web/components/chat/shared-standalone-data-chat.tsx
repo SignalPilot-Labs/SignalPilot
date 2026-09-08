@@ -149,9 +149,6 @@ export function SharedStandaloneDataChat({ token }: { token: string }) {
                 artifactsLoading={false}
                 artifactsOpen={artifactsOpen}
                 onOpenArtifacts={openArtifactsPanel}
-                dashboardSessionId={null}
-                dashboardOpen={false}
-                onOpenDashboard={() => undefined}
               />
             </div>
           </main>

@@ -68,7 +68,10 @@ def file_manifest_entry(row: GatewayChatFile) -> dict:
 
 def derive_file_kind(filename: str, mime_type: str | None) -> str:
     """Classify a file for the artifacts panel from its extension and MIME type."""
-    extension = PurePosixPath(filename.lower()).suffix
+    lowered = filename.lower()
+    if lowered.endswith(".dashboard.json"):
+        return "dashboard"
+    extension = PurePosixPath(lowered).suffix
     kind = _KIND_BY_EXTENSION.get(extension)
     if kind:
         return kind

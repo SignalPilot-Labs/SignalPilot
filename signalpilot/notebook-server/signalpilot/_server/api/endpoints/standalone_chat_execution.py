@@ -21,7 +21,6 @@ from signalpilot._server.ai.claude_session_archive import (
     prepare_claude_session,
 )
 from signalpilot._server.ai.standalone_chat_tools import (
-    StandaloneArtifactCollector,
     StandaloneNotebookLifecycle,
     build_standalone_chat_mcp_server,
 )
@@ -43,7 +42,6 @@ from signalpilot._server.api.endpoints.standalone_chat_finalize import (
     recovery_injection,
 )
 from signalpilot._server.api.endpoints.standalone_chat_gateway import (
-    StandaloneGatewayClient,
     gateway_api_base_url,
 )
 from signalpilot._server.api.endpoints.standalone_chat_prompt import (
@@ -152,44 +150,6 @@ async def execute(*, request: Request) -> StreamingResponse:
     scoped_token = authorization.gateway_token
     runtime_redactions = (scoped_token, *connector_secret_values(connectors))
     gateway_api_url = gateway_api_base_url()
-    gateway = StandaloneGatewayClient(
-        gateway_url=gateway_api_url,
-        token=scoped_token,
-        run_id=run_id,
-    )
-    active_authoring_session_id = (
-        str(
-            (
-                (body.get("warm_context") or {}).get("dashboard_authoring")
-                or {}
-            ).get("authoring_session_id")
-            or ""
-        )
-        or None
-    )
-
-    async def dashboard_authoring_tool(
-        tool: str,
-        arguments: dict[str, Any],
-    ) -> dict[str, Any]:
-        nonlocal active_authoring_session_id
-        supplied = str(arguments.get("authoring_session_id") or "") or None
-        if tool == "begin_dashboard_authoring":
-            if supplied and supplied != active_authoring_session_id:
-                raise ValueError(
-                    "Dashboard authoring session is not active in this Data Chat"
-                )
-        elif supplied != active_authoring_session_id:
-            raise ValueError(
-                "Dashboard authoring session is not active in this Data Chat"
-            )
-        result = await gateway.dashboard_authoring_tool(tool, arguments)
-        if tool == "begin_dashboard_authoring":
-            active_authoring_session_id = (
-                str(result.get("authoring_session_id") or "") or None
-            )
-        return result
-
     auth_config_override = _runtime_auth_override(body)
     agent_model = str(
         body.get("model")
@@ -320,7 +280,6 @@ async def execute(*, request: Request) -> StreamingResponse:
             # Non-analysis kernels survive a recovery restart untouched.
             carryover_sessions: dict[str, str] = {}
             for attempt in (1, 2):
-                collector = StandaloneArtifactCollector()
                 lifecycle = StandaloneNotebookLifecycle()
                 lifecycle.sessions.update(carryover_sessions)
                 current_lifecycle = lifecycle
@@ -390,7 +349,6 @@ async def execute(*, request: Request) -> StreamingResponse:
                         return
 
                 artifact_server = build_standalone_chat_mcp_server(
-                    collector,
                     project_directory=project_directory,
                     scratch_directory=scratch,
                     notebook_mcp_app=runtime_app,
@@ -403,7 +361,6 @@ async def execute(*, request: Request) -> StreamingResponse:
                             working_scratch, notebook_name
                         )
                     ),
-                    dashboard_authoring_handler=dashboard_authoring_tool,
                 )
                 attempt_prompt = prompt
                 if recovery_failure is not None:
@@ -597,7 +554,6 @@ async def execute(*, request: Request) -> StreamingResponse:
                 for line in await final_capture():
                     yield line
                 final_payload = build_final_payload(
-                    collector,
                     accepted_text=accepted_text,
                     agent_cost_usd=state.agent_cost_usd,
                     agent_usage=state.agent_usage,

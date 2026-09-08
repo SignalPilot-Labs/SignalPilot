@@ -45,10 +45,9 @@ MCP_TOOL_SCOPES: dict[str, str] = {
     "audit_model_sources": "query",
     "compare_join_types": "query",
     "verify_model_values": "query",
-    # Disabled with the reports MCP registration. Durable reports and dashboards
-    # require explicit user creation or approval.
+    # Disabled with the reports MCP registration. Durable reports require
+    # explicit user creation or approval.
     # "manage_report": "admin",
-    # "manage_dashboard": "admin",
     "list_semantic_metrics": "query",
     "verify_metric_conformance": "query",
     "plan_query": "query",

@@ -86,7 +86,7 @@ function FileImage({
 
 /** Shimmer placeholder at 16:10 while the manifest catches up. Keyed by
  * the normalized path in the tree, so it resolves in place. */
-function PendingFigure({ name }: { name: string }) {
+export function PendingFigure({ name }: { name: string }) {
   return (
     <span
       data-testid="chat-md-figure-pending"

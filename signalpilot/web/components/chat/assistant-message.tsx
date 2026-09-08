@@ -41,10 +41,6 @@ import { LivePill } from "~/components/chat/live-pill";
 import { useToast } from "~/components/ui/toast";
 import { useChatUi, type UiMessage } from "~/components/chat/chat-ui-context";
 import {
-  DashboardPreviewCard,
-  messageDashboardPreview,
-} from "~/components/chat/chat-dashboard-preview-card";
-import {
   deriveArtifactCards,
   groupCardsByAnchor,
 } from "~/lib/chat-artifact-cards";
@@ -134,9 +130,6 @@ export function AssistantMessage({
   );
   const runtimeArchiveAvailable =
     message.metadata.runtime_archive_available === true;
-  const dashboardPreview = successful
-    ? messageDashboardPreview(message.metadata)
-    : null;
   return (
     <article
       data-chat-message-id={message.id}
@@ -178,9 +171,6 @@ export function AssistantMessage({
           {runId && <ConnectorSignInCards events={events} runId={runId} />}
           {!blocksHaveText && message.content && !messageRepeatsRunError && (
             <ChatMarkdown markdown={message.content} streaming={running} />
-          )}
-          {dashboardPreview && (
-            <DashboardPreviewCard preview={dashboardPreview} />
           )}
           {runStatus === "cancelled" && (
             <p className="mt-3 text-xs text-[var(--color-text-dim)]">

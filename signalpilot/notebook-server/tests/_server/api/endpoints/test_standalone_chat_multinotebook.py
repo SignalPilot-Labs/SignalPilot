@@ -12,7 +12,6 @@ from starlette.requests import Request
 
 from signalpilot._server.ai.claude_agent import AgentEvent
 from signalpilot._server.ai.standalone_chat_tools import (
-    StandaloneArtifactCollector,
     StandaloneNotebookLifecycle,
     build_standalone_chat_mcp_server,
 )
@@ -113,7 +112,6 @@ async def test_start_tool_named_notebook_starts_a_distinct_lazy_session(
 
     lifecycle = StandaloneNotebookLifecycle()
     server = build_standalone_chat_mcp_server(
-        StandaloneArtifactCollector(),
         notebook_mcp_app=object(),
         analysis_notebook_path=seeded,
         notebook_lifecycle=lifecycle,
@@ -298,7 +296,7 @@ async def test_run_archives_each_notebook_and_gates_only_the_analysis(
     async def execution_directory(**_kwargs: Any) -> tuple[Path, bool]:
         return tmp_path, False
 
-    def build_server(_collector: Any, **kwargs: Any) -> object:
+    def build_server(**kwargs: Any) -> object:
         lifecycles.append(kwargs["notebook_lifecycle"])
         event_sinks.append(kwargs["event_sink"])
         return object()
@@ -427,7 +425,7 @@ def _patch_execution(
     async def execution_directory(**_kwargs: Any) -> tuple[Path, bool]:
         return tmp_path, False
 
-    def build_server(_collector: Any, **kwargs: Any) -> object:
+    def build_server(**kwargs: Any) -> object:
         captured["lifecycle"] = kwargs["notebook_lifecycle"]
         captured["event_sink"] = kwargs["event_sink"]
         return object()
@@ -473,7 +471,6 @@ async def test_start_tool_rejects_traversal_and_bad_slugs(
     seeded.write_text("import marimo\n", encoding="utf-8")
     seeds: list[str] = []
     server = build_standalone_chat_mcp_server(
-        StandaloneArtifactCollector(),
         notebook_mcp_app=object(),
         analysis_notebook_path=seeded,
         notebook_lifecycle=StandaloneNotebookLifecycle(),

@@ -3,14 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
-
-
-@dataclass
-class StandaloneArtifactCollector:
-    """Run-scoped results the in-process tools record for the final payload."""
-
-    dashboard_preview: dict[str, Any] | None = None
 
 
 @dataclass

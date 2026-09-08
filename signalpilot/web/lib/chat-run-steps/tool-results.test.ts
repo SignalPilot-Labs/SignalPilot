@@ -239,7 +239,9 @@ describe("toolResultKindForTool", () => {
     expect(toolResultKindForTool("dbt_execute")).toBe("dbt_run");
     expect(toolResultKindForTool("Bash")).toBe("terminal");
     expect(toolResultKindForTool("search_knowledge")).toBe("knowledge");
-    expect(toolResultKindForTool("create_dashboard_preview")).toBe("artifact");
+    expect(toolResultKindForTool("unknown_tool")).toBeNull();
+    expect(toolResultKindForTool("dashboard_sample_data")).toBe("dashboard_sample");
+    expect(toolResultKindForTool("dashboard_screenshot")).toBe("dashboard_screenshot");
     expect(toolResultKindForTool("start_analysis_notebook")).toBe("artifact");
     expect(toolResultKindForTool("publish_chart")).toBeNull();
     expect(toolResultKindForTool("run_cells")).toBe("json");

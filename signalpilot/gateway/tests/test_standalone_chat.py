@@ -1464,13 +1464,6 @@ async def test_claim_completion_and_final_message_are_idempotent(db_session):
         run_id=run.id,
         worker_id="worker-a",
         content="Revenue increased.",
-        dashboard_preview={
-            "authoring_session_id": "authoring-session-1",
-            "dashboard_name": "Executive Revenue",
-            "summary": "A governed executive dashboard.",
-            "chart_count": 4,
-            "chart_titles": ["must-not-be-exposed"],
-        },
     )
     second = await chat_store.complete_run(
         db_session,
@@ -1480,14 +1473,6 @@ async def test_claim_completion_and_final_message_are_idempotent(db_session):
     )
     assert first is not None
     assert "report_action_outcome" not in first.metadata_json
-    assert first.metadata_json["dashboard_preview"] == {
-        "authoring_session_id": "authoring-session-1",
-        "dashboard_name": "Executive Revenue",
-        "summary": "A governed executive dashboard.",
-        "chart_count": 4,
-        "requires_review": True,
-        "apply_required": True,
-    }
     assert second is None
     count = await db_session.scalar(
         select(func.count(GatewayChatMessage.id)).where(

@@ -4,11 +4,11 @@ import httpx
 import pytest
 
 from gateway.notion import client as notion_client
-from gateway.notion import dashboards
+from gateway.notion import deliverables
 
 
 def test_html_embed_block_uses_file_upload_shape() -> None:
-    assert dashboards.html_embed_block("upload-1") == {
+    assert deliverables.html_embed_block("upload-1") == {
         "object": "block",
         "type": "embed",
         "embed": {
@@ -76,7 +76,7 @@ async def test_empty_anchor_inserts_after_then_archives(monkeypatch: pytest.Monk
     monkeypatch.setattr(notion_client, "append_block_children", append_block_children)
     monkeypatch.setattr(notion_client, "archive_block", archive_block)
 
-    result = await dashboards.insert_html_deliverable(
+    result = await deliverables.insert_html_deliverable(
         "token",
         page_id="page-1",
         anchor_block_id="anchor-1",
@@ -120,7 +120,7 @@ async def test_oversize_html_inserts_report_link_without_upload(
     monkeypatch.setattr(notion_client, "upload_file", upload_file)
     monkeypatch.setattr(notion_client, "append_block_children", append_block_children)
 
-    result = await dashboards.insert_html_deliverable(
+    result = await deliverables.insert_html_deliverable(
         "token",
         page_id="page-1",
         anchor_block_id="anchor-1",
@@ -154,7 +154,7 @@ async def test_replace_html_deliverable_updates_existing_embed_with_file_upload(
     monkeypatch.setattr(notion_client, "upload_file", upload_file)
     monkeypatch.setattr(notion_client, "update_block", update_block)
 
-    result = await dashboards.replace_html_deliverable(
+    result = await deliverables.replace_html_deliverable(
         "token",
         embed_block_id="embed-1",
         title="Revenue Dashboard",

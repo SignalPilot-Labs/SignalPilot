@@ -2,3 +2,7 @@
 # E2E test artifacts
 e2e-*.png
 test-results/
+
+# Dashboard renderer CLI bundle
+dashboard-renderer/dist/
+dashboard-renderer/node_modules/

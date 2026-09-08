@@ -1,11 +1,11 @@
 "use client";
 
 // The right-hand slot of the standalone data chat: floating toggles over the
-// transcript and the one panel showing at a time (artifacts, chat settings,
-// or the dashboard preview). The container owns the open/close state; this
-// module only renders it.
+// transcript and the one panel showing at a time (artifacts or chat
+// settings). The container owns the open/close state; this module only
+// renders it.
 
-import { History, LayoutDashboard, Loader2, NotebookPen, Share2 } from "lucide-react";
+import { History, Loader2, NotebookPen, Share2 } from "lucide-react";
 import type {
   ConversationFileInfo,
   ConversationNotebook,
@@ -13,7 +13,6 @@ import type {
 } from "~/lib/api";
 import { ArtifactsPanel } from "~/components/chat/artifacts-panel";
 import type { ArtifactOpenRequest } from "~/components/chat/use-open-artifact";
-import { ChatDashboardPanel } from "~/components/chat/chat-dashboard-panel";
 import {
   ChatSettingsPanel,
   type ChatBudgetSettings,
@@ -28,9 +27,6 @@ export function ChatPanelToggles({
   artifactsLoading,
   artifactsOpen,
   onOpenArtifacts,
-  dashboardSessionId,
-  dashboardOpen,
-  onOpenDashboard,
   onShare,
   onReplay,
 }: {
@@ -42,10 +38,6 @@ export function ChatPanelToggles({
   artifactsLoading: boolean;
   artifactsOpen: boolean;
   onOpenArtifacts: () => void;
-  /** The newest dashboard preview session, when the run produced one. */
-  dashboardSessionId: string | null;
-  dashboardOpen: boolean;
-  onOpenDashboard: (sessionId: string) => void;
 }) {
   // One floating row, outermost action last, so absent toggles leave no gap.
   return (
@@ -60,18 +52,6 @@ export function ChatPanelToggles({
           className={TOGGLE_CLASS}
         >
           <History className="h-4 w-4" />
-        </button>
-      )}
-      {dashboardSessionId && !dashboardOpen && (
-        <button
-          type="button"
-          aria-label="Open the dashboard preview"
-          title="Open the dashboard preview"
-          data-testid="chat-dashboard-toggle"
-          onClick={() => onOpenDashboard(dashboardSessionId)}
-          className={TOGGLE_CLASS}
-        >
-          <LayoutDashboard className="h-4 w-4" />
         </button>
       )}
       {(artifactsLoading || artifactsAvailable) && !artifactsOpen && (
@@ -112,7 +92,6 @@ export function ChatRightPanels({
   conversationId,
   artifacts,
   settings,
-  dashboard,
 }: {
   conversationId: string;
   artifacts: {
@@ -131,13 +110,6 @@ export function ChatRightPanels({
     budgets: ChatBudgetSettings | null;
     onClose: () => void;
   };
-  dashboard: {
-    sessionId: string | null;
-    updateLabel: string | null;
-    updateRevision: number;
-    queriesEnabled: boolean;
-    onClose: () => void;
-  };
 }) {
   // Settings wins the slot; the hooks keep at most one sibling open.
   if (settings.open) {
@@ -147,17 +119,6 @@ export function ChatRightPanels({
         connectorsEnabled={settings.connectorsEnabled}
         model={settings.model}
         budgets={settings.budgets}
-      />
-    );
-  }
-  if (dashboard.sessionId) {
-    return (
-      <ChatDashboardPanel
-        sessionId={dashboard.sessionId}
-        updateLabel={dashboard.updateLabel}
-        updateRevision={dashboard.updateRevision}
-        queriesEnabled={dashboard.queriesEnabled}
-        onClose={dashboard.onClose}
       />
     );
   }

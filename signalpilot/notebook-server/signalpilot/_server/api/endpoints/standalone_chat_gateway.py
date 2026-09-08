@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
-
-DASHBOARD_AUTHORING_TIMEOUT_SECONDS = 1_200.0
 
 
 def gateway_api_base_url() -> str:
@@ -23,17 +22,11 @@ def gateway_api_base_url() -> str:
     )
 
 
+@dataclass(kw_only=True)
 class StandaloneGatewayClient:
-    def __init__(
-        self,
-        *,
-        gateway_url: str,
-        token: str,
-        run_id: str,
-    ) -> None:
-        self.gateway_url = gateway_url
-        self.token = token
-        self.run_id = run_id
+    gateway_url: str
+    token: str
+    run_id: str
 
     @property
     def _headers(self) -> dict[str, str]:
@@ -89,53 +82,3 @@ class StandaloneGatewayClient:
         if not isinstance(value, dict):
             raise ValueError(invalid)
         return value
-
-    async def dashboard_authoring_tool(
-        self,
-        tool: str,
-        arguments: dict[str, Any],
-    ) -> dict[str, Any]:
-        """Execute one model-free authoring mutation through the run token."""
-
-        payload = dict(arguments)
-        session_id = str(payload.pop("authoring_session_id", "") or "")
-        if tool == "begin_dashboard_authoring":
-            path = "/api/dashboard-authoring/begin"
-            if session_id:
-                payload["authoring_session_id"] = session_id
-        elif tool == "set_dashboard_plan":
-            path = f"/api/dashboard-authoring/sessions/{session_id}/plan"
-        elif tool == "upsert_dashboard_chart":
-            chart_id = str(payload.pop("chart_id", "") or "")
-            path = (
-                f"/api/dashboard-authoring/sessions/{session_id}/charts/"
-                f"{chart_id}"
-            )
-        elif tool == "apply_dashboard_operations":
-            path = f"/api/dashboard-authoring/sessions/{session_id}/operations"
-        elif tool == "confirm_dashboard_custom_sql":
-            payload.pop("authoring_contract_version", None)
-            payload.pop("confirmation", None)
-            path = f"/api/dashboard-authoring/sessions/{session_id}/confirm-custom-sql"
-        elif tool == "create_dashboard_preview":
-            path = f"/api/dashboard-authoring/sessions/{session_id}/finalize"
-        else:
-            raise ValueError("Unknown dashboard authoring tool")
-        if tool != "begin_dashboard_authoring" and not session_id:
-            raise ValueError("Dashboard authoring session is required")
-        result = await self._post_json(
-            path,
-            payload=payload,
-            timeout=DASHBOARD_AUTHORING_TIMEOUT_SECONDS,
-            invalid="Invalid dashboard authoring result",
-            failed="Dashboard authoring tool failed",
-        )
-        if tool == "confirm_dashboard_custom_sql":
-            return {
-                "status": "custom_sql_confirmed",
-                "authoring_session_id": session_id,
-                "plan_revision": result.get("plan_revision", 0),
-                "draft_revision": result.get("draft_revision", 0),
-                "custom_sql_confirmed": bool(result.get("custom_sql_confirmed")),
-            }
-        return result

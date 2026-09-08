@@ -2,6 +2,9 @@ import { asRecord, text } from "./payload";
 import type {
   ArtifactResult,
   ColumnProfileResult,
+  DashboardSampleChart,
+  DashboardSampleResult,
+  DashboardScreenshotResult,
   DbtRunResult,
   KnowledgeResult,
   ProfiledColumn,
@@ -244,7 +247,7 @@ export function parseKnowledge(r: Record<string, unknown>): Omit<KnowledgeResult
 export function parseArtifact(r: Record<string, unknown>): Omit<ArtifactResult, keyof ToolResultBase> {
   return {
     kind: "artifact",
-    artifactKind: oneOf(r.artifact_kind, ["dashboard", "notebook"], "notebook"),
+    artifactKind: oneOf(r.artifact_kind, ["notebook"], "notebook"),
     published: bool(r.published),
     filename: text(r.filename),
     artifactIndex: num(r.artifact_index),
@@ -253,6 +256,64 @@ export function parseArtifact(r: Record<string, unknown>): Omit<ArtifactResult, 
     sessionId: text(r.session_id),
     notebookPath: text(r.notebook_path),
     notebook: text(r.notebook),
-    dashboardSessionId: text(r.dashboard_session_id),
+  };
+}
+
+const issues = (value: unknown): { code: string; message: string }[] =>
+  records(value).map((issue) => ({ code: str(issue.code), message: str(issue.message) }));
+
+export function parseDashboardSample(
+  r: Record<string, unknown>,
+): Omit<DashboardSampleResult, keyof ToolResultBase> {
+  const charts: DashboardSampleChart[] = records(r.charts).map((chart) => {
+    const chartIssues = issues(chart.issues);
+    const rows = records(chart.rows).map((row) => {
+      const out: Record<string, ToolResultCell> = {};
+      for (const [key, value] of Object.entries(row)) out[key] = cell(value);
+      return out;
+    });
+    const columns = list(chart.columns)
+      .map((column) => {
+        if (typeof column === "string") return { name: column, inferredType: null };
+        const record = asRecord(column);
+        return record ? { name: str(record.name), inferredType: text(record.inferred_type) } : null;
+      })
+      .filter((column): column is { name: string; inferredType: string | null } => column !== null);
+    return {
+      id: str(chart.id),
+      type: text(chart.type),
+      dataset: text(chart.dataset),
+      rowCount: int(chart.row_count, rows.length),
+      issueCount: int(chart.issue_count, chartIssues.length),
+      columns,
+      rows,
+      issues: chartIssues,
+    };
+  });
+  return {
+    kind: "dashboard_sample",
+    dashboardValid: bool(r.dashboard_valid, true),
+    errors: strings(r.errors),
+    charts,
+  };
+}
+
+export function parseDashboardScreenshot(
+  r: Record<string, unknown>,
+): Omit<DashboardScreenshotResult, keyof ToolResultBase> {
+  return {
+    kind: "dashboard_screenshot",
+    dashboardValid: bool(r.dashboard_valid, true),
+    errors: strings(r.errors),
+    rendered: strings(r.rendered),
+    failed: records(r.failed).map((entry) => ({
+      id: str(entry.id),
+      code: str(entry.code),
+      message: str(entry.message),
+    })),
+    width: num(r.width),
+    height: num(r.height),
+    previewPath: text(r.preview_path),
+    error: text(r.error),
   };
 }

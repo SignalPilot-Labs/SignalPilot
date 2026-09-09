@@ -27,6 +27,8 @@ _mcp_logger = _logging.getLogger("gateway.mcp_audit")
 # the registration boundary makes a newly added tool fail closed until its
 # capability is reviewed and classified here.
 MCP_TOOL_SCOPES: dict[str, str] = {
+    "show_signalpilot_app_demo": "read",
+    "ping_signalpilot_app_demo": "read",
     "run_signalpilot_agent": "agent:run",
     "continue_signalpilot_agent": "agent:run",
     "get_signalpilot_agent": "agent:run",

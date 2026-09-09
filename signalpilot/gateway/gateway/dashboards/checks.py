@@ -130,6 +130,8 @@ def referenced_columns_by_dataset(spec: dict[str, Any]) -> dict[str, list[str]]:
         names = columns.setdefault(str(chart["dataset"]), [])
         names.extend(name for name in referenced_columns(chart, spec) if name not in names)
     for filter_def in spec.get("filters") or []:
+        # An unbound filter (no dataset) applies wherever its column exists;
+        # it is never a required column.
         if not isinstance(filter_def, dict) or not filter_def.get("dataset"):
             continue
         column = filter_def.get("column")

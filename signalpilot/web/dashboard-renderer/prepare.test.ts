@@ -228,3 +228,44 @@ describe("issues", () => {
     expect(issue.message).toContain("c1");
   });
 });
+
+describe("filters without a dataset bind by column", () => {
+  const spec = {
+    version: 1 as const,
+    title: "T",
+    datasets: {
+      a: { rows: [{ region: "N", v: 1 }, { region: "S", v: 2 }] },
+      b: { rows: [{ region: "N", w: 10 }, { region: "S", w: 20 }] },
+      c: { rows: [{ other: "x", z: 5 }] },
+    },
+    filters: [{ id: "region", label: "Region", column: "region", type: "in" as const, default: ["N"] }],
+    charts: [
+      { id: "ca", type: "kpi" as const, title: "A", dataset: "a", value: { column: "v" } },
+      { id: "cb", type: "kpi" as const, title: "B", dataset: "b", value: { column: "w" } },
+      { id: "cc", type: "kpi" as const, title: "C", dataset: "c", value: { column: "z" } },
+    ],
+  };
+  const datasets = { a: spec.datasets.a.rows, b: spec.datasets.b.rows, c: spec.datasets.c.rows };
+
+  it("applies to every dataset that has the column", () => {
+    expect(prepareChartRows(spec.charts[0], spec, datasets).rows).toEqual([{ region: "N", v: 1 }]);
+    expect(prepareChartRows(spec.charts[1], spec, datasets).rows).toEqual([{ region: "N", w: 10 }]);
+  });
+
+  it("leaves datasets without the column alone and reports no missing column", () => {
+    const result = prepareChartRows(spec.charts[2], spec, datasets);
+    expect(result.rows).toEqual([{ other: "x", z: 5 }]);
+    expect(result.issues).toEqual([]);
+  });
+
+  it("a bound filter still requires its column on that dataset", () => {
+    const bound = { ...spec, filters: [{ ...spec.filters[0], dataset: "c" }] };
+    const result = prepareChartRows(bound.charts[2], bound, datasets);
+    expect(result.issues.map((issue) => issue.code)).toContain("missing_column");
+  });
+
+  it("live filter state drives every bound dataset", () => {
+    expect(prepareChartRows(spec.charts[1], spec, datasets, { region: ["S"] }).rows).toEqual([{ region: "S", w: 20 }]);
+  });
+});
+

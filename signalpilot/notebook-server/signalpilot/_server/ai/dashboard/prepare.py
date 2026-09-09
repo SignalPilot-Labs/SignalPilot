@@ -202,14 +202,26 @@ def _filter_keeps(row: Row, filter_def: dict[str, Any]) -> bool:
     return True
 
 
+def filter_binds_to(
+    filter_def: dict[str, Any], dataset: str, columns: list[str]
+) -> bool:
+    """A filter with ``dataset`` binds to that dataset only. A filter without
+    it binds to every dataset whose rows carry the column."""
+    bound = filter_def.get("dataset")
+    if bound is not None:
+        return bound == dataset
+    return str(filter_def.get("column") or "") in columns
+
+
 def apply_filters(
     rows: list[Row], chart: dict[str, Any], spec: dict[str, Any]
 ) -> list[Row]:
+    columns = available_columns(rows)
     bound = [
         filter_def
         for filter_def in spec.get("filters") or []
         if isinstance(filter_def, dict)
-        and filter_def.get("dataset") == chart.get("dataset")
+        and filter_binds_to(filter_def, str(chart.get("dataset")), columns)
     ]
     if not bound:
         return list(rows)

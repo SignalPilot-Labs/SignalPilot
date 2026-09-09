@@ -275,8 +275,10 @@ Store percentages as fractions (`0.123`), not as `12.3`.
 
 ## Filters
 
-Filters live at the top level and bind to one dataset and one column. The
-`default` is applied by the renderer and by the check tools.
+Filters live at the top level. A filter names a `column`. Omit `dataset` and
+the filter applies to every dataset that has that column, so one control can
+drive several charts. Set `dataset` to bind the filter to one dataset only.
+The `default` is applied by the renderer and by the check tools.
 
 | Type | `default` |
 |---|---|
@@ -286,12 +288,12 @@ Filters live at the top level and bind to one dataset and one column. The
 | `number_range` | `{ "min": 0, "max": 100 }`, each optional |
 
 ```json
-{ "id": "region", "label": "Region", "dataset": "monthly",
-  "column": "region", "type": "in", "default": [] }
+{ "id": "region", "label": "Region", "column": "region", "type": "in", "default": [] }
 ```
 
-A filter applies to every chart on its dataset. Bind a filter to a dataset
-that has the column.
+Give the same column name to every dataset a shared filter must drive, for
+example `region` in the monthly, market, and channel datasets. A filter bound
+with `dataset` must find its column there.
 
 ## Grid
 

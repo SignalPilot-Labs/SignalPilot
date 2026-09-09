@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 
 import type { DatasetRows } from "./datasets";
-import type { FilterState } from "./prepare";
+import { filterBindsTo, type FilterState } from "./prepare";
 import type { DashboardFilter, DashboardSpec } from "./schema";
 
 const INPUT_CLASS =
@@ -124,6 +124,15 @@ function FilterControl({
   );
 }
 
+/** Rows the filter draws its choices from: its dataset, or every dataset with the column. */
+function boundRows(filter: DashboardFilter, datasets: Record<string, DatasetRows>): DatasetRows {
+  const rows: DatasetRows = [];
+  for (const [name, datasetRows] of Object.entries(datasets)) {
+    if (filterBindsTo(filter, name, datasetRows)) rows.push(...datasetRows);
+  }
+  return rows;
+}
+
 export function FilterBar({
   spec,
   datasets,
@@ -148,7 +157,7 @@ export function FilterBar({
           <FilterControl
             filter={filter}
             value={Object.prototype.hasOwnProperty.call(filterState, filter.id) ? filterState[filter.id] : filter.default}
-            rows={datasets[filter.dataset]}
+            rows={boundRows(filter, datasets)}
             onChange={(next) => onChange({ ...filterState, [filter.id]: next })}
           />
         </label>

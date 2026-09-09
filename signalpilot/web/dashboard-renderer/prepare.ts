@@ -82,6 +82,8 @@ function referencedColumns(
   }
   if (chart.sort) columns.push(chart.sort.column);
   for (const filter of spec.filters ?? []) {
+    // A filter bound to this dataset must find its column. An unbound filter
+    // applies wherever the column exists and is never a missing column.
     if (filter.dataset === chart.dataset) columns.push(filter.column);
   }
   return [...new Set(columns)];
@@ -107,6 +109,16 @@ function numericColumns(chart: DashboardChart): string[] {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * A filter with `dataset` binds to that dataset only. A filter without it
+ * binds to every dataset whose rows carry the column, so one control can
+ * drive several charts that share a column.
+ */
+export function filterBindsTo(filter: DashboardFilter, datasetName: string, rows: DatasetRows): boolean {
+  if (filter.dataset !== undefined) return filter.dataset === datasetName;
+  return availableColumns(rows).includes(filter.column);
 }
 
 function filterValue(filter: DashboardFilter, filterState?: FilterState): unknown {
@@ -282,7 +294,7 @@ export function prepareChartRows(
 
   let rows = source;
   for (const filter of spec.filters ?? []) {
-    if (filter.dataset !== datasetName) continue;
+    if (!filterBindsTo(filter, datasetName, rows)) continue;
     rows = applyFilter(rows, filter, filterValue(filter, filterState));
   }
   if (chart.sort) rows = sortRows(rows, chart.sort.column, chart.sort.direction ?? "asc");

@@ -154,7 +154,6 @@
       "required": [
         "id",
         "label",
-        "dataset",
         "column",
         "type"
       ],
@@ -168,7 +167,8 @@
           "maxLength": 100
         },
         "dataset": {
-          "$ref": "#/$defs/id"
+          "$ref": "#/$defs/id",
+          "description": "Optional. Bind the filter to one dataset. When omitted, the filter applies to every dataset that has the column."
         },
         "column": {
           "$ref": "#/$defs/column"

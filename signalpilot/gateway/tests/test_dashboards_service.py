@@ -321,3 +321,23 @@ class TestEditMessage:
         # The spec no longer travels in the message.
         assert "```" not in message and '"title"' not in message and "select " not in message
         assert "—" not in message
+
+
+def test_unbound_filter_columns_are_not_required_by_the_gate():
+    from gateway.dashboards.checks import referenced_columns_by_dataset
+
+    spec = {
+        "version": 1,
+        "title": "T",
+        "datasets": {"a": {"connection": "w", "sql": "select 1"}, "b": {"connection": "w", "sql": "select 2"}},
+        "filters": [
+            {"id": "region", "label": "Region", "column": "region", "type": "in"},
+            {"id": "month", "label": "Month", "dataset": "b", "column": "month", "type": "date_range"},
+        ],
+        "charts": [
+            {"id": "ca", "type": "kpi", "title": "A", "dataset": "a", "value": {"column": "v"}},
+            {"id": "cb", "type": "kpi", "title": "B", "dataset": "b", "value": {"column": "w"}},
+        ],
+    }
+    assert referenced_columns_by_dataset(spec) == {"a": ["v"], "b": ["w", "month"]}
+

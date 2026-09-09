@@ -377,3 +377,37 @@ def test_infer_column_types():
         {"name": "z", "inferred_type": "null"},
         {"name": "f", "inferred_type": "number"},
     ]
+
+
+def test_filter_without_dataset_binds_to_every_dataset_with_the_column():
+    spec = {
+        "version": 1,
+        "title": "T",
+        "datasets": {
+            "a": {"rows": [{"region": "N", "v": 1}, {"region": "S", "v": 2}]},
+            "b": {"rows": [{"region": "N", "w": 10}, {"region": "S", "w": 20}]},
+            "c": {"rows": [{"other": "x", "z": 5}]},
+        },
+        "filters": [
+            {"id": "region", "label": "Region", "column": "region", "type": "in", "default": ["N"]}
+        ],
+        "charts": [
+            {"id": "ca", "type": "kpi", "title": "A", "dataset": "a", "value": {"column": "v"}},
+            {"id": "cb", "type": "kpi", "title": "B", "dataset": "b", "value": {"column": "w"}},
+            {"id": "cc", "type": "kpi", "title": "C", "dataset": "c", "value": {"column": "z"}},
+        ],
+    }
+    datasets = {
+        name: LoadedDataset(rows=list(definition["rows"]), resolved_file=None)
+        for name, definition in spec["datasets"].items()
+    }
+    rows_a, issues_a = prepare_chart_rows(spec["charts"][0], spec, datasets)
+    rows_b, issues_b = prepare_chart_rows(spec["charts"][1], spec, datasets)
+    rows_c, issues_c = prepare_chart_rows(spec["charts"][2], spec, datasets)
+    assert rows_a == [{"region": "N", "v": 1}] and issues_a == []
+    assert rows_b == [{"region": "N", "w": 10}] and issues_b == []
+    assert rows_c == [{"other": "x", "z": 5}] and issues_c == []
+
+    spec["filters"][0]["dataset"] = "c"
+    _, bound_issues = prepare_chart_rows(spec["charts"][2], spec, datasets)
+    assert any(issue["code"] == "missing_column" for issue in bound_issues)

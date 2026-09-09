@@ -67,7 +67,8 @@ export type DashboardFilterType =
 export type DashboardFilter = {
   id: string;
   label: string;
-  dataset: string;
+  /** Bind to one dataset. Omitted: binds to every dataset that has the column. */
+  dataset?: string;
   column: string;
   type: DashboardFilterType;
   default?: unknown;

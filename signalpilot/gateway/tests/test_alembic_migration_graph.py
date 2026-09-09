@@ -35,7 +35,12 @@ def test_real_migration_chain_is_the_tracked_head() -> None:
     config = build_alembic_config("postgresql://unused:unused@localhost/unused")
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_current_head() == "0029"
+    assert scripts.get_current_head() == "0030"
+
+    # 0030 adds durable MCP agent jobs after the dashboard changes.
+    revision_0030 = scripts.get_revision("0030")
+    assert revision_0030 is not None
+    assert revision_0030.down_revision == "0029"
 
     # 0029 drops the dashboard share token (link visibility removed).
     revision_0029 = scripts.get_revision("0029")

@@ -16,6 +16,7 @@ from .base import (
     TZDateTime,
     strip_ssl_secrets,
 )
+from .mcp_agent import MCPAgentEvent, MCPAgentThread
 from .chat import (
     GatewayChatArtifact,
     GatewayChatConversation,

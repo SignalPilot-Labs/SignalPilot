@@ -6,6 +6,7 @@ This module defines lifespan, middleware, and router registration.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -176,6 +177,9 @@ async def lifespan(app: FastAPI):
         logger.warning("STARTUP: stale session cleanup failed: %s", e)
 
     background_tasks = start_background_tasks(get_session_factory())
+    from gateway.agent_execution.service import AgentService
+
+    mcp_agent_worker_task = asyncio.create_task(AgentService().worker_loop())
 
     # Start MCP session manager if mounted
     mcp_ctx = None
@@ -210,6 +214,8 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        mcp_agent_worker_task.cancel()
+        await asyncio.gather(mcp_agent_worker_task, return_exceptions=True)
         if mcp_ctx is not None:
             await mcp_ctx.__aexit__(None, None, None)
         await dbt_proxy_ctx.__aexit__(None, None, None)
@@ -350,8 +356,8 @@ try:
     os.environ.setdefault("SP_GATEWAY_URL", "http://localhost:3300")
 
     from .auth.mcp_api_key import MCPAuthMiddleware
-
-    _mcp_http_app = _mcp_instance.streamable_http_app()
+    from .mcp.server import streamable_http_app
+    _mcp_http_app = streamable_http_app()
     _mcp_session_manager = _mcp_instance.session_manager
     _mcp_http_app = MCPAuthMiddleware(_mcp_http_app)
     # MCP streamable-http app has internal route at /mcp.

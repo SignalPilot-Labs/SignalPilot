@@ -107,6 +107,12 @@ def require_scopes(request: Request, *required: str) -> None:
         return
 
     # Unknown auth method — fail closed.
+    if auth.get("auth_method") == "mcp_agent":
+        effective = frozenset(auth.get("scopes", [])) & {"read", "query"}
+        if any(scope not in effective for scope in required):
+            raise HTTPException(status_code=403, detail="Insufficient scope")
+        return
+
     raise HTTPException(status_code=403, detail="Unknown authentication method")
 
 

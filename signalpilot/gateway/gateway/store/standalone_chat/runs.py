@@ -23,6 +23,7 @@ from gateway.standalone_chat.domain import (
     RunStatus,
     assert_run_transition,
 )
+from gateway.store.standalone_chat.admission import admit_existing_agent_chat
 from gateway.store.standalone_chat.helpers import (
     _append_status_message,
     _event_info,
@@ -45,6 +46,7 @@ async def create_run(
     message: str,
     message_metadata: dict[str, Any] | None = None,
 ) -> GatewayChatRun:
+    await admit_existing_agent_chat(db, org_id=org_id, user_id=user_id, conversation_id=conversation_id)
     conversation = await _owned_conversation_row(
         db,
         org_id=org_id,
@@ -368,6 +370,7 @@ async def retry_run(
     user_id: str,
     run_id: str,
 ) -> GatewayChatRun | None:
+    await admit_existing_agent_chat(db, org_id=org_id, user_id=user_id, run_id=run_id)
     failed = await _owned_run_row(db, org_id=org_id, user_id=user_id, run_id=run_id, lock=True)
     if failed is None:
         return None

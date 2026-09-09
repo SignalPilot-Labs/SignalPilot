@@ -57,13 +57,11 @@ async def _agent_tool_catalog(ctx, call_next):
         return result
     from mcp.types import ListToolsResult
 
-    from .audit import AGENT_ALLOWED_MCP_TOOLS, STANDALONE_CHAT_TOOL_ALLOWLIST
+    from .audit import STANDALONE_CHAT_TOOL_ALLOWLIST
     from .context import mcp_execution_identity_var
 
     identity = mcp_execution_identity_var.get(None) or ""
-    if identity.startswith("agent:"):
-        allowed = AGENT_ALLOWED_MCP_TOOLS
-    elif identity.startswith("chat:"):
+    if identity.startswith("chat:"):
         allowed = STANDALONE_CHAT_TOOL_ALLOWLIST
     else:
         return result

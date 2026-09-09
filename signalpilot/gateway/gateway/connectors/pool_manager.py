@@ -11,6 +11,7 @@ import contextlib
 import hashlib
 import json
 import logging
+import os
 import random
 import socket
 import time
@@ -315,13 +316,13 @@ async def _connect_validated(
 ) -> None:
     """Connect with the destination validated and the resolver pinned across it.
 
-    The validated IPs are deliberately not substituted into the connection string
-: connecting by IP breaks TLS hostname verification (sslmode=verify-full) and
-    SNI-based routing. Pinning the resolver instead keeps the hostname in the DSN
-    while denying the driver's own lookup any address we did not just validate.
-    Drivers that resolve inside a C library (psycopg2/libpq, pymssql/FreeTDS) do
-    not consult the pin; for those the post-connect peer check below is the only
-    thing that narrows the window.
+        The validated IPs are deliberately not substituted into the connection string
+    : connecting by IP breaks TLS hostname verification (sslmode=verify-full) and
+        SNI-based routing. Pinning the resolver instead keeps the hostname in the DSN
+        while denying the driver's own lookup any address we did not just validate.
+        Drivers that resolve inside a C library (psycopg2/libpq, pymssql/FreeTDS) do
+        not consult the pin; for those the post-connect peer check below is the only
+        thing that narrows the window.
     """
     from ..network.validation import assert_address_allowed, pinned_resolution
 
@@ -371,25 +372,52 @@ def _connected_peer_ip(connector: BaseConnector) -> str | None:
 
 
 class PoolManager:
-    """Manages a cache of connected connectors, keyed by (db_type, connection_string).
+    """Bounded independent connector leases per organization, DSN and credentials.
 
     Connectors are reused across requests and cleaned up after idle timeout.
     SSH tunnels are automatically managed alongside their connectors.
     """
 
-    def __init__(self, idle_timeout_sec: int = 300):
+    def __init__(
+        self,
+        idle_timeout_sec: int = 300,
+        *,
+        max_connections: int | None = None,
+        acquire_timeout_sec: float | None = None,
+    ):
         self._pools: dict[str, tuple[BaseConnector, float]] = {}
         self._identities: dict[str, str] = {}  # key -> credential identity the connector was built with
         self._tunnels: dict[str, SSHTunnel] = {}  # key -> active tunnel
         self._keepalive_intervals: dict[str, int] = {}  # key -> interval seconds
         self._last_keepalive: dict[str, float] = {}  # key -> last keepalive time
         # A connector carries execution-local driver state such as an active
-        # cursor/backend PID/job and the most recent query stats. Lease each pool
-        # key exclusively so two requests can never race on that shared state.
+        # cursor/backend PID/job and the most recent query stats. Lease each slot
+        # exclusively so requests never share mutable driver execution state.
         self._checkout_locks: dict[str, asyncio.Lock] = {}
         self._checkout_owners: dict[str, asyncio.Task[Any] | None] = {}
+        self._leases: dict[tuple[str, asyncio.Task], tuple[str, int]] = {}
+        self._retiring: set[str] = set()
+        self._closing: dict[str, asyncio.Task] = {}
+        self._max_connections = min(
+            20,
+            max(
+                1, int(max_connections if max_connections is not None else os.getenv("SP_DB_POOL_MAX_CONNECTIONS", "5"))
+            ),
+        )
+        self._acquire_timeout = min(
+            300.0,
+            max(
+                0.01,
+                float(
+                    acquire_timeout_sec
+                    if acquire_timeout_sec is not None
+                    else os.getenv("SP_DB_POOL_ACQUIRE_TIMEOUT_SECONDS", "30")
+                ),
+            ),
+        )
         self._idle_timeout = idle_timeout_sec
         self._lock = asyncio.Lock()
+        self._available = asyncio.Condition(self._lock)
         self._keepalive_task: asyncio.Task | None = None
 
     # Error substrings that indicate non-transient failures (don't retry these)
@@ -440,33 +468,56 @@ class PoolManager:
         max_retries: int = 3,
         org_id: str | None = None,
     ) -> BaseConnector:
-        """Exclusively check out a connected connector for this pool key.
+        """Lease an independent connector; queue at capacity with a bounded timeout.
 
-        The caller must pair every successful acquisition with ``release()``.
-        Concurrent callers for the same org and credential identity wait for the
-        current lease instead of sharing mutable connector execution state.
+        Limits apply per process, organization, DSN and credential identity.
+        Nested acquisitions by the same task reuse its lease with a depth counter.
+        File-based engines retain one slot to preserve their write-lock semantics.
         """
-        _, credential_identity = _pop_credential_identity(credential_extras)
-        if org_id is None:
-            org_id = _current_org_id()
-        key = _make_pool_key(db_type, connection_string, org_id, credential_identity)
-
-        # setdefault is synchronous, so competing event-loop tasks cannot create
-        # different locks for the same key between lookup and insertion.
-        checkout_lock = self._checkout_locks.setdefault(key, asyncio.Lock())
-        await checkout_lock.acquire()
-        self._checkout_owners[key] = asyncio.current_task()
+        _, identity = _pop_credential_identity(credential_extras)
+        org_id = _current_org_id() if org_id is None else org_id
+        group = _make_pool_key(db_type, connection_string, org_id, identity)
+        task = asyncio.current_task()
+        lease_id = (group, task)
+        limit = 1 if db_type in {"sqlite", "duckdb"} else self._max_connections
+        slot = None
         try:
-            return await self._acquire_connector(
-                db_type,
-                connection_string,
-                credential_extras=credential_extras,
-                max_retries=max_retries,
-                org_id=org_id,
-            )
-        except BaseException:
-            self._checkout_owners.pop(key, None)
-            checkout_lock.release()
+            async with asyncio.timeout(self._acquire_timeout):
+                async with self._available:
+                    if lease_id in self._leases:
+                        slot, depth = self._leases[lease_id]
+                        self._leases[lease_id] = (slot, depth + 1)
+                        return self._pools[slot][0]
+                    while slot is None:
+                        for index in range(limit):
+                            candidate = group if index == 0 else group + _KEY_SCOPE_SEP + f"slot={index}"
+                            if candidate not in self._checkout_owners and candidate not in self._closing:
+                                slot = candidate
+                                self._checkout_owners[slot] = task
+                                self._leases[lease_id] = (slot, 1)
+                                break
+                        if slot is None:
+                            await self._available.wait()
+                return await self._acquire_connector(
+                    db_type,
+                    connection_string,
+                    credential_extras=credential_extras,
+                    max_retries=max_retries,
+                    org_id=org_id,
+                    pool_key=slot,
+                )
+        except BaseException as exc:
+            if slot is not None:
+                async with self._available:
+                    await self._close_slot(slot)
+                    self._leases.pop(lease_id, None)
+                    self._checkout_owners.pop(slot, None)
+                    self._available.notify_all()
+                await self._drain_closing([slot])
+            if isinstance(exc, TimeoutError):
+                raise RuntimeError(
+                    "Database connection pool acquisition timed out; retry after active queries finish"
+                ) from None
             raise
 
     async def _acquire_connector(
@@ -476,6 +527,7 @@ class PoolManager:
         credential_extras: dict | None = None,
         max_retries: int = 3,
         org_id: str | None = None,
+        pool_key: str | None = None,
     ) -> BaseConnector:
         """Get or create the connector after its pool key is checked out.
 
@@ -493,8 +545,10 @@ class PoolManager:
         credential_extras, credential_identity = _pop_credential_identity(credential_extras)
         if org_id is None:
             org_id = _current_org_id()
-        key = _make_pool_key(db_type, connection_string, org_id, credential_identity)
-        async with self._lock:
+        key = pool_key or _make_pool_key(db_type, connection_string, org_id, credential_identity)
+        # Only this slot's owner can initialize it; never hold the global metadata
+        # lock across network connection, health checks, or retry backoff.
+        async with self._checkout_locks.setdefault(key, asyncio.Lock()):
             if key in self._pools:
                 connector, _ = self._pools[key]
                 self._pools[key] = (connector, time.monotonic())
@@ -602,7 +656,11 @@ class PoolManager:
                     if attempt > 0:
                         logger.info("Connection succeeded on attempt %d for %s", attempt + 1, db_type)
                     return connector
-                except Exception as e:
+                except BaseException as e:
+                    with contextlib.suppress(Exception):
+                        await connector.close()
+                    if not isinstance(e, Exception):
+                        raise
                     last_error = e
                     if attempt >= max_retries or not self._is_transient(e):
                         # Non-transient or exhausted retries: fail now
@@ -635,50 +693,73 @@ class PoolManager:
             self._keepalive_task = asyncio.ensure_future(self._keepalive_loop())
 
     async def _keepalive_loop(self) -> None:
-        """Periodically ping connections that have a keepalive interval configured."""
+        """Ping only unleased slots; reserve them without blocking other keys."""
         while True:
-            await asyncio.sleep(30)  # Check every 30 seconds
+            await asyncio.sleep(30)
             if not self._keepalive_intervals:
-                break  # No more keepalive connections, stop the loop
-            now = time.monotonic()
-            async with self._lock:
-                for key in list(self._keepalive_intervals):
+                break
+            for key in list(self._keepalive_intervals):
+                async with self._available:
                     if key not in self._pools:
-                        # Connection was removed
                         self._keepalive_intervals.pop(key, None)
                         self._last_keepalive.pop(key, None)
                         continue
                     if key in self._checkout_owners:
-                        # Never ping a connector while a request owns its cursor,
-                        # backend PID, cancellation handle, or result metadata.
                         continue
-                    interval = self._keepalive_intervals[key]
-                    last = self._last_keepalive.get(key, 0)
-                    if now - last < interval:
+                    if time.monotonic() - self._last_keepalive.get(key, 0) < self._keepalive_intervals[key]:
                         continue
-                    connector, last_used = self._pools[key]
-                    try:
-                        healthy = await connector.health_check()
-                        if healthy:
-                            self._last_keepalive[key] = now
-                            logger.debug("Keepalive ping OK for %s", _safe_pool_key_for_log(key))
-                        else:
-                            logger.warning(
-                                "Keepalive ping failed for %s — removing from pool", _safe_pool_key_for_log(key)
-                            )
-                            try:
-                                await connector.close()
-                            except Exception:
-                                pass
-                            del self._pools[key]
-                            self._keepalive_intervals.pop(key, None)
-                            self._last_keepalive.pop(key, None)
-                            if key in self._tunnels:
-                                self._tunnels[key].stop()
-                                del self._tunnels[key]
-                    except Exception as e:
-                        logger.warning("Keepalive error for %s: %s", _safe_pool_key_for_log(key), e)
-                        self._last_keepalive[key] = now  # Don't spam retries
+                    connector, _ = self._pools[key]
+                    self._checkout_owners[key] = asyncio.current_task()
+                try:
+                    if not await connector.health_check():
+                        self._retiring.add(key)
+                except Exception:
+                    self._retiring.add(key)
+                finally:
+                    async with self._available:
+                        try:
+                            if key in self._retiring:
+                                await self._close_slot(key)
+                            else:
+                                self._last_keepalive[key] = time.monotonic()
+                        finally:
+                            self._checkout_owners.pop(key, None)
+                            self._available.notify_all()
+
+    async def _close_slot(self, key: str) -> None:
+        """Detach under the metadata lock; dispose asynchronously outside it.
+
+        A closing slot remains reserved until disposal completes, so a slow driver
+        close never blocks unrelated keys or temporarily exceeds the slot limit.
+        """
+        entry = self._pools.pop(key, None)
+        tunnel = self._tunnels.pop(key, None)
+        self._identities.pop(key, None)
+        self._keepalive_intervals.pop(key, None)
+        self._last_keepalive.pop(key, None)
+        self._retiring.discard(key)
+        if entry is None and tunnel is None:
+            return
+
+        async def dispose():
+            try:
+                if entry:
+                    with contextlib.suppress(Exception):
+                        await entry[0].close()
+                if tunnel:
+                    with contextlib.suppress(Exception):
+                        await asyncio.to_thread(tunnel.stop)
+            finally:
+                async with self._available:
+                    self._closing.pop(key, None)
+                    self._available.notify_all()
+
+        self._closing[key] = asyncio.create_task(dispose())
+
+    async def _drain_closing(self, keys) -> None:
+        tasks = [self._closing[key] for key in keys if key in self._closing]
+        if tasks:
+            await asyncio.shield(asyncio.gather(*tasks, return_exceptions=True))
 
     async def release(
         self,
@@ -687,30 +768,30 @@ class PoolManager:
         credential_extras: dict | None = None,
         org_id: str | None = None,
     ) -> None:
-        """Return an exclusively checked-out connector to the pool.
-
-        Pass the credential_extras from acquisition so the pool key matches.
-        """
-        _, credential_identity = _pop_credential_identity(credential_extras)
-        if org_id is None:
-            org_id = _current_org_id()
-        key = _make_pool_key(db_type, connection_string, org_id, credential_identity)
-        checkout_lock = self._checkout_locks.get(key)
-        owner = self._checkout_owners.get(key)
-        current_task = asyncio.current_task()
-        if checkout_lock is None or owner is not current_task:
-            if owner is not None:
-                logger.warning(
-                    "Ignored connector release from a task that does not own %s",
-                    _safe_pool_key_for_log(key),
-                )
-            return
-        async with self._lock:
-            if key in self._pools:
-                connector, _ = self._pools[key]
-                self._pools[key] = (connector, time.monotonic())
-        self._checkout_owners.pop(key, None)
-        checkout_lock.release()
+        """Release only this task's lease; nested leases release at outermost exit."""
+        _, identity = _pop_credential_identity(credential_extras)
+        org_id = _current_org_id() if org_id is None else org_id
+        group = _make_pool_key(db_type, connection_string, org_id, identity)
+        lease_id = (group, asyncio.current_task())
+        async with self._available:
+            lease = self._leases.get(lease_id)
+            if lease is None:
+                return
+            slot, depth = lease
+            if depth > 1:
+                self._leases[lease_id] = (slot, depth - 1)
+                return
+            try:
+                if slot in self._retiring:
+                    await self._close_slot(slot)
+                elif slot in self._pools:
+                    connector, _ = self._pools[slot]
+                    self._pools[slot] = (connector, time.monotonic())
+            finally:
+                self._leases.pop(lease_id, None)
+                self._checkout_owners.pop(slot, None)
+                self._available.notify_all()
+        await self._drain_closing([slot])
 
     @contextlib.asynccontextmanager
     async def connection(
@@ -736,12 +817,23 @@ class PoolManager:
             credential_extras=credential_extras,
             org_id=org_id,
         )
+        previous_audit_name = getattr(connector, "_audit_connection_name", None)
         try:
             if connection_name:
                 connector._audit_connection_name = connection_name
             yield connector
+        except asyncio.CancelledError:
+            # A driver may retain an interrupted cursor/job. Never return that
+            # physical connector to another request, even if its health ping works.
+            _, identity = _pop_credential_identity(credential_extras)
+            lease = self._leases.get(
+                (_make_pool_key(db_type, connection_string, org_id, identity), asyncio.current_task())
+            )
+            if lease:
+                self._retiring.add(lease[0])
+            raise
         finally:
-            connector._audit_connection_name = None
+            connector._audit_connection_name = previous_audit_name
             await self.release(
                 db_type,
                 connection_string,
@@ -750,81 +842,50 @@ class PoolManager:
             )
 
     async def cleanup_idle(self) -> int:
-        """Close connectors that have been idle longer than timeout. Returns count closed."""
-        now = time.monotonic()
-        closed = 0
-        async with self._lock:
-            stale_keys = [
-                k
-                for k, (_, last_used) in self._pools.items()
-                if k not in self._checkout_owners and now - last_used > self._idle_timeout
+        """Retire idle, unleased slots without interrupting active queries."""
+        async with self._available:
+            now = time.monotonic()
+            stale = [
+                key
+                for key, (_, used) in self._pools.items()
+                if key not in self._checkout_owners and now - used > self._idle_timeout
             ]
-            for key in stale_keys:
-                connector, _ = self._pools.pop(key)
-                try:
-                    await connector.close()
-                except Exception:
-                    pass
-                # Close associated tunnel
-                if key in self._tunnels:
-                    self._tunnels[key].stop()
-                    del self._tunnels[key]
-                # Clean up keepalive tracking
-                self._identities.pop(key, None)
-                self._keepalive_intervals.pop(key, None)
-                self._last_keepalive.pop(key, None)
-                closed += 1
-        return closed
+            for key in stale:
+                await self._close_slot(key)
+        await self._drain_closing(stale)
+        return len(stale)
 
     async def close_all(self) -> None:
-        """Close all managed connectors, tunnels, and the keepalive task."""
+        """Close idle slots now and retire active slots when their owners release."""
         if self._keepalive_task and not self._keepalive_task.done():
             self._keepalive_task.cancel()
             self._keepalive_task = None
-        async with self._lock:
-            for connector, _ in self._pools.values():
-                try:
-                    await connector.close()
-                except Exception:
-                    pass
-            self._pools.clear()
-            self._identities.clear()
-            # Close all tunnels
-            for tunnel in self._tunnels.values():
-                tunnel.stop()
-            self._tunnels.clear()
-            self._keepalive_intervals.clear()
-            self._last_keepalive.clear()
+        async with self._available:
+            for key in set(self._pools) | set(self._checkout_owners):
+                if key in self._checkout_owners:
+                    self._retiring.add(key)
+                else:
+                    await self._close_slot(key)
+            self._available.notify_all()
+            closing = list(self._closing)
+        await self._drain_closing(closing)
 
     async def close_pool(self, key_substring: str, org_id: str | None = None) -> int:
-        """Close pools whose key contains the given substring.
-
-        Used when connection credentials change and existing pools are stale.
-        Pass the connection string or a unique identifier to match, plus the owning
-        org so a shared connection string does not evict another tenant's pool.
-        Returns number of pools closed.
-        """
-        closed = 0
-        async with self._lock:
-            stale_keys = [
-                k
-                for k in self._pools
-                if key_substring in _split_pool_key(k)[0] and (org_id is None or _pool_key_scope(k) == org_id)
+        """Invalidate matching slots; active queries finish before their slot closes."""
+        async with self._available:
+            matches = [
+                key
+                for key in set(self._pools) | set(self._checkout_owners)
+                if key_substring in _split_pool_key(key)[0] and (org_id is None or _pool_key_scope(key) == org_id)
             ]
-            for key in stale_keys:
-                connector, _ = self._pools.pop(key)
-                try:
-                    await connector.close()
-                except Exception:
-                    pass
-                if key in self._tunnels:
-                    self._tunnels[key].stop()
-                    del self._tunnels[key]
-                self._identities.pop(key, None)
-                self._keepalive_intervals.pop(key, None)
-                self._last_keepalive.pop(key, None)
-                closed += 1
-        return closed
+            for key in matches:
+                if key in self._checkout_owners:
+                    self._retiring.add(key)
+                else:
+                    await self._close_slot(key)
+            self._available.notify_all()
+        await self._drain_closing(matches)
+        return len(matches)
 
     @property
     def pool_count(self) -> int:
@@ -836,7 +897,7 @@ class PoolManager:
 
     def stats(self) -> dict[str, Any]:
         """Return pool manager statistics for monitoring."""
-        now = time.time()
+        now = time.monotonic()
         pools = []
         for key, (connector, last_used) in self._pools.items():
             # Extract db_type from key
@@ -866,6 +927,8 @@ class PoolManager:
             "pool_count": len(self._pools),
             "tunnel_count": len(self._tunnels),
             "max_idle_seconds": self._idle_timeout,
+            "max_connections_per_key": self._max_connections,
+            "acquire_timeout_seconds": self._acquire_timeout,
             "pools": pools,
             "tunnels": tunnels,
         }

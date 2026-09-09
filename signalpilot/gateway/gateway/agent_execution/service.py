@@ -1,35 +1,31 @@
-"""Durable, owner-scoped foreground delegation to cloud Docker workers."""
+"""MCP adapter for the existing Chats store and worker; no separate runtime."""
 
 from __future__ import annotations
 
 import asyncio
 import hashlib
 import json
-import logging
 import os
 import time
-import uuid
 
-from sqlalchemy import func, select, text, update
+from sqlalchemy import select
 
 from gateway.db.engine import get_session_factory
-from gateway.db.models import GatewayWorkspaceRevision, MCPAgentThread
-from gateway.runtime.mode import runtime_env
-from gateway.store import Store, org_secrets
-from gateway.workspace_store import WorkspaceStore, workspace_object_storage
+from gateway.db.models import GatewayChatConversation, GatewayChatMessage, GatewayChatRun, GatewayChatRunEvent
+from gateway.git.repos import branch_head_sha
+from gateway.standalone_chat.config import runtime_env, standalone_chat_enabled
+from gateway.standalone_chat.projects import authorize_chat_project, evaluate_project_readiness
+from gateway.store import Store, standalone_chat as chat_store
+from gateway.store.standalone_chat.helpers import _stage_run_event, _event_info, _token_usage
+from gateway.store.standalone_chat.admission import lock_agent_account, check_agent_capacity
 
-from . import artifacts, auth
-from .contracts import AgentRequest, AgentResult, RuntimeResult
-from .docker import DockerAgent
-
-logger = logging.getLogger(__name__)
+from .chat_view import chat_url
+from .contracts import AgentLaunchRequest, AgentResult
 
 
 class AgentService:
-    def __init__(self, factory=None, storage=None, runtime=None):
+    def __init__(self, factory=None):
         self._factory = factory
-        self.storage = storage if storage is not None else workspace_object_storage()
-        self.runtime = runtime
 
     @property
     def factory(self):
@@ -39,135 +35,130 @@ class AgentService:
     def require_enabled():
         if os.getenv("SP_FEATURE_MCP_AGENT", "true").lower() not in {"1", "true"}:
             raise ValueError("Cloud agent delegation is disabled")
-        for key in ("SP_AGENT_IMAGE", "SP_AGENT_DOCKER_NETWORK", "SP_AGENT_MCP_URL", "SP_AGENT_MODEL"):
-            if not os.getenv(key):
-                raise ValueError("Cloud agent configuration is incomplete")
+        if not standalone_chat_enabled():
+            raise ValueError("SignalPilot Chats is not enabled. Enable Chats to delegate agents through MCP.")
+
+    async def _lock_org(self, db, org_id):
+        await lock_agent_account(db, org_id)
+
+    async def _capacity(self, db, org_id):
+        await check_agent_capacity(db, org_id)
+
+    async def _resolve_request(self, db, org_id, user_id, request):
+        store = Store(db, org_id=org_id, user_id=user_id)
+        settings = await store.load_settings()
+        project_id = request.project_id or settings.mcp_agent_default_project_id
+        setup = "Open Settings → MCP Connect and configure the SignalPilot agent defaults."
+        if not project_id:
+            raise ValueError(f"SignalPilot agent needs a default project. {setup}")
+        project = await authorize_chat_project(db, org_id=org_id, user_id=user_id, project_id=project_id)
+        if project is None or project.status != "active":
+            raise ValueError(f"The selected agent project is unavailable. {setup}")
+        saved_branch = (
+            settings.mcp_agent_default_branch if project_id == settings.mcp_agent_default_project_id else None
+        )
+        branch = request.branch or saved_branch or project.default_branch or "main"
+        saved_connection = (
+            settings.mcp_agent_default_connection_name if project_id == settings.mcp_agent_default_project_id else None
+        )
+        connection = request.connection_name or saved_connection or project.connection_name
+        if connection != project.connection_name:
+            raise ValueError(
+                f"SignalPilot agents use the project's Chats connection ({project.connection_name}). Update the project connection or MCP defaults in Settings."
+            )
+        readiness = await evaluate_project_readiness(
+            db, org_id=org_id, user_id=user_id, project=project, branch_override=branch
+        )
+        if not readiness.ready:
+            raise ValueError(
+                f"Project is not ready for Chats: {readiness.message} Open the project's setup in Settings."
+            )
+        commit = branch_head_sha(project.id, branch)
+        if not commit or len(commit) != 40:
+            raise ValueError("The selected project commit is unavailable. Re-sync the project before starting Chats.")
+        return project, branch, commit
 
     async def _owned(self, db, org_id, user_id, thread_id):
         row = await db.scalar(
-            select(MCPAgentThread).where(
-                MCPAgentThread.id == thread_id, MCPAgentThread.org_id == org_id, MCPAgentThread.user_id == user_id,
-                MCPAgentThread.runtime_env == runtime_env(),
+            select(GatewayChatConversation).where(
+                GatewayChatConversation.id == thread_id,
+                GatewayChatConversation.org_id == org_id,
+                GatewayChatConversation.user_id == user_id,
+                GatewayChatConversation.origin == "mcp_agent",
+                GatewayChatConversation.status == "active",
             )
         )
         if row is None:
-            raise ValueError("Agent thread not found")
-        if row.retained_until <= time.time():
-            raise ValueError("Agent thread retention expired; start a new thread")
-        if row.status in {"queued", "running"} and (
-            row.expires_at <= time.time() or (row.status == "running" and row.lease_expires_at <= time.time())
-        ):
-            await db.execute(
-                update(MCPAgentThread)
-                .where(
-                    MCPAgentThread.id == row.id,
-                    MCPAgentThread.run_id == row.run_id,
-                    MCPAgentThread.status == row.status,
-                    (
-                        (MCPAgentThread.expires_at <= time.time())
-                        | ((MCPAgentThread.status == "running") & (MCPAgentThread.lease_expires_at <= time.time()))
-                    ),
-                )
-                .values(status="failed", result={"error": "Agent deadline exceeded"}, updated_at=time.time())
-            )
-            await db.commit()
-            await db.refresh(row)
+            raise ValueError("Agent chat not found")
         return row
 
-    async def _validate(self, db, org_id, user_id, request, resolve_key=True):
-        store = Store(db, org_id=org_id, user_id=user_id)
-        project = await store.get_workspace_project(request.project_id)
-        if project is None or project.status != "active":
-            raise ValueError("Active workspace project not found")
-        if await store.get_connection(request.connection_name) is None:
-            raise ValueError("Connection not found")
-        if not resolve_key:
-            revision = await db.scalar(
-                select(GatewayWorkspaceRevision.id).where(
-                    GatewayWorkspaceRevision.org_id == org_id,
-                    GatewayWorkspaceRevision.project_id == request.project_id,
-                    GatewayWorkspaceRevision.branch == request.branch,
-                    GatewayWorkspaceRevision.revision == request.revision,
-                )
-            )
-            if revision is None:
-                raise ValueError("Workspace revision not found")
-            return None
-        key = await org_secrets.resolve_anthropic_key(db, org_id)
-        if not key:
-            raise ValueError("Configure an organization Anthropic API key")
-        return key
-
-    async def _lock_org(self, db, org_id):
-        # All start/resume admissions serialize across gateway replicas. Never
-        # hold this lock while a container runs.
-        dialect = db.bind.dialect.name
-        if dialect == "postgresql":
-            lock_id = int.from_bytes(hashlib.sha256(("mcp-agent:" + org_id).encode()).digest()[:8], "big", signed=True)
-            await db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_id})
-        elif dialect == "sqlite":
-            await db.execute(text("BEGIN IMMEDIATE"))
-        else:
-            raise ValueError("Agent admission requires PostgreSQL")
-
-    async def _capacity(self, db, org_id):
-        maximum = min(20, max(1, int(os.getenv("SP_AGENT_MAX_CONCURRENT_PER_ORG", "2"))))
-        active = await db.scalar(
-            select(func.count())
-            .select_from(MCPAgentThread)
+    async def _latest(self, db, org_id, user_id, thread_id):
+        await self._owned(db, org_id, user_id, thread_id)
+        run = await db.scalar(
+            select(GatewayChatRun)
+            .join(GatewayChatMessage, GatewayChatMessage.id == GatewayChatRun.user_message_id)
             .where(
-                MCPAgentThread.org_id == org_id,
-                MCPAgentThread.runtime_env == runtime_env(),
-                MCPAgentThread.status.in_(["queued", "running"]),
-                MCPAgentThread.expires_at > time.time(),
+                GatewayChatRun.conversation_id == thread_id,
+                GatewayChatRun.org_id == org_id,
+                GatewayChatRun.user_id == user_id,
             )
+            .order_by(GatewayChatMessage.sequence.desc(), GatewayChatRun.created_at.desc(), GatewayChatRun.id.desc())
+            .limit(1)
         )
-        if active >= maximum:
-            raise ValueError("Organization agent concurrency limit reached")
+        if run is None or (run.runtime_env or None) != (runtime_env() or None):
+            raise ValueError("Agent chat run not found in this environment")
+        return run
 
-    async def start(self, org_id, user_id, request: AgentRequest, progress=None):
+    @staticmethod
+    def _queued_event(db, run):
+        _stage_run_event(
+            db, run=run, event_type="status", payload={"status": "queued", "chat_url": chat_url(run.conversation_id)}
+        )
+
+    async def start(self, org_id, user_id, request: AgentLaunchRequest, progress=None):
         self.require_enabled()
         async with self.factory() as db:
             await self._lock_org(db, org_id)
+            idem = None
             if request.client_request_id:
+                idem = (
+                    "mcp-agent:"
+                    + hashlib.sha256(json.dumps([org_id, user_id, request.client_request_id]).encode()).hexdigest()
+                )
                 existing = await db.scalar(
-                    select(MCPAgentThread).where(
-                        MCPAgentThread.org_id == org_id,
-                        MCPAgentThread.user_id == user_id,
-                        MCPAgentThread.client_request_id == request.client_request_id,
+                    select(GatewayChatMessage.conversation_id).where(
+                        GatewayChatMessage.org_id == org_id,
+                        GatewayChatMessage.user_id == user_id,
+                        GatewayChatMessage.idempotency_key == idem,
                     )
                 )
                 if existing:
-                    existing_id = existing.id
                     await db.rollback()
-                    return await self.get(org_id, user_id, existing_id)
+                    return await self.get(org_id, user_id, existing)
             await self._capacity(db, org_id)
-            await self._validate(db, org_id, user_id, request, resolve_key=False)
-            now = time.time()
-            row = MCPAgentThread(
-                id=str(uuid.uuid4()),
+            project, branch, commit = await self._resolve_request(db, org_id, user_id, request)
+            query_budget, chat_budget = await chat_store.default_chat_budgets(db, org_id=org_id, user_id=user_id)
+            conversation, run = await chat_store.create_conversation_with_run(
+                db,
                 org_id=org_id,
                 user_id=user_id,
-                runtime_env=runtime_env(),
-                run_id=str(uuid.uuid4()),
-                status="queued",
-                expires_at=now + 300,
-                lease_expires_at=0,
-                enqueued_at=now,
-                event_sequence=0,
-                retained_until=now + 7 * 86400,
-                client_request_id=request.client_request_id,
-                updated_at=now,
-                attempt=1,
-                request=request.model_dump(),
-                history=[],
-                result={},
-                snapshot_key="",
+                project=project,
+                branch=branch,
+                commit_sha=commit,
+                message=request.task,
+                origin="mcp_agent",
+                commit=False,
+                per_query_budget_usd=query_budget,
+                chat_budget_usd=chat_budget,
             )
-            db.add(row)
+            conversation.title = request.task[:200]
+            if idem:
+                message = await db.get(GatewayChatMessage, run.user_message_id)
+                message.idempotency_key = idem
+            self._queued_event(db, run)
             await db.commit()
-            await db.refresh(row)
-        return await self.get(org_id, user_id, row.id)
+            thread_id = conversation.id
+        return await self.get(org_id, user_id, thread_id)
 
     async def resume(self, org_id, user_id, thread_id, task, progress=None):
         self.require_enabled()
@@ -175,372 +166,222 @@ class AgentService:
             raise ValueError("Task must contain 1–16000 characters")
         async with self.factory() as db:
             await self._lock_org(db, org_id)
-            row = await self._owned(db, org_id, user_id, thread_id)
-            if row.status not in {"completed", "input_required"}:
-                raise ValueError("Only completed or input-required threads can continue")
-            if row.attempt >= 12:
-                raise ValueError("Thread continuation limit reached; start a new thread")
-            request = AgentRequest.model_validate({**row.request, "task": task})
-            await self._capacity(db, org_id)
-            await self._validate(db, org_id, user_id, request, resolve_key=False)
-            run_id = str(uuid.uuid4())
-            claimed = await db.execute(
-                update(MCPAgentThread)
-                .where(
-                    MCPAgentThread.id == row.id,
-                    MCPAgentThread.run_id == row.run_id,
-                    MCPAgentThread.status == row.status,
-                )
-                .values(
-                    run_id=run_id,
-                    status="queued",
-                    request=request.model_dump(),
-                    result={},
-                    attempt=row.attempt + 1,
-                    expires_at=time.time() + 300,
-                    lease_expires_at=0,
-                    event_sequence=0,
-                    enqueued_at=time.time(),
-                    updated_at=time.time(),
-                )
-            )
-            if claimed.rowcount != 1:
-                raise ValueError("Thread was already continued; fetch its latest status")
-            await db.commit()
-            await db.refresh(row)
-        return await self.get(org_id, user_id, row.id)
+            run = await self._latest(db, org_id, user_id, thread_id)
+            if run.status == "waiting_for_user":
+                await chat_store.submit_clarification(db, org_id=org_id, user_id=user_id, run_id=run.id, message=task)
+            elif run.status in {"completed", "failed", "cancelled"}:
+                await self._capacity(db, org_id)
+                await chat_store.create_run(db, org_id=org_id, user_id=user_id, conversation_id=thread_id, message=task)
+            else:
+                raise ValueError("Chat is still active. Wait for completion or respond to its question in Chats.")
+        return await self.get(org_id, user_id, thread_id)
 
-    async def get(self, org_id, user_id, thread_id, after_sequence=0, run_id=None):
+    async def get(self, org_id, user_id, thread_id, after_sequence=0, run_id=None, detail="summary", sequence=None):
+        from .projection import SUMMARY_EVENT_TYPES, summarize_event
+
+        if after_sequence < 0 or (sequence is not None and sequence < 1):
+            raise ValueError("Activity cursor must be nonnegative and event sequence positive")
+        if detail not in {"summary", "full"}:
+            raise ValueError("Detail must be summary or full")
         async with self.factory() as db:
-            row = await self._owned(db, org_id, user_id, thread_id)
-            if run_id is not None and run_id != row.run_id:
-                raise ValueError("Agent turn changed; get latest state and restart the cursor")
-            result = AgentResult(
-                status=row.status,
-                thread_id=row.id,
-                run_id=row.run_id,
-                **{k: v for k, v in row.result.items() if k != "artifact_prefix"},
-            )
-            prefix = row.result.get("artifact_prefix")
-            from .events import read_events
-
-            if after_sequence > row.event_sequence:
-                raise ValueError("Event cursor is ahead of this agent turn")
-            result.events = await read_events(db, org_id, row.id, row.run_id, after_sequence, limit=50)
-            bounded, size = [], 0
-            for item in result.events:
-                item_size = len(json.dumps(item, ensure_ascii=False))
-                if bounded and size + item_size > 12000:
-                    break
-                bounded.append(item)
-                size += item_size
-            result.events = bounded
-            result.next_sequence = result.events[-1]["sequence"] if result.events else after_sequence
-            result.has_more = row.event_sequence > result.next_sequence
-            result.elapsed_seconds = max(0, int(time.time() - row.enqueued_at))
-            result.next_action = (
-                "Show the user meaningful new activity and evidence from events, including redacted SQL. "
-                "Then call wait_signalpilot_agent with thread_id, run_id and after_sequence=next_sequence. "
-                "Continue until terminal status; do not ask the user to poll."
-                if row.status in {"queued", "running"}
-                else "Ask the user the question, then continue_signalpilot_agent with their answer."
-                if row.status == "input_required"
-                else "Report the outcome and verification to the user, including available artifact links."
-            )
-            if result.has_more:
-                result.next_action = (
-                    "Show meaningful new evidence, then call wait_signalpilot_agent with the same "
-                    "thread_id and run_id and after_sequence=next_sequence to read remaining activity before reporting the outcome."
+            await self._owned(db, org_id, user_id, thread_id)
+            if run_id:
+                run = await db.scalar(
+                    select(GatewayChatRun).where(
+                        GatewayChatRun.id == run_id,
+                        GatewayChatRun.conversation_id == thread_id,
+                        GatewayChatRun.org_id == org_id,
+                        GatewayChatRun.user_id == user_id,
+                    )
                 )
-            if prefix:
-                ttl = max(1, min(600, int(row.retained_until - time.time())))
-                result.output = {
-                    "patch_url": await self.storage.presign_get(prefix + "/changes.patch", expires_seconds=ttl),
-                    "snapshot_url": await self.storage.presign_get(prefix + "/output.tgz", expires_seconds=ttl),
-                    "expires_in_seconds": ttl,
-                }
+                if run is None or (run.runtime_env or None) != (runtime_env() or None):
+                    raise ValueError("Agent chat run not found in this environment")
+            else:
+                run = await self._latest(db, org_id, user_id, thread_id)
+            if after_sequence > run.last_event_sequence:
+                raise ValueError("Activity cursor exceeds the latest event")
+            status = (
+                "input_required" if run.status in {"waiting_for_user", "waiting_for_query_approval"} else run.status
+            )
+            terminal_summary = detail == "summary" and sequence is None and status not in {"queued", "running"}
+            query = select(GatewayChatRunEvent).where(
+                GatewayChatRunEvent.run_id == run.id,
+                GatewayChatRunEvent.org_id == org_id,
+                GatewayChatRunEvent.user_id == user_id,
+                # Keep this page within the captured high-water mark even if
+                # another transaction appends events during this read.
+                GatewayChatRunEvent.sequence <= run.last_event_sequence,
+            )
+            if sequence is not None:
+                query = query.where(GatewayChatRunEvent.sequence == sequence)
+            else:
+                query = query.where(GatewayChatRunEvent.sequence > after_sequence)
+                if detail == "summary":
+                    query = query.where(GatewayChatRunEvent.event_type.in_(SUMMARY_EVENT_TYPES))
+            rows = (
+                []
+                if terminal_summary
+                else (await db.scalars(query.order_by(GatewayChatRunEvent.sequence).limit(51))).all()
+            )
+            if sequence is not None and not rows:
+                raise ValueError("Agent event not found")
+            events, size, last = [], 0, after_sequence
+            for row in rows[:50]:
+                event = _event_info(row).model_dump(mode="json")
+                if detail == "summary" and sequence is None:
+                    event = summarize_event(event)
+                cost = len(json.dumps(event))
+                if events and size + cost > 12000:
+                    break
+                events.append(event)
+                size += cost
+                last = row.sequence
+            if terminal_summary or (sequence is None and len(rows) <= 50 and len(events) == len(rows)):
+                last = run.last_event_sequence
+            result = AgentResult(
+                status=status,
+                thread_id=thread_id,
+                run_id=run.id,
+                chat_url=chat_url(thread_id),
+                events=events,
+                next_sequence=last,
+                has_more=sequence is None and last < run.last_event_sequence,
+                elapsed_seconds=max(
+                    0,
+                    int((run.terminal_at.timestamp() if run.terminal_at else time.time()) - run.created_at.timestamp()),
+                ),
+                error=run.public_error_message,
+                error_code=run.public_error_code,
+                usage=_token_usage(run.usage_json),
+                cost_usd=run.cost_usd,
+            )
+            if (
+                sequence is None
+                and status in {"completed", "input_required"}
+                and (after_sequence == 0 or after_sequence < run.last_event_sequence)
+            ):
+                message = await db.scalar(
+                    select(GatewayChatMessage)
+                    .where(
+                        GatewayChatMessage.conversation_id == thread_id,
+                        GatewayChatMessage.org_id == org_id,
+                        GatewayChatMessage.user_id == user_id,
+                        GatewayChatMessage.role == "assistant",
+                        GatewayChatMessage.metadata_json["run_id"].as_string() == run.id,
+                    )
+                    .order_by(GatewayChatMessage.sequence.desc())
+                    .limit(1)
+                )
+                if message:
+                    if status == "input_required":
+                        result.question = message.content
+                    else:
+                        result.summary = message.content
+            if status == "failed":
+                failed = await db.scalar(
+                    select(GatewayChatRunEvent)
+                    .where(
+                        GatewayChatRunEvent.run_id == run.id,
+                        GatewayChatRunEvent.org_id == org_id,
+                        GatewayChatRunEvent.user_id == user_id,
+                        GatewayChatRunEvent.event_type == "error",
+                    )
+                    .order_by(GatewayChatRunEvent.sequence.desc())
+                    .limit(1)
+                )
+                if failed:
+                    for field in (
+                        "raw_error",
+                        "stderr",
+                        "raw_error_truncated",
+                        "stderr_truncated",
+                        "diagnostic_context",
+                        "full_trace",
+                        "error_type",
+                        "error_stage",
+                    ):
+                        if field in failed.payload_json:
+                            setattr(result, field, failed.payload_json[field])
+                if not result.raw_error:
+                    result.raw_error = run.public_error_message
+            if status in {"queued", "running"}:
+                result.next_action = f"Agent is working independently. Share {result.chat_url}. Wait only if the user asks for updates or you need its result; no narration or continued polling is required."
+            elif status == "input_required":
+                result.next_action = f"Ask the user for the requested clarification or approval. Open {result.chat_url}; approvals are handled in Chats."
+            else:
+                result.next_action = f"Use the final result. Full events and conversation context are available on explicit request; artifacts are in {result.chat_url}."
             return result
+
+    async def wait(self, org_id, user_id, thread_id, after_sequence=0, run_id=None, wait_seconds=20, detail="summary"):
+        if not 0 <= wait_seconds <= 25:
+            raise ValueError("Wait duration must be between 0 and 25 seconds")
+        deadline = time.monotonic() + wait_seconds
+        initial = await self.get(org_id, user_id, thread_id, after_sequence, run_id, detail)
+        if initial.status not in {"queued", "running"} or (detail == "full" and initial.events):
+            return initial
+        while time.monotonic() < deadline:
+            await asyncio.sleep(min(0.5, max(0, deadline - time.monotonic())))
+            async with self.factory() as db:
+                state = (
+                    await db.execute(
+                        select(GatewayChatRun.status, GatewayChatRun.last_event_sequence).where(
+                            GatewayChatRun.id == initial.run_id,
+                            GatewayChatRun.org_id == org_id,
+                            GatewayChatRun.user_id == user_id,
+                            GatewayChatRun.conversation_id == thread_id,
+                        )
+                    )
+                ).one_or_none()
+            if state is None or state.status not in {"queued", "running"}:
+                break
+            if detail == "full" and state.last_event_sequence > initial.next_sequence:
+                break
+        result = await self.get(org_id, user_id, thread_id, after_sequence, initial.run_id, detail)
+        result.heartbeat = not result.events and result.status in {"queued", "running"}
+        return result
+
+    async def context(self, org_id, user_id, thread_id, after_message_sequence=0, limit=20):
+        from .contracts import AgentContextResult
+
+        if after_message_sequence < 0 or not 1 <= limit <= 50:
+            raise ValueError("Message cursor must be nonnegative and limit between 1 and 50")
+        async with self.factory() as db:
+            await self._latest(db, org_id, user_id, thread_id)
+            rows = (
+                await db.scalars(
+                    select(GatewayChatMessage)
+                    .where(
+                        GatewayChatMessage.conversation_id == thread_id,
+                        GatewayChatMessage.org_id == org_id,
+                        GatewayChatMessage.user_id == user_id,
+                        GatewayChatMessage.role.in_(["user", "assistant"]),
+                        GatewayChatMessage.sequence > after_message_sequence,
+                    )
+                    .order_by(GatewayChatMessage.sequence)
+                    .limit(limit + 1)
+                )
+            ).all()
+            page = rows[:limit]
+            return AgentContextResult(
+                thread_id=thread_id,
+                chat_url=chat_url(thread_id),
+                messages=[
+                    {
+                        "id": row.id,
+                        "role": row.role,
+                        "content": row.content,
+                        "sequence": row.sequence,
+                        "created_at": row.created_at,
+                        "run_id": (row.metadata_json or {}).get("run_id"),
+                    }
+                    for row in page
+                ],
+                next_message_sequence=page[-1].sequence if page else after_message_sequence,
+                has_more=len(rows) > limit,
+            )
 
     async def cancel(self, org_id, user_id, thread_id):
         async with self.factory() as db:
-            row = await self._owned(db, org_id, user_id, thread_id)
-            await db.execute(
-                update(MCPAgentThread)
-                .where(
-                    MCPAgentThread.id == row.id,
-                    MCPAgentThread.run_id == row.run_id,
-                    MCPAgentThread.status.in_(["queued", "running"]),
-                )
-                .values(status="cancelled", updated_at=time.time(), result={})
-            )
-            await db.commit()
+            run = await self._latest(db, org_id, user_id, thread_id)
+            await chat_store.request_cancellation(db, org_id=org_id, user_id=user_id, run_id=run.id)
         return await self.get(org_id, user_id, thread_id)
-
-    async def wait(self, org_id, user_id, thread_id, after_sequence=0, run_id=None, wait_seconds=20):
-        if not isinstance(after_sequence, int) or after_sequence < 0 or not 0 <= wait_seconds <= 25:
-            raise ValueError("Invalid cursor or wait duration; use 0–25 seconds")
-        deadline = time.monotonic() + wait_seconds
-        while True:
-            result = await self.get(org_id, user_id, thread_id, after_sequence, run_id)
-            if result.events or result.status not in {"queued", "running"}:
-                return result
-            if time.monotonic() >= deadline:
-                result.heartbeat = True
-                return result
-            await asyncio.sleep(min(0.25, max(0, deadline - time.monotonic())))
-
-    async def run_once(self):
-        """Claim one queued turn atomically. Never replay an orphaned running turn."""
-        self.require_enabled()
-        async with self.factory() as db:
-            await db.execute(
-                update(MCPAgentThread)
-                .where(
-                    MCPAgentThread.status.in_(["queued", "running"]),
-                    MCPAgentThread.runtime_env == runtime_env(),
-                    (
-                        (MCPAgentThread.expires_at <= time.time())
-                        | (MCPAgentThread.retained_until <= time.time())
-                        | ((MCPAgentThread.status == "running") & (MCPAgentThread.lease_expires_at <= time.time()))
-                    ),
-                )
-                .values(
-                    status="failed",
-                    result={"error": "Worker lease or deadline expired; start a new turn"},
-                    updated_at=time.time(),
-                )
-            )
-            candidate = await db.scalar(
-                select(MCPAgentThread)
-                .where(
-                    MCPAgentThread.status == "queued",
-                    MCPAgentThread.runtime_env == runtime_env(),
-                    MCPAgentThread.expires_at > time.time(),
-                    MCPAgentThread.retained_until > time.time(),
-                )
-                .order_by(MCPAgentThread.enqueued_at)
-                .limit(1)
-                .with_for_update(skip_locked=True)
-            )
-            if candidate is None:
-                await db.commit()
-                return False
-            claimed = await db.execute(
-                update(MCPAgentThread)
-                .where(
-                    MCPAgentThread.id == candidate.id,
-                    MCPAgentThread.run_id == candidate.run_id,
-                    MCPAgentThread.status == "queued",
-                )
-                .values(
-                    status="running",
-                    lease_expires_at=time.time() + 45,
-                    expires_at=min(time.time() + candidate.request["timeout_seconds"], candidate.retained_until),
-                    updated_at=time.time(),
-                )
-            )
-            if claimed.rowcount != 1:
-                await db.rollback()
-                return False
-            await db.commit()
-            await db.refresh(candidate)
-        await self._execute(candidate)
-        return True
-
-    async def worker_loop(self):
-        tasks = set()
-        try:
-            while True:
-                try:
-                    self.require_enabled()
-                    for task in list(tasks):
-                        if task.done():
-                            tasks.remove(task)
-                            if task.cancelled():
-                                continue
-                            try:
-                                task.result()
-                            except Exception as exc:
-                                logger.warning("Agent worker failed type=%s", type(exc).__name__)
-                    if len(tasks) < 4:
-                        tasks.add(asyncio.create_task(self.run_once()))
-                except ValueError:
-                    pass  # An unconfigured runtime leaves the rest of the gateway available.
-                await asyncio.sleep(0.5)
-        finally:
-            for task in tasks:
-                task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
-
-    async def _execute(self, row):
-        request = AgentRequest.model_validate(row.request)
-        owner_task = asyncio.current_task()
-
-        async def renew():
-            while True:
-                await asyncio.sleep(10)
-                async with self.factory() as db:
-                    renewed = await db.execute(
-                        update(MCPAgentThread)
-                        .where(
-                            MCPAgentThread.id == row.id,
-                            MCPAgentThread.run_id == row.run_id,
-                            MCPAgentThread.status == "running",
-                            MCPAgentThread.lease_expires_at > time.time(),
-                        )
-                        .values(lease_expires_at=time.time() + 45)
-                    )
-                    await db.commit()
-                    if renewed.rowcount != 1:
-                        owner_task.cancel()
-                        return
-
-        heartbeat = asyncio.create_task(renew())
-
-        async def cancelled():
-            async with self.factory() as db:
-                active = await db.scalar(
-                    select(MCPAgentThread.id).where(
-                        MCPAgentThread.id == row.id,
-                        MCPAgentThread.run_id == row.run_id,
-                        MCPAgentThread.status == "running",
-                        MCPAgentThread.expires_at > time.time(),
-                        MCPAgentThread.lease_expires_at > time.time(),
-                    )
-                )
-                return active is None
-
-        async def event(raw):
-            from .events import append_event
-
-            await append_event(self.factory, row.id, row.run_id, row.org_id, {**raw, "type": "progress"})
-
-        try:
-            async with asyncio.timeout(max(1, row.expires_at - time.time())):
-                async with self.factory() as db:
-                    key = await self._validate(db, row.org_id, row.user_id, request)
-                    if not row.snapshot_key:
-                        _, row.snapshot_key = await WorkspaceStore(self.storage).build_snapshot(
-                            db,
-                            org_id=row.org_id,
-                            project_id=request.project_id,
-                            branch=request.branch,
-                            revision=request.revision,
-                        )
-                    await db.commit()
-                before_bytes = await self.storage.get_bytes(row.snapshot_key)
-                if before_bytes is None:
-                    raise ValueError("Project snapshot unavailable")
-                before = artifacts.read_archive(before_bytes)
-                # Repack a sanitized input to prevent project credentials entering the worker.
-                prefix = (
-                    "mcp-agents/"
-                    + hashlib.sha256(row.org_id.encode()).hexdigest()[:24]
-                    + "/"
-                    + row.id
-                    + "/"
-                    + row.run_id
-                )
-                await self.storage.put_bytes(prefix + "/input.tgz", artifacts.pack(before))
-                payload = {
-                    **request.model_dump(),
-                    "api_key": key,
-                    "mcp_token": auth.mint(row, request.timeout_seconds),
-                    "mcp_url": os.environ["SP_AGENT_MCP_URL"],
-                    "model": os.environ["SP_AGENT_MODEL"],
-                    "snapshot_url": await self.storage.presign_get(
-                        prefix + "/input.tgz", expires_seconds=request.timeout_seconds
-                    ),
-                    "history": row.history,
-                }
-                from gateway.mcp.audit import AGENT_ALLOWED_MCP_TOOLS
-
-                payload["allowed_mcp_tools"] = sorted(AGENT_ALLOWED_MCP_TOOLS)
-                await event({"stage": "starting"})
-                runtime = self.runtime or DockerAgent()
-                if await cancelled():
-                    raise asyncio.CancelledError()
-                raw, output = await runtime.run(
-                    run_id=row.run_id, payload=payload, on_event=event, is_cancelled=cancelled
-                )
-                outcome = RuntimeResult.model_validate(raw)
-                after = artifacts.read_archive(output)
-                secrets = (key, payload["mcp_token"])
-                if any(secret.encode() in data for secret in secrets for data in after.values()):
-                    raise ValueError("Agent output contains execution credentials")
-                for secret in secrets:
-                    outcome.summary = outcome.summary.replace(secret, "[REDACTED]")
-                    if outcome.question:
-                        outcome.question = outcome.question.replace(secret, "[REDACTED]")
-                    outcome.verification = [text.replace(secret, "[REDACTED]") for text in outcome.verification]
-                changed, patch = artifacts.patch(before, after)
-                await self.storage.put_bytes(prefix + "/output.tgz", artifacts.pack(after))
-                await self.storage.put_bytes(prefix + "/changes.patch", patch, content_type="text/plain")
-                result = outcome.model_dump(exclude={"status"}) | {"changed_files": changed, "artifact_prefix": prefix}
-                history = (
-                    [
-                        *row.history,
-                        {"role": "user", "content": request.task},
-                        {
-                            "role": "assistant",
-                            "content": outcome.summary
-                            + ("\nQuestion: " + outcome.question if outcome.question else ""),
-                        },
-                    ]
-                )[-12:]
-                async with self.factory() as db:
-                    await db.execute(
-                        update(MCPAgentThread)
-                        .where(
-                            MCPAgentThread.id == row.id,
-                            MCPAgentThread.run_id == row.run_id,
-                            MCPAgentThread.status == "running",
-                            MCPAgentThread.expires_at > time.time(),
-                            MCPAgentThread.lease_expires_at > time.time(),
-                        )
-                        .values(
-                            status=outcome.status,
-                            result=result,
-                            history=history,
-                            snapshot_key=prefix + "/output.tgz",
-                            updated_at=time.time(),
-                        )
-                    )
-                    await db.commit()
-        except asyncio.CancelledError:
-
-            async def persist_cancel():
-                async with self.factory() as db:
-                    await db.execute(
-                        update(MCPAgentThread)
-                        .where(
-                            MCPAgentThread.id == row.id,
-                            MCPAgentThread.run_id == row.run_id,
-                            MCPAgentThread.status == "running",
-                        )
-                        .values(
-                            status="failed",
-                            result={"error": "Worker stopped; start a new turn"},
-                            updated_at=time.time(),
-                        )
-                    )
-                    await db.commit()
-
-            await asyncio.shield(persist_cancel())
-            raise
-        except Exception as exc:
-            logger.warning("Agent execution failed run=%s type=%s", row.run_id, type(exc).__name__)
-            async with self.factory() as db:
-                await db.execute(
-                    update(MCPAgentThread)
-                    .where(
-                        MCPAgentThread.id == row.id,
-                        MCPAgentThread.run_id == row.run_id,
-                        MCPAgentThread.status == "running",
-                    )
-                    .values(status="failed", result={"error": "Agent execution failed"}, updated_at=time.time())
-                )
-                await db.commit()
-        finally:
-            heartbeat.cancel()
-            await asyncio.gather(heartbeat, return_exceptions=True)

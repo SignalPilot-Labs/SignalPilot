@@ -61,6 +61,15 @@ pending rotation. An in-place upgrade with unmigrated ciphertext fails closed.
 | `SP_PER_KEY_RPM` | `1000` | MCP tool calls per minute per API key. |
 | `SP_PER_ORG_RPM` | `5000` | MCP tool calls per minute per org (cloud mode). |
 
+## Database concurrency
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SP_DB_POOL_MAX_CONNECTIONS` | `5` | Maximum independently leased connectors per gateway process, organization, database connection, and credential identity. Bounded to 1–20. SQLite and DuckDB retain one lease. |
+| `SP_DB_POOL_ACQUIRE_TIMEOUT_SECONDS` | `30` | Maximum connection acquisition wait in seconds. Bounded to 0.01–300. Requests fail when capacity is unavailable within this window. |
+
+Each lease keeps query state and cancellation isolated from other requests. These limits count connector instances; drivers with internal pools can open additional physical connections. They are separate from the two-agent account limit for MCP-launched SignalPilot agents.
+
 ## Auth
 
 | Variable | Default | Description |

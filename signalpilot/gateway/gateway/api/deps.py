@@ -41,7 +41,7 @@ async def get_store(
     execution_identity = claims.get("execution_identity")
     allowed_connection_name = (
         claims.get("connection_name")
-        if isinstance(execution_identity, str) and execution_identity.startswith(("chat:", "agent:"))
+        if isinstance(execution_identity, str) and execution_identity.startswith("chat:")
         else None
     )
     return Store(

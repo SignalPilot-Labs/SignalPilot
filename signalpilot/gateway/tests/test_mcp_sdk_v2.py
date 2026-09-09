@@ -210,7 +210,7 @@ async def test_nested_agent_catalog_matches_execution_policy_without_mutating_ou
     from mcp.client import Client
 
     from gateway.mcp import mcp
-    from gateway.mcp.audit import AGENT_ALLOWED_MCP_TOOLS, STANDALONE_CHAT_TOOL_ALLOWLIST
+    from gateway.mcp.audit import STANDALONE_CHAT_TOOL_ALLOWLIST
     from gateway.mcp.context import mcp_execution_identity_var
 
     async def catalog(identity):
@@ -223,10 +223,6 @@ async def test_nested_agent_catalog_matches_execution_policy_without_mutating_ou
 
     outer = await catalog(None)
     assert "run_signalpilot_agent" in outer
-    nested = await catalog("agent:example-run")
-    assert nested == outer & AGENT_ALLOWED_MCP_TOOLS
-    assert "query_database" in nested
-    assert not {"run_signalpilot_agent", "map_columns", "find_column_producers"} & nested
     chat = await catalog("chat:example-run")
     assert chat == outer & STANDALONE_CHAT_TOOL_ALLOWLIST
     assert (

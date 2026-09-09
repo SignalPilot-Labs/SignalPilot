@@ -32,6 +32,8 @@ MCP_TOOL_SCOPES: dict[str, str] = {
     "get_signalpilot_agent": "agent:run",
     "cancel_signalpilot_agent": "agent:run",
     "wait_signalpilot_agent": "agent:run",
+    "get_signalpilot_agent_event": "agent:run",
+    "get_signalpilot_agent_context": "agent:run",
     "list_database_connections": "read",
     "connection_health": "query",
     "connector_capabilities": "read",
@@ -151,17 +153,6 @@ EVAL_ALLOWED_MCP_TOOLS: frozenset[str] = frozenset(
 # a second, stale chat-only denylist. Xata branch control remains excluded:
 # chat runs use a frozen project/branch and must not create or delete database
 # branches as a side effect of analysis.
-AGENT_ALLOWED_MCP_TOOLS: frozenset[str] = frozenset({
-    "list_database_connections", "connection_health", "connector_capabilities",
-    "get_knowledge", "search_knowledge", "read_knowledge", "analyze_project_db",
-    "dbt_error_parser", "generate_sql_skeleton", "check_model_schema", "analyze_grain",
-    "validate_model_output", "audit_model_sources", "compare_join_types", "verify_model_values",
-    "list_semantic_metrics", "verify_metric_conformance", "plan_query", "query_database",
-    "check_budget", "explain_query", "validate_sql", "estimate_query_cost", "debug_cte_query",
-    "describe_table", "list_tables", "get_date_boundaries", "schema_diff", "schema_ddl",
-    "schema_link", "explore_columns", "explore_column", "explore_table", "schema_statistics",
-    "find_join_path", "get_relationships", "schema_overview",
-})
 
 STANDALONE_CHAT_BLOCKED_TOOLS = frozenset(
     {
@@ -170,6 +161,8 @@ STANDALONE_CHAT_BLOCKED_TOOLS = frozenset(
         "get_signalpilot_agent",
         "cancel_signalpilot_agent",
         "wait_signalpilot_agent",
+        "get_signalpilot_agent_event",
+        "get_signalpilot_agent_context",
         "schema_diff_branches",
         "xata_branch_diff",
         "xata_list_branches",
@@ -210,16 +203,16 @@ async def _audit_tool_call(
     org_id = mcp_org_id_var.get(None)
 
     # Increment daily usage counter for every tool call
-    if org_id and tool_name not in {"get_signalpilot_agent", "wait_signalpilot_agent"}:
+    if org_id and tool_name not in {
+        "get_signalpilot_agent", "wait_signalpilot_agent",
+        "get_signalpilot_agent_event", "get_signalpilot_agent_context",
+    }:
         daily_query_counter.increment(org_id)
 
     client_ip = mcp_client_ip_var.get(None)
     user_agent = mcp_user_agent_var.get(None)
 
     metadata: dict = {"args": {k: str(v)[:200] for k, v in args.items()} if args else {}}
-    identity = mcp_execution_identity_var.get(None)
-    if identity and identity.startswith("agent:"):
-        metadata["agent_run_id"] = identity.removeprefix("agent:")
     # Eval attribution (observed coverage): which run/task issued this call.
     from .context import mcp_eval_run_var, mcp_eval_task_var
 
@@ -286,33 +279,12 @@ def _audited_tool(fn):
             else:
                 scope_error = _require_mcp_scope(required_scope)
                 denial = standalone_chat_tool_denial(tool_name, conn)
-                identity = mcp_execution_identity_var.get(None) or ""
-                if identity.startswith("agent:"):
-                    if tool_name not in AGENT_ALLOWED_MCP_TOOLS:
-                        denial = "Error: tool unavailable to delegated agents"
-                    if conn and conn != mcp_allowed_connection_var.get(None):
-                        denial = "Error: connection outside agent scope"
                 if scope_error:
                     result = scope_error
                 elif denial:
                     result = denial
                 else:
-                    if identity.startswith("agent:") and tool_name != "query_database":
-                        from gateway.agent_execution.events import current_event
-
-                        await current_event({"type": "tool_started", "tool": tool_name})
-                        try:
-                            result = await fn(*args, **kwargs)
-                        except (Exception, asyncio.CancelledError):
-                            await current_event({"type": "tool_failed", "tool": tool_name})
-                            raise
-                        failed = bool(getattr(result, "is_error", False)) or (isinstance(result, str) and result.startswith(
-                            ("Error:", "Query error:", "Planning error:", "Validation error:", "INVALID", "Query blocked:")
-                        ))
-                        await current_event({"type": "tool_failed" if failed else "tool_finished", "tool": tool_name,
-                                             "duration_ms": max(0, (time.time() - t0) * 1000)})
-                    else:
-                        result = await fn(*args, **kwargs)
+                    result = await fn(*args, **kwargs)
             duration_ms = (time.time() - t0) * 1000
             # Detect blocked queries from return value
             result_str = str(result) if result else ""

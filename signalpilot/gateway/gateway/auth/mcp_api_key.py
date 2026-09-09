@@ -256,20 +256,7 @@ class MCPAuthMiddleware:
             )
 
             try:
-                if raw_bearer.startswith("spa_"):
-                    import jwt
-
-                    from ..agent_execution.auth import verify as verify_agent_token
-                    try:
-                        claims = await verify_agent_token(raw_bearer)
-                    except jwt.InvalidTokenError:
-                        await _send_401(send, "Invalid or inactive agent credential.")
-                        return
-                    except SQLAlchemyError:
-                        await _send_503(send, "Agent authentication unavailable.")
-                        return
-                else:
-                    claims = verify_session_jwt(raw_bearer)
+                claims = verify_session_jwt(raw_bearer)
             except NotebookSessionJWTError:
                 await _send_401(send, "Invalid notebook session token.")
                 return

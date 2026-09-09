@@ -4,6 +4,14 @@
 import { GATEWAY_URL, _getAuthHeader, request } from "./client";
 
 // Settings
+export const getMcpAgentDefaults = () =>
+  request<import("../types").McpAgentDefaults>("/api/settings/mcp-agent");
+export const updateMcpAgentDefaults = (defaults: import("../types").McpAgentDefaults) =>
+  request<import("../types").McpAgentDefaults>("/api/settings/mcp-agent", {
+    method: "PUT",
+    body: JSON.stringify(defaults),
+  });
+
 export const getSettings = () =>
   request<import("../types").GatewaySettings>("/api/settings");
 export const updateSettings = (s: import("../types").GatewaySettings) =>

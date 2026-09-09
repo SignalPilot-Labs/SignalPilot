@@ -96,6 +96,7 @@ async def create_conversation_with_run(
         user_message_id=user_message.id,
         status=RunStatus.queued.value,
         runtime_env=chat_config.runtime_env(),
+        created_at=_now(),
     )
     db.add_all([conversation, user_message, run])
     if not commit:
@@ -151,6 +152,7 @@ async def list_conversations(
     user_id: str,
     limit: int = 100,
     offset: int = 0,
+    project_id: str | None = None,
 ) -> list[StandaloneConversationInfo]:
     """List the caller's active conversations, newest first.
 
@@ -203,8 +205,9 @@ async def list_conversations(
                 GatewayChatConversation.user_id == user_id,
                 GatewayChatConversation.surface == "standalone",
                 GatewayChatConversation.status == "active",
+                GatewayChatConversation.project_id == project_id if project_id else True,
             )
-            .order_by(GatewayChatConversation.updated_at.desc())
+            .order_by(GatewayChatConversation.updated_at.desc(), GatewayChatConversation.id.desc())
             .limit(limit)
             .offset(offset)
         )
@@ -293,11 +296,7 @@ async def get_conversation_detail(
         .all()
     )
     current_run = runs[0] if runs else None
-    run_usage = {
-        run.id: usage
-        for run in runs
-        if (usage := _token_usage(run.usage_json)) is not None
-    }
+    run_usage = {run.id: usage for run in runs if (usage := _token_usage(run.usage_json)) is not None}
     events = list(
         (
             await db.execute(

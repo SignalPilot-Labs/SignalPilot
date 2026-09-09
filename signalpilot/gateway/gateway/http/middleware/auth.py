@@ -64,75 +64,6 @@ async def _eval_credentials_active() -> bool:
     return any(key.eval_run_id for key in keys)
 
 
-def _agent_rest_path_allowed(method: str, path: str, connection: str) -> bool:
-    """Exact REST routes used by governed MCP query/schema adapters."""
-    if method == "POST" and path in {"/api/query", "/api/query/explain"}:
-        return True
-    if method == "GET" and path in {"/api/connections", "/api/connectors/capabilities"}:
-        return True
-    base = f"/api/connections/{connection}"
-    if method == "GET":
-        return path in {
-            base + suffix
-            for suffix in (
-                "",
-                "/capabilities",
-                "/schema",
-                "/schema/overview",
-                "/schema/diff",
-                "/schema/ddl",
-                "/schema/link",
-                "/schema/explore-table",
-                "/schema/join-paths",
-                "/schema/relationships",
-            )
-        }
-    return method == "POST" and path in {base + "/schema/explore", base + "/schema/explore-columns"}
-
-
-async def _agent_rest_request(request: Request, token: str, call_next: RequestResponseEndpoint) -> Response:
-    """Revalidate the active run for each adapter call; never grant generic REST access."""
-    import jwt
-    from sqlalchemy.exc import SQLAlchemyError
-
-    from ...agent_execution.auth import verify
-
-    try:
-        claims = await verify(token)
-    except jwt.InvalidTokenError:
-        return Response(
-            '{"detail":"Invalid or inactive agent credential."}', status_code=401, media_type="application/json"
-        )
-    except (SQLAlchemyError, ValueError):
-        return Response(
-            '{"detail":"Agent authentication unavailable."}', status_code=503, media_type="application/json"
-        )
-    connection = claims["connection_name"]
-    if not _agent_rest_path_allowed(request.method, request.url.path, connection):
-        return Response(
-            '{"detail":"Agent credential is not permitted on this endpoint."}',
-            status_code=403,
-            media_type="application/json",
-        )
-    if request.method == "POST" and request.url.path in {"/api/query", "/api/query/explain"}:
-        try:
-            body = await request.json()
-        except ValueError:
-            return Response('{"detail":"Invalid query request."}', status_code=400, media_type="application/json")
-        if not isinstance(body, dict) or body.get("connection_name") != connection:
-            return Response(
-                '{"detail":"Connection outside agent scope."}', status_code=403, media_type="application/json"
-            )
-    request.state.auth = {
-        "auth_method": "mcp_agent",
-        "user_id": claims["sub"],
-        "org_id": claims["org_id"],
-        "scopes": [scope for scope in claims.get("scopes", []) if scope in {"read", "query"}],
-        "connection_name": connection,
-        "execution_identity": "agent:" + claims["run_id"],
-    }
-    request.state._jwt_claims = {**claims, "execution_identity": "agent:" + claims["run_id"]}
-    return await call_next(request)
 
 
 class APIKeyAuthMiddleware(BaseHTTPMiddleware):
@@ -146,13 +77,6 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         if request.method == "OPTIONS":
             return await call_next(request)
-
-        bearer = request.headers.get("authorization", "")
-        agent_token = (
-            bearer[7:].strip() if bearer.startswith("Bearer ") else request.headers.get("x-api-key", "").strip()
-        )
-        if agent_token.startswith("spa_") and request.url.path not in {"/mcp", "/mcp/"}:
-            return await _agent_rest_request(request, agent_token, call_next)
 
         if request.url.path in PUBLIC_PATHS:
             return await call_next(request)

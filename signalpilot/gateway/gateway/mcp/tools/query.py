@@ -1,8 +1,6 @@
 """Query tools: plan_query, query_database, validation, and budgets."""
 
-import asyncio
 import json
-import time
 
 import httpx
 from sqlalchemy import select
@@ -166,25 +164,14 @@ async def query_database(
                         }
                     )
                 context = await _chat_query_context(store, path="mcp", plan_id=plan.plan_id)
-            from gateway.agent_execution.events import current_event
-
-            await current_event({"type": "query_started", "tool": "query_database", "sql": sql})
-            query_started = time.perf_counter()
-            try:
-                result = await governed_query_executor.execute(
-                    store,
-                    connection_name=connection_name,
-                    sql=sql,
-                    row_limit=min(row_limit, 10_000),
-                    timeout_seconds=150,
-                    context=context,
-                )
-            except (Exception, asyncio.CancelledError):
-                await current_event({"type": "query_failed", "tool": "query_database",
-                                     "duration_ms": (time.perf_counter() - query_started) * 1000})
-                raise
-            await current_event({"type": "query_finished", "tool": "query_database",
-                                 "row_count": result.row_count, "duration_ms": result.execution_ms})
+            result = await governed_query_executor.execute(
+                store,
+                connection_name=connection_name,
+                sql=sql,
+                row_limit=min(row_limit, 10_000),
+                timeout_seconds=150,
+                context=context,
+            )
         except (GovernedQueryError, QueryPlanError) as exc:
             return f"Query error: {sanitize_mcp_error(str(exc), cap=300)}"
 

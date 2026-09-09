@@ -51,6 +51,9 @@ from gateway.standalone_chat.worker_errors import (
 from gateway.standalone_chat.worker_errors import (
     public_full_trace as _public_full_trace,
 )
+from gateway.standalone_chat.worker_errors import (
+    public_raw_error_fields as _public_raw_error_fields,
+)
 from gateway.standalone_chat.worker_events import (
     _cancellation_monitor,
     _lease_renewer,
@@ -390,6 +393,10 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                             content,
                             full_trace=str(event.get("full_trace") or content or ""),
                             diagnostic_context=event.get("diagnostic_context"),
+                            raw_error=event.get("raw_error"),
+                            stderr=event.get("stderr"),
+                            raw_error_truncated=event.get("raw_error_truncated") is True,
+                            stderr_truncated=event.get("stderr_truncated") is True,
                         )
                     elif event_type == "final":
                         final_text = content or final_text or streamed_text
@@ -497,8 +504,11 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                     "message": public_message,
                     "full_trace": full_trace,
                     "diagnostic_context": diagnostic_context,
+                    **_public_raw_error_fields(exc),
                 },
             )
+        with suppress(Exception):
+            await _flush_deltas(run_id)
         async with get_session_factory()() as db:
             await chat_store.fail_run(
                 db,

@@ -40,6 +40,7 @@ async def list_conversations(
     store: StoreD,
     limit: Annotated[int, Query(ge=1, le=200)] = 100,
     offset: Annotated[int, Query(ge=0)] = 0,
+    project_id: str | None = None,
 ):
     _require_enabled()
     conversations = await chat_store.list_conversations(
@@ -48,6 +49,7 @@ async def list_conversations(
         user_id=store.user_id or "local",
         limit=limit,
         offset=offset,
+        project_id=project_id,
     )
     return {"conversations": conversations}
 

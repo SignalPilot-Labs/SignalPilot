@@ -45,6 +45,7 @@ import {
   groupCardsByAnchor,
 } from "~/lib/chat-artifact-cards";
 import { MessageTiming } from "~/components/chat/chat-message-timing";
+import { ChatErrorDetails } from "~/components/chat/chat-error-details";
 
 function WorkTimeline({ runId }: { runId: string }) {
   const { events } = useChatUi();
@@ -169,6 +170,7 @@ export function AssistantMessage({
             </div>
           )}
           {runId && <ConnectorSignInCards events={events} runId={runId} />}
+          {runId && <ChatErrorDetails events={events} runId={runId} />}
           {!blocksHaveText && message.content && !messageRepeatsRunError && (
             <ChatMarkdown markdown={message.content} streaming={running} />
           )}

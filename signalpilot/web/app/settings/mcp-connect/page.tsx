@@ -20,6 +20,7 @@ import { StatusDot } from "~/components/ui/data-viz";
 import { SectionHeader } from "~/components/ui/section-header";
 import { useToast } from "~/components/ui/toast";
 import { ApiKeysSkeleton } from "~/components/ui/skeleton";
+import { McpAgentDefaultsSettings } from "~/components/settings/mcp-agent-defaults";
 
 // ---------------------------------------------------------------------------
 // MCP URL derivation
@@ -216,6 +217,7 @@ function McpConnectContent() {
       </TerminalBar>
 
       {/* ── Section 1: Endpoint (hidden if no keys) ── */}
+      <McpAgentDefaultsSettings />
       {!hasKeys ? null : <section className="mb-8">
         <SectionHeader icon={Plug} title="endpoint" />
         <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] rounded-[14px] p-5 space-y-4">

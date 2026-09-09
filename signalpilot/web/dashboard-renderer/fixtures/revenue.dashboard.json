@@ -5,20 +5,16 @@
   "layout": { "columns": 12, "rowHeight": 72 },
   "datasets": {
     "summary": {
-      "rows": [
-        {
-          "total_revenue": 5896400,
-          "prior_revenue": 5210000,
-          "orders": 28410,
-          "avg_order_value": 207.55,
-          "growth": 0.1318
-        }
-      ]
+      "connection": "warehouse",
+      "sql": "with years as (select date_trunc('year', order_date) as year, sum(revenue) as revenue, count(*) as orders from fct_orders where order_date >= date '2023-01-01' and order_date < date '2025-01-01' group by 1) select cur.revenue as total_revenue, prev.revenue as prior_revenue, cur.orders, cur.revenue / cur.orders as avg_order_value, (cur.revenue - prev.revenue) / prev.revenue as growth, (select r.region from fct_orders o join dim_region r on r.region_id = o.region_id where o.order_date >= date '2024-01-01' and o.order_date < date '2025-01-01' group by 1 order by sum(o.revenue) desc limit 1) as top_region from years cur join years prev on prev.year = cur.year - interval '1 year' where cur.year = date '2024-01-01'"
     },
-    "revenue_monthly": { "file": "artifacts/revenue_monthly.csv" },
+    "revenue_monthly": {
+      "connection": "warehouse",
+      "sql": "select date_trunc('month', o.order_date) as month, r.region, sum(o.revenue) as revenue, count(*) as orders, max(t.target) as target from fct_orders o join dim_region r on r.region_id = o.region_id left join monthly_targets t on t.region = r.region and t.month = date_trunc('month', o.order_date) where o.order_date >= date '2024-01-01' and o.order_date < date '2025-01-01' group by 1, 2 order by 1, 2"
+    },
     "revenue_by_region": {
-      "file": "artifacts/revenue_by_region.json",
-      "source": { "kind": "sql", "connection": "warehouse", "sql": "select region, sum(revenue) as revenue from fct_orders group by 1" }
+      "connection": "warehouse",
+      "sql": "with cur as (select r.region, sum(o.revenue) as revenue, count(distinct o.customer_id) as customers, sum(o.revenue) / count(*) as avg_order_value from fct_orders o join dim_region r on r.region_id = o.region_id where o.order_date >= date '2024-01-01' and o.order_date < date '2025-01-01' group by 1), prev as (select r.region, sum(o.revenue) as revenue from fct_orders o join dim_region r on r.region_id = o.region_id where o.order_date >= date '2023-01-01' and o.order_date < date '2024-01-01' group by 1), targets as (select region, sum(target) as target from monthly_targets where month >= date '2024-01-01' and month < date '2025-01-01' group by 1) select cur.region, cur.revenue, targets.target, cur.customers, cur.avg_order_value, (cur.revenue - prev.revenue) / prev.revenue as growth from cur join prev on prev.region = cur.region join targets on targets.region = cur.region"
     }
   },
   "filters": [
@@ -130,6 +126,15 @@
       ],
       "sort": { "column": "revenue", "direction": "desc" },
       "limit": 10
+    },
+    {
+      "id": "kpi_top_region",
+      "type": "kpi",
+      "title": "Top region",
+      "description": "Region with the highest 2024 revenue.",
+      "dataset": "summary",
+      "value": { "column": "top_region" },
+      "comparison": { "column": "growth", "label": "Growth", "format": "percentage" }
     }
   ]
 }

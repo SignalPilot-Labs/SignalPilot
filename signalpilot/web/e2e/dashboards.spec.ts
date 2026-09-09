@@ -41,7 +41,7 @@ test.describe("dashboards (fixture harness)", () => {
     await expect(page.getByTestId("dashboard-version-line")).toContainText("Version 3");
     await expect(page.getByTestId("dashboard-schedule-label")).toHaveText("Daily at 06:00 ET");
     const renderer = page.getByTestId("dashboard-canvas").locator("[data-dashboard-renderer]");
-    await expect(renderer.locator("[data-chart-id]")).toHaveCount(9);
+    await expect(renderer.locator("[data-chart-id]")).toHaveCount(10);
     await expect(renderer.locator("[data-dashboard-tile-error]")).toHaveCount(0);
     await expect(renderer.locator('[data-chart-id="kpi_revenue"]')).toContainText("$");
     await expect(renderer.locator('[data-chart-id="revenue_trend"] svg').first()).toBeVisible();
@@ -95,15 +95,16 @@ test.describe("dashboards (fixture harness)", () => {
     await row.getByTestId("dashboard-version-toggle").click();
     await expect(row).toHaveAttribute("data-expanded", "1");
     const datasets = row.getByTestId("dashboard-version-dataset");
-    await expect(datasets).toHaveCount(2);
-    await expect(datasets.first()).toContainText("revenue_monthly.csv");
+    await expect(datasets).toHaveCount(3);
+    await expect(datasets.first()).toContainText("summary.csv");
+    await expect(datasets.nth(1)).toContainText("revenue_monthly.csv");
     const downloadPromise = page.waitForEvent("download");
     await row
       .locator('[data-testid="dashboard-version-dataset"][data-dataset="revenue_by_region"]')
       .getByTestId("dashboard-version-dataset-download")
       .click();
     const download = await downloadPromise;
-    expect(download.suggestedFilename()).toBe("revenue_by_region.json");
+    expect(download.suggestedFilename()).toBe("revenue_by_region.csv");
     // The owner label is an email in the fixture, so it shows as is.
     await expect(page.getByTestId("dashboard-owner")).toHaveText("by daniel@example.com");
   });

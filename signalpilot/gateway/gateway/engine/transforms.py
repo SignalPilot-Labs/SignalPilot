@@ -73,6 +73,9 @@ def inject_limit(sql: str, max_rows: int = 10_000, dialect: str = "postgres") ->
     if parsed is None:
         return sql
 
+    if dialect == "tsql" and isinstance(parsed, exp.SetOperation):
+        return _limit_tsql_set_operation(parsed, max_rows)
+
     existing_limit = parsed.args.get("limit")
     current = _resolve_limit_value(existing_limit) if existing_limit is not None else None
     # Fail closed: any limit that is missing, unresolvable (LIMIT ALL, params,
@@ -81,6 +84,56 @@ def inject_limit(sql: str, max_rows: int = 10_000, dialect: str = "postgres") ->
         parsed.set("limit", exp.Limit(expression=exp.Literal.number(max_rows)))
 
     return parsed.sql(dialect=dialect)
+
+
+def _limit_tsql_set_operation(node: exp.SetOperation, max_rows: int) -> str:
+    """Cap a T-SQL UNION / EXCEPT / INTERSECT without breaking its ORDER BY.
+
+    T-SQL has no LIMIT on a set operation, so sqlglot wraps it as a derived
+    table and puts TOP on an outer select. Trailing ORDER BY, OFFSET, and
+    FETCH clauses then land inside the derived table, which SQL Server
+    rejects (error 1033). sqlglot attaches those clauses either to the set
+    operation node or to its right-most SELECT. Lift all of them onto the
+    outer select, whose SELECT * exposes the set operation's output columns
+    unchanged, so ORDER BY by name or ordinal keeps its meaning.
+
+    The cap becomes TOP, or FETCH when an OFFSET is present (T-SQL forbids
+    TOP together with OFFSET). An existing FETCH within the cap is kept.
+    """
+    tail: exp.Expression = node
+    while isinstance(tail, exp.SetOperation):
+        tail = tail.expression
+
+    def take(name: str, *, only: type[exp.Expression] | None = None) -> exp.Expression | None:
+        for holder in (node, tail):
+            value = holder.args.get(name)
+            if value is not None and (only is None or isinstance(value, only)):
+                holder.set(name, None)
+                return value
+        return None
+
+    with_clause = node.args.get("with")
+    if with_clause is not None:
+        node.set("with", None)
+    order = take("order")
+    offset = take("offset")
+    # A trailing FETCH belongs to the whole set operation. A TOP on the tail
+    # SELECT (an exp.Limit) belongs to that branch alone and must stay there.
+    fetch = take("limit", only=exp.Fetch)
+    current = _resolve_limit_value(fetch) if fetch is not None else None
+    cap = current if current is not None and current <= max_rows else max_rows
+
+    outer = exp.select("*").from_(
+        exp.Subquery(this=node, alias=exp.TableAlias(this=exp.to_identifier("_sp_limit")))
+    )
+    if with_clause is not None:
+        outer.set("with", with_clause)
+    if order is not None:
+        outer.set("order", order)
+    if offset is not None:
+        outer.set("offset", offset)
+    outer.set("limit", exp.Limit(expression=exp.Literal.number(cap)))
+    return outer.sql(dialect="tsql")
 
 
 __all__ = ["inject_limit", "redact_sql_literals"]

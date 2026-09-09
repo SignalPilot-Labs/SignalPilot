@@ -250,7 +250,7 @@ async def record_run_usage(
 ) -> bool:
     """Persist the agent's reported cost and token usage on the run row.
 
-    Operator accounting only (never surfaced in the chat UX). Written as soon
+    Accounting and owner-scoped MCP usage reporting. Written as soon
     as the runtime reports it, so the numbers survive even when the run later
     fails validation or cancels."""
     if cost_usd is None and not usage:

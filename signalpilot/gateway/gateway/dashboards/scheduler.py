@@ -23,7 +23,8 @@ from gateway.db.models.dashboards import new_refresh_id
 from gateway.standalone_chat.domain import TERMINAL_RUN_STATUSES
 
 from . import store
-from .refresh import SQL_TIMEOUT_SECONDS, QueryExecutor, fail_refresh, finalize_agent_refresh, run_refresh
+from .query import REFRESH_TIMEOUT_SECONDS, QueryExecutor
+from .refresh import fail_refresh, finalize_agent_refresh, run_refresh
 from .schedule import compute_next_refresh_at
 from .storage import DashboardStorage
 
@@ -36,7 +37,7 @@ AGENT_REFRESH_TIMEOUT = timedelta(hours=2)
 # A sql-mode refresh runs its datasets one after another, each under the
 # query timeout; the sweep budget is that per-dataset time times the dataset
 # count (recorded on the row at start) plus a margin.
-SQL_DATASET_TIMEOUT = timedelta(seconds=SQL_TIMEOUT_SECONDS)
+SQL_DATASET_TIMEOUT = timedelta(seconds=REFRESH_TIMEOUT_SECONDS)
 STALE_MARGIN = timedelta(minutes=5)
 # A queued row is picked up within seconds; older than this, nobody will.
 QUEUED_REFRESH_TIMEOUT = timedelta(minutes=10)

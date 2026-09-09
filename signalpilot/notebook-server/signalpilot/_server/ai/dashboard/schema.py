@@ -15,6 +15,11 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from signalpilot._dashboard_sql import (
+    normalized_sql_hash,
+    snapshot_path,
+)
+
 SCHEMA_RELATIVE_PATH = Path("skills") / "dashboard" / "dashboard.schema.json"
 _MAX_ERRORS = 50
 
@@ -25,6 +30,57 @@ CHART_ID_PATTERN = r"^[a-z][a-z0-9_]{0,63}$"
 
 class DashboardSchemaUnavailable(RuntimeError):
     """Raised when no schema file can be located or parsed."""
+
+
+def is_sql_dataset(definition: Any) -> bool:
+    """True for ``{"connection": ..., "sql": ...}``."""
+    return (
+        isinstance(definition, dict)
+        and isinstance(definition.get("connection"), str)
+        and isinstance(definition.get("sql"), str)
+    )
+
+
+def is_static_dataset(definition: Any) -> bool:
+    """True for ``{"rows": [...]}``."""
+    return isinstance(definition, dict) and isinstance(
+        definition.get("rows"), list
+    )
+
+
+def dataset_sql(spec: dict[str, Any]) -> dict[str, tuple[str, str]]:
+    """``{name: (connection, sql)}`` for every SQL dataset in a spec."""
+    definitions = spec.get("datasets")
+    definitions = definitions if isinstance(definitions, dict) else {}
+    return {
+        str(name): (definition["connection"], definition["sql"])
+        for name, definition in definitions.items()
+        if is_sql_dataset(definition)
+    }
+
+
+def dataset_file_refs(spec: dict[str, Any]) -> list[dict[str, str]]:
+    """``[{"name", "path"}]`` snapshot references for the SQL datasets."""
+    return [
+        {"name": name, "path": snapshot_path(name)}
+        for name in dataset_sql(spec)
+    ]
+
+
+__all__ = [
+    "CHART_ID_PATTERN",
+    "DASHBOARD_PATH_PATTERN",
+    "DashboardSchemaUnavailable",
+    "dataset_file_refs",
+    "dataset_sql",
+    "is_sql_dataset",
+    "is_static_dataset",
+    "locate_schema_file",
+    "normalized_sql_hash",
+    "schema_validator",
+    "snapshot_path",
+    "validate_spec",
+]
 
 
 def _candidate_paths() -> list[Path]:

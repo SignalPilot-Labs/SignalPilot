@@ -1,9 +1,8 @@
 """Probe a URL or command: transport, auth mode, server name, tools.
 
-Transport detection follows the spec fallback: POST an ``initialize`` request;
-2xx -> Streamable HTTP; 400/404/405 -> GET expecting an SSE ``endpoint`` event
--> legacy SSE. A 401 runs OAuth discovery; without OAuth metadata it is a
-key-protected server. Tool listing then goes through the official SDK client.
+The SDK negotiates modern discovery or the legacy handshake over HTTP.
+400/404/405 may fall back to legacy SSE. A 401 runs OAuth discovery;
+without OAuth metadata it is a key-protected server.
 """
 
 from __future__ import annotations
@@ -15,13 +14,11 @@ import shlex
 from dataclasses import dataclass, field
 from typing import Any
 
-import httpx
-from mcp.types import LATEST_PROTOCOL_VERSION
+import httpx2 as httpx
 
 from gateway.mcp_connectors import oauth as oauth_mod
 from gateway.mcp_connectors.ssrf import (
     PROBE_TIMEOUT_SECONDS,
-    UnsafeUrlError,
     safe_async_client,
     validate_remote_url,
 )
@@ -62,37 +59,6 @@ class ProbeResult:
         if self.error:
             payload["error"] = self.error
         return payload
-
-
-def _initialize_body() -> dict[str, Any]:
-    return {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {
-            "protocolVersion": LATEST_PROTOCOL_VERSION,
-            "capabilities": {},
-            "clientInfo": {"name": "signalpilot-gateway", "version": "1.0"},
-        },
-    }
-
-
-async def _preflight(client: httpx.AsyncClient, url: str) -> httpx.Response:
-    """POST initialize and return the (closed) response; only status/headers are used."""
-    async with client.stream(
-        "POST",
-        url,
-        json=_initialize_body(),
-        headers={"Accept": "application/json, text/event-stream", "Content-Type": "application/json"},
-    ) as response:
-        session_id = response.headers.get("mcp-session-id")
-        await response.aclose()
-    if session_id and response.status_code < 300:
-        try:
-            await client.delete(url, headers={"Mcp-Session-Id": session_id})
-        except httpx.HTTPError:
-            pass
-    return response
 
 
 async def _looks_like_legacy_sse(client: httpx.AsyncClient, url: str) -> bool:
@@ -141,44 +107,31 @@ async def probe_url(
     """Probe a remote server. Never raises for reachability problems; SSRF errors do raise."""
     normalized = await validate_remote_url(url)
     factory = client_factory or (lambda h: safe_async_client(headers=h, timeout=httpx.Timeout(PROBE_TIMEOUT_SECONDS)))
-    client = factory(dict(headers or {}))
-    try:
-        try:
-            response = await _preflight(client, normalized)
-        except UnsafeUrlError:
-            raise
-        except httpx.HTTPError as exc:
-            logger.info("Probe preflight failed for %s: %s", normalized, type(exc).__name__)
-            return ProbeResult(transport=transport_hint or "http", auth="unknown", error=_UNREACHABLE)
-        status = response.status_code
-        if status == 401:
-            www_authenticate = response.headers.get("www-authenticate")
-            return await _classify_401(normalized, www_authenticate, client, transport_hint)
-        if status == 403:
-            return ProbeResult(transport=transport_hint or "http", auth="key", error=None)
-        if status in _SSE_FALLBACK_STATUSES and transport_hint != "http":
-            if await _looks_like_legacy_sse(client, normalized):
-                transport = "sse"
-            else:
-                return ProbeResult(
-                    transport=transport_hint or "http",
-                    auth="unknown",
-                    error="This address does not answer like an MCP server.",
-                )
-        elif status >= 300:
-            return ProbeResult(transport=transport_hint or "http", auth="unknown", error=_UNREACHABLE)
-        else:
-            transport = transport_hint or "http"
-    finally:
-        await client.aclose()
-
+    transport = transport_hint or "http"
     spec = UpstreamSpec(url=normalized, transport=transport, headers=dict(headers or {}))
     try:
         tools, protocol_version, server_name = await list_tools_via_sdk(spec, client_factory=client_factory)
     except UpstreamError as exc:
         if exc.status == 401:
             return await _classify_401(normalized, exc.www_authenticate, None, transport)
-        return ProbeResult(transport=transport, auth="unknown", error=str(exc) or _UNREACHABLE)
+        if exc.status == 403:
+            return ProbeResult(transport=transport, auth="key")
+        if exc.status not in _SSE_FALLBACK_STATUSES or transport_hint is not None:
+            return ProbeResult(transport=transport, auth="unknown", error=str(exc) or _UNREACHABLE)
+        async with factory(dict(headers or {})) as client:
+            legacy_sse = await _looks_like_legacy_sse(client, normalized)
+        if not legacy_sse:
+            return ProbeResult(
+                transport=transport, auth="unknown", error="This address does not answer like an MCP server."
+            )
+        transport = "sse"
+        spec = UpstreamSpec(url=normalized, transport=transport, headers=dict(headers or {}))
+        try:
+            tools, protocol_version, server_name = await list_tools_via_sdk(spec, client_factory=client_factory)
+        except UpstreamError as sse_exc:
+            if sse_exc.status == 401:
+                return await _classify_401(normalized, sse_exc.www_authenticate, None, transport)
+            return ProbeResult(transport=transport, auth="unknown", error=str(sse_exc) or _UNREACHABLE)
     return ProbeResult(
         transport=transport,
         auth="key" if headers else "none",

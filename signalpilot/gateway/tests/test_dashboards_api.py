@@ -23,6 +23,7 @@ from tests.dashboards_support import (
     ORG,
     OTHER_USER,
     USER,
+    FakeExecutor,
     add_conversation_with_files,
     api_store,
     db,
@@ -40,6 +41,7 @@ def storage(monkeypatch):
     storage, backend = fake_storage()
     monkeypatch.setattr(routes, "storage", lambda: storage)
     monkeypatch.setattr(publish_routes, "dashboard_storage", lambda: storage)
+    monkeypatch.setattr(publish_routes, "governed_executor", FakeExecutor)
     monkeypatch.setenv("SP_FEATURE_STANDALONE_CHAT", "1")
     return storage, backend
 
@@ -89,7 +91,7 @@ class TestPublishRoute:
         from gateway.store import standalone_chat as chat_store
 
         await chat_store.mark_conversation_file_deleted(
-            db, org_id=ORG, user_id=USER, conversation_id=conversation.id, path="artifacts/regions.csv"
+            db, org_id=ORG, user_id=USER, conversation_id=conversation.id, path="artifacts/datasets/regions.csv"
         )
         with pytest.raises(HTTPException) as excinfo:
             await publish_routes.publish_dashboard(conversation.id, "file-dash", publish_body(), api_store(db), "basic_member")

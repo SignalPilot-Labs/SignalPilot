@@ -2,6 +2,9 @@ import { asRecord, text } from "./payload";
 import type {
   ArtifactResult,
   ColumnProfileResult,
+  DashboardListResult,
+  DashboardLoadDataset,
+  DashboardLoadResult,
   DashboardSampleChart,
   DashboardSampleResult,
   DashboardScreenshotResult,
@@ -315,5 +318,70 @@ export function parseDashboardScreenshot(
     height: num(r.height),
     previewPath: text(r.preview_path),
     error: text(r.error),
+  };
+}
+
+export function parseDashboardList(
+  r: Record<string, unknown>,
+): Omit<DashboardListResult, keyof ToolResultBase> {
+  const dashboards = records(r.dashboards).map((entry) => ({
+    id: str(entry.id),
+    slug: str(entry.slug),
+    name: str(entry.name),
+    description: text(entry.description),
+    chartCount: int(entry.chart_count),
+    visibility: text(entry.visibility),
+    updatedAt: text(entry.updated_at),
+    lastRefreshAt: text(entry.last_refresh_at),
+    canEdit: bool(entry.can_edit),
+  }));
+  return {
+    kind: "dashboard_list",
+    dashboards,
+    total: int(r.total, dashboards.length),
+    dashboardsTruncated: bool(r.dashboards_truncated),
+  };
+}
+
+/** `datasets` is a name-keyed map on the wire; a list of named entries is
+ * accepted too so an older or newer projector never blanks the card. */
+function loadDatasets(value: unknown): DashboardLoadDataset[] {
+  const entry = (name: string, raw: Record<string, unknown>): DashboardLoadDataset => ({
+    name,
+    rows: num(raw.rows) ?? num(raw.row_count),
+    snapshot: text(raw.snapshot) ?? text(raw.path),
+  });
+  if (Array.isArray(value)) {
+    return records(value).map((raw) => entry(str(raw.name), raw));
+  }
+  return Object.entries(asRecord(value) ?? {}).flatMap(([name, raw]) => {
+    const record = asRecord(raw);
+    return record ? [entry(name, record)] : [];
+  });
+}
+
+export function parseDashboardLoad(
+  r: Record<string, unknown>,
+): Omit<DashboardLoadResult, keyof ToolResultBase> {
+  const dashboard = asRecord(r.dashboard);
+  // The projector emits `{}` when the tool returned no dashboard.
+  const named = dashboard && (text(dashboard.id) || text(dashboard.slug) || text(dashboard.name));
+  return {
+    kind: "dashboard_load",
+    path: text(r.path),
+    dashboard: named
+      ? {
+          id: str(dashboard.id),
+          slug: str(dashboard.slug),
+          name: str(dashboard.name),
+          versionNo: num(dashboard.version_no),
+          chartCount: num(dashboard.chart_count),
+        }
+      : null,
+    datasets: loadDatasets(r.datasets),
+    datasetsTruncated: bool(r.datasets_truncated),
+    next: text(r.next),
+    error: text(r.error),
+    message: text(r.message),
   };
 }

@@ -242,10 +242,100 @@ describe("toolResultKindForTool", () => {
     expect(toolResultKindForTool("unknown_tool")).toBeNull();
     expect(toolResultKindForTool("dashboard_sample_data")).toBe("dashboard_sample");
     expect(toolResultKindForTool("dashboard_screenshot")).toBe("dashboard_screenshot");
+    expect(toolResultKindForTool("dashboard_list_published")).toBe("dashboard_list");
+    expect(toolResultKindForTool("dashboard_load_published")).toBe("dashboard_load");
     expect(toolResultKindForTool("start_analysis_notebook")).toBe("artifact");
     expect(toolResultKindForTool("publish_chart")).toBeNull();
     expect(toolResultKindForTool("run_cells")).toBe("json");
     expect(toolResultKindForTool("TodoWrite")).toBeNull();
     expect(toolResultKindForTool("Read")).toBeNull();
+  });
+});
+
+describe("dashboard list and load projections", () => {
+  it("parses the gallery listing with the projector's truncation flag", () => {
+    const result = parseToolResult(
+      {
+        tool_call_id: "t1",
+        error: false,
+        summary: "2 dashboards",
+        result: {
+          kind: "dashboard_list",
+          dashboards: [
+            {
+              id: "dash_1",
+              slug: "revenue",
+              name: "Revenue overview",
+              description: null,
+              chart_count: 9,
+              visibility: "org",
+              updated_at: "2026-09-08T09:00:00Z",
+              last_refresh_at: null,
+              can_edit: true,
+            },
+            { id: "dash_2", slug: "pipeline", name: "Pipeline" },
+          ],
+          dashboards_truncated: true,
+        },
+      },
+      "mcp__standalone-chat__dashboard_list_published",
+      false,
+    );
+    expect(result).toMatchObject({
+      kind: "dashboard_list",
+      total: 2,
+      dashboardsTruncated: true,
+      dashboards: [
+        { id: "dash_1", slug: "revenue", chartCount: 9, visibility: "org", lastRefreshAt: null, canEdit: true },
+        { id: "dash_2", slug: "pipeline", name: "Pipeline", chartCount: 0, visibility: null, canEdit: false },
+      ],
+    });
+  });
+
+  it("parses a loaded dashboard, its dataset map, and a refusal", () => {
+    const loaded = parseToolResult(
+      {
+        tool_call_id: "t1",
+        error: false,
+        summary: "Loaded Revenue overview v3",
+        result: {
+          kind: "dashboard_load",
+          path: "artifacts/revenue.dashboard.json",
+          dashboard: { id: "dash_1", slug: "revenue", name: "Revenue overview", version_no: 3, chart_count: 9 },
+          datasets: { summary: { rows: 1, snapshot: "artifacts/datasets/summary.csv" }, monthly: { rows: 48, snapshot: "" } },
+        },
+      },
+      "dashboard_load_published",
+      false,
+    );
+    expect(loaded).toMatchObject({
+      kind: "dashboard_load",
+      path: "artifacts/revenue.dashboard.json",
+      dashboard: { id: "dash_1", slug: "revenue", name: "Revenue overview", versionNo: 3, chartCount: 9 },
+      datasets: [
+        { name: "summary", rows: 1, snapshot: "artifacts/datasets/summary.csv" },
+        { name: "monthly", rows: 48, snapshot: null },
+      ],
+      datasetsTruncated: false,
+      error: null,
+      message: null,
+    });
+    const refused = parseToolResult(
+      {
+        tool_call_id: "t2",
+        error: false,
+        summary: "Load failed: no such dashboard",
+        result: { kind: "dashboard_load", error: "not_found", message: "no such dashboard", dashboard: {}, datasets: {} },
+      },
+      "dashboard_load_published",
+      false,
+    );
+    expect(refused).toMatchObject({
+      kind: "dashboard_load",
+      dashboard: null,
+      datasets: [],
+      error: "not_found",
+      message: "no such dashboard",
+    });
   });
 });

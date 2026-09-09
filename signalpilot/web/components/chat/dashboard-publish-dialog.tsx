@@ -1,22 +1,14 @@
 "use client";
 
 // Publish a chat dashboard artifact to the team gallery. The dialog owns
-// the form (see dashboard-publish-form.ts for the model), validates the
-// dataset files against the conversation manifest before it lets the user
-// submit, and reports gateway failures inline where the fix is.
+// the form (see dashboard-publish-form.ts for the model), checks that every
+// SQL dataset's snapshot is in the conversation manifest before it lets the
+// user submit, and reports gateway failures inline where the fix is. The
+// "where did this file come from" strip and its loader live in
+// dashboard-publish-source.tsx.
 
-import { AlertCircle, CheckCircle2, ExternalLink, Loader2, Upload, X } from "lucide-react";
-import Link from "next/link";
-import {
-  useCallback,
-  useContext,
-  useEffect,
-  useId,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { AlertCircle, Loader2, Upload, X } from "lucide-react";
+import { useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { ConversationFileInfo } from "~/lib/api";
 import {
@@ -30,19 +22,17 @@ import {
   DASHBOARD_REFRESH_MODE_OPTIONS,
   DASHBOARD_VISIBILITY_OPTIONS,
 } from "~/lib/dashboards/options";
-import { realDashboardsRoutes } from "~/lib/dashboards/api";
 import { ChatUiContext } from "~/components/chat/chat-ui-context";
 import { AnchorTimeField } from "~/components/dashboards/anchor-time-field";
 import { TimezoneField } from "~/components/dashboards/timezone-field";
 import {
   REAL_DASHBOARD_PUBLISH_API,
   buildPublishRequest,
+  datasetKindLabel,
   describePublishError,
-  findPublishedDashboard,
   initialPublishForm,
   publishDatasetRows,
   publishFormProblems,
-  refreshableLabel,
   retargetPublishForm,
   type DashboardPublishApi,
   type DashboardPublishForm,
@@ -55,105 +45,6 @@ import {
 export function useDashboardPublishApi(override?: DashboardPublishApi | null): DashboardPublishApi {
   const ui = useContext(ChatUiContext);
   return override ?? ui?.dashboardsApi ?? REAL_DASHBOARD_PUBLISH_API;
-}
-
-type PublishedDashboardState = {
-  /** Every dashboard the caller can see; the dialog picks editable targets. */
-  dashboards: PublishedDashboard[];
-  /** The one published from this chat file, when there is one. */
-  published: PublishedDashboard | null;
-  loaded: boolean;
-  reload: () => Promise<void>;
-  /** Record a publish result without a round trip. */
-  setPublished: (dashboard: PublishedDashboard) => void;
-};
-
-/**
- * Loads the gallery on mount and tracks which dashboard, if any, came from
- * this conversation file. A failed list is silent: the user can still
- * publish, and the dialog reports its own failures.
- */
-export function usePublishedDashboard(
-  api: DashboardPublishApi,
-  conversationId: string,
-  fileId: string,
-): PublishedDashboardState {
-  const [dashboards, setDashboards] = useState<PublishedDashboard[]>([]);
-  const [published, setPublishedState] = useState<PublishedDashboard | null>(null);
-  const [loaded, setLoaded] = useState(false);
-  const alive = useRef(true);
-  useEffect(() => {
-    alive.current = true;
-    return () => {
-      alive.current = false;
-    };
-  }, []);
-  const reload = useCallback(async () => {
-    try {
-      const result = await api.listDashboards();
-      if (!alive.current) return;
-      setDashboards(result.dashboards);
-      setPublishedState(findPublishedDashboard(result.dashboards, conversationId, fileId));
-    } catch {
-      // Gallery unavailable: nothing to show yet.
-    } finally {
-      if (alive.current) setLoaded(true);
-    }
-  }, [api, conversationId, fileId]);
-  useEffect(() => {
-    if (!conversationId) {
-      setLoaded(true);
-      return;
-    }
-    void reload();
-  }, [reload, conversationId]);
-  const setPublished = useCallback((dashboard: PublishedDashboard) => {
-    setPublishedState(dashboard);
-    setDashboards((list) => [dashboard, ...list.filter((item) => item.id !== dashboard.id)]);
-  }, []);
-  return { dashboards, published, loaded, reload, setPublished };
-}
-
-/** The inline "Published as <name>" band shown under the file header. */
-export function DashboardPublishedStrip({
-  dashboard,
-  onPublishNewVersion,
-}: {
-  dashboard: PublishedDashboard;
-  onPublishNewVersion: () => void;
-}) {
-  return (
-    <div
-      data-testid="chat-dashboard-published"
-      data-dashboard-slug={dashboard.slug}
-      className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-[var(--color-border)] bg-[var(--color-success)]/[0.04] px-3 py-1.5 text-[11.5px]"
-    >
-      <span className="inline-flex items-center gap-1.5 text-[var(--color-text-muted)]">
-        <CheckCircle2 className="h-3.5 w-3.5 text-[var(--color-success)]" />
-        Published as{" "}
-        <span className="font-medium text-[var(--color-text)]">{dashboard.name}</span>
-        {dashboard.current_version_no != null && (
-          <span className="text-[var(--color-text-dim)]">v{dashboard.current_version_no}</span>
-        )}
-      </span>
-      <Link
-        href={realDashboardsRoutes.dashboard(dashboard.slug)}
-        data-testid="chat-dashboard-published-open"
-        className="inline-flex items-center gap-1 text-[var(--color-text)] underline decoration-[var(--color-border-active)] underline-offset-2 hover:decoration-[var(--color-text)]"
-      >
-        Open
-        <ExternalLink className="h-3 w-3" />
-      </Link>
-      <button
-        type="button"
-        data-testid="chat-dashboard-publish-version"
-        onClick={onPublishNewVersion}
-        className="ml-auto rounded-md border border-[var(--color-border)] bg-[var(--color-bg-card)] px-2 py-0.5 text-[11px] text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
-      >
-        Publish new version
-      </button>
-    </div>
-  );
 }
 
 const FIELD =
@@ -226,8 +117,8 @@ function DatasetTable({ rows }: { rows: PublishDatasetRow[] }) {
       <thead>
         <tr className="text-[10.5px] uppercase tracking-[0.06em] text-[var(--color-text-dim)]">
           <th className="pb-1 pr-2 font-medium">Dataset</th>
-          <th className="pb-1 pr-2 font-medium">Refresh</th>
-          <th className="pb-1 font-medium">File</th>
+          <th className="pb-1 pr-2 font-medium">Source</th>
+          <th className="pb-1 font-medium">Snapshot</th>
         </tr>
       </thead>
       <tbody>
@@ -240,12 +131,12 @@ function DatasetTable({ rows }: { rows: PublishDatasetRow[] }) {
             className="border-t border-[var(--color-border)]"
           >
             <td className="py-1 pr-2 font-mono text-[var(--color-text)]">{row.name}</td>
-            <td className="py-1 pr-2 text-[var(--color-text-muted)]">{refreshableLabel(row)}</td>
+            <td className="py-1 pr-2 text-[var(--color-text-muted)]">{datasetKindLabel(row)}</td>
             <td className="py-1">
               {row.status === "inline" && <span className="text-[var(--color-text-dim)]">Inline rows</span>}
               {row.status === "found" && (
                 <span className="text-[var(--color-text-muted)]">
-                  Found <span className="font-mono text-[var(--color-text-dim)]">{row.file?.path}</span>
+                  Found <span className="font-mono text-[var(--color-text-dim)]">{row.path}</span>
                 </span>
               )}
               {row.status === "missing" && (
@@ -317,7 +208,7 @@ function DashboardPublishDialogBody({
     [spec, files, file.origin_run_id],
   );
   const missing = rows.filter((row) => row.status === "missing");
-  const anyRefreshable = rows.some((row) => row.refreshable);
+  const anySql = rows.some((row) => row.connection !== null);
   const problems = publishFormProblems(form);
   const blocked = missing.length > 0 || problems.length > 0 || submitting;
 
@@ -489,9 +380,9 @@ function DashboardPublishDialogBody({
               options={DASHBOARD_REFRESH_MODE_OPTIONS}
               onChange={(value) => update("mode", value)}
             />
-            {!anyRefreshable && form.mode === "sql" && (
+            {!anySql && form.mode === "sql" && (
               <p className="text-[10.5px] leading-4 text-[var(--color-warning)]">
-                No dataset carries a SQL source, so a SQL re-run keeps every dataset as it is now.
+                Every dataset is static, so a SQL re-run has nothing to refresh.
               </p>
             )}
             <label className="flex cursor-pointer items-center gap-2 text-[12px] text-[var(--color-text)]">
@@ -519,13 +410,30 @@ function DashboardPublishDialogBody({
             >
               {missing.length > 0 && (
                 <p>
-                  Cannot publish: {missing.length === 1 ? "the dataset file" : "these dataset files"} {missing.map((row) => row.path).join(", ")} {missing.length === 1 ? "is" : "are"} not in this chat. Ask the agent to write {missing.length === 1 ? "it" : "them"} again, then publish.
+                  Cannot publish: {missing.length === 1 ? "the snapshot" : "the snapshots"} {missing.map((row) => row.path).join(", ")} {missing.length === 1 ? "is" : "are"} not in this chat. Ask the agent to call sp.dashboard_dataset for {missing.length === 1 ? "it" : "them"} again, then publish.
                 </p>
               )}
               {problems.map((problem) => (
                 <p key={problem}>{problem}</p>
               ))}
-              {error && <p data-testid="chat-dashboard-publish-api-error">{error.message}</p>}
+              {error && (
+                <div data-testid="chat-dashboard-publish-api-error">
+                  <p>{error.message}</p>
+                  {error.datasets.length > 0 && (
+                    <ul className="mt-1 list-disc space-y-0.5 pl-5">
+                      {error.datasets.map((dataset) => (
+                        <li
+                          key={dataset.name}
+                          data-testid="chat-dashboard-publish-error-dataset"
+                          data-dataset={dataset.name}
+                        >
+                          <span className="font-mono">{dataset.name}</span>: {dataset.problem}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </form>

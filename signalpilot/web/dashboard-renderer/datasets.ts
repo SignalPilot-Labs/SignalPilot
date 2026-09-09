@@ -1,8 +1,12 @@
 /**
- * Dataset loading helpers: RFC 4180 CSV/TSV parsing with numeric coercion and
- * JSON arrays of flat objects.
+ * Dataset helpers: RFC 4180 CSV parsing with numeric coercion, the snapshot
+ * convention for SQL datasets, and the inline rows of static datasets.
  *
- * The delimited parser is a copy of `parseDelimited` from
+ * A SQL dataset's snapshot is written only by the sandbox helper
+ * `sp.dashboard_dataset(name, connection=..., sql=...)`, always as CSV at
+ * `artifacts/datasets/<name>.csv`; there is no other snapshot format.
+ *
+ * The CSV parser is a copy of `parseDelimited` from
  * `components/chat/chat-csv-preview.tsx` (not imported: this package must
  * build without the rest of the web app).
  *
@@ -10,11 +14,17 @@
  */
 import { NUMERIC_TEXT } from "./format";
 import type { DashboardCellValue, DashboardSpec } from "./schema";
+import { isSqlDataset } from "./schema";
 
 export type DatasetRows = Record<string, DashboardCellValue>[];
 
-/** Parse RFC 4180 delimited text into records (no header handling). */
-function parseDelimitedRecords(text: string, delimiter: string): string[][] {
+/** Scratch-relative path of a SQL dataset's snapshot. */
+export function datasetSnapshotPath(name: string): string {
+  return `artifacts/datasets/${name}.csv`;
+}
+
+/** Parse RFC 4180 comma-separated text into records (no header handling). */
+function parseCsvRecords(text: string): string[][] {
   const records: string[][] = [];
   let record: string[] = [];
   let field = "";
@@ -49,7 +59,7 @@ function parseDelimitedRecords(text: string, delimiter: string): string[][] {
       index += 1;
       continue;
     }
-    if (char === delimiter) {
+    if (char === ",") {
       record.push(field);
       field = "";
       index += 1;
@@ -86,55 +96,13 @@ function coerceCell(cell: string): DashboardCellValue {
   return cell;
 }
 
-function delimiterForFilename(filename: string): string {
-  return /\.tsv$/i.test(filename) ? "\t" : ",";
-}
-
-function parseJsonRows(text: string, filename: string): DatasetRows {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch (error) {
-    throw new Error(
-      `${filename}: invalid JSON (${error instanceof Error ? error.message : String(error)})`,
-    );
-  }
-  if (!Array.isArray(parsed)) {
-    throw new Error(`${filename}: JSON dataset must be an array of objects`);
-  }
-  return parsed.map((row, index) => {
-    if (row === null || typeof row !== "object" || Array.isArray(row)) {
-      throw new Error(`${filename}: row ${index} is not an object`);
-    }
-    const out: Record<string, DashboardCellValue> = {};
-    for (const [key, value] of Object.entries(row as Record<string, unknown>)) {
-      out[key] =
-        value === null ||
-        typeof value === "string" ||
-        typeof value === "number" ||
-        typeof value === "boolean"
-          ? value
-          : value === undefined
-            ? null
-            : JSON.stringify(value);
-    }
-    return out;
-  });
-}
-
 /**
- * Parse dataset text by file extension: `.json` -> array of objects,
- * `.tsv` -> tab delimited, anything else -> comma delimited. Delimited files
- * use the first record as the header: names are trimmed and an empty name
- * stays "" (the Python loader does the same). Records whose cells are all
- * blank are skipped. Throws on unparseable input.
+ * Parse a snapshot CSV. The first record is the header: names are trimmed
+ * and an empty name stays "" (the Python loader does the same). Records
+ * whose cells are all blank are skipped. A leading UTF-8 BOM is ignored.
  */
-export function parseDatasetText(text: string, filename: string): DatasetRows {
-  if (/\.json$/i.test(filename)) return parseJsonRows(text, filename);
-  const records = parseDelimitedRecords(
-    text.charCodeAt(0) === 0xfeff ? text.slice(1) : text,
-    delimiterForFilename(filename),
-  );
+export function parseDatasetCsv(text: string): DatasetRows {
+  const records = parseCsvRecords(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
   const header = records[0];
   if (!header || header.length === 0) return [];
   const names = header.map((name) => name.trim());
@@ -150,20 +118,20 @@ export function parseDatasetText(text: string, filename: string): DatasetRows {
   return rows;
 }
 
-/** Every dataset backed by a file, with its scratch-relative path. */
+/** Every SQL dataset with the scratch-relative path of its snapshot. */
 export function datasetFileRefs(
   spec: DashboardSpec,
 ): { name: string; path: string }[] {
   return Object.entries(spec.datasets).flatMap(([name, dataset]) =>
-    typeof dataset.file === "string" ? [{ name, path: dataset.file }] : [],
+    isSqlDataset(dataset) ? [{ name, path: datasetSnapshotPath(name) }] : [],
   );
 }
 
-/** Datasets declared inline via `rows`. */
+/** The rows of every static dataset, keyed by name. */
 export function inlineDatasets(spec: DashboardSpec): Record<string, DatasetRows> {
   const out: Record<string, DatasetRows> = {};
   for (const [name, dataset] of Object.entries(spec.datasets)) {
-    if (Array.isArray(dataset.rows)) out[name] = dataset.rows;
+    if (!isSqlDataset(dataset)) out[name] = dataset.rows;
   }
   return out;
 }

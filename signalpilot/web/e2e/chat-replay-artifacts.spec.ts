@@ -118,8 +118,8 @@ test.describe("conversation replay: artifact cards (fixture harness)", () => {
     await expect(replay.getByTestId("chat-group-artifact-cards")).toHaveCount(1);
     await expect(replay.getByTestId("chat-artifact-card")).toHaveCount(3);
     // 3 full cards, then the rest as compact rows: the four original files
-    // plus the dashboard fixture (spec + two dataset files).
-    await expect(replay.getByTestId("chat-artifact-card-row")).toHaveCount(7);
+    // plus the dashboard fixture (spec + three dataset snapshots).
+    await expect(replay.getByTestId("chat-artifact-card-row")).toHaveCount(8);
     await expect(replay.getByTestId("chat-trailing-artifact-cards")).toHaveCount(0);
     await expect(replay.getByTestId("chat-step-artifact-cards")).toHaveCount(0);
   });

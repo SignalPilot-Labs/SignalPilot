@@ -3,11 +3,15 @@
 The service takes a session, a storage facade, and plain inputs. It raises
 ``DashboardError`` with an HTTP status; the API maps it to a response. The
 refresh path lives in ``refresh.py`` and reuses ``write_version`` here.
+
+A dataset is defined by its SQL. The chat's snapshot at
+``artifacts/datasets/<name>.csv`` is only the cached result, so publish
+verifies, before any object is written, that the SQL still reproduces every
+column the charts and filters read from that dataset.
 """
 
 from __future__ import annotations
 
-import json
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -22,22 +26,24 @@ from gateway.db.models import (
     GatewayPublishedDashboardVersion,
 )
 from gateway.db.models.dashboards import new_dashboard_id, new_version_id
+from gateway.governance.query_executor import GovernedQueryContext
+from gateway.store import Store
 
 from . import schema, store
-from .datasets import (
-    ManifestRow,
-    Row,
-    dataset_extension,
-    inline_rows,
-    parse_dataset_bytes,
-    resolve_dataset_refs,
+from .checks import referenced_columns_by_dataset
+from .datasets import ManifestRow, Row, parse_dataset_bytes, resolve_dataset_refs
+from .query import (
+    GATE_ROW_LIMIT,
+    GATE_TIMEOUT_SECONDS,
+    DatasetQueryError,
+    QueryExecutor,
+    run_dataset_query,
 )
 from .schedule import DEFAULT_ANCHOR, DEFAULT_TIMEZONE, compute_next_refresh_at
 from .serializers import PublishDashboardRequest, RefreshSettingsIn, UpdateDashboardRequest
 from .storage import MAX_DATASET_BYTES, MAX_SPEC_BYTES, DashboardStorage, dataset_key, spec_key
 
 PROMPTS_DIR = Path(__file__).with_name("prompts")
-EDIT_MESSAGE_CAP_BYTES = 200 * 1024
 EDIT_CHAT_ORIGIN = "user"
 EDIT_CHAT_BUDGET_USD = 2.0
 
@@ -51,11 +57,15 @@ class DashboardError(Exception):
 
 @dataclass
 class DatasetPayload:
-    """Bytes of one file-backed dataset ready to be stored."""
+    """The CSV bytes of one SQL dataset ready to be stored."""
 
+    name: str
     data: bytes
-    filename: str
     rows: list[Row]
+
+    @property
+    def filename(self) -> str:
+        return f"{self.name}.csv"
 
     @property
     def meta(self) -> dict[str, Any]:
@@ -64,12 +74,15 @@ class DatasetPayload:
 
 @dataclass
 class VersionMaterial:
-    """Everything a new version needs: the spec, new bytes, and carried keys."""
+    """Everything a new version needs: the spec plus one payload per SQL dataset.
+
+    ``referenced`` is for restore only: it points a new version at the
+    objects of an older one instead of uploading them again.
+    """
 
     spec: dict[str, Any]
     payloads: dict[str, DatasetPayload] = field(default_factory=dict)
-    # Datasets whose bytes did not change: reference the previous key.
-    carried: dict[str, tuple[str, dict[str, Any]]] = field(default_factory=dict)
+    referenced: dict[str, tuple[str, dict[str, Any]]] = field(default_factory=dict)
 
 
 def load_prompt(name: str) -> str:
@@ -101,7 +114,7 @@ async def write_version(
 ) -> GatewayPublishedDashboardVersion:
     """Store the material under a fresh version id and make it current.
 
-    Carried datasets reference the previous version's object key. Objects are
+    Referenced datasets point at an older version's object key. Objects are
     only ever deleted with the whole dashboard prefix, so a shared key stays
     valid for every version that points at it.
 
@@ -114,11 +127,11 @@ async def write_version(
     dataset_keys: dict[str, str] = {}
     dataset_meta: dict[str, dict[str, Any]] = {}
     for name, payload in material.payloads.items():
-        key = dataset_key(org_id, dashboard.id, version_id, name, dataset_extension(payload.filename))
-        await storage.put_dataset(key, payload.data, filename=payload.filename)
+        key = dataset_key(org_id, dashboard.id, version_id, name)
+        await storage.put_dataset(key, payload.data)
         dataset_keys[name] = key
         dataset_meta[name] = payload.meta
-    for name, (key, meta) in material.carried.items():
+    for name, (key, meta) in material.referenced.items():
         dataset_keys[name] = key
         dataset_meta[name] = dict(meta)
     return await store.create_version(
@@ -146,7 +159,9 @@ async def restore_version(
     spec = await storage.get_spec(version.spec_key)
     material = VersionMaterial(
         spec=spec,
-        carried={name: (key, (version.dataset_meta or {}).get(name) or {}) for name, key in (version.dataset_keys or {}).items()},
+        referenced={
+            name: (key, (version.dataset_meta or {}).get(name) or {}) for name, key in (version.dataset_keys or {}).items()
+        },
     )
     version = await write_version(db, storage, dashboard, material, produced_by="restore", producer_ref=user_id)
     await db.commit()
@@ -158,11 +173,11 @@ async def load_bundle_datasets(
     spec: dict[str, Any],
     version: GatewayPublishedDashboardVersion,
 ) -> dict[str, list[Row]]:
-    """Rows for every dataset of a version, inline ones included."""
+    """Rows for every dataset of a version: static ones inline, SQL ones from storage."""
     datasets: dict[str, list[Row]] = {}
     keys = version.dataset_keys or {}
     for name, definition in schema.dataset_definitions(spec).items():
-        rows = inline_rows(definition)
+        rows = schema.static_rows(definition)
         if rows is not None:
             datasets[name] = rows
             continue
@@ -170,9 +185,8 @@ async def load_bundle_datasets(
         if not key:
             datasets[name] = []
             continue
-        filename = str(definition.get("file") or f"{name}.csv")
         try:
-            datasets[name] = parse_dataset_bytes(await storage.get_dataset(key), filename)
+            datasets[name] = parse_dataset_bytes(await storage.get_dataset(key), name)
         except ValueError:
             datasets[name] = []
     return datasets
@@ -187,7 +201,7 @@ async def collect_publish_material(
     file_row: GatewayChatFile,
     manifest: list[ManifestRow],
 ) -> VersionMaterial:
-    """Read and validate the spec and every dataset file of a chat dashboard."""
+    """Read and validate the spec and every SQL dataset's snapshot from the chat."""
     if file_row.kind != "dashboard":
         raise DashboardError(422, {"message": "File is not a dashboard", "errors": []})
     raw = await storage.get_chat_object(file_row.object_key, max_bytes=MAX_SPEC_BYTES)
@@ -200,7 +214,7 @@ async def collect_publish_material(
         raise DashboardError(
             422,
             {
-                "message": "Dataset files are missing from the conversation",
+                "message": "Dataset snapshots are missing from the conversation",
                 "missing_datasets": missing,
                 "errors": [item.error for item in resolved if item.error],
             },
@@ -210,11 +224,76 @@ async def collect_publish_material(
         assert item.row is not None
         data = await storage.get_chat_object(item.row.object_key, max_bytes=MAX_DATASET_BYTES)
         try:
-            rows = parse_dataset_bytes(data, item.row.filename)
+            rows = parse_dataset_bytes(data, item.name)
         except ValueError as exc:
             raise DashboardError(422, {"message": f"Dataset '{item.name}' could not be parsed", "errors": [str(exc)]}) from exc
-        material.payloads[item.name] = DatasetPayload(data=data, filename=item.row.filename, rows=rows)
+        material.payloads[item.name] = DatasetPayload(name=item.name, data=data, rows=rows)
     return material
+
+
+async def verify_sql_datasets(
+    db: AsyncSession,
+    executor: QueryExecutor,
+    spec: dict[str, Any],
+    *,
+    org_id: str,
+    user_id: str,
+    project_id: str | None,
+) -> None:
+    """The publish gate: every SQL dataset must reproduce the columns its charts read.
+
+    Runs each SQL dataset with ``row_limit=1`` through the governed executor.
+    Raises ``DashboardError(422)`` with ``code`` ``sql_failed`` when a query
+    errors, or ``not_repeatable`` when a result lacks referenced columns. A
+    query that returns no rows exposes no columns and counts as not
+    repeatable. Static datasets are skipped.
+    """
+    queries = schema.dataset_sql(spec)
+    if not queries:
+        return
+    needed = referenced_columns_by_dataset(spec)
+    query_store = Store(db, org_id=org_id, user_id=user_id)
+    context = GovernedQueryContext(path="dashboard", project_id=project_id)
+    failed: dict[str, str] = {}
+    not_repeatable: dict[str, dict[str, Any]] = {}
+    for name, (connection, sql) in queries.items():
+        try:
+            result = await run_dataset_query(
+                executor,
+                query_store,
+                connection=connection,
+                sql=sql,
+                row_limit=GATE_ROW_LIMIT,
+                timeout_seconds=GATE_TIMEOUT_SECONDS,
+                context=context,
+            )
+        except DatasetQueryError as exc:
+            failed[name] = str(exc)
+            continue
+        missing = [column for column in needed.get(name, []) if column not in result.columns]
+        if missing:
+            not_repeatable[name] = {"missing_columns": missing, "columns": result.columns}
+    if failed:
+        raise DashboardError(
+            422,
+            {
+                "code": "sql_failed",
+                "message": "The SQL of " + ", ".join(sorted(failed)) + " failed to run; fix the SQL before publishing",
+                "datasets": failed,
+            },
+        )
+    if not_repeatable:
+        raise DashboardError(
+            422,
+            {
+                "code": "not_repeatable",
+                "message": (
+                    "The SQL of " + ", ".join(sorted(not_repeatable)) + " does not produce every column the charts "
+                    "read; put every derivation in the SQL and call sp.dashboard_dataset again"
+                ),
+                "datasets": not_repeatable,
+            },
+        )
 
 
 def apply_settings(
@@ -251,6 +330,7 @@ def apply_settings(
 async def publish(
     db: AsyncSession,
     storage: DashboardStorage,
+    executor: QueryExecutor,
     *,
     org_id: str,
     user_id: str,
@@ -261,8 +341,13 @@ async def publish(
     body: PublishDashboardRequest,
     project_id: str | None,
 ) -> tuple[GatewayPublishedDashboard, GatewayPublishedDashboardVersion]:
-    """Publish a chat dashboard file as a new dashboard or a new version."""
+    """Publish a chat dashboard file as a new dashboard or a new version.
+
+    Order: read and parse the snapshots, run the SQL gate, then and only
+    then write objects and rows.
+    """
     material = await collect_publish_material(storage, file_row=file_row, manifest=manifest)
+    await verify_sql_datasets(db, executor, material.spec, org_id=org_id, user_id=user_id, project_id=project_id)
     now = store.utcnow()
     if body.target_dashboard_id:
         dashboard = await store.get_dashboard(db, org_id=org_id, id_or_slug=body.target_dashboard_id)
@@ -354,40 +439,20 @@ async def delete(db: AsyncSession, storage: DashboardStorage, dashboard: Gateway
 # ── Edit chat ───────────────────────────────────────────────────────────────
 
 
-def edit_message(
-    dashboard: GatewayPublishedDashboard,
-    spec: dict[str, Any],
-    dataset_bytes: dict[str, tuple[str, bytes]],
-) -> str:
-    """The first user message of an edit chat: spec and datasets inline.
+def edit_message(dashboard: GatewayPublishedDashboard) -> str:
+    """The first user message of an edit chat.
 
-    The gateway cannot seed files into a fresh run's scratch directory, so
-    the datasets travel inline as fenced blocks under a 200 KB cap. Datasets
-    past the cap are listed as omitted.
+    Nothing of the spec travels in the message. The agent loads the published
+    version into the chat with the ``dashboard_load_published`` sandbox tool,
+    which writes the dashboard file and every SQL snapshot, and the user
+    publishes the edited file as a new version from the chat panel.
     """
-    spec_json = json.dumps(spec, indent=2, ensure_ascii=False)
-    budget = EDIT_MESSAGE_CAP_BYTES - len(spec_json.encode("utf-8"))
-    blocks: list[str] = []
-    omitted: list[str] = []
-    for name, (path, data) in dataset_bytes.items():
-        text = data.decode("utf-8", errors="replace")
-        fence = "```" if "```" not in text else "````"
-        block = f"Dataset `{name}` at `{path}`:\n\n{fence}\n{text.rstrip()}\n{fence}\n"
-        size = len(block.encode("utf-8"))
-        if size > budget:
-            omitted.append(f"{name} ({path})")
-            continue
-        budget -= size
-        blocks.append(block)
-    if omitted:
-        blocks.append("Datasets omitted because they are too large to inline; reproduce them from their `source`:\n- " + "\n- ".join(omitted))
     return render_prompt(
         "edit_prompt.md",
         {
             "dashboard_name": dashboard.name,
-            "dashboard_path": dashboard_artifact_path(dashboard),
-            "spec_json": spec_json,
-            "dataset_blocks": "\n".join(blocks),
+            "dashboard_slug": dashboard.slug,
+            "dashboard_id": dashboard.id,
         },
     )
 
@@ -446,23 +511,16 @@ async def seed_dashboard_chat(
 
 async def create_edit_chat(
     db: AsyncSession,
-    storage: DashboardStorage,
     dashboard: GatewayPublishedDashboard,
-    version: GatewayPublishedDashboardVersion,
     *,
     user_id: str,
 ) -> str:
-    """Create a conversation seeded with the current spec and datasets."""
-    spec = await storage.get_spec(version.spec_key)
-    dataset_bytes: dict[str, tuple[str, bytes]] = {}
-    refs = schema.dataset_file_refs(spec)
-    for name, key in (version.dataset_keys or {}).items():
-        dataset_bytes[name] = (refs.get(name, f"artifacts/{name}.csv"), await storage.get_dataset(key))
+    """Create a conversation whose first message loads the published dashboard."""
     conversation_id, _run_id = await seed_dashboard_chat(
         db,
         dashboard,
         user_id=user_id,
-        message=edit_message(dashboard, spec, dataset_bytes),
+        message=edit_message(dashboard),
         title=f"Edit dashboard: {dashboard.name}",
         origin=EDIT_CHAT_ORIGIN,
         chat_budget_usd=EDIT_CHAT_BUDGET_USD,

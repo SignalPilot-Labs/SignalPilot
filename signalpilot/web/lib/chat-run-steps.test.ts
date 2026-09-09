@@ -265,10 +265,11 @@ describe("foldRunBlocks", () => {
     expect(chain2.steps).toHaveLength(10);
     expect(chain2.steps[0]?.tool).toBe("start_analysis_notebook");
     expect(answer.text).toContain("EMEA drove the growth");
-    // Dashboard check + render, then the follow-up verification chain:
-    // list_tables → explore_columns → dbt_execute → search_knowledge →
+    // Dashboard load + check + render, then the follow-up verification
+    // chain: list_tables → explore_columns → dbt_execute → search_knowledge →
     // hubspot connector, then a short tail.
     expect(chain3.steps.map((step) => step.tool)).toEqual([
+      "dashboard_load_published",
       "dashboard_sample_data",
       "dashboard_screenshot",
       "list_tables",
@@ -278,6 +279,7 @@ describe("foldRunBlocks", () => {
       "search_contacts",
     ]);
     expect(chain3.steps.map((step) => step.result?.kind)).toEqual([
+      "dashboard_load",
       "dashboard_sample",
       "dashboard_screenshot",
       "table_list",

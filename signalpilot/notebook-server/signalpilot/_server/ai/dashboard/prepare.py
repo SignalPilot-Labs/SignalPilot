@@ -5,10 +5,11 @@ never aggregates: it applies the filters bound to the chart's dataset (using
 each filter's ``default``), then the chart's ``sort``, then ``limit``, then a
 hard cap of 50 000 rows.
 
-Issue codes: ``missing_dataset``, ``dataset_unreadable``, ``empty_dataset``,
-``missing_column``, ``non_numeric_y``, ``unparseable_date``,
-``too_many_rows``, ``series_with_multi_y``. The first, second, fourth, and
-last make the chart ``failed``; the rest are warnings.
+Issue codes: ``missing_dataset``, ``snapshot_missing``, ``snapshot_stale``,
+``dataset_unreadable``, ``empty_dataset``, ``missing_column``,
+``non_numeric_y``, ``unparseable_date``, ``too_many_rows``,
+``series_with_multi_y``. The dataset codes, ``missing_column``, and
+``series_with_multi_y`` make the chart ``failed``; the rest are warnings.
 """
 
 from __future__ import annotations
@@ -32,6 +33,8 @@ PARSE_THRESHOLD = 0.9
 FAILED_CODES = frozenset(
     {
         "missing_dataset",
+        "snapshot_missing",
+        "snapshot_stale",
         "dataset_unreadable",
         "missing_column",
         "series_with_multi_y",
@@ -131,6 +134,10 @@ def referenced_columns(
     add(chart.get("label"))
     add(chart.get("size"))
     add(chart.get("color"))
+    for item in chart.get("bars") or []:
+        add(item)
+    for item in chart.get("lines") or []:
+        add(item)
     add(chart.get("series"))
     add(chart.get("sort"))
     for filter_def in spec.get("filters") or []:
@@ -142,7 +149,12 @@ def referenced_columns(
 
 
 def y_columns(chart: dict[str, Any]) -> list[str]:
-    """Columns that must be numeric for this chart type."""
+    """Columns that must be numeric for this chart type.
+
+    A kpi ``value`` or ``comparison`` is only held to be numeric when it
+    declares a ``format``; with no format the tile shows any scalar (a
+    number, or a text label) verbatim.
+    """
     chart_type = chart.get("type")
     if chart_type in CARTESIAN_TYPES:
         return [
@@ -150,7 +162,22 @@ def y_columns(chart: dict[str, Any]) -> list[str]:
             for item in chart.get("y") or []
             if isinstance(item, dict) and item.get("column")
         ]
-    if chart_type in {"scatter", "pie", "kpi"}:
+    if chart_type == "kpi":
+        return [
+            str(cell["column"])
+            for cell in (chart.get("value"), chart.get("comparison"))
+            if isinstance(cell, dict)
+            and cell.get("column")
+            and cell.get("format")
+        ]
+    if chart_type == "combo":
+        bars_and_lines = [*(chart.get("bars") or []), *(chart.get("lines") or [])]
+        return [
+            str(item.get("column"))
+            for item in bars_and_lines
+            if isinstance(item, dict) and item.get("column")
+        ]
+    if chart_type in {"scatter", "pie", "heatmap"}:
         target = (
             chart.get("y") if chart_type == "scatter" else chart.get("value")
         )
@@ -199,14 +226,26 @@ def _filter_keeps(row: Row, filter_def: dict[str, Any]) -> bool:
     return True
 
 
+def filter_binds_to(
+    filter_def: dict[str, Any], dataset: str, columns: list[str]
+) -> bool:
+    """A filter with ``dataset`` binds to that dataset only. A filter without
+    it binds to every dataset whose rows carry the column."""
+    bound = filter_def.get("dataset")
+    if bound is not None:
+        return bound == dataset
+    return str(filter_def.get("column") or "") in columns
+
+
 def apply_filters(
     rows: list[Row], chart: dict[str, Any], spec: dict[str, Any]
 ) -> list[Row]:
+    columns = available_columns(rows)
     bound = [
         filter_def
         for filter_def in spec.get("filters") or []
         if isinstance(filter_def, dict)
-        and filter_def.get("dataset") == chart.get("dataset")
+        and filter_binds_to(filter_def, str(chart.get("dataset")), columns)
     ]
     if not bound:
         return list(rows)
@@ -251,6 +290,32 @@ def _ratio(values: list[Any], parser: Any) -> float | None:
     return parsed / len(non_null)
 
 
+def _dataset_issue(
+    chart_id: str, dataset_name: str, loaded: LoadedDataset | None
+) -> Issue:
+    """The failing issue for a dataset that could not be loaded.
+
+    A snapshot problem keeps the loader's message, which already names the
+    dataset and the fix. Any other load error is ``dataset_unreadable``.
+    """
+    if loaded is not None and loaded.code in {
+        "snapshot_missing",
+        "snapshot_stale",
+    }:
+        return {
+            "code": loaded.code,
+            "message": f"Chart '{chart_id}': {loaded.error}",
+        }
+    detail = loaded.error if loaded is not None else "not loaded"
+    return {
+        "code": "dataset_unreadable",
+        "message": (
+            f"Chart '{chart_id}' dataset '{dataset_name}' is "
+            f"unreadable: {detail}"
+        ),
+    }
+
+
 def prepare_chart_rows(
     chart: dict[str, Any],
     spec: dict[str, Any],
@@ -280,16 +345,7 @@ def prepare_chart_rows(
         return [], issues
     loaded = datasets.get(dataset_name)
     if loaded is None or loaded.error:
-        detail = loaded.error if loaded is not None else "not loaded"
-        issues.append(
-            {
-                "code": "dataset_unreadable",
-                "message": (
-                    f"Chart '{chart_id}' dataset '{dataset_name}' is "
-                    f"unreadable: {detail}"
-                ),
-            }
-        )
+        issues.append(_dataset_issue(chart_id, dataset_name, loaded))
         return [], issues
     raw_rows = loaded.rows
     if not raw_rows:

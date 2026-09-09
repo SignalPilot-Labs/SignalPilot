@@ -7,11 +7,12 @@
  */
 import type { DatasetRows } from "./datasets";
 import { isIsoDate, isNumeric, parseIsoDate, toNumber } from "./format";
-import type { DashboardChart, DashboardFilter, DashboardSpec } from "./schema";
-import { isCartesianChart } from "./schema";
+import type { DashboardChart, DashboardFilter, DashboardSeries, DashboardSpec } from "./schema";
+import { isCartesianChart, isSqlDataset } from "./schema";
 
 export type ChartIssueCode =
   | "missing_dataset"
+  | "snapshot_missing"
   | "dataset_unreadable"
   | "empty_dataset"
   | "missing_column"
@@ -31,6 +32,7 @@ const NUMERIC_THRESHOLD = 0.9;
 
 const FAILING_CODES = new Set<string>([
   "missing_dataset",
+  "snapshot_missing",
   "dataset_unreadable",
   "missing_column",
   "series_with_multi_y",
@@ -69,6 +71,16 @@ function referencedColumns(
       columns.push(chart.x.column, ...chart.y.map((series) => series.column));
       if (chart.series) columns.push(chart.series.column);
       break;
+    case "combo":
+      columns.push(
+        chart.x.column,
+        ...chart.bars.map((series) => series.column),
+        ...chart.lines.map((series) => series.column),
+      );
+      break;
+    case "heatmap":
+      columns.push(chart.x.column, chart.y.column, chart.value.column);
+      break;
     case "pie":
       columns.push(chart.label, chart.value.column);
       break;
@@ -80,16 +92,24 @@ function referencedColumns(
   }
   if (chart.sort) columns.push(chart.sort.column);
   for (const filter of spec.filters ?? []) {
+    // A filter bound to this dataset must find its column. An unbound filter
+    // applies wherever the column exists and is never a missing column.
     if (filter.dataset === chart.dataset) columns.push(filter.column);
   }
   return [...new Set(columns)];
 }
 
-/** Numeric (y/value) columns subject to the non_numeric_y check. */
+/**
+ * Numeric (y/value) columns subject to the non_numeric_y check. A kpi value or
+ * comparison is only held to be numeric when it declares a `format`; with no
+ * format the tile shows any scalar (a number, or a text label) verbatim.
+ */
 function numericColumns(chart: DashboardChart): string[] {
   switch (chart.type) {
     case "kpi":
-      return [chart.value.column];
+      return [chart.value, chart.comparison]
+        .filter((cell): cell is DashboardSeries => cell?.format !== undefined)
+        .map((cell) => cell.column);
     case "pie":
       return [chart.value.column];
     case "scatter":
@@ -98,6 +118,10 @@ function numericColumns(chart: DashboardChart): string[] {
     case "line":
     case "area":
       return chart.y.map((series) => series.column);
+    case "combo":
+      return [...chart.bars, ...chart.lines].map((series) => series.column);
+    case "heatmap":
+      return [chart.value.column];
     default:
       return [];
   }
@@ -105,6 +129,16 @@ function numericColumns(chart: DashboardChart): string[] {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * A filter with `dataset` binds to that dataset only. A filter without it
+ * binds to every dataset whose rows carry the column, so one control can
+ * drive several charts that share a column.
+ */
+export function filterBindsTo(filter: DashboardFilter, datasetName: string, rows: DatasetRows): boolean {
+  if (filter.dataset !== undefined) return filter.dataset === datasetName;
+  return availableColumns(rows).includes(filter.column);
 }
 
 function filterValue(filter: DashboardFilter, filterState?: FilterState): unknown {
@@ -239,11 +273,21 @@ export function prepareChartRows(
   }
   const source = datasets[datasetName];
   if (!Array.isArray(source)) {
-    const file = spec.datasets[datasetName]?.file;
-    issues.push({
-      code: "dataset_unreadable",
-      message: `Chart "${id}": dataset "${datasetName}"${file ? ` (${file})` : ""} could not be read.`,
-    });
+    // The web viewer cannot see the sandbox sidecars, so a SQL dataset with
+    // no rows means its snapshot file is absent (the Python side also
+    // reports snapshot_stale). Static rows always come from the spec, so a
+    // static dataset without rows is a loading failure.
+    issues.push(
+      isSqlDataset(spec.datasets[datasetName])
+        ? {
+            code: "snapshot_missing",
+            message: `Dataset '${datasetName}' has no snapshot. Call sp.dashboard_dataset('${datasetName}', connection=..., sql=...) in the notebook.`,
+          }
+        : {
+            code: "dataset_unreadable",
+            message: `Chart "${id}": dataset "${datasetName}" could not be read.`,
+          },
+    );
     return { rows: [], issues };
   }
 
@@ -270,7 +314,7 @@ export function prepareChartRows(
 
   let rows = source;
   for (const filter of spec.filters ?? []) {
-    if (filter.dataset !== datasetName) continue;
+    if (!filterBindsTo(filter, datasetName, rows)) continue;
     rows = applyFilter(rows, filter, filterValue(filter, filterState));
   }
   if (chart.sort) rows = sortRows(rows, chart.sort.column, chart.sort.direction ?? "asc");
@@ -299,7 +343,9 @@ export function prepareChartRows(
       });
     }
   }
-  if ((isCartesianChart(chart) || chart.type === "scatter") && chart.x.type === "date") {
+  // Every chart with an x axis (cartesian, scatter, combo, heatmap), as in
+  // the Python and gateway checks.
+  if ("x" in chart && chart.x?.type === "date") {
     const column = chart.x.column;
     const check = ratioPassing(rows, column, isIsoDate);
     if (!check.ok) {

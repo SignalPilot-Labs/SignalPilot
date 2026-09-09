@@ -193,6 +193,9 @@ class TestPoolTenantIsolation:
 
         closed = await pm.close_pool(_CONN_STR, org_id="org-a")
         assert closed == 1
+        # An active owner keeps its connector until release.
+        a.close.assert_not_awaited()
+        await pm.release("postgres", _CONN_STR, credential_extras=_extras("cred-a"), org_id="org-a")
         assert pm.pool_count == 1
         a.close.assert_awaited()
         b.close.assert_not_awaited()
@@ -265,7 +268,7 @@ class TestPoolExecutionIsolation:
     @pytest.mark.asyncio
     async def test_same_pool_key_is_exclusively_checked_out(self):
         """A second request cannot observe or overwrite active query state."""
-        pm = PoolManager()
+        pm = PoolManager(max_connections=1)
         connector = _mock_connector("shared")
         first_started = asyncio.Event()
         first_cancelled = asyncio.Event()

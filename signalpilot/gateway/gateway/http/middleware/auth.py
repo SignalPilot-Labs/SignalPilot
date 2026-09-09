@@ -64,6 +64,8 @@ async def _eval_credentials_active() -> bool:
     return any(key.eval_run_id for key in keys)
 
 
+
+
 class APIKeyAuthMiddleware(BaseHTTPMiddleware):
     """Validates API key from Authorization header or X-API-Key header.
 
@@ -113,14 +115,8 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
         # the private local dev key before either passthrough can run.
         from ...runtime.mode import is_local_mode
 
-        trusted_local_key = bool(
-            provided_key and local_key and hmac.compare_digest(provided_key, local_key)
-        )
-        if (
-            is_local_mode()
-            and not trusted_local_key
-            and not (provided_key or "").startswith("sp_")
-        ):
+        trusted_local_key = bool(provided_key and local_key and hmac.compare_digest(provided_key, local_key))
+        if is_local_mode() and not trusted_local_key and not (provided_key or "").startswith("sp_"):
             try:
                 if await _eval_credentials_active():
                     return Response(

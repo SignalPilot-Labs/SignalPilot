@@ -176,6 +176,20 @@ export function tooltipBase(tokens: ThemeTokens, trigger: "axis" | "item"): Axis
   };
 }
 
+/**
+ * Category labels for a chart that draws every x kind on a category axis
+ * (heatmap): dates read as axis dates, everything else as its raw text.
+ */
+export function categoryLabels(model: XAxisModel): string[] {
+  if (model.kind !== "time") return model.categories;
+  const labels = [...model.categories];
+  model.categoryIndex.forEach((position, rowIndex) => {
+    const timestamp = model.numeric[rowIndex];
+    if (timestamp !== undefined) labels[position] = formatAxisDate(timestamp, model.monthly);
+  });
+  return labels;
+}
+
 /** Heading text for a tooltip over one x position. */
 export function formatXValue(model: XAxisModel, rowIndex: number, raw: unknown): string {
   if (model.kind === "time") {

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import inspect
 import logging as _logging
@@ -26,6 +27,13 @@ _mcp_logger = _logging.getLogger("gateway.mcp_audit")
 # the registration boundary makes a newly added tool fail closed until its
 # capability is reviewed and classified here.
 MCP_TOOL_SCOPES: dict[str, str] = {
+    "run_signalpilot_agent": "agent:run",
+    "continue_signalpilot_agent": "agent:run",
+    "get_signalpilot_agent": "agent:run",
+    "cancel_signalpilot_agent": "agent:run",
+    "wait_signalpilot_agent": "agent:run",
+    "get_signalpilot_agent_event": "agent:run",
+    "get_signalpilot_agent_context": "agent:run",
     "list_database_connections": "read",
     "connection_health": "query",
     "connector_capabilities": "read",
@@ -145,8 +153,16 @@ EVAL_ALLOWED_MCP_TOOLS: frozenset[str] = frozenset(
 # a second, stale chat-only denylist. Xata branch control remains excluded:
 # chat runs use a frozen project/branch and must not create or delete database
 # branches as a side effect of analysis.
+
 STANDALONE_CHAT_BLOCKED_TOOLS = frozenset(
     {
+        "run_signalpilot_agent",
+        "continue_signalpilot_agent",
+        "get_signalpilot_agent",
+        "cancel_signalpilot_agent",
+        "wait_signalpilot_agent",
+        "get_signalpilot_agent_event",
+        "get_signalpilot_agent_context",
         "schema_diff_branches",
         "xata_branch_diff",
         "xata_list_branches",
@@ -187,7 +203,10 @@ async def _audit_tool_call(
     org_id = mcp_org_id_var.get(None)
 
     # Increment daily usage counter for every tool call
-    if org_id:
+    if org_id and tool_name not in {
+        "get_signalpilot_agent", "wait_signalpilot_agent",
+        "get_signalpilot_agent_event", "get_signalpilot_agent_context",
+    }:
         daily_query_counter.increment(org_id)
 
     client_ip = mcp_client_ip_var.get(None)
@@ -246,6 +265,9 @@ def _audited_tool(fn):
             bound_args = dict(kwargs)
         conn = bound_args.get("connection_name")
         sql_arg = bound_args.get("sql")
+        is_agent = MCP_TOOL_SCOPES.get(tool_name) == "agent:run"
+        safe_args = ({k: bound_args[k] for k in ("project_id", "thread_id") if k in bound_args}
+                     if is_agent else {k: v for k, v in bound_args.items() if k != "ctx"})
         try:
             from gateway.mcp.context import mcp_eval_run_var
 
@@ -266,33 +288,29 @@ def _audited_tool(fn):
             duration_ms = (time.time() - t0) * 1000
             # Detect blocked queries from return value
             result_str = str(result) if result else ""
-            is_blocked = result_str.startswith(("Query blocked:", "Error:"))
-            import asyncio
-
+            is_blocked = result_str.startswith(("Query blocked:", "Error:")) or bool(getattr(result, "is_error", False))
             asyncio.create_task(
                 _audit_tool_call(
                     tool_name=tool_name,
-                    args=bound_args,
-                    result=result_str[:200],
+                    args=safe_args,
+                    result=None if is_agent else result_str[:200],
                     duration_ms=duration_ms,
                     connection_name=conn,
                     sql=sql_arg,
                     audit_id=audit_id,
-                    error=result_str[:200] if is_blocked else None,
+                    error=("Agent request failed" if is_agent else result_str[:200]) if is_blocked else None,
                 )
             )
             return result
-        except Exception as exc:
+        except (Exception, asyncio.CancelledError) as exc:
             duration_ms = (time.time() - t0) * 1000
-            import asyncio
-
             asyncio.create_task(
                 _audit_tool_call(
                     tool_name=tool_name,
-                    args=bound_args,
+                    args=safe_args,
                     result=None,
                     duration_ms=duration_ms,
-                    error=str(exc)[:200],
+                    error=("Agent request cancelled" if isinstance(exc, asyncio.CancelledError) else "Agent request failed") if is_agent else str(exc)[:200],
                     connection_name=conn,
                     sql=sql_arg,
                     audit_id=audit_id,

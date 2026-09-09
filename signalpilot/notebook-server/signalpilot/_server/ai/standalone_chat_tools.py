@@ -1,10 +1,13 @@
 """In-process MCP tools for one standalone data-chat run.
 
-The tools cover notebooks, read-only dbt inspection, and the two dashboard
-check tools (`dashboard_sample_data`, `dashboard_screenshot`). Files the agent
-saves under the scratch directory are captured by the filesystem sweep, not by
-a tool. A dashboard is a plain `artifacts/<name>.dashboard.json` file; the
-check tools read it and never write into `artifacts/`.
+The tools cover notebooks, read-only dbt inspection, the two dashboard
+check tools (`dashboard_sample_data`, `dashboard_screenshot`), and the two
+published-dashboard tools (`dashboard_list_published`,
+`dashboard_load_published`). Files the agent saves under the scratch
+directory are captured by the filesystem sweep, not by a tool. A dashboard is
+a plain `artifacts/<name>.dashboard.json` file; the check tools read it and
+never write into `artifacts/`. The load tool is the one tool that writes
+there: it restores a published version so the agent can edit it.
 """
 
 from __future__ import annotations
@@ -16,6 +19,8 @@ from typing import TYPE_CHECKING, Any
 from signalpilot._server.ai.dashboard import (
     dashboard_sample_data,
     dashboard_screenshot,
+    list_published,
+    load_published,
 )
 from signalpilot._server.ai.standalone_chat_dbt import run_inspect_dbt
 from signalpilot._server.ai.standalone_chat_lifecycle import (
@@ -50,8 +55,14 @@ def build_standalone_chat_mcp_server(
     notebook_starter: Callable[[Any, dict[str, Any]], list[Any]] | None = None,
     notebook_session_resolver: Callable[[str], Any] | None = None,
     notebook_seeder: Callable[[str], Path] | None = None,
+    gateway_url: str = "",
+    gateway_token: str = "",
 ) -> Any:
-    """Build the isolated in-process tool server used by one run."""
+    """Build the isolated in-process tool server used by one run.
+
+    ``gateway_url`` and ``gateway_token`` are the run's scoped gateway
+    identity; the published-dashboard tools read ``/api/dashboards`` with it.
+    """
     from claude_agent_sdk import McpSdkServerConfig
     from mcp.server import Server
     from mcp.types import ImageContent, TextContent, Tool
@@ -195,11 +206,34 @@ def build_standalone_chat_mcp_server(
             theme=str(arguments.get("theme") or "light"),
         )
 
+    async def dashboard_list_published_tool(
+        _arguments: dict[str, Any],
+    ) -> list[TextContent]:
+        listed = await list_published(
+            gateway_url=gateway_url, gateway_token=gateway_token
+        )
+        return [TextContent(type="text", text=json.dumps(listed))]
+
+    async def dashboard_load_published_tool(
+        arguments: dict[str, Any],
+    ) -> list[TextContent]:
+        if scratch_directory is None:
+            return _dashboard_unavailable()
+        loaded = await load_published(
+            scratch_directory=scratch_directory,
+            gateway_url=gateway_url,
+            gateway_token=gateway_token,
+            dashboard=str(arguments.get("dashboard") or ""),
+        )
+        return [TextContent(type="text", text=json.dumps(loaded))]
+
     handlers = {
         "start_analysis_notebook": start_analysis_notebook,
         "inspect_dbt": inspect_dbt,
         "dashboard_sample_data": dashboard_sample_data_tool,
         "dashboard_screenshot": dashboard_screenshot_tool,
+        "dashboard_list_published": dashboard_list_published_tool,
+        "dashboard_load_published": dashboard_load_published_tool,
     }
 
     @server.call_tool()

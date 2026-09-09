@@ -361,6 +361,8 @@ async def execute(*, request: Request) -> StreamingResponse:
                             working_scratch, notebook_name
                         )
                     ),
+                    gateway_url=gateway_api_url,
+                    gateway_token=scoped_token,
                 )
                 attempt_prompt = prompt
                 if recovery_failure is not None:

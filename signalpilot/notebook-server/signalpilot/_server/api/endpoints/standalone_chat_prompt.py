@@ -67,6 +67,8 @@ STANDALONE_ALLOWED_TOOLS = [
     "mcp__signalpilot__validate_model_output",
     "mcp__signalpilot__verify_model_values",
     "mcp__signalpilot__verify_metric_conformance",
+    "mcp__standalone-chat__dashboard_list_published",
+    "mcp__standalone-chat__dashboard_load_published",
     "mcp__standalone-chat__dashboard_sample_data",
     "mcp__standalone-chat__dashboard_screenshot",
     "mcp__standalone-chat__inspect_dbt",

@@ -220,7 +220,11 @@ export function createFixtureDashboardsApi(options: FixtureDashboardsOptions = {
         refresh.status = "succeeded";
         refresh.finished_at = new Date(now() + refreshDuration).toISOString();
         refresh.version_id = version.id;
-        refresh.detail = { revenue_by_region: { status: "succeeded", row_count: 4 } };
+        refresh.detail = {
+          summary: { status: "succeeded", row_count: 1 },
+          revenue_monthly: { status: "succeeded", row_count: 48 },
+          revenue_by_region: { status: "succeeded", row_count: 4 },
+        };
         dashboard.last_refresh_at = refresh.finished_at;
         dashboard.last_refresh_status = "succeeded";
       }, refreshDuration);

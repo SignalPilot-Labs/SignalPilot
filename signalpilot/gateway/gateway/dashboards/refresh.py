@@ -1,8 +1,10 @@
 """Refresh execution.
 
-SQL mode re-runs every dataset ``source`` through the governed query
-executor and writes the rows as CSV. Agent mode seeds a chat run that
-reproduces the datasets; the scheduler finalizes it when the run ends.
+SQL mode re-runs every SQL dataset's ``sql`` on its ``connection`` through
+the governed query executor and writes the rows as CSV. Agent mode seeds a
+chat run that rebuilds the snapshots with ``sp.dashboard_dataset``; the
+scheduler finalizes it when the run ends. Static datasets live inline in the
+spec and are never refreshed.
 
 Both modes assemble a ``VersionMaterial``, run the chart checks against the
 new rows, and only then create a version and swap ``current_version_id``.
@@ -12,12 +14,11 @@ any chart would fail, or a dataset that had rows is now empty.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any, Protocol
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,19 +29,19 @@ from gateway.db.models import (
     GatewayPublishedDashboardVersion,
 )
 from gateway.governance.context import current_org_id_var
-from gateway.governance.query_executor import GovernedQueryContext, GovernedQueryError
+from gateway.governance.query_executor import GovernedQueryContext
 from gateway.store import Store
 
 from . import schema, store
 from .checks import SpecCheck, check_spec
-from .datasets import (
-    Row,
-    inline_rows,
-    parse_dataset_bytes,
-    resolve_file_ref,
-    result_columns,
-    rows_to_csv,
-    rows_to_json,
+from .datasets import Row, parse_dataset_bytes, resolve_file_ref, rows_to_csv
+from .query import (
+    REFRESH_ROW_LIMIT,
+    REFRESH_TIMEOUT_SECONDS,
+    DatasetQueryError,
+    QueryExecutor,
+    governed_executor,
+    run_dataset_query,
 )
 from .service import (
     DatasetPayload,
@@ -54,30 +55,9 @@ from .storage import MAX_DATASET_BYTES, MAX_SPEC_BYTES, DashboardStorage, dashbo
 
 logger = logging.getLogger(__name__)
 
-SQL_ROW_LIMIT = 50_000
-SQL_TIMEOUT_SECONDS = 120
 REFRESH_CHAT_ORIGIN = "dashboard_refresh"
 REFRESH_CHAT_BUDGET_USD = 2.0
 REFRESH_PER_QUERY_BUDGET_USD = 0.25
-
-
-class QueryExecutor(Protocol):
-    async def execute(
-        self,
-        store: Store,
-        *,
-        connection_name: str,
-        sql: str,
-        row_limit: int,
-        timeout_seconds: int,
-        context: GovernedQueryContext,
-    ) -> Any: ...
-
-
-def _default_executor() -> QueryExecutor:
-    from gateway.governance.query_executor import GovernedQueryExecutor
-
-    return GovernedQueryExecutor()
 
 
 def refresh_identity(dashboard: GatewayPublishedDashboard) -> str:
@@ -96,9 +76,9 @@ class RefreshOutcome:
         self.datasets: dict[str, dict[str, Any]] = {}
         self.check: SpecCheck | None = None
 
-    def inline(self, name: str, rows: list[Row]) -> None:
+    def static(self, name: str, rows: list[Row]) -> None:
         self.rows[name] = rows
-        self.datasets[name] = {"status": "inline", "row_count": len(rows)}
+        self.datasets[name] = {"status": "static", "row_count": len(rows)}
 
     def refreshed(self, name: str, payload: DatasetPayload, *, previous_rows: int) -> None:
         self.material.payloads[name] = payload
@@ -107,11 +87,6 @@ class RefreshOutcome:
             self.failed(name, f"Query returned no rows; the previous version had {previous_rows}", row_count=0)
             return
         self.datasets[name] = {"status": "refreshed", "row_count": len(payload.rows)}
-
-    def carried(self, name: str, key: str, meta: dict[str, Any], rows: list[Row] | None) -> None:
-        self.material.carried[name] = (key, meta)
-        self.rows[name] = rows
-        self.datasets[name] = {"status": "carried", "row_count": int(meta.get("row_count") or 0)}
 
     def failed(self, name: str, error: str, *, row_count: int | None = None) -> None:
         self.rows.setdefault(name, None)
@@ -143,27 +118,6 @@ class RefreshOutcome:
         }
 
 
-async def carry_previous(
-    storage: DashboardStorage,
-    outcome: RefreshOutcome,
-    version: GatewayPublishedDashboardVersion,
-    name: str,
-    filename: str,
-) -> None:
-    """Reference the previous version's object for a dataset with no source."""
-    key = (version.dataset_keys or {}).get(name)
-    meta = (version.dataset_meta or {}).get(name) or {}
-    if not key:
-        outcome.failed(name, "No stored file in the previous version")
-        return
-    try:
-        rows = parse_dataset_bytes(await storage.get_dataset(key), filename)
-    except Exception as exc:
-        outcome.failed(name, f"Stored file is unreadable: {exc}")
-        return
-    outcome.carried(name, key, meta, rows)
-
-
 def previous_row_count(version: GatewayPublishedDashboardVersion, name: str) -> int:
     meta = (version.dataset_meta or {}).get(name) or {}
     return int(meta.get("row_count") or 0)
@@ -181,49 +135,34 @@ async def run_sql_datasets(
     spec: dict[str, Any],
 ) -> RefreshOutcome:
     outcome = RefreshOutcome(spec)
-    sources = schema.dataset_sources(spec)
+    queries = schema.dataset_sql(spec)
     query_store = Store(db, org_id=dashboard.org_id, user_id=refresh_identity(dashboard))
     context = GovernedQueryContext(path="dashboard", project_id=dashboard.project_id)
     for name, definition in schema.dataset_definitions(spec).items():
-        rows = inline_rows(definition)
+        rows = schema.static_rows(definition)
         if rows is not None:
-            outcome.inline(name, rows)
+            outcome.static(name, rows)
             continue
-        filename = str(definition.get("file") or f"{name}.csv")
-        source = sources.get(name)
-        if source is None:
-            await carry_previous(storage, outcome, version, name, filename)
+        query = queries.get(name)
+        if query is None:
+            outcome.failed(name, "Dataset has no connection or no sql")
             continue
-        connection = str(source.get("connection") or "").strip()
-        sql = str(source.get("sql") or "").strip()
-        if not connection or not sql:
-            outcome.failed(name, "Source has no connection or no sql")
-            continue
+        connection, sql = query
         try:
-            result = await asyncio.wait_for(
-                executor.execute(
-                    query_store,
-                    connection_name=connection,
-                    sql=sql,
-                    row_limit=SQL_ROW_LIMIT,
-                    timeout_seconds=SQL_TIMEOUT_SECONDS,
-                    context=context,
-                ),
-                timeout=SQL_TIMEOUT_SECONDS + 30,
+            result = await run_dataset_query(
+                executor,
+                query_store,
+                connection=connection,
+                sql=sql,
+                row_limit=REFRESH_ROW_LIMIT,
+                timeout_seconds=REFRESH_TIMEOUT_SECONDS,
+                context=context,
             )
-        except GovernedQueryError as exc:
-            outcome.failed(name, f"{exc.code}: {exc}")
+        except DatasetQueryError as exc:
+            outcome.failed(name, str(exc))
             continue
-        except TimeoutError:
-            outcome.failed(name, f"Query timed out after {SQL_TIMEOUT_SECONDS}s")
-            continue
-        except Exception as exc:
-            outcome.failed(name, f"Query failed: {exc}")
-            continue
-        result_rows = list(result.rows or [])
-        columns = result_columns(getattr(result, "columns", None), result_rows)
-        data = rows_to_json(result_rows) if filename.lower().endswith(".json") else rows_to_csv(columns, result_rows)
-        payload = DatasetPayload(data=data, filename=filename.rsplit("/", 1)[-1], rows=parse_dataset_bytes(data, filename))
+        data = rows_to_csv(result.columns, result.rows)
+        payload = DatasetPayload(name=name, data=data, rows=parse_dataset_bytes(data, name))
         outcome.refreshed(name, payload, previous_rows=previous_row_count(version, name))
     return outcome
 
@@ -232,9 +171,10 @@ async def run_sql_datasets(
 
 
 def refresh_message(dashboard: GatewayPublishedDashboard, spec: dict[str, Any]) -> str:
-    sources = schema.dataset_sources(spec)
-    refs = schema.dataset_file_refs(spec)
-    listed = [f"- `{name}` -> `{refs.get(name, '?')}` on connection `{source.get('connection') or '?'}`" for name, source in sources.items()]
+    listed = [
+        f"- `{name}` on connection `{connection}` -> `{schema.snapshot_path(name)}`"
+        for name, (connection, _sql) in schema.dataset_sql(spec).items()
+    ]
     return render_prompt(
         "refresh_prompt.md",
         {
@@ -272,7 +212,7 @@ async def collect_agent_outcome(
     refresh: GatewayDashboardRefresh,
     run: GatewayChatRun,
 ) -> RefreshOutcome | str:
-    """Assemble the outcome from files the run wrote, or return an error string."""
+    """Assemble the outcome from the snapshots the run wrote, or return an error string."""
     from gateway.store.standalone_chat import list_conversation_files
 
     if run.status != "completed":
@@ -299,29 +239,26 @@ async def collect_agent_outcome(
     new_ids = [chart.get("id") for chart in spec.get("charts") or []]
     if previous_ids != new_ids or set(schema.dataset_definitions(previous_spec)) != set(schema.dataset_definitions(spec)):
         return "The agent run changed chart ids or dataset names; the spec must stay unchanged"
+    if schema.dataset_sql(spec) != schema.dataset_sql(previous_spec):
+        return "The agent run changed a dataset's connection or sql; the spec must stay unchanged"
     outcome = RefreshOutcome(spec)
-    sources = schema.dataset_sources(spec)
     for name, definition in schema.dataset_definitions(spec).items():
-        rows = inline_rows(definition)
+        rows = schema.static_rows(definition)
         if rows is not None:
-            outcome.inline(name, rows)
+            outcome.static(name, rows)
             continue
-        filename = str(definition.get("file") or f"{name}.csv")
-        if name not in sources:
-            await carry_previous(storage, outcome, version, name, filename)
-            continue
-        file_row = resolve_file_ref(filename, manifest)
+        path = schema.snapshot_path(name)
+        file_row = resolve_file_ref(path, manifest)
         if file_row is None:
-            outcome.failed(name, f"The agent run did not write {filename}")
+            outcome.failed(name, f"The agent run did not write {path}")
             continue
         data = await storage.get_chat_object(file_row.object_key, max_bytes=MAX_DATASET_BYTES)
         try:
-            parsed = parse_dataset_bytes(data, filename)
+            parsed = parse_dataset_bytes(data, name)
         except ValueError as exc:
-            outcome.failed(name, f"Dataset file could not be parsed: {exc}")
+            outcome.failed(name, str(exc))
             continue
-        payload = DatasetPayload(data=data, filename=filename.rsplit("/", 1)[-1], rows=parsed)
-        outcome.refreshed(name, payload, previous_rows=previous_row_count(version, name))
+        outcome.refreshed(name, DatasetPayload(name=name, data=data, rows=parsed), previous_rows=previous_row_count(version, name))
     return outcome
 
 
@@ -448,9 +385,9 @@ async def run_refresh(
                 await db.commit()
                 return
             # The stale sweep sizes its budget by this count.
-            refresh.detail = {"sql_datasets": len(schema.dataset_sources(spec))}
+            refresh.detail = {"sql_datasets": len(schema.dataset_sql(spec))}
             await db.commit()
-            outcome = await run_sql_datasets(db, storage, executor or _default_executor(), dashboard, version, spec)
+            outcome = await run_sql_datasets(db, storage, executor or governed_executor(), dashboard, version, spec)
             await finish_refresh(db, storage, dashboard, refresh, outcome)
         except Exception as exc:
             logger.exception("Dashboard refresh %s crashed", refresh_id)

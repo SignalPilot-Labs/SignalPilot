@@ -58,6 +58,7 @@ READ_ONLY_MCP_SUFFIXES = (
     "inspect_dbt",
     "dashboard_sample_data",
     "dashboard_screenshot",
+    "dashboard_list_published",
     "plan_query",
     "describe_table",
     "schema_overview",

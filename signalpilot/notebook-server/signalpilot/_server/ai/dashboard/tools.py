@@ -163,6 +163,7 @@ def _sample_data_payload(
             )
             continue
         rows, issues = prepare_chart_rows(chart, spec, datasets)
+        # resolved_file: the snapshot path of a SQL dataset; None for rows.
         loaded = datasets.get(str(chart.get("dataset")))
         entries.append(
             {

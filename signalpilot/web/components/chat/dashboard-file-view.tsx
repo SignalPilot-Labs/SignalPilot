@@ -7,16 +7,18 @@ import { normalizeFileRef, resolveFileRef } from "~/lib/chat-file-refs";
 import type { PublishedDashboard } from "~/lib/api/dashboards";
 import {
   DashboardPublishDialog,
-  DashboardPublishedStrip,
   useDashboardPublishApi,
-  usePublishedDashboard,
 } from "~/components/chat/dashboard-publish-dialog";
 import type { DashboardPublishApi } from "~/components/chat/dashboard-publish-form";
+import {
+  DashboardSourceStrip,
+  useDashboardSource,
+} from "~/components/chat/dashboard-publish-source";
 import {
   DashboardRenderer,
   datasetFileRefs,
   inlineDatasets,
-  parseDatasetText,
+  parseDatasetCsv,
   validateDashboardSpec,
   type DashboardSpec,
   type DashboardTheme,
@@ -104,10 +106,11 @@ const ACTION_CLASS =
 
 /**
  * Renders a `*.dashboard.json` conversation file: validates the spec,
- * resolves its file-backed datasets against the manifest, fetches and
- * parses them, then hands everything to the shared DashboardRenderer with
- * live filters. Missing datasets are left out of the map so the renderer
- * reports them per tile; while the run still streams they show as pending.
+ * resolves each SQL dataset's snapshot (`artifacts/datasets/<name>.csv`)
+ * against the manifest, fetches and parses them, then hands everything to
+ * the shared DashboardRenderer with live filters. Missing snapshots are
+ * left out of the map so the renderer reports them per tile; while the run
+ * still streams they show as pending.
  */
 export function DashboardFileView({
   file,
@@ -131,11 +134,14 @@ export function DashboardFileView({
   const [showRaw, setShowRaw] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const api = useDashboardPublishApi(publishApi);
-  const publishedState = usePublishedDashboard(api, conversationId, file.id);
+  const sourceState = useDashboardSource(api, conversationId, file);
+  // The dashboard a publish versions by default: the one published from
+  // this file, else the one the file was loaded from.
+  const sourceId = sourceState.source?.dashboard.id ?? "new";
   // null = closed; "new" = fresh publish; an id = new version of that one.
   const [publishTarget, setPublishTarget] = useState<"new" | string | null>(null);
   const onPublished = ({ dashboard }: { dashboard: PublishedDashboard }) => {
-    publishedState.setPublished(dashboard);
+    sourceState.setPublished(dashboard);
     setPublishTarget(null);
     toast("Published", "success");
   };
@@ -168,11 +174,7 @@ export function DashboardFileView({
       if (!entry.file) continue;
       const state = texts[entry.file.id];
       if (!state || state.phase !== "text") continue;
-      try {
-        out[entry.name] = parseDatasetText(state.text, entry.file.filename);
-      } catch {
-        // Unparseable: leave it out so the tile reports dataset_unreadable.
-      }
+      out[entry.name] = parseDatasetCsv(state.text);
     }
     return out;
   }, [spec, resolved, texts]);
@@ -232,8 +234,8 @@ export function DashboardFileView({
             data-testid="chat-dashboard-publish"
             aria-label="Publish the dashboard"
             onClick={() => {
-              void publishedState.reload();
-              setPublishTarget(publishedState.published?.id ?? "new");
+              void sourceState.reload();
+              setPublishTarget(sourceId);
             }}
             className={ACTION_CLASS}
           >
@@ -252,10 +254,10 @@ export function DashboardFileView({
           Download JSON
         </button>
       </div>
-      {spec && publishedState.published && (
-        <DashboardPublishedStrip
-          dashboard={publishedState.published}
-          onPublishNewVersion={() => setPublishTarget(publishedState.published?.id ?? "new")}
+      {spec && sourceState.source && (
+        <DashboardSourceStrip
+          source={sourceState.source}
+          onPublishNewVersion={() => setPublishTarget(sourceId)}
         />
       )}
       {spec && conversationId && (
@@ -266,7 +268,7 @@ export function DashboardFileView({
           file={file}
           spec={spec}
           files={files}
-          dashboards={publishedState.dashboards}
+          dashboards={sourceState.dashboards}
           initialTargetId={publishTarget === "new" ? null : publishTarget}
           onPublished={onPublished}
           api={api}

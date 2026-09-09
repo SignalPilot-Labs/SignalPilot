@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from signalpilot._server.ai.dashboard.datasets import LoadedDataset
 from signalpilot._server.ai.dashboard.prepare import (
     chart_is_failed,
@@ -16,7 +18,7 @@ def _spec(**overrides: Any) -> dict[str, Any]:
     spec: dict[str, Any] = {
         "version": 1,
         "title": "T",
-        "datasets": {"monthly": {"file": "artifacts/m.csv"}},
+        "datasets": {"monthly": {"connection": "w", "sql": "select 1"}},
         "filters": [],
         "charts": [],
     }
@@ -50,7 +52,7 @@ def _datasets(rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     return {
         "monthly": LoadedDataset(
             rows=_rows() if rows is None else rows,
-            resolved_file="artifacts/m.csv",
+            resolved_file="artifacts/datasets/monthly.csv",
         )
     }
 
@@ -107,7 +109,10 @@ def test_filters_equals_in_date_range_number_range():
 
 def test_filters_bound_to_another_dataset_are_ignored():
     spec = _spec(
-        datasets={"monthly": {"file": "artifacts/m.csv"}, "o": {"rows": []}},
+        datasets={
+            "monthly": {"connection": "w", "sql": "select 1"},
+            "o": {"rows": []},
+        },
         filters=[
             {
                 "id": "r",
@@ -169,14 +174,39 @@ def test_missing_dataset_fails_the_chart():
 def test_dataset_unreadable_fails_the_chart():
     datasets = {
         "monthly": LoadedDataset(
-            error="Dataset file not found: artifacts/m.csv",
-            resolved_file="artifacts/m.csv",
+            error="Dataset snapshot could not be parsed: artifacts/datasets/m.csv",
+            resolved_file="artifacts/datasets/m.csv",
+            code="dataset_unreadable",
         )
     }
     rows, issues = prepare_chart_rows(_line(), _spec(), datasets)
     assert rows == []
     assert _codes(issues) == ["dataset_unreadable"]
-    assert "artifacts/m.csv" in issues[0]["message"]
+    assert "artifacts/datasets/m.csv" in issues[0]["message"]
+    assert "'rev'" in issues[0]["message"]
+    assert chart_is_failed(issues)
+
+    not_loaded, issues = prepare_chart_rows(_line(), _spec(), {})
+    assert not_loaded == []
+    assert _codes(issues) == ["dataset_unreadable"]
+
+
+@pytest.mark.parametrize("code", ["snapshot_missing", "snapshot_stale"])
+def test_snapshot_codes_fail_the_chart_and_keep_the_loader_message(code: str):
+    datasets = {
+        "monthly": LoadedDataset(
+            error="Dataset 'monthly' has no snapshot. Call sp.dashboard_dataset.",
+            resolved_file="artifacts/datasets/monthly.csv",
+            code=code,
+        )
+    }
+    rows, issues = prepare_chart_rows(_line(), _spec(), datasets)
+    assert rows == []
+    assert _codes(issues) == [code]
+    assert issues[0]["message"] == (
+        "Chart 'rev': Dataset 'monthly' has no snapshot. Call "
+        "sp.dashboard_dataset."
+    )
     assert chart_is_failed(issues)
 
 
@@ -294,10 +324,27 @@ def test_non_numeric_y_is_a_warning():
         "type": "kpi",
         "title": "K",
         "dataset": "monthly",
-        "value": {"column": "region"},
+        "value": {"column": "region", "format": "integer"},
     }
     _, issues = prepare_chart_rows(kpi, _spec(), _datasets())
     assert _codes(issues) == ["non_numeric_y"]
+
+
+def test_kpi_text_cells_pass_without_a_format():
+    kpi = {
+        "id": "k",
+        "type": "kpi",
+        "title": "K",
+        "dataset": "monthly",
+        "value": {"column": "region"},
+    }
+    _, issues = prepare_chart_rows(kpi, _spec(), _datasets())
+    assert issues == []
+
+    kpi["comparison"] = {"column": "month", "format": "compact"}
+    _, issues = prepare_chart_rows(kpi, _spec(), _datasets())
+    assert _codes(issues) == ["non_numeric_y"]
+    assert "'month'" in issues[0]["message"]
 
 
 def test_unparseable_date_is_a_warning_only_for_date_axes():
@@ -347,3 +394,37 @@ def test_infer_column_types():
         {"name": "z", "inferred_type": "null"},
         {"name": "f", "inferred_type": "number"},
     ]
+
+
+def test_filter_without_dataset_binds_to_every_dataset_with_the_column():
+    spec = {
+        "version": 1,
+        "title": "T",
+        "datasets": {
+            "a": {"rows": [{"region": "N", "v": 1}, {"region": "S", "v": 2}]},
+            "b": {"rows": [{"region": "N", "w": 10}, {"region": "S", "w": 20}]},
+            "c": {"rows": [{"other": "x", "z": 5}]},
+        },
+        "filters": [
+            {"id": "region", "label": "Region", "column": "region", "type": "in", "default": ["N"]}
+        ],
+        "charts": [
+            {"id": "ca", "type": "kpi", "title": "A", "dataset": "a", "value": {"column": "v"}},
+            {"id": "cb", "type": "kpi", "title": "B", "dataset": "b", "value": {"column": "w"}},
+            {"id": "cc", "type": "kpi", "title": "C", "dataset": "c", "value": {"column": "z"}},
+        ],
+    }
+    datasets = {
+        name: LoadedDataset(rows=list(definition["rows"]), resolved_file=None)
+        for name, definition in spec["datasets"].items()
+    }
+    rows_a, issues_a = prepare_chart_rows(spec["charts"][0], spec, datasets)
+    rows_b, issues_b = prepare_chart_rows(spec["charts"][1], spec, datasets)
+    rows_c, issues_c = prepare_chart_rows(spec["charts"][2], spec, datasets)
+    assert rows_a == [{"region": "N", "v": 1}] and issues_a == []
+    assert rows_b == [{"region": "N", "w": 10}] and issues_b == []
+    assert rows_c == [{"other": "x", "z": 5}] and issues_c == []
+
+    spec["filters"][0]["dataset"] = "c"
+    _, bound_issues = prepare_chart_rows(spec["charts"][2], spec, datasets)
+    assert any(issue["code"] == "missing_column" for issue in bound_issues)

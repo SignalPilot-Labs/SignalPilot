@@ -102,6 +102,7 @@ class MSSQLConnector(BaseConnector):
             self._azure_client_id,
             authority=authority,
             client_credential=self._azure_client_secret,
+            timeout=self._login_timeout,
         )
         # Azure SQL database scope
         result = app.acquire_token_for_client(scopes=["https://database.windows.net/.default"])
@@ -111,6 +112,14 @@ class MSSQLConnector(BaseConnector):
         raise RuntimeError(f"Azure AD token acquisition failed: {error}")
 
     async def connect(self, connection_string: str) -> None:
+        async with self._conn_lock:
+            await self._run_in_thread(
+                lambda: self._connect_sync(connection_string),
+                self._login_timeout + self._query_timeout,
+                label="SQL Server connection",
+            )
+
+    def _connect_sync(self, connection_string: str) -> None:
         if not HAS_PYMSSQL:
             raise RuntimeError("pymssql not installed. Run: pip install pymssql")
 
@@ -124,8 +133,8 @@ class MSSQLConnector(BaseConnector):
             "user": params.get("user", ""),
             "password": params.get("password", ""),
             "database": params.get("database") or "master",
-            "login_timeout": self._login_timeout,
-            "timeout": self._query_timeout,
+            "login_timeout": max(1, self._login_timeout),
+            "timeout": max(1, self._query_timeout),
             "as_dict": True,
             "charset": "UTF-8",
         }
@@ -165,6 +174,7 @@ class MSSQLConnector(BaseConnector):
             cursor.execute("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
             cursor.close()
         except pymssql.OperationalError as e:
+            self._safe_close_sync()
             err_str = str(e).lower()
             if "login failed" in err_str:
                 raise RuntimeError(
@@ -179,6 +189,9 @@ class MSSQLConnector(BaseConnector):
                     f"Connection failed: Cannot connect to SQL Server on '{connect_kwargs.get('server', '')}:{connect_kwargs.get('port', '1433')}'"
                 ) from e
             raise RuntimeError(f"SQL Server connection error: {e}") from e
+        except Exception:
+            self._safe_close_sync()
+            raise
 
     def _parse_connection_string(self, conn_str: str) -> dict:
         """Parse mssql://user:pass@host:port/db or mssql+pymssql://... format.
@@ -230,8 +243,8 @@ class MSSQLConnector(BaseConnector):
                 user=self._connect_params.get("user", ""),
                 password=self._connect_params.get("password", ""),
                 database=self._connect_params.get("database") or "master",
-                login_timeout=self._login_timeout,
-                timeout=self._query_timeout,
+                login_timeout=max(1, self._login_timeout),
+                timeout=max(1, self._query_timeout),
                 as_dict=True,
                 charset="UTF-8",
             )
@@ -281,10 +294,48 @@ class MSSQLConnector(BaseConnector):
             raise RuntimeError(f"SQL Server query error: {e}") from e
 
     async def cancel_current_query(self) -> bool:
-        if self._conn is None:
-            return False
-        await self._run_in_thread(self._conn.cancel, 10, label="SQL Server cancellation")
-        return True
+        # pymssql handles must not be used from two threads simultaneously.
+        # Wait for the bounded driver operation before touching its handle.
+        async with self._conn_lock:
+            if self._conn is None:
+                return False
+            await self._run_in_thread(self._conn.cancel, 10, label="SQL Server cancellation")
+            return True
+
+    async def _run_in_thread(self, fn, timeout: int | None = None, label: str = "Query") -> Any:
+        """Keep ownership until the synchronous worker stops, even on cancellation."""
+        worker = asyncio.create_task(asyncio.to_thread(fn))
+        try:
+            return await asyncio.wait_for(asyncio.shield(worker), timeout=(timeout or self._query_timeout) + 5)
+        except (asyncio.CancelledError, TimeoutError) as error:
+            # Cancelling to_thread does not stop its thread. Releasing the lease
+            # now would let another query mutate the same pymssql session.
+            while not worker.done():
+                try:
+                    await asyncio.shield(worker)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break
+            if not worker.cancelled():
+                worker.exception()  # Retrieve any worker error before discarding.
+            closer = asyncio.create_task(asyncio.to_thread(self._safe_close_sync))
+            while not closer.done():
+                try:
+                    await asyncio.shield(closer)
+                except asyncio.CancelledError:
+                    continue
+            closer.result()
+            if isinstance(error, TimeoutError):
+                raise RuntimeError(f"{label} query timed out after {timeout or self._query_timeout}s") from error
+            raise
+
+    async def close(self) -> None:
+        async with self._conn_lock:
+            try:
+                await self._run_in_thread(self._safe_close_sync, 10, label="SQL Server close")
+            finally:
+                self._cleanup_temp_files()
 
     async def _get_schema_impl(self) -> dict[str, Any]:
         import time as _time
@@ -690,11 +741,14 @@ class MSSQLConnector(BaseConnector):
         # Use the connection lock because another caller can hold the connection.
         async with self._conn_lock:
             try:
-                self._ensure_connected()
-                cursor = self._conn.cursor(as_dict=True)
-                cursor.execute("SELECT 1 AS ok")
-                cursor.fetchall()
-                cursor.close()
+                def ping():
+                    cursor = self._conn.cursor(as_dict=True)
+                    try:
+                        cursor.execute("SELECT 1 AS ok")
+                        cursor.fetchall()
+                    finally:
+                        cursor.close()
+                await self._run_in_thread(ping, self._query_timeout, label="SQL Server health check")
                 return True
             except Exception:
                 return False

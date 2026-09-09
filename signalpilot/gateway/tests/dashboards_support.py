@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
+import re
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
@@ -54,18 +56,19 @@ def fake_storage() -> tuple[DashboardStorage, FakeObjectStore]:
     return DashboardStorage(backend), backend
 
 
+MONTHLY_SQL = "select month, revenue from m"
+REGIONS_SQL = "select region, total from r"
+
+
 def spec_json() -> dict:
-    """A valid two-dataset spec: one SQL-backed file, one static snapshot."""
+    """A valid three-dataset spec: two SQL datasets and one static dataset."""
     return {
         "version": 1,
         "title": "Revenue",
         "description": "Monthly revenue",
         "datasets": {
-            "monthly": {
-                "file": "artifacts/monthly.csv",
-                "source": {"kind": "sql", "connection": "warehouse", "sql": "select month, revenue from m"},
-            },
-            "regions": {"file": "artifacts/regions.csv"},
+            "monthly": {"connection": "warehouse", "sql": MONTHLY_SQL},
+            "regions": {"connection": "warehouse", "sql": REGIONS_SQL},
             "inline": {"rows": [{"k": "a", "v": 1}]},
         },
         "charts": [
@@ -91,6 +94,46 @@ def spec_json() -> dict:
 
 MONTHLY_CSV = b"month,revenue\n2026-01-01,100\n2026-02-01,120\n"
 REGIONS_CSV = b"region,total\nnorth,10\nsouth,\n"
+MONTHLY_PATH = "artifacts/datasets/monthly.csv"
+REGIONS_PATH = "artifacts/datasets/regions.csv"
+
+
+class FakeExecutor:
+    """A stand-in for the governed executor.
+
+    ``by_sql`` maps a SQL text to its rows; ``rows`` answers every other
+    query; with neither, the columns are read from the ``select`` list and one
+    row of placeholder values is returned, so any spec passes the publish gate.
+    """
+
+    def __init__(self, rows=None, *, by_sql=None, error: Exception | None = None, delay: float = 0.0) -> None:
+        self.rows = rows
+        self.by_sql = dict(by_sql or {})
+        self.error = error
+        self.delay = delay
+        self.calls: list[dict] = []
+
+    @staticmethod
+    def rows_from_sql(sql: str) -> list[dict]:
+        match = re.match(r"select\s+(.+?)\s+from\b", sql, re.IGNORECASE | re.DOTALL)
+        columns = [part.strip().split()[-1] for part in (match.group(1) if match else "").split(",") if part.strip()]
+        return [{column: f"{column}-1" for column in columns}]
+
+    async def execute(self, store_, **kwargs):
+        self.calls.append(kwargs)
+        if self.delay:
+            await asyncio.sleep(self.delay)
+        if self.error:
+            raise self.error
+        sql = kwargs["sql"]
+        if sql in self.by_sql:
+            rows = self.by_sql[sql]
+        elif self.rows is not None:
+            rows = self.rows
+        else:
+            rows = self.rows_from_sql(sql)
+        columns = [{"name": key} for key in rows[0]] if rows else []
+        return SimpleNamespace(rows=list(rows), columns=columns)
 
 
 def manifest_row(path: str, data: bytes, *, run_id: str = "run-1", file_id: str | None = None):
@@ -107,12 +150,12 @@ def manifest_row(path: str, data: bytes, *, run_id: str = "run-1", file_id: str 
 
 
 def fake_manifest(backend: FakeObjectStore, spec: dict | None = None, *, run_id: str = "run-1"):
-    """Manifest rows plus stored bytes for the spec and both dataset files."""
+    """Manifest rows plus stored bytes for the spec and both SQL snapshots."""
     spec = spec or spec_json()
     rows = [
         manifest_row("artifacts/revenue.dashboard.json", json.dumps(spec).encode(), run_id=run_id, file_id="file-dash"),
-        manifest_row("artifacts/monthly.csv", MONTHLY_CSV, run_id=run_id),
-        manifest_row("artifacts/regions.csv", REGIONS_CSV, run_id=run_id),
+        manifest_row(MONTHLY_PATH, MONTHLY_CSV, run_id=run_id),
+        manifest_row(REGIONS_PATH, REGIONS_CSV, run_id=run_id),
     ]
     for row in rows:
         backend.objects[row.object_key] = json.dumps(spec).encode() if row.kind == "dashboard" else (

@@ -5,20 +5,12 @@
   "layout": { "columns": 12, "rowHeight": 72 },
   "datasets": {
     "monthly": {
-      "file": "artifacts/revenue_monthly.csv",
-      "source": {
-        "kind": "sql",
-        "connection": "warehouse",
-        "sql": "select date_trunc('month', order_date) as month, region, sum(net_revenue) as revenue, count(*) as orders from fct_orders where order_status = 'completed' and order_date >= '2025-01-01' group by 1, 2 order by 1, 2"
-      }
+      "connection": "warehouse",
+      "sql": "with monthly as (select date_trunc('month', order_date) as month, case when country in ('US', 'CA', 'MX') then 'North America' when country in ('GB', 'DE', 'FR', 'NL') then 'Europe' else 'Rest of world' end as region, sum(net_revenue) as revenue, count(*) as orders from fct_orders where order_status = 'completed' and order_date >= '2024-01-01' group by 1, 2) select month, region, revenue, orders, sum(revenue) over (partition by region order by month rows between 11 preceding and current row) as revenue_ttm from monthly where month >= '2025-01-01' order by month, region"
     },
     "by_region": {
-      "file": "artifacts/revenue_by_region.csv",
-      "source": {
-        "kind": "sql",
-        "connection": "warehouse",
-        "sql": "select region, sum(net_revenue) as revenue, count(*) as orders, count(distinct customer_id) as customers, sum(net_revenue) / nullif(lag_revenue, 0) - 1 as growth from rpt_region_revenue where year = 2025 group by 1"
-      }
+      "connection": "warehouse",
+      "sql": "with yearly as (select case when country in ('US', 'CA', 'MX') then 'North America' when country in ('GB', 'DE', 'FR', 'NL') then 'Europe' else 'Rest of world' end as region, extract(year from order_date) as year, sum(net_revenue) as revenue, count(*) as orders, count(distinct customer_id) as customers from fct_orders where order_status = 'completed' and order_date >= '2024-01-01' group by 1, 2), growth as (select region, year, revenue, orders, customers, revenue / nullif(lag(revenue) over (partition by region order by year), 0) - 1 as growth from yearly) select region, revenue, orders, customers, growth from growth where year = 2025 order by revenue desc"
     },
     "totals": {
       "rows": [
@@ -63,13 +55,14 @@
       "grid": { "x": 3, "y": 0, "w": 3, "h": 2 }
     },
     {
-      "id": "revenue_by_month",
+      "id": "revenue_ttm",
       "type": "line",
-      "title": "Revenue by month",
-      "description": "Sum of net revenue per month across all regions.",
+      "title": "Trailing twelve month revenue",
+      "description": "Sum of the last twelve months of net revenue, per region.",
       "dataset": "monthly",
       "x": { "column": "month", "type": "date", "label": "Month" },
-      "y": [ { "column": "revenue", "label": "Revenue", "format": "currency:USD" } ],
+      "y": [ { "column": "revenue_ttm", "label": "TTM revenue", "format": "currency:USD" } ],
+      "series": { "column": "region" },
       "sort": { "column": "month", "direction": "asc" },
       "grid": { "x": 6, "y": 0, "w": 6, "h": 4 }
     },
@@ -111,6 +104,31 @@
       "sort": { "column": "revenue", "direction": "desc" },
       "limit": 20,
       "grid": { "x": 0, "y": 8, "w": 12, "h": 5 }
+    },
+    {
+      "id": "revenue_and_growth",
+      "type": "combo",
+      "title": "Revenue and growth by region",
+      "description": "Bars show 2025 revenue on the left axis. The line shows growth versus 2024 on the right axis.",
+      "dataset": "by_region",
+      "x": { "column": "region", "label": "Region" },
+      "bars": [ { "column": "revenue", "label": "Revenue", "format": "currency:USD" } ],
+      "lines": [ { "column": "growth", "label": "Growth", "format": "percentage" } ],
+      "secondary_axis": true,
+      "sort": { "column": "revenue", "direction": "desc" },
+      "grid": { "x": 0, "y": 13, "w": 6, "h": 4 }
+    },
+    {
+      "id": "revenue_heatmap",
+      "type": "heatmap",
+      "title": "Revenue by region and month",
+      "dataset": "monthly",
+      "x": { "column": "month", "type": "date", "label": "Month" },
+      "y": { "column": "region" },
+      "value": { "column": "revenue", "label": "Revenue", "format": "compact" },
+      "show_values": true,
+      "sort": { "column": "month" },
+      "grid": { "x": 6, "y": 13, "w": 6, "h": 4 }
     }
   ]
 }

@@ -110,6 +110,8 @@ async def test_publish_tools_are_gone_and_unknown_tools_are_errors():
         "inspect_dbt",
         "dashboard_sample_data",
         "dashboard_screenshot",
+        "dashboard_list_published",
+        "dashboard_load_published",
     }
     assert not any(name.startswith("publish_") for name in names)
     assert not any("report" in name for name in names)
@@ -171,6 +173,40 @@ async def test_dashboard_tools_report_a_structured_error_without_scratch():
         [],
     )
 
+    loaded = await server.request_handlers[CallToolRequest](
+        CallToolRequest(
+            params=CallToolRequestParams(
+                name="dashboard_load_published",
+                arguments={"dashboard": "monthly-savings"},
+            )
+        )
+    )
+    loaded_payload = json.loads(loaded.root.content[0].text)
+    assert loaded_payload["error"] == "scratch_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_published_dashboard_tools_report_a_missing_gateway_identity(
+    tmp_path,
+):
+    # No gateway identity threaded in: the tools answer, they do not raise.
+    server = build_standalone_chat_mcp_server(scratch_directory=tmp_path)[
+        "instance"
+    ]
+    for name, arguments in (
+        ("dashboard_list_published", {}),
+        ("dashboard_load_published", {"dashboard": "monthly-savings"}),
+    ):
+        response = await server.request_handlers[CallToolRequest](
+            CallToolRequest(
+                params=CallToolRequestParams(name=name, arguments=arguments)
+            )
+        )
+        assert response.root.isError is False
+        payload = json.loads(response.root.content[0].text)
+        assert payload["error"] == "gateway_error"
+        assert payload["status"] is None
+
 
 def test_dashboard_tool_schemas_match_the_contract():
     tools = {
@@ -200,6 +236,12 @@ def test_dashboard_tool_schemas_match_the_contract():
         "default": 1280,
     }
     assert shot["properties"]["theme"]["enum"] == ["light", "dark"]
+    assert tools["dashboard_list_published"].inputSchema["properties"] == {}
+    load = tools["dashboard_load_published"].inputSchema
+    assert load["required"] == ["dashboard"]
+    assert load["properties"]["dashboard"]["pattern"] == (
+        r"^[A-Za-z0-9][A-Za-z0-9_-]{0,80}$"
+    )
 
 
 @pytest.mark.asyncio
@@ -327,7 +369,11 @@ def test_agent_contract_includes_default_signalpilot_mcp_tools():
     assert "analytics-steps.md" in _prompt_flat
     assert "prebuild-state.md" in _prompt_flat
     # The filesystem is the artifact API. No publish or report tools.
-    assert "## Files and charts" in STANDALONE_SYSTEM_PROMPT
+    assert "## Notebook and files" in STANDALONE_SYSTEM_PROMPT
+    # Notebook detail lives in the notebook skill; the prompt only points at it.
+    assert "`signalpilot-dbt:notebook`" in _prompt_flat
+    assert "MultipleDefinitionError" not in _prompt_flat
+    assert "fig.savefig(" not in _prompt_flat
     assert "SP_CHAT_ARTIFACTS_DIRECTORY" in _prompt_flat
     assert "sp.artifact_path(" in _prompt_flat
     assert "![Revenue by month, 2025](artifacts/revenue_by_month.png)" in (
@@ -357,6 +403,8 @@ def test_agent_contract_includes_default_signalpilot_mcp_tools():
     assert "artifacts/<name>.dashboard.json" in _prompt_flat
     assert "`dashboard_sample_data`" in _prompt_flat
     assert "`dashboard_screenshot`" in _prompt_flat
+    assert "`dashboard_list_published`" in _prompt_flat
+    assert "`dashboard_load_published`" in _prompt_flat
     assert {
         "mcp__signalpilot__get_knowledge",
         "mcp__signalpilot__propose_knowledge",
@@ -366,6 +414,8 @@ def test_agent_contract_includes_default_signalpilot_mcp_tools():
         "mcp__signalpilot__dbt_execute",
         "mcp__standalone-chat__dashboard_sample_data",
         "mcp__standalone-chat__dashboard_screenshot",
+        "mcp__standalone-chat__dashboard_list_published",
+        "mcp__standalone-chat__dashboard_load_published",
     } <= set(STANDALONE_ALLOWED_TOOLS)
     assert not any(
         "dashboard_authoring" in tool for tool in STANDALONE_ALLOWED_TOOLS

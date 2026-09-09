@@ -92,6 +92,10 @@ def _dispatch(tool_name: str, base: str, text: str, tool_input: dict[str, Any] |
         return dashboard.project_dashboard_sample(text, tool_input)
     if base == "dashboard_screenshot":
         return dashboard.project_dashboard_screenshot(text, tool_input)
+    if base == "dashboard_list_published":
+        return dashboard.project_dashboard_list(text, tool_input)
+    if base == "dashboard_load_published":
+        return dashboard.project_dashboard_load(text, tool_input)
     return ops.project_json_or_text(text, tool_input, fallback=_humanize(base))
 
 
@@ -171,6 +175,14 @@ def _shrink_result(result: dict[str, Any]) -> bool:
             chart["rows"] = []
         result["rows_truncated"] = True
         return True
+    if kind == "dashboard_list" and len(result.get("dashboards") or []) > TABLE_LIST_SHRUNK // 5:
+        result["dashboards"] = result["dashboards"][: TABLE_LIST_SHRUNK // 5]
+        result["dashboards_truncated"] = True
+        return True
+    if kind == "dashboard_load" and result.get("datasets"):
+        result["datasets"] = {}
+        result["datasets_truncated"] = True
+        return True
     if kind == "terminal":
         changed = False
         for key in ("stdout", "stderr"):
@@ -186,7 +198,7 @@ def finalize_payload(payload: dict[str, Any]) -> dict[str, Any]:
     """Return a JSON-serializable payload at most ``PAYLOAD_MAX`` bytes.
 
     Shrinks in order: kind-specific bulk (rows→20, entries→50, columns→100,
-    logs→2 KB), then ``result_text``→2 KB, then ``result``→``{"kind":"text"}``
+    logs→2 KB, dashboard lists→10, loaded datasets dropped), then ``result_text``→2 KB, then ``result``→``{"kind":"text"}``
     with the text dropped. Sets ``truncated`` whenever it changed something.
     """
     payload = json.loads(json.dumps(payload, separators=(",", ":"), default=str))

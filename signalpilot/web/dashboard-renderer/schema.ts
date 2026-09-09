@@ -40,17 +40,23 @@ export type DashboardSort = {
 
 export type DashboardGrid = { x: number; y: number; w: number; h: number };
 
-export type DashboardDatasetSource = {
-  kind: "sql";
-  connection?: string;
-  sql?: string;
+/**
+ * A dataset defined by one SQL query on a named connection. Its rows are
+ * the query result; the chat renders the snapshot the sandbox helper wrote
+ * at `artifacts/datasets/<name>.csv` (see `datasetSnapshotPath`).
+ */
+export type DashboardSqlDataset = { connection: string; sql: string };
+
+/** Static rows for constants that never refresh. */
+export type DashboardStaticDataset = {
+  rows: Record<string, DashboardCellValue>[];
 };
 
-export type DashboardDataset = {
-  file?: string;
-  rows?: Record<string, DashboardCellValue>[];
-  source?: DashboardDatasetSource;
-};
+export type DashboardDataset = DashboardSqlDataset | DashboardStaticDataset;
+
+export function isSqlDataset(dataset: DashboardDataset): dataset is DashboardSqlDataset {
+  return "sql" in dataset;
+}
 
 export type DashboardFilterType =
   | "equals"
@@ -61,7 +67,8 @@ export type DashboardFilterType =
 export type DashboardFilter = {
   id: string;
   label: string;
-  dataset: string;
+  /** Bind to one dataset. Omitted: binds to every dataset that has the column. */
+  dataset?: string;
   column: string;
   type: DashboardFilterType;
   default?: unknown;
@@ -99,6 +106,27 @@ export type CartesianChart = ChartBase & {
   horizontal?: boolean;
 };
 
+/** Bars on the left value axis with lines drawn over them. */
+export type ComboChart = ChartBase & {
+  type: "combo";
+  x: DashboardAxis;
+  bars: DashboardSeries[];
+  lines: DashboardSeries[];
+  /** Lines use a right-hand value axis. Default true. */
+  secondary_axis?: boolean;
+  stack?: boolean;
+};
+
+/** One row per cell: x category, y category, numeric value. */
+export type HeatmapChart = ChartBase & {
+  type: "heatmap";
+  x: DashboardAxis;
+  y: DashboardAxis;
+  value: DashboardSeries;
+  /** Label every cell. Default: true when the chart has 100 cells or fewer. */
+  show_values?: boolean;
+};
+
 export type PieChart = ChartBase & {
   type: "pie";
   label: string;
@@ -118,6 +146,8 @@ export type DashboardChart =
   | KpiChart
   | TableChart
   | CartesianChart
+  | ComboChart
+  | HeatmapChart
   | PieChart
   | ScatterChart;
 

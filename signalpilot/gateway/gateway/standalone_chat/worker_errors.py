@@ -6,6 +6,7 @@ Never forward arbitrary environment values.
 
 from __future__ import annotations
 
+import os
 import re
 import traceback
 from typing import Any
@@ -20,10 +21,41 @@ class AnalysisRuntimeError(RuntimeError):
         *,
         full_trace: str = "",
         diagnostic_context: Any = None,
+        raw_error: str | None = None,
+        stderr: str | None = None,
+        raw_error_truncated: bool = False,
+        stderr_truncated: bool = False,
     ) -> None:
         super().__init__(message)
         self.full_trace = full_trace
         self.diagnostic_context = diagnostic_context
+        self.raw_error = raw_error if isinstance(raw_error, str) else message
+        self.stderr = stderr if isinstance(stderr, str) else ""
+        self.raw_error_truncated = raw_error_truncated
+        self.stderr_truncated = stderr_truncated
+
+
+def public_raw_error_fields(exc: Exception) -> dict[str, Any]:
+    """Persist bounded original runtime diagnostics for every chat consumer."""
+    from gateway.errors.mcp import sanitize_mcp_error
+
+    result: dict[str, Any] = {}
+    for field, limit in (("raw_error", 8192), ("stderr", 4096)):
+        value = getattr(exc, field, str(exc) if field == "raw_error" else "")
+        text = value if isinstance(value, str) else ""
+        for name in ("CLAUDE_CODE_OAUTH_TOKEN", "OAUTH_TOKEN", "ANTHROPIC_API_KEY", "SP_CHAT_TEST_OAUTH_TOKEN"):
+            secret = os.environ.get(name)
+            if secret:
+                text = text.replace(secret, "[REDACTED]")
+        text = redact_error_text(text)
+        text = re.sub(r"(?i)\b[a-z][a-z0-9+.-]*://[^\s<>\"']+", "[URL REDACTED]", text)
+        text = re.sub(r"(?i)\bBearer\s+[^\s\"']+", "Bearer [REDACTED]", text)
+        text = re.sub(r"(?i)(?:api[_-]?key|token|password|secret)[\"']?\s*[:=]\s*[\"']?[^\s,;\"']+", "[REDACTED]", text)
+        text = re.sub(r"\b(?:spa_[\w.-]+|eyJ[\w-]+\.[\w-]+\.[\w-]+)\b", "[REDACTED]", text)
+        safe = sanitize_mcp_error(text, cap=limit + 1)
+        result[field] = safe[:limit]
+        result[field + "_truncated"] = getattr(exc, field + "_truncated", False) is True or len(safe) > limit
+    return result
 
 
 def public_error_message(exc: Exception) -> str:

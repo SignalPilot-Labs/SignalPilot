@@ -119,8 +119,8 @@ def _tool(name: str, **annotations):
         name=name,
         title=None,
         description=f"{name} description\x00 with control char",
-        inputSchema={"type": "object"},
-        annotations=SimpleNamespace(model_dump=lambda exclude_none=True: annotations, title=None),
+        input_schema={"type": "object"},
+        annotations=SimpleNamespace(model_dump=lambda exclude_none=True, by_alias=True: annotations, title=None),
     )
 
 
@@ -320,7 +320,7 @@ def test_probe_command_blocks_docker_and_parses_args() -> None:
 
 
 def test_unwrap_http_error_finds_nested_status_error() -> None:
-    import httpx
+    import httpx2 as httpx
 
     response = httpx.Response(401, headers={"WWW-Authenticate": 'Bearer resource_metadata="https://x/.well-known"'})
     error = httpx.HTTPStatusError("401", request=httpx.Request("POST", "https://x"), response=response)

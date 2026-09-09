@@ -88,14 +88,16 @@ function currencyCode(format: DashboardFormat | undefined): string | undefined {
 /**
  * integer: 0 decimals grouped; decimal: 2 decimals; compact: 1.2K/3.4M;
  * percentage: value*100 with 1 decimal and %; currency:XXX: Intl currency,
- * 0 decimals when >= 1000 else 2. Nulls render as an en dash.
+ * 0 decimals when >= 1000 else 2. Nulls render as an en dash. A cell that is
+ * not a number (a text label, a boolean) renders as text, trimmed, and
+ * ignores `format`.
  */
 export function formatValue(value: unknown, format?: DashboardFormat): string {
   if (value === null || value === undefined) return NULL_TEXT;
   const numeric = toNumber(value);
   if (numeric === undefined) {
     if (typeof value === "boolean") return value ? "true" : "false";
-    return String(value);
+    return String(value).trim();
   }
   if (format === "integer") {
     return new Intl.NumberFormat(LOCALE, { maximumFractionDigits: 0 }).format(numeric);

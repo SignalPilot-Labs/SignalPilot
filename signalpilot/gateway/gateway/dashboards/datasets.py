@@ -1,8 +1,8 @@
-"""Dataset bytes: parsing, writing, and manifest reference resolution.
+"""Dataset bytes: CSV parsing, CSV writing, and manifest reference resolution.
 
-Parsing mirrors the notebook-server loader: CSV and TSV have a header row,
-fully numeric cells become ``int`` or ``float``, empty cells become ``None``.
-JSON is an array of flat objects.
+A snapshot is CSV only: a header row, RFC 4180 quoting, fully numeric cells
+become ``int`` or ``float``, empty cells become ``None``. The same coercion
+runs in the notebook-server loader and the web parser.
 
 Reference resolution mirrors ``web/lib/chat-file-refs.ts``: an absolute
 sandbox path keeps the tail after the run root, leading ``./`` and ``/`` are
@@ -19,29 +19,23 @@ import re
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
-from pathlib import PurePosixPath
 from typing import Any, Protocol
 
 Row = dict[str, Any]
 
 ARTIFACTS_PREFIX = "artifacts/"
 MAX_DATASET_BYTES = 50 * 1024 * 1024
+CSV_CONTENT_TYPE = "text/csv"
 
 _RUN_ROOT_RE = re.compile(r"signalpilot-chat-runs/[^/]+/(.+)$")
 _SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.-]*:", re.IGNORECASE)
-
-_CONTENT_TYPES = {
-    ".csv": "text/csv",
-    ".tsv": "text/tab-separated-values",
-    ".json": "application/json",
-}
 
 
 # ── Parsing ──────────────────────────────────────────────────────────────────
 
 
 def coerce_cell(value: str | None) -> Any:
-    """Coerce one delimited cell: empty -> None, fully numeric -> int or float."""
+    """Coerce one CSV cell: empty -> None, fully numeric -> int or float."""
     if value is None:
         return None
     text = value.strip()
@@ -60,8 +54,8 @@ def coerce_cell(value: str | None) -> Any:
     return number
 
 
-def parse_delimited(text: str, *, delimiter: str) -> list[Row]:
-    reader = csv.reader(io.StringIO(text), delimiter=delimiter)
+def parse_csv(text: str) -> list[Row]:
+    reader = csv.reader(io.StringIO(text))
     try:
         header = next(reader)
     except StopIteration:
@@ -79,51 +73,18 @@ def parse_delimited(text: str, *, delimiter: str) -> list[Row]:
     return rows
 
 
-def parse_json_rows(text: str) -> list[Row]:
-    parsed = json.loads(text)
-    if not isinstance(parsed, list):
-        raise ValueError("JSON dataset must be an array of objects")
-    rows: list[Row] = []
-    for index, item in enumerate(parsed):
-        if not isinstance(item, dict):
-            raise ValueError(f"JSON dataset item {index} is not an object")
-        rows.append(dict(item))
-    return rows
-
-
-def parse_dataset_text(text: str, filename: str) -> list[Row]:
-    """Parse by extension (csv, tsv, json). Raises ValueError on bad input."""
-    suffix = PurePosixPath(filename).suffix.lower()
-    if suffix == ".csv":
-        return parse_delimited(text, delimiter=",")
-    if suffix == ".tsv":
-        return parse_delimited(text, delimiter="\t")
-    if suffix == ".json":
-        return parse_json_rows(text)
-    raise ValueError(f"Unsupported dataset file type: {filename}")
-
-
-def parse_dataset_bytes(data: bytes, filename: str) -> list[Row]:
+def parse_dataset_bytes(data: bytes, name: str) -> list[Row]:
+    """Parse a CSV snapshot. ``name`` only labels errors. Raises ValueError."""
     if len(data) > MAX_DATASET_BYTES:
-        raise ValueError(f"Dataset file is larger than 50 MB: {filename}")
+        raise ValueError(f"Dataset '{name}' snapshot is larger than 50 MB")
     try:
         text = data.decode("utf-8-sig")
     except UnicodeDecodeError as exc:
-        raise ValueError(f"Dataset file is not UTF-8 text: {filename}") from exc
+        raise ValueError(f"Dataset '{name}' snapshot is not UTF-8 text") from exc
     try:
-        return parse_dataset_text(text, filename)
+        return parse_csv(text)
     except csv.Error as exc:
-        raise ValueError(f"Dataset file could not be parsed: {filename} ({exc})") from exc
-
-
-def inline_rows(definition: dict[str, Any]) -> list[Row] | None:
-    """Rows of an inline dataset definition, or None when it is file-backed."""
-    rows = definition.get("rows")
-    if rows is None:
-        return None
-    if not isinstance(rows, list):
-        return []
-    return [dict(item) for item in rows if isinstance(item, dict)]
+        raise ValueError(f"Dataset '{name}' snapshot could not be parsed as CSV ({exc})") from exc
 
 
 # ── Writing ──────────────────────────────────────────────────────────────────
@@ -160,29 +121,12 @@ def rows_to_csv(columns: list[str], rows: list[Row]) -> bytes:
     return buffer.getvalue().encode("utf-8")
 
 
-def rows_to_json(rows: list[Row]) -> bytes:
-    return json.dumps(rows, default=str, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-
-
 def result_columns(columns: list[dict[str, Any]] | None, rows: list[Row]) -> list[str]:
     """Column order of a query result: metadata first, else the first row's keys."""
     names = [str(item.get("name")) for item in columns or [] if isinstance(item, dict) and item.get("name")]
     if names:
         return names
     return [str(key) for key in rows[0]] if rows else []
-
-
-# ── Names and content types ─────────────────────────────────────────────────
-
-
-def dataset_extension(filename: str) -> str:
-    """The stored extension for a dataset file: csv, tsv, or json."""
-    suffix = PurePosixPath(filename).suffix.lower().lstrip(".")
-    return suffix if suffix in {"csv", "tsv", "json"} else "csv"
-
-
-def content_type_for(filename: str) -> str:
-    return _CONTENT_TYPES.get(PurePosixPath(filename).suffix.lower(), "application/octet-stream")
 
 
 # ── Manifest reference resolution ────────────────────────────────────────────
@@ -278,7 +222,7 @@ def resolve_dataset_refs(
     *,
     run_id: str | None = None,
 ) -> list[ResolvedDataset]:
-    """Resolve every ``datasets.<name>.file`` against the conversation manifest."""
+    """Resolve every SQL dataset's snapshot path against the conversation manifest."""
     resolved: list[ResolvedDataset] = []
     for name, ref in refs.items():
         norm = normalize_file_ref(ref)
@@ -287,7 +231,7 @@ def resolve_dataset_refs(
             continue
         row = resolve_file_ref(norm, rows, run_id=run_id)
         if row is None:
-            resolved.append(ResolvedDataset(name, ref, None, f"Dataset '{name}' file is not in the conversation: {ref}"))
+            resolved.append(ResolvedDataset(name, ref, None, f"Dataset '{name}' has no snapshot in the conversation: {ref}"))
             continue
         resolved.append(ResolvedDataset(name, ref, row))
     return resolved

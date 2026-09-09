@@ -107,11 +107,13 @@ describe("DashboardVersionList", () => {
     const toggles = container.querySelectorAll<HTMLButtonElement>('[data-testid="dashboard-version-toggle"]');
     await act(async () => toggles[1].click());
     const rows = container.querySelectorAll('[data-testid="dashboard-version-dataset"]');
-    expect([...rows].map((row) => row.getAttribute("data-dataset"))).toEqual(["revenue_monthly", "revenue_by_region"]);
-    expect(rows[0].textContent).toContain("revenue_monthly.csv");
-    expect(rows[0].textContent).toContain("48 rows");
+    expect([...rows].map((row) => row.getAttribute("data-dataset"))).toEqual(["summary", "revenue_monthly", "revenue_by_region"]);
+    expect(rows[0].textContent).toContain("summary.csv");
+    expect(rows[0].textContent).toContain("1 row");
+    expect(rows[1].textContent).toContain("revenue_monthly.csv");
+    expect(rows[1].textContent).toContain("48 rows");
     await act(async () => {
-      rows[1].querySelector<HTMLButtonElement>('[data-testid="dashboard-version-dataset-download"]')?.click();
+      rows[2].querySelector<HTMLButtonElement>('[data-testid="dashboard-version-dataset-download"]')?.click();
     });
     expect(onDownloadDataset).toHaveBeenCalledTimes(1);
     expect(onDownloadDataset.mock.calls[0][0].id).toBe(FIXTURE_VERSION_IDS.v2);
@@ -119,8 +121,8 @@ describe("DashboardVersionList", () => {
     // The fixture API serves the stored bytes for that version.
     const api = createFixtureDashboardsApi();
     const blob = await api.fetchDashboardDataset(FIXTURE_DASHBOARD_ID, FIXTURE_VERSION_IDS.v2, "revenue_by_region");
-    expect(blob.type).toBe("application/json");
-    expect(JSON.parse(await blob.text())).toHaveLength(4);
+    expect(blob.type).toBe("text/csv");
+    expect((await blob.text()).trim().split("\n")).toHaveLength(5);
     await expect(api.fetchDashboardDataset(FIXTURE_DASHBOARD_ID, FIXTURE_VERSION_IDS.v2, "nope")).rejects.toThrow(/404/);
     // Toggling again collapses.
     await act(async () => toggles[1].click());

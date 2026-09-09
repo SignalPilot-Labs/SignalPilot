@@ -1,5 +1,6 @@
 /**
- * Pure ECharts option builders for bar | line | area | pie | scatter.
+ * Pure ECharts option builders for bar | line | area | pie | scatter, and the
+ * dispatcher that also routes combo and heatmap to their own builders.
  * No React, no DOM, no window: the same function feeds the browser tile and
  * the server-side SVG print path.
  *
@@ -13,13 +14,13 @@ import type { DatasetRows } from "../datasets";
 import { formatValue, toNumber } from "../format";
 import type {
   CartesianChart,
+  ComboChart,
   DashboardChart,
-  DashboardFormat,
+  HeatmapChart,
   PieChart,
   ScatterChart,
 } from "../schema";
 import type { DashboardTheme, ThemeTokens } from "../theme";
-import { themeTokens } from "../theme";
 import {
   buildXAxisModel,
   formatXValue,
@@ -28,28 +29,24 @@ import {
   tooltipBase,
   valueAxisOption,
   xAxisOption,
-  type XAxisModel,
 } from "./axes";
+import { buildComboOption } from "./combo";
+import { buildHeatmapOption } from "./heatmap";
+import {
+  baseOption,
+  paramsArray,
+  resolveTokens,
+  seriesData,
+  type SeriesSpec,
+  type TooltipParam,
+} from "./option-helpers";
 
-export type ChartOptionChart = CartesianChart | PieChart | ScatterChart;
-
-type SeriesSpec = {
-  name: string;
-  column: string;
-  format?: DashboardFormat;
-  /** Row indexes that belong to this series. */
-  rowIndexes: number[];
-};
-
-type TooltipParam = { seriesName?: string; dataIndex?: number; data?: unknown; value?: unknown };
-
-function paramsArray(raw: unknown): TooltipParam[] {
-  return (Array.isArray(raw) ? raw : [raw]) as TooltipParam[];
-}
-
-function resolveTokens(theme: DashboardTheme | ThemeTokens | undefined): ThemeTokens {
-  return typeof theme === "object" ? theme : themeTokens(theme);
-}
+export type ChartOptionChart =
+  | CartesianChart
+  | ComboChart
+  | HeatmapChart
+  | PieChart
+  | ScatterChart;
 
 function seriesSpecs(chart: CartesianChart, rows: DatasetRows): SeriesSpec[] {
   if (chart.series && chart.y.length === 1) {
@@ -75,33 +72,6 @@ function seriesSpecs(chart: CartesianChart, rows: DatasetRows): SeriesSpec[] {
     format: y.format,
     rowIndexes: all,
   }));
-}
-
-type Point = { value: unknown; rowIndex: number };
-
-/** Series data aligned to the x model: category -> one slot per category. */
-function seriesData(
-  spec: SeriesSpec,
-  rows: DatasetRows,
-  model: XAxisModel,
-  horizontal: boolean,
-): Point[] {
-  if (model.kind === "category") {
-    const slots: Point[] = model.categories.map(() => ({ value: null, rowIndex: -1 }));
-    for (const rowIndex of spec.rowIndexes) {
-      const y = toNumber(rows[rowIndex][spec.column]) ?? null;
-      slots[model.categoryIndex[rowIndex]] = { value: y, rowIndex };
-    }
-    return slots;
-  }
-  const points: Point[] = [];
-  for (const rowIndex of spec.rowIndexes) {
-    const x = model.numeric[rowIndex];
-    if (x === undefined) continue;
-    const y = toNumber(rows[rowIndex][spec.column]) ?? null;
-    points.push({ value: horizontal ? [y, x] : [x, y], rowIndex });
-  }
-  return points;
 }
 
 function buildCartesianOption(
@@ -158,11 +128,7 @@ function buildCartesianOption(
   });
 
   const option: EChartsOption = {
-    animation: false,
-    aria: { enabled: true },
-    backgroundColor: "transparent",
-    color: [...tokens.palette],
-    textStyle: { fontFamily: tokens.fontFamily },
+    ...baseOption(tokens),
     grid: gridOption(multiple, Boolean(chart.x.label)),
     legend: legendOption(tokens, multiple, specs.length),
     tooltip: {
@@ -208,11 +174,7 @@ function buildPieOption(
   const showLabels = data.length <= 8;
   const showLegend = data.length > 1 && data.length <= 12;
   return {
-    animation: false,
-    aria: { enabled: true },
-    backgroundColor: "transparent",
-    color: [...tokens.palette],
-    textStyle: { fontFamily: tokens.fontFamily },
+    ...baseOption(tokens),
     legend: legendOption(tokens, showLegend, data.length),
     tooltip: {
       ...tooltipBase(tokens, "item"),
@@ -289,11 +251,7 @@ function buildScatterOption(
   }));
   const multiple = series.length > 1;
   return {
-    animation: false,
-    aria: { enabled: true },
-    backgroundColor: "transparent",
-    color: [...tokens.palette],
-    textStyle: { fontFamily: tokens.fontFamily },
+    ...baseOption(tokens),
     grid: gridOption(multiple, Boolean(chart.x.label)),
     legend: legendOption(tokens, multiple, series.length),
     tooltip: {
@@ -330,6 +288,10 @@ export function buildChartOption(
   theme?: DashboardTheme | ThemeTokens,
 ): EChartsOption {
   switch (chart.type) {
+    case "combo":
+      return buildComboOption(chart, rows, theme);
+    case "heatmap":
+      return buildHeatmapOption(chart, rows, theme);
     case "pie":
       return buildPieOption(chart, rows, theme);
     case "scatter":

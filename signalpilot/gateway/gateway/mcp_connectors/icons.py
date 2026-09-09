@@ -18,7 +18,7 @@ import time
 from dataclasses import dataclass
 from urllib.parse import urljoin, urlsplit
 
-import httpx
+import httpx2 as httpx
 
 from gateway.mcp_connectors.ssrf import PROBE_TIMEOUT_SECONDS, UnsafeUrlError, safe_async_client
 

@@ -9,8 +9,8 @@ from gateway.dashboards import refresh as refresh_module
 from gateway.dashboards import scheduler, store
 from gateway.dashboards.scheduler import poll_agent_refreshes, run_due_dashboard_refreshes
 from gateway.db.models import GatewayChatRun
-from tests.dashboards_support import db, fake_storage, session_factory
-from tests.test_dashboards_refresh import FakeExecutor, _manual_refresh, _published, run_refresh
+from tests.dashboards_support import FakeExecutor, db, fake_storage, session_factory
+from tests.test_dashboards_refresh import _manual_refresh, _published, run_refresh
 
 
 class TestScheduler:
@@ -220,7 +220,7 @@ class TestSettleRace:
 
         monkeypatch.setattr(refresh_module, "run_sql_datasets", spy)
         await run_refresh(session_factory, refresh.id, storage=storage, executor=FakeExecutor())
-        assert seen == [{"sql_datasets": 1}]
+        assert seen == [{"sql_datasets": 2}]
 
     async def test_claim_to_finalizing_stamps_the_time(self, db) -> None:
         storage, backend = fake_storage()

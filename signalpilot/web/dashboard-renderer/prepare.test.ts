@@ -131,12 +131,21 @@ describe("issues", () => {
     expect(chartIsFailed(result.issues)).toBe(true);
   });
 
-  it("dataset_unreadable fails when rows were not loaded", () => {
+  it("snapshot_missing fails a SQL dataset whose rows were not loaded", () => {
     const spec = specWith({});
-    spec.datasets.sales = { file: "artifacts/sales.csv" };
+    spec.datasets.sales = { connection: "warehouse", sql: "select 1" };
     const result = prepareChartRows(spec.charts[0], spec, {});
+    expect(codes(result.issues)).toEqual(["snapshot_missing"]);
+    expect(result.issues[0].message).toBe(
+      "Dataset 'sales' has no snapshot. Call sp.dashboard_dataset('sales', connection=..., sql=...) in the notebook.",
+    );
+    expect(chartIsFailed(result.issues)).toBe(true);
+  });
+
+  it("dataset_unreadable fails a static dataset whose rows were not passed", () => {
+    const result = prepareChartRows(specWith({}).charts[0], specWith({}), {});
     expect(codes(result.issues)).toEqual(["dataset_unreadable"]);
-    expect(result.issues[0].message).toContain("artifacts/sales.csv");
+    expect(result.issues[0].message).toContain('"sales"');
   });
 
   it("missing_column names the column and the available columns", () => {
@@ -189,6 +198,19 @@ describe("issues", () => {
     expect(result.issues[0].message).toContain('"day"');
   });
 
+  it("unparseable_date also covers combo and heatmap date axes", () => {
+    const combo = run(
+      specWith({ type: "combo", x: { column: "day", type: "date" }, bars: [{ column: "revenue" }], lines: [{ column: "revenue" }], y: undefined }),
+    );
+    expect(codes(combo.issues)).toEqual(["unparseable_date"]);
+    const heatmap = run(
+      specWith({ type: "heatmap", x: { column: "day", type: "date" }, y: { column: "region" }, value: { column: "revenue" } }),
+    );
+    expect(codes(heatmap.issues)).toEqual(["unparseable_date"]);
+    const category = run(specWith({ type: "heatmap", x: { column: "day" }, y: { column: "region" }, value: { column: "revenue" } }));
+    expect(category.issues).toEqual([]);
+  });
+
   it("too_many_rows caps at 50000", () => {
     const big: DatasetRows = Array.from({ length: 50_010 }, (_, index) => ({ day: "d", revenue: index }));
     const spec = specWith({});
@@ -205,12 +227,22 @@ describe("issues", () => {
   });
 
   it("kpi, pie and scatter columns are checked", () => {
-    const kpi = run(specWith({ type: "kpi", value: { column: "note" }, x: undefined, y: undefined }));
+    const kpi = run(specWith({ type: "kpi", value: { column: "note", format: "integer" }, x: undefined, y: undefined }));
     expect(codes(kpi.issues)).toEqual(["non_numeric_y"]);
     const scatter = run(specWith({ type: "scatter", x: { column: "day" }, y: { column: "revenue" }, size: "nope" }));
     expect(codes(scatter.issues)).toEqual(["missing_column"]);
     const pie = run(specWith({ type: "pie", label: "region", value: { column: "revenue" }, x: undefined, y: undefined }));
     expect(pie.issues).toEqual([]);
+  });
+
+  it("kpi text cells pass when the value or comparison has no format", () => {
+    const text = run(specWith({ type: "kpi", value: { column: "note" }, x: undefined, y: undefined }));
+    expect(text.issues).toEqual([]);
+    const comparison = run(
+      specWith({ type: "kpi", value: { column: "note" }, comparison: { column: "region", format: "compact" }, x: undefined, y: undefined }),
+    );
+    expect(codes(comparison.issues)).toEqual(["non_numeric_y"]);
+    expect(comparison.issues[0].message).toContain('"region"');
   });
 
   it("unknown_chart lists valid ids", () => {
@@ -219,3 +251,44 @@ describe("issues", () => {
     expect(issue.message).toContain("c1");
   });
 });
+
+describe("filters without a dataset bind by column", () => {
+  const spec = {
+    version: 1 as const,
+    title: "T",
+    datasets: {
+      a: { rows: [{ region: "N", v: 1 }, { region: "S", v: 2 }] },
+      b: { rows: [{ region: "N", w: 10 }, { region: "S", w: 20 }] },
+      c: { rows: [{ other: "x", z: 5 }] },
+    },
+    filters: [{ id: "region", label: "Region", column: "region", type: "in" as const, default: ["N"] }],
+    charts: [
+      { id: "ca", type: "kpi" as const, title: "A", dataset: "a", value: { column: "v" } },
+      { id: "cb", type: "kpi" as const, title: "B", dataset: "b", value: { column: "w" } },
+      { id: "cc", type: "kpi" as const, title: "C", dataset: "c", value: { column: "z" } },
+    ],
+  };
+  const datasets = { a: spec.datasets.a.rows, b: spec.datasets.b.rows, c: spec.datasets.c.rows };
+
+  it("applies to every dataset that has the column", () => {
+    expect(prepareChartRows(spec.charts[0], spec, datasets).rows).toEqual([{ region: "N", v: 1 }]);
+    expect(prepareChartRows(spec.charts[1], spec, datasets).rows).toEqual([{ region: "N", w: 10 }]);
+  });
+
+  it("leaves datasets without the column alone and reports no missing column", () => {
+    const result = prepareChartRows(spec.charts[2], spec, datasets);
+    expect(result.rows).toEqual([{ other: "x", z: 5 }]);
+    expect(result.issues).toEqual([]);
+  });
+
+  it("a bound filter still requires its column on that dataset", () => {
+    const bound = { ...spec, filters: [{ ...spec.filters[0], dataset: "c" }] };
+    const result = prepareChartRows(bound.charts[2], bound, datasets);
+    expect(result.issues.map((issue) => issue.code)).toContain("missing_column");
+  });
+
+  it("live filter state drives every bound dataset", () => {
+    expect(prepareChartRows(spec.charts[1], spec, datasets, { region: ["S"] }).rows).toEqual([{ region: "S", w: 20 }]);
+  });
+});
+

@@ -329,6 +329,12 @@
           "$ref": "#/$defs/cartesianChart"
         },
         {
+          "$ref": "#/$defs/comboChart"
+        },
+        {
+          "$ref": "#/$defs/heatmapChart"
+        },
+        {
           "$ref": "#/$defs/pieChart"
         },
         {
@@ -479,6 +485,104 @@
           "type": "boolean",
           "default": false,
           "description": "bar only."
+        }
+      }
+    },
+    "comboChart": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/chartBase"
+        }
+      ],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "x",
+        "bars",
+        "lines"
+      ],
+      "properties": {
+        "id": true,
+        "title": true,
+        "description": true,
+        "dataset": true,
+        "sort": true,
+        "limit": true,
+        "grid": true,
+        "type": {
+          "const": "combo"
+        },
+        "x": {
+          "$ref": "#/$defs/axis"
+        },
+        "bars": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "items": {
+            "$ref": "#/$defs/series"
+          },
+          "description": "One to four numeric columns drawn as bars on the left value axis."
+        },
+        "lines": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "items": {
+            "$ref": "#/$defs/series"
+          },
+          "description": "One to four numeric columns drawn as lines over the bars."
+        },
+        "secondary_axis": {
+          "type": "boolean",
+          "default": true,
+          "description": "Draw the lines on a right-hand value axis. Its format comes from the first line series."
+        },
+        "stack": {
+          "type": "boolean",
+          "default": false,
+          "description": "Stack the bars."
+        }
+      }
+    },
+    "heatmapChart": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/chartBase"
+        }
+      ],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "x",
+        "y",
+        "value"
+      ],
+      "properties": {
+        "id": true,
+        "title": true,
+        "description": true,
+        "dataset": true,
+        "sort": true,
+        "limit": true,
+        "grid": true,
+        "type": {
+          "const": "heatmap"
+        },
+        "x": {
+          "$ref": "#/$defs/axis"
+        },
+        "y": {
+          "$ref": "#/$defs/axis",
+          "description": "Category axis. One row per cell: one x value and one y value."
+        },
+        "value": {
+          "$ref": "#/$defs/series",
+          "description": "Numeric cell value. Its format applies to the tooltip and the cell label."
+        },
+        "show_values": {
+          "type": "boolean",
+          "description": "Label every cell with its value. Default: true when the chart has 100 cells or fewer."
         }
       }
     },

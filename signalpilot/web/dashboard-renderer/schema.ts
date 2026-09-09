@@ -106,6 +106,27 @@ export type CartesianChart = ChartBase & {
   horizontal?: boolean;
 };
 
+/** Bars on the left value axis with lines drawn over them. */
+export type ComboChart = ChartBase & {
+  type: "combo";
+  x: DashboardAxis;
+  bars: DashboardSeries[];
+  lines: DashboardSeries[];
+  /** Lines use a right-hand value axis. Default true. */
+  secondary_axis?: boolean;
+  stack?: boolean;
+};
+
+/** One row per cell: x category, y category, numeric value. */
+export type HeatmapChart = ChartBase & {
+  type: "heatmap";
+  x: DashboardAxis;
+  y: DashboardAxis;
+  value: DashboardSeries;
+  /** Label every cell. Default: true when the chart has 100 cells or fewer. */
+  show_values?: boolean;
+};
+
 export type PieChart = ChartBase & {
   type: "pie";
   label: string;
@@ -125,6 +146,8 @@ export type DashboardChart =
   | KpiChart
   | TableChart
   | CartesianChart
+  | ComboChart
+  | HeatmapChart
   | PieChart
   | ScatterChart;
 

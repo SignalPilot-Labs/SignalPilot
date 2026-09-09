@@ -198,6 +198,19 @@ describe("issues", () => {
     expect(result.issues[0].message).toContain('"day"');
   });
 
+  it("unparseable_date also covers combo and heatmap date axes", () => {
+    const combo = run(
+      specWith({ type: "combo", x: { column: "day", type: "date" }, bars: [{ column: "revenue" }], lines: [{ column: "revenue" }], y: undefined }),
+    );
+    expect(codes(combo.issues)).toEqual(["unparseable_date"]);
+    const heatmap = run(
+      specWith({ type: "heatmap", x: { column: "day", type: "date" }, y: { column: "region" }, value: { column: "revenue" } }),
+    );
+    expect(codes(heatmap.issues)).toEqual(["unparseable_date"]);
+    const category = run(specWith({ type: "heatmap", x: { column: "day" }, y: { column: "region" }, value: { column: "revenue" } }));
+    expect(category.issues).toEqual([]);
+  });
+
   it("too_many_rows caps at 50000", () => {
     const big: DatasetRows = Array.from({ length: 50_010 }, (_, index) => ({ day: "d", revenue: index }));
     const spec = specWith({});
@@ -214,12 +227,22 @@ describe("issues", () => {
   });
 
   it("kpi, pie and scatter columns are checked", () => {
-    const kpi = run(specWith({ type: "kpi", value: { column: "note" }, x: undefined, y: undefined }));
+    const kpi = run(specWith({ type: "kpi", value: { column: "note", format: "integer" }, x: undefined, y: undefined }));
     expect(codes(kpi.issues)).toEqual(["non_numeric_y"]);
     const scatter = run(specWith({ type: "scatter", x: { column: "day" }, y: { column: "revenue" }, size: "nope" }));
     expect(codes(scatter.issues)).toEqual(["missing_column"]);
     const pie = run(specWith({ type: "pie", label: "region", value: { column: "revenue" }, x: undefined, y: undefined }));
     expect(pie.issues).toEqual([]);
+  });
+
+  it("kpi text cells pass when the value or comparison has no format", () => {
+    const text = run(specWith({ type: "kpi", value: { column: "note" }, x: undefined, y: undefined }));
+    expect(text.issues).toEqual([]);
+    const comparison = run(
+      specWith({ type: "kpi", value: { column: "note" }, comparison: { column: "region", format: "compact" }, x: undefined, y: undefined }),
+    );
+    expect(codes(comparison.issues)).toEqual(["non_numeric_y"]);
+    expect(comparison.issues[0].message).toContain('"region"');
   });
 
   it("unknown_chart lists valid ids", () => {

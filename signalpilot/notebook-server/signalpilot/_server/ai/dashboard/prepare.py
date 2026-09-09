@@ -134,6 +134,10 @@ def referenced_columns(
     add(chart.get("label"))
     add(chart.get("size"))
     add(chart.get("color"))
+    for item in chart.get("bars") or []:
+        add(item)
+    for item in chart.get("lines") or []:
+        add(item)
     add(chart.get("series"))
     add(chart.get("sort"))
     for filter_def in spec.get("filters") or []:
@@ -145,7 +149,12 @@ def referenced_columns(
 
 
 def y_columns(chart: dict[str, Any]) -> list[str]:
-    """Columns that must be numeric for this chart type."""
+    """Columns that must be numeric for this chart type.
+
+    A kpi ``value`` or ``comparison`` is only held to be numeric when it
+    declares a ``format``; with no format the tile shows any scalar (a
+    number, or a text label) verbatim.
+    """
     chart_type = chart.get("type")
     if chart_type in CARTESIAN_TYPES:
         return [
@@ -153,7 +162,22 @@ def y_columns(chart: dict[str, Any]) -> list[str]:
             for item in chart.get("y") or []
             if isinstance(item, dict) and item.get("column")
         ]
-    if chart_type in {"scatter", "pie", "kpi"}:
+    if chart_type == "kpi":
+        return [
+            str(cell["column"])
+            for cell in (chart.get("value"), chart.get("comparison"))
+            if isinstance(cell, dict)
+            and cell.get("column")
+            and cell.get("format")
+        ]
+    if chart_type == "combo":
+        bars_and_lines = [*(chart.get("bars") or []), *(chart.get("lines") or [])]
+        return [
+            str(item.get("column"))
+            for item in bars_and_lines
+            if isinstance(item, dict) and item.get("column")
+        ]
+    if chart_type in {"scatter", "pie", "heatmap"}:
         target = (
             chart.get("y") if chart_type == "scatter" else chart.get("value")
         )

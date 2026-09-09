@@ -36,6 +36,18 @@ rows the dashboard shows are only the cached result of that query.
   most 5000 flat objects.
 - Never write `artifacts/datasets/*.csv` by hand.
 
+### Reuse datasets
+
+Several charts can read different columns of one dataset when the grain
+matches. One query with one row per region can feed a bar chart, a pie
+chart, a table, and a combo chart. Build the KPI row from one query that
+returns one row with one column per tile. Do not write one query per chart
+when one wide query serves them.
+
+Put `TOP` or `LIMIT` in the SQL when the snapshot must be small. The chart
+`limit` is presentation only. The snapshot keeps every row the SQL
+returned.
+
 ## Workflow
 
 Load the skill `signalpilot-dbt:notebook` first. It explains the notebook
@@ -177,6 +189,10 @@ Every chart has `id`, `type`, `title`, `dataset`, and optional
 Shows the `value` column of the first row. `comparison` shows a second
 column from the same row, small, under the value.
 
+A `value` without `format` shows the cell as text. Use this for a name
+such as the top region: select it in the SQL and point the tile at that
+column. Never hard-code the name in `title` or `description`.
+
 ```json
 {
   "id": "total_revenue", "type": "kpi", "title": "Net revenue",
@@ -256,6 +272,40 @@ is allowed only when `y` has exactly one entry.
   "y": { "column": "revenue", "format": "currency:USD" },
   "size": "customers",
   "color": "region"
+}
+```
+
+### combo
+
+Bars and lines on one x axis. `bars` and `lines` each hold one to four
+numeric columns. The bars use the left axis. The lines use a right axis
+with the format of the first line series. Set `secondary_axis: false` to
+put the lines on the left axis. Set `stack: true` to stack the bars.
+
+```json
+{
+  "id": "revenue_and_growth", "type": "combo", "title": "Revenue and growth",
+  "dataset": "by_region",
+  "x": { "column": "region" },
+  "bars": [ { "column": "revenue", "format": "currency:USD" } ],
+  "lines": [ { "column": "growth", "format": "percentage" } ]
+}
+```
+
+### heatmap
+
+One row per cell. `x` and `y` are category axes. `value` is the numeric
+cell value. Its `format` applies to the tooltip and the cell label. Cells
+are labeled when the chart has 100 cells or fewer. Set `show_values` to
+change that.
+
+```json
+{
+  "id": "revenue_heatmap", "type": "heatmap", "title": "Revenue by region and month",
+  "dataset": "monthly",
+  "x": { "column": "month", "type": "date" },
+  "y": { "column": "region" },
+  "value": { "column": "revenue", "format": "compact" }
 }
 ```
 

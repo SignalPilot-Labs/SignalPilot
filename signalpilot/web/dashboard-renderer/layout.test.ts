@@ -9,6 +9,8 @@ function chart(id: string, type: DashboardChart["type"], grid?: { x: number; y: 
   if (type === "table") return { ...base, type, columns: [{ column: "v" }] } as DashboardChart;
   if (type === "pie") return { ...base, type, label: "l", value: { column: "v" } } as DashboardChart;
   if (type === "scatter") return { ...base, type, x: { column: "x" }, y: { column: "v" } } as DashboardChart;
+  if (type === "combo") return { ...base, type, x: { column: "x" }, bars: [{ column: "v" }], lines: [{ column: "w" }] } as DashboardChart;
+  if (type === "heatmap") return { ...base, type, x: { column: "x" }, y: { column: "y" }, value: { column: "v" } } as DashboardChart;
   return { ...base, type, x: { column: "x" }, y: [{ column: "v" }] } as DashboardChart;
 }
 
@@ -17,6 +19,13 @@ function spec(charts: DashboardChart[], rowHeight?: number): DashboardSpec {
 }
 
 describe("placeTiles", () => {
+  it("gives combo and heatmap the default chart size", () => {
+    expect(placeTiles(spec([chart("c", "combo"), chart("h", "heatmap")]))).toEqual([
+      { chartId: "c", x: 0, y: 0, w: 6, h: 4 },
+      { chartId: "h", x: 6, y: 0, w: 6, h: 4 },
+    ]);
+  });
+
   it("places explicit grids exactly", () => {
     const tiles = placeTiles(spec([chart("a", "kpi", { x: 3, y: 1, w: 3, h: 2 })]));
     expect(tiles).toEqual([{ chartId: "a", x: 3, y: 1, w: 3, h: 2 }]);

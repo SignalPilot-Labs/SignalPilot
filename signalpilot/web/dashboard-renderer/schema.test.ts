@@ -71,6 +71,35 @@ describe("validateDashboardSpec", () => {
     expect(result.errors.some((error) => error.includes('"extra"'))).toBe(true);
   });
 
+  it("accepts combo and heatmap charts and rejects their bad shapes", () => {
+    const withChart = (chart: unknown) =>
+      validateDashboardSpec({ version: 1, title: "T", datasets: { d: { rows: [{ a: 1 }] } }, charts: [chart] });
+    const combo = {
+      id: "c", type: "combo", title: "C", dataset: "d",
+      x: { column: "month", type: "date" },
+      bars: [{ column: "revenue" }],
+      lines: [{ column: "margin", format: "percentage" }],
+      secondary_axis: true,
+      stack: false,
+    };
+    const heatmap = {
+      id: "h", type: "heatmap", title: "H", dataset: "d",
+      x: { column: "month" }, y: { column: "region" }, value: { column: "revenue" }, show_values: true,
+    };
+    expect(withChart(combo).ok).toBe(true);
+    expect(withChart(heatmap).ok).toBe(true);
+    for (const bad of [
+      { ...combo, lines: [] },
+      { ...combo, bars: [1, 2, 3, 4, 5].map((n) => ({ column: "b" + n })) },
+      { ...combo, y: [{ column: "x" }] },
+      { ...heatmap, y: "region" },
+      { ...heatmap, value: undefined },
+      { ...heatmap, horizontal: true },
+    ]) {
+      expect(withChart(bad).ok).toBe(false);
+    }
+  });
+
   it("accepts a SQL dataset and rejects mixed or partial shapes", () => {
     const chart = { id: "k", type: "kpi", title: "K", dataset: "d", value: { column: "a" } };
     const withDataset = (dataset: unknown) =>

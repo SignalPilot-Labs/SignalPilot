@@ -57,8 +57,44 @@ describe("composeDashboardSvg", () => {
     expect(result.width).toBe(1280);
     expect(result.height).toBeGreaterThan(600);
     expect(result.svg).toContain("Revenue overview 2024");
+    // The text kpi renders its cell verbatim, at the headline size.
+    expect(result.svg).toMatch(/font-size="28"[^>]*>South</);
     expect(result.svg).toContain("Period: 2024-01-01 to 2024-12-01");
     expect(result.svg).toContain("$5,896,400");
+  });
+
+  it("renders combo and heatmap tiles through ECharts SSR", () => {
+    const rows = [
+      { month: "2025-01-01", region: "North", revenue: 120, orders: 10 },
+      { month: "2025-01-01", region: "South", revenue: 80, orders: 6 },
+      { month: "2025-02-01", region: "North", revenue: 150, orders: 12 },
+      { month: "2025-02-01", region: "South", revenue: 90, orders: 7 },
+    ];
+    const spec: DashboardSpec = {
+      version: 1,
+      title: "Mixed",
+      datasets: { d: { rows } },
+      charts: [
+        {
+          id: "mix", type: "combo", title: "Revenue and orders", dataset: "d",
+          x: { column: "month", type: "date" },
+          bars: [{ column: "revenue", format: "currency:USD" }],
+          lines: [{ column: "orders", format: "integer" }],
+        },
+        {
+          id: "heat", type: "heatmap", title: "Revenue by region and month", dataset: "d",
+          x: { column: "month", type: "date" }, y: { column: "region" }, value: { column: "revenue", format: "integer" },
+        },
+      ],
+    };
+    const result = composeDashboardSvg({ spec, datasets: { d: rows }, width: 1000, theme: "light" });
+    expect(result.failed).toEqual([]);
+    expect(result.rendered).toEqual(["mix", "heat"]);
+    expect(result.svg).toContain('data-chart-id="mix" data-chart-type="combo"');
+    expect(result.svg).toContain('data-chart-id="heat" data-chart-type="heatmap"');
+    // The visualMap legend renders as a gradient bar in SSR.
+    expect(result.svg).toContain("<linearGradient");
+    expect(result.svg).toContain(">150<");
   });
 
   it("re-flows selected charts and reports failed tiles", () => {

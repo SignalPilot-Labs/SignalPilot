@@ -19,6 +19,7 @@ describe("formatValue", () => {
     ["42.5", undefined, "42.5"],
     [42.123456, undefined, "42.12"],
     ["hello", "integer", "hello"],
+    ["  South ", "currency:USD", "South"],
     [true, undefined, "true"],
   ] as const)("formats %s with %s as %s", (value, format, expected) => {
     expect(formatValue(value, format)).toBe(expected);

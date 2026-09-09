@@ -4,6 +4,11 @@ import type { DatasetRows } from "../datasets";
 import { formatValue } from "../format";
 import type { KpiChart } from "../schema";
 
+/**
+ * One headline cell plus an optional comparison line. A numeric cell renders
+ * with its `format`; a text cell (for example `top_region = "South"`) renders
+ * verbatim at the same size, so `formatValue` decides per cell.
+ */
 export function KpiTile({ chart, rows }: { chart: KpiChart; rows: DatasetRows }) {
   const first = rows[0];
   const value = formatValue(first?.[chart.value.column], chart.value.format);

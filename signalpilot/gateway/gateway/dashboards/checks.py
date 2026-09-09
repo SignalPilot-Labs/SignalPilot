@@ -113,6 +113,10 @@ def referenced_columns(chart: dict[str, Any], spec: dict[str, Any]) -> list[str]
     add(chart.get("label"))
     add(chart.get("size"))
     add(chart.get("color"))
+    for item in chart.get("bars") or []:
+        add(item)
+    for item in chart.get("lines") or []:
+        add(item)
     add(chart.get("series"))
     add(chart.get("sort"))
     for filter_def in spec.get("filters") or []:
@@ -142,10 +146,24 @@ def referenced_columns_by_dataset(spec: dict[str, Any]) -> dict[str, list[str]]:
 
 
 def y_columns(chart: dict[str, Any]) -> list[str]:
+    """Columns that must be numeric. A kpi value or comparison only when it declares a ``format``."""
     chart_type = chart.get("type")
     if chart_type in CARTESIAN_TYPES:
         return [str(item.get("column")) for item in chart.get("y") or [] if isinstance(item, dict) and item.get("column")]
-    if chart_type in {"scatter", "pie", "kpi"}:
+    if chart_type == "kpi":
+        return [
+            str(cell["column"])
+            for cell in (chart.get("value"), chart.get("comparison"))
+            if isinstance(cell, dict) and cell.get("column") and cell.get("format")
+        ]
+    if chart_type == "combo":
+        bars_and_lines = [*(chart.get("bars") or []), *(chart.get("lines") or [])]
+        return [
+            str(item.get("column"))
+            for item in bars_and_lines
+            if isinstance(item, dict) and item.get("column")
+        ]
+    if chart_type in {"scatter", "pie", "heatmap"}:
         target = chart.get("y") if chart_type == "scatter" else chart.get("value")
         if isinstance(target, dict) and target.get("column"):
             return [str(target["column"])]

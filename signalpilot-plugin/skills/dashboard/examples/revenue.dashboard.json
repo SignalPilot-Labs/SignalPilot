@@ -104,6 +104,31 @@
       "sort": { "column": "revenue", "direction": "desc" },
       "limit": 20,
       "grid": { "x": 0, "y": 8, "w": 12, "h": 5 }
+    },
+    {
+      "id": "revenue_and_growth",
+      "type": "combo",
+      "title": "Revenue and growth by region",
+      "description": "Bars show 2025 revenue on the left axis. The line shows growth versus 2024 on the right axis.",
+      "dataset": "by_region",
+      "x": { "column": "region", "label": "Region" },
+      "bars": [ { "column": "revenue", "label": "Revenue", "format": "currency:USD" } ],
+      "lines": [ { "column": "growth", "label": "Growth", "format": "percentage" } ],
+      "secondary_axis": true,
+      "sort": { "column": "revenue", "direction": "desc" },
+      "grid": { "x": 0, "y": 13, "w": 6, "h": 4 }
+    },
+    {
+      "id": "revenue_heatmap",
+      "type": "heatmap",
+      "title": "Revenue by region and month",
+      "dataset": "monthly",
+      "x": { "column": "month", "type": "date", "label": "Month" },
+      "y": { "column": "region" },
+      "value": { "column": "revenue", "label": "Revenue", "format": "compact" },
+      "show_values": true,
+      "sort": { "column": "month" },
+      "grid": { "x": 6, "y": 13, "w": 6, "h": 4 }
     }
   ]
 }

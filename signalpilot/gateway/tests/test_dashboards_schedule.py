@@ -161,3 +161,20 @@ class TestChecks:
     def test_unreadable_dataset_fails(self) -> None:
         result = checks.check_spec(spec_json(), {"monthly": None, "regions": [], "inline": []})
         assert not result.ok
+
+    def test_kpi_text_cell_is_numeric_only_with_a_format(self) -> None:
+        rows = [{"region": "South", "growth": 0.1}]
+        spec = {
+            "version": 1,
+            "title": "T",
+            "datasets": {"s": {"rows": rows}},
+            "charts": [
+                {"id": "text", "type": "kpi", "title": "A", "dataset": "s", "value": {"column": "region"}},
+                {"id": "num", "type": "kpi", "title": "B", "dataset": "s", "value": {"column": "region", "format": "integer"}},
+                {"id": "cmp", "type": "kpi", "title": "C", "dataset": "s", "value": {"column": "growth"}, "comparison": {"column": "region", "format": "compact"}},
+            ],
+        }
+        result = checks.check_spec(spec, {"s": rows})
+        assert result.ok
+        assert [issue["code"] for chart in result.charts for issue in chart.issues] == ["non_numeric_y", "non_numeric_y"]
+        assert result.charts[0].issues == []

@@ -80,7 +80,7 @@ test.describe("dashboard artifact (fixture harness)", () => {
     const renderer = view.locator("[data-dashboard-renderer]");
     await expect(renderer).toBeVisible();
     await expect(renderer.locator("h2")).toHaveText("Revenue overview 2024");
-    await expect(renderer.locator("[data-chart-id]")).toHaveCount(9);
+    await expect(renderer.locator("[data-chart-id]")).toHaveCount(10);
     // No tile failed: every dataset resolved and parsed.
     await expect(renderer.locator("[data-dashboard-tile-error]")).toHaveCount(0);
     // ECharts drew the line chart with the SVG renderer.
@@ -98,7 +98,7 @@ test.describe("dashboard artifact (fixture harness)", () => {
     await waitForHydration(page);
     await page.locator('[data-testid="chat-md-file-chip"][data-kind="dashboard"]').click();
     const renderer = page.getByTestId("chat-dashboard-view").locator("[data-dashboard-renderer]");
-    await expect(renderer.locator("[data-chart-id]")).toHaveCount(9);
+    await expect(renderer.locator("[data-chart-id]")).toHaveCount(10);
     const table = renderer.locator('[data-chart-id="top_months"]');
     // Ten rows: the table sorts by revenue and limits to 10 of 48.
     await expect(table.locator("tbody tr")).toHaveCount(10);
@@ -127,7 +127,7 @@ test.describe("dashboard artifact (fixture harness)", () => {
     const lightbox = page.getByTestId("artifact-lightbox");
     await expect(lightbox).toBeVisible();
     await expect(lightbox).toContainText("Revenue overview 2024");
-    await expect(lightbox.locator("[data-chart-id]")).toHaveCount(9);
+    await expect(lightbox.locator("[data-chart-id]")).toHaveCount(10);
     await page.keyboard.press("Escape");
     await expect(lightbox).not.toBeVisible();
   });
@@ -157,7 +157,7 @@ test.describe("dashboard artifact (fixture harness)", () => {
     await expect(frameOf("dashboard_screenshot")).toHaveAttribute("data-density", "expanded");
     const shot = page.getByTestId("chat-dashboard-screenshot-card");
     await expect(shot).toBeVisible();
-    await expect(shot.getByTestId("chat-dashboard-screenshot-rendered")).toHaveCount(9);
+    await expect(shot.getByTestId("chat-dashboard-screenshot-rendered")).toHaveCount(10);
     await expect(shot.getByTestId("chat-dashboard-screenshot-failed")).toHaveCount(0);
     await expect(shot.locator("img")).toHaveCount(0);
   });

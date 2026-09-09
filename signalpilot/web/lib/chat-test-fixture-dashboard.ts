@@ -39,6 +39,7 @@ const FIXTURE_DASHBOARD_CHART_IDS = [
   "region_vs_target",
   "customers_vs_revenue",
   "top_months",
+  "kpi_top_region",
 ] as const;
 
 export const DASHBOARD_SPEC_FILE = JSON.stringify(revenueSpecJson, null, 2);
@@ -85,7 +86,7 @@ const csvFile = (rows: Record<string, string | number>[]): string => {
 export const DASHBOARD_REGION_CSV_FILE = csvFile(REGION_ROWS);
 
 const SUMMARY_ROWS = [
-  { total_revenue: 5896400, prior_revenue: 5210000, orders: 28410, avg_order_value: 207.55, growth: 0.1318 },
+  { total_revenue: 5896400, prior_revenue: 5210000, orders: 28410, avg_order_value: 207.55, growth: 0.1318, top_region: "South" },
 ];
 
 export const DASHBOARD_SUMMARY_CSV_FILE = csvFile(SUMMARY_ROWS);
@@ -323,7 +324,7 @@ export function dashboardFixtureEvents(runId: string): FixtureEvent[] {
         tool_call_id: SCREENSHOT_TOOL_CALL_ID,
         tool: "mcp__standalone-chat__dashboard_screenshot",
         error: false,
-        summary: "Rendered 9 charts",
+        summary: `Rendered ${FIXTURE_DASHBOARD_CHART_IDS.length} charts`,
         result: screenshotResult,
         result_text: JSON.stringify(screenshotResult),
         result_chars: JSON.stringify(screenshotResult).length,

@@ -7,7 +7,7 @@
  */
 import type { DatasetRows } from "./datasets";
 import { isIsoDate, isNumeric, parseIsoDate, toNumber } from "./format";
-import type { DashboardChart, DashboardFilter, DashboardSpec } from "./schema";
+import type { DashboardChart, DashboardFilter, DashboardSeries, DashboardSpec } from "./schema";
 import { isCartesianChart, isSqlDataset } from "./schema";
 
 export type ChartIssueCode =
@@ -71,6 +71,16 @@ function referencedColumns(
       columns.push(chart.x.column, ...chart.y.map((series) => series.column));
       if (chart.series) columns.push(chart.series.column);
       break;
+    case "combo":
+      columns.push(
+        chart.x.column,
+        ...chart.bars.map((series) => series.column),
+        ...chart.lines.map((series) => series.column),
+      );
+      break;
+    case "heatmap":
+      columns.push(chart.x.column, chart.y.column, chart.value.column);
+      break;
     case "pie":
       columns.push(chart.label, chart.value.column);
       break;
@@ -89,11 +99,17 @@ function referencedColumns(
   return [...new Set(columns)];
 }
 
-/** Numeric (y/value) columns subject to the non_numeric_y check. */
+/**
+ * Numeric (y/value) columns subject to the non_numeric_y check. A kpi value or
+ * comparison is only held to be numeric when it declares a `format`; with no
+ * format the tile shows any scalar (a number, or a text label) verbatim.
+ */
 function numericColumns(chart: DashboardChart): string[] {
   switch (chart.type) {
     case "kpi":
-      return [chart.value.column];
+      return [chart.value, chart.comparison]
+        .filter((cell): cell is DashboardSeries => cell?.format !== undefined)
+        .map((cell) => cell.column);
     case "pie":
       return [chart.value.column];
     case "scatter":
@@ -102,6 +118,10 @@ function numericColumns(chart: DashboardChart): string[] {
     case "line":
     case "area":
       return chart.y.map((series) => series.column);
+    case "combo":
+      return [...chart.bars, ...chart.lines].map((series) => series.column);
+    case "heatmap":
+      return [chart.value.column];
     default:
       return [];
   }
@@ -323,7 +343,9 @@ export function prepareChartRows(
       });
     }
   }
-  if ((isCartesianChart(chart) || chart.type === "scatter") && chart.x.type === "date") {
+  // Every chart with an x axis (cartesian, scatter, combo, heatmap), as in
+  // the Python and gateway checks.
+  if ("x" in chart && chart.x?.type === "date") {
     const column = chart.x.column;
     const check = ratioPassing(rows, column, isIsoDate);
     if (!check.ok) {

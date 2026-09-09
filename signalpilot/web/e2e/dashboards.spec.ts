@@ -41,7 +41,7 @@ test.describe("dashboards (fixture harness)", () => {
     await expect(page.getByTestId("dashboard-version-line")).toContainText("Version 3");
     await expect(page.getByTestId("dashboard-schedule-label")).toHaveText("Daily at 06:00 ET");
     const renderer = page.getByTestId("dashboard-canvas").locator("[data-dashboard-renderer]");
-    await expect(renderer.locator("[data-chart-id]")).toHaveCount(9);
+    await expect(renderer.locator("[data-chart-id]")).toHaveCount(10);
     await expect(renderer.locator("[data-dashboard-tile-error]")).toHaveCount(0);
     await expect(renderer.locator('[data-chart-id="kpi_revenue"]')).toContainText("$");
     await expect(renderer.locator('[data-chart-id="revenue_trend"] svg').first()).toBeVisible();

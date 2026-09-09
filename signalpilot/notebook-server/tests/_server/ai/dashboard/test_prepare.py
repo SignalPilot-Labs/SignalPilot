@@ -324,10 +324,27 @@ def test_non_numeric_y_is_a_warning():
         "type": "kpi",
         "title": "K",
         "dataset": "monthly",
-        "value": {"column": "region"},
+        "value": {"column": "region", "format": "integer"},
     }
     _, issues = prepare_chart_rows(kpi, _spec(), _datasets())
     assert _codes(issues) == ["non_numeric_y"]
+
+
+def test_kpi_text_cells_pass_without_a_format():
+    kpi = {
+        "id": "k",
+        "type": "kpi",
+        "title": "K",
+        "dataset": "monthly",
+        "value": {"column": "region"},
+    }
+    _, issues = prepare_chart_rows(kpi, _spec(), _datasets())
+    assert issues == []
+
+    kpi["comparison"] = {"column": "month", "format": "compact"}
+    _, issues = prepare_chart_rows(kpi, _spec(), _datasets())
+    assert _codes(issues) == ["non_numeric_y"]
+    assert "'month'" in issues[0]["message"]
 
 
 def test_unparseable_date_is_a_warning_only_for_date_axes():

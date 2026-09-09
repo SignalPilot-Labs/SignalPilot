@@ -239,6 +239,83 @@ async def test_notebook_stream_does_not_hold_a_database_session(monkeypatch: pyt
 
 
 @pytest.mark.asyncio
+async def test_buffered_deltas_are_written_before_the_run_completes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The trailing text chunk must sequence before complete_run's status event."""
+    timeline: list[tuple[str, Any]] = []
+
+    class FakeSessionContext:
+        async def __aenter__(self) -> object:
+            return object()
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+    run = SimpleNamespace(
+        id="run-a",
+        org_id="org-a",
+        user_id="user-a",
+        conversation_id="conv-a",
+        execution_attempt=1,
+        cancellation_requested_at=None,
+    )
+
+    async def get_worker_run(*_args: Any, **_kwargs: Any) -> Any:
+        return run
+
+    async def worker_context(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {
+            "project": SimpleNamespace(connection_name="production", default_branch="main"),
+            "conversation": SimpleNamespace(branch="main", commit_sha="a" * 40),
+            "messages": [SimpleNamespace(role="user", content="Diagnose revenue")],
+        }
+
+    async def stream_execution(*_args: Any, **_kwargs: Any):
+        yield {"type": "text_delta", "content": "Revenue "}
+        yield {"type": "text_delta", "content": "grew."}
+        yield {"type": "final", "content": "Revenue grew."}
+
+    async def prepare_execution(*_args: Any, **_kwargs: Any) -> object:
+        return object()
+
+    async def complete_run(*_args: Any, **kwargs: Any) -> None:
+        timeline.append(("complete_run", kwargs["content"]))
+
+    async def fail_run(*_args: Any, **kwargs: Any) -> None:
+        timeline.append(("fail_run", kwargs["code"]))
+
+    async def wait_until_stopped(_run_id: str, _worker_id: str, stop: Any, _worker_task: Any = None) -> None:
+        await stop.wait()
+
+    async def noop(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    async def write_event(_run_id: str, event_type: str, payload: dict[str, Any]) -> None:
+        timeline.append((event_type, payload))
+
+    monkeypatch.setattr(worker, "get_session_factory", lambda: FakeSessionContext)
+    monkeypatch.setattr(worker.chat_store, "get_worker_run", get_worker_run)
+    monkeypatch.setattr(worker.chat_store, "worker_context", worker_context)
+    monkeypatch.setattr(worker.chat_store, "complete_run", complete_run)
+    monkeypatch.setattr(worker.chat_store, "fail_run", fail_run)
+    monkeypatch.setattr(worker.chat_store, "finalize_undelivered_steering", noop)
+    monkeypatch.setattr(worker, "prepare_execution", prepare_execution)
+    monkeypatch.setattr(worker, "stream_execution", stream_execution)
+    monkeypatch.setattr(worker, "_warm_context", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(worker, "_write_event", write_event)
+    monkeypatch.setattr(worker, "_update_summary", noop)
+    monkeypatch.setattr(worker, "_lease_renewer", wait_until_stopped)
+    monkeypatch.setattr(worker, "_cancellation_monitor", wait_until_stopped)
+    monkeypatch.setattr(worker, "_steering_monitor", noop)
+    monkeypatch.setattr(worker, "cleanup_finished_execution", noop)
+
+    await worker._execute_claimed_run("run-a", "worker-a")
+
+    assert ("text_delta", {"delta": "Revenue grew."}) in timeline
+    assert timeline.index(("text_delta", {"delta": "Revenue grew."})) < timeline.index(("complete_run", "Revenue grew."))
+    assert "run-a" not in worker._delta_batchers
+
+
+@pytest.mark.asyncio
 async def test_terminal_notebook_validation_error_persists_no_answer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -38,6 +38,7 @@ from gateway.standalone_chat.worker_context import (
 from gateway.standalone_chat.worker_context import (
     warm_context as _warm_context,
 )
+from gateway.standalone_chat.worker_deltas import DELTA_EVENT_TYPES, DeltaBatcher
 from gateway.standalone_chat.worker_errors import (
     AnalysisRuntimeError as _AnalysisRuntimeError,
 )
@@ -68,7 +69,12 @@ logger = logging.getLogger(__name__)
 _CLARIFICATION_PREFIX = "CLARIFICATION_REQUESTED:"
 
 
-async def _append(run_id: str, event_type: str, payload: dict[str, Any]) -> None:
+# One batcher per run being executed by this worker. Deltas are coalesced;
+# every other event flushes them first so transcript order is preserved.
+_delta_batchers: dict[str, DeltaBatcher] = {}
+
+
+async def _write_event(run_id: str, event_type: str, payload: dict[str, Any]) -> None:
     factory = get_session_factory()
     async with factory() as db:
         await chat_store.append_event(
@@ -77,6 +83,26 @@ async def _append(run_id: str, event_type: str, payload: dict[str, Any]) -> None
             event_type=event_type,
             payload=payload,
         )
+
+
+async def _append(run_id: str, event_type: str, payload: dict[str, Any]) -> None:
+    batcher = _delta_batchers.get(run_id)
+    if batcher is None:
+        await _write_event(run_id, event_type, payload)
+        return
+    if event_type in DELTA_EVENT_TYPES:
+        await batcher.add(event_type, payload)
+        return
+    await batcher.flush()
+    await _write_event(run_id, event_type, payload)
+
+
+async def _flush_deltas(run_id: str) -> None:
+    """Persist buffered deltas before a store call that stages its own event
+    (complete_run, fail_run), so the status event sequences after them."""
+    batcher = _delta_batchers.get(run_id)
+    if batcher is not None:
+        await batcher.flush()
 
 
 async def _announce_notebook(run_id: str, payload: dict[str, Any]) -> None:
@@ -118,6 +144,9 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
     starts_new_text_block = False
     tool_names_by_id: dict[str, str] = {}
     tool_inputs_by_id: dict[str, dict[str, Any]] = {}
+    _delta_batchers[run_id] = DeltaBatcher(
+        lambda event_type, payload: _write_event(run_id, event_type, payload)
+    )
     try:
         factory = get_session_factory()
         async with factory() as db:
@@ -419,6 +448,7 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
         if not answer:
             raise RuntimeError("The analysis runtime returned no answer")
 
+        await _flush_deltas(run_id)
         async with factory() as db:
             message = await chat_store.complete_run(
                 db,
@@ -430,6 +460,8 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
         if message is not None:
             await _update_summary(run_id)
     except asyncio.CancelledError:
+        with suppress(Exception):
+            await _flush_deltas(run_id)
         async with get_session_factory()() as db:
             run = await chat_store.get_worker_run(
                 db,
@@ -476,6 +508,10 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                 message=public_message,
             )
     finally:
+        batcher = _delta_batchers.pop(run_id, None)
+        if batcher is not None:
+            with suppress(Exception):
+                await batcher.close()
         stop.set()
         for task in (renewer, cancellation, steering):
             if task is None:

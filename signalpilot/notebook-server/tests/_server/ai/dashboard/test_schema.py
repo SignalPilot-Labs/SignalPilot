@@ -61,7 +61,7 @@ def test_example_revenue_dashboard_validates():
     )
     assert validate_spec(example) == []
     types = {chart["type"] for chart in example["charts"]}
-    assert types == {"kpi", "line", "bar", "pie", "table"}
+    assert types == {"kpi", "line", "bar", "pie", "table", "combo", "heatmap"}
     assert any("series" in chart for chart in example["charts"])
     assert len(example["filters"]) == 2
     sql = dataset_sql(example)

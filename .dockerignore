@@ -13,6 +13,11 @@ benchmark/run2_score.py
 benchmark/run*.sh
 benchmark/fix_starting_dbs.*
 .env
+**/.env
+**/.env.*
+**/*.pem
+.tmp/
+bash.exe.stackdump
 .git
 **/__pycache__/
 **/*.pyc

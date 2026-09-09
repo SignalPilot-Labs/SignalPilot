@@ -15,12 +15,16 @@ from gateway.db.models import GatewayChatConversation, GatewayChatMessage, Gatew
 from gateway.git.repos import branch_head_sha
 from gateway.standalone_chat.config import runtime_env, standalone_chat_enabled
 from gateway.standalone_chat.projects import authorize_chat_project, evaluate_project_readiness
-from gateway.store import Store, standalone_chat as chat_store
-from gateway.store.standalone_chat.helpers import _stage_run_event, _event_info, _token_usage
-from gateway.store.standalone_chat.admission import lock_agent_account, check_agent_capacity
+from gateway.store import Store
+from gateway.store import standalone_chat as chat_store
+from gateway.store.standalone_chat.admission import check_agent_capacity, lock_agent_account
+from gateway.store.standalone_chat.helpers import _event_info, _stage_run_event, _token_usage
 
+from .artifacts import artifact_manifest
 from .chat_view import chat_url
 from .contracts import AgentLaunchRequest, AgentResult
+
+WAIT_CEILING_SECONDS = 25
 
 
 class AgentService:
@@ -309,18 +313,27 @@ class AgentService:
             elif status == "input_required":
                 result.next_action = f"Ask the user for the requested clarification or approval. Open {result.chat_url}; approvals are handled in Chats."
             else:
-                result.next_action = f"Use the final result. Full events and conversation context are available on explicit request; artifacts are in {result.chat_url}."
+                result.artifacts = await artifact_manifest(db, org_id, user_id, run)
+                result.next_action = "Use the final result and artifacts. Call download_artifacts with thread_id and selected artifact_ids for download links."
             return result
 
-    async def wait(self, org_id, user_id, thread_id, after_sequence=0, run_id=None, wait_seconds=20, detail="summary"):
-        if not 0 <= wait_seconds <= 25:
+    async def wait(self, org_id, user_id, thread_id, after_sequence=0, run_id=None, wait_seconds=20, detail="summary", mode="bounded"):
+        if mode not in {"bounded", "completion"}:
+            raise ValueError("Wait mode must be bounded or completion")
+        completion = mode == "completion"
+        if not completion and not 0 <= wait_seconds <= 25:
             raise ValueError("Wait duration must be between 0 and 25 seconds")
-        deadline = time.monotonic() + wait_seconds
+        # Completion mode is still bounded: MCP hosts time out long tool calls
+        # and then fall back to polling tools, so the call returns a heartbeat
+        # at the ceiling and the caller repeats the wait.
+        deadline = time.monotonic() + (WAIT_CEILING_SECONDS if completion else wait_seconds)
+        if completion:
+            detail = "summary"
         initial = await self.get(org_id, user_id, thread_id, after_sequence, run_id, detail)
         if initial.status not in {"queued", "running"} or (detail == "full" and initial.events):
             return initial
-        while time.monotonic() < deadline:
-            await asyncio.sleep(min(0.5, max(0, deadline - time.monotonic())))
+        while deadline is None or time.monotonic() < deadline:
+            await asyncio.sleep(2 if completion else min(0.5, max(0, deadline - time.monotonic())))
             async with self.factory() as db:
                 state = (
                     await db.execute(
@@ -338,6 +351,11 @@ class AgentService:
                 break
         result = await self.get(org_id, user_id, thread_id, after_sequence, initial.run_id, detail)
         result.heartbeat = not result.events and result.status in {"queued", "running"}
+        if completion and result.status in {"queued", "running"}:
+            result.next_action = (
+                "Still running. Call wait_signalpilot_agent again with the same thread_id, run_id "
+                "and next_sequence; do not call get_signalpilot_agent to poll."
+            )
         return result
 
     async def context(self, org_id, user_id, thread_id, after_message_sequence=0, limit=20):
@@ -346,7 +364,7 @@ class AgentService:
         if after_message_sequence < 0 or not 1 <= limit <= 50:
             raise ValueError("Message cursor must be nonnegative and limit between 1 and 50")
         async with self.factory() as db:
-            await self._latest(db, org_id, user_id, thread_id)
+            run = await self._latest(db, org_id, user_id, thread_id)
             rows = (
                 await db.scalars(
                     select(GatewayChatMessage)
@@ -363,6 +381,7 @@ class AgentService:
             ).all()
             page = rows[:limit]
             return AgentContextResult(
+                artifacts=await artifact_manifest(db, org_id, user_id, run),
                 thread_id=thread_id,
                 chat_url=chat_url(thread_id),
                 messages=[

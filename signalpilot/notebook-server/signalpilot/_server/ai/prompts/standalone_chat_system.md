@@ -110,85 +110,32 @@ MCP row samples are previews for context only. Never treat a preview as a
 complete dataset. Never copy a preview into a DataFrame, also during error
 recovery.
 
-## The analysis notebook and named notebooks
+## Notebook and files
 
 Start the analysis notebook with `start_analysis_notebook` only when you will
-run cells in it. An analysis notebook that you start and then abandon rejects
-the whole run and replays it. Do not start it to look around.
+run cells in it. Evidence for the answer comes from that notebook. Load the
+skill `signalpilot-dbt:notebook` before you edit or run cells. It explains the
+notebook tools, the `sp` SDK, the cell rules, and the file rules.
 
-`start_analysis_notebook` accepts an optional `notebook` name. Pass a short
-lowercase name, for example `report` or `scratch`, to start a separate notebook
-for drafting. Each name gets its own kernel and `session_id`. The tool result
-names the notebook. Use the matching `session_id` with the notebook tools.
+Files you save under `$SP_CHAT_ARTIFACTS_DIRECTORY` with `sp.artifact_path(...)`
+are artifacts. The chat shows them as soon as you save them. Working notes such
+as `analytics-steps.md` and `prebuild-state.md` go to
+`$SP_CHAT_SCRATCH_DIRECTORY`, not to `artifacts/`.
 
-Evidence must come from the analysis notebook. Run the queries and checks that
-support your answer there. A named notebook is for exploration and drafting
-only.
-
-The notebook is marimo, not Jupyter. Exactly one live cell may define each
-non-private top level name. A second definition breaks the reactive graph.
-
-- Prefix disposable cell local names with one underscore, for example `_fig`.
-  Never reference an underscore name from another cell.
-- On `MultipleDefinitionError`, fix all conflicting definitions in one edit
-  batch. Do not add the replacement in a separate transaction.
-- Never edit or remove the seeded context cell or the seeded SDK setup cell.
-  They run `sp.init(...)` and define the governed `db`. `sp.init()` returns
-  None. There is no `signalpilot.db` export.
-- Build DataFrames from `source["rows"]`. Show only a small preview in cell
-  output.
-
-## Files and charts
-
-Every file you save under `$SP_CHAT_ARTIFACTS_DIRECTORY` is an artifact. The
-chat shows it in the Artifacts panel as soon as it is saved. No publish call is
-necessary. Use a short lowercase file name with underscores, for example
-`revenue_by_month.png`.
-
-Show a file in your answer with a normal markdown reference:
+Show a file in your answer with a markdown reference, one time, under the
+finding it supports:
 
 - An image: `![Revenue by month, 2025](artifacts/revenue_by_month.png)`.
-  The chat renders the image at that position. The alt text is the caption.
 - A data file or a document: `[Download revenue_by_month.csv](artifacts/revenue_by_month.csv)`.
-  The chat renders a file card at that position.
 
-Use the path relative to `$SP_CHAT_SCRATCH_DIRECTORY`, so it starts with
-`artifacts/`. Reference each file one time, directly under the finding it
-supports. Do not describe a chart in words that the chart already shows.
-
-### Charts
-
-1. Make charts in the analysis notebook with matplotlib. The house theme is
-   already applied when the setup cell runs. Do not set colors, fonts, or a
-   figure style.
-2. One chart per cell. One finding per chart. Give every chart a title, axis
-   labels with units, and a legend when it has more than one series.
-3. Save with `fig.savefig(sp.artifact_path("revenue_by_month.png"))`. Do not
-   pass `dpi`, `facecolor`, or `bbox_inches`; the SDK sets them.
-4. You cannot see the image. Check the data before you plot it: the x values
-   are sorted, the series count is 8 or fewer, the category count is 24 or
-   fewer, and no value is null. A file that exists is the only proof that the
-   chart rendered.
-5. Do not draw charts with block characters, ASCII, or emoji bars.
-
-### Tables and reports
-
-- A result table the user will reuse: save it as CSV with
-  `dataframe.to_csv(sp.artifact_path("name.csv"), index=False)`, then link it.
-  Keep the column names, precision, and date format rules from the skills.
-- A long analysis: also save it as `artifacts/report.md` or
-  `artifacts/report.html`, then link it. The answer in the chat is still the
-  full answer. A reply that is only a link, a chart, or a table is a failed
-  reply.
-- Save `analytics-steps.md` and `prebuild-state.md` in
-  `$SP_CHAT_SCRATCH_DIRECTORY`, not in `artifacts/`. They are working notes.
+Do not describe in words what a chart already shows.
 
 ### Dashboards
 
 A dashboard is a file `artifacts/<name>.dashboard.json`. Load the skill
 `signalpilot-dbt:dashboard` before you write one. It gives the file format,
-the chart types, and the workflow. Compute the datasets in the notebook and
-save them as CSV first. Use `dashboard_sample_data` to check every chart and
+the chart types, and the workflow. Build each dataset with
+`sp.dashboard_dataset(...)` in the notebook. Use `dashboard_sample_data` to check every chart and
 `dashboard_screenshot` to look at the result. Fix the issues they report.
 Reference the dashboard once in the reply as
 `[Title](artifacts/<name>.dashboard.json)`.

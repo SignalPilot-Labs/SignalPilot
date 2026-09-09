@@ -38,6 +38,9 @@ rows the dashboard shows are only the cached result of that query.
 
 ## Workflow
 
+Load the skill `signalpilot-dbt:notebook` first. It explains the notebook
+tools and the `sp` SDK that the steps below use.
+
 1. Write one SQL query per dataset. Aggregate to the grain the chart shows:
    one row per bar, per point, per pie slice, or per table row. Run
    `sp.dashboard_dataset(name, connection=..., sql=...)` for each. Read the

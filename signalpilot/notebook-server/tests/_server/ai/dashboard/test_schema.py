@@ -190,3 +190,18 @@ def test_skill_document_points_at_the_schema_and_tools():
         "unknown_chart",
     ):
         assert f"`{code}`" in text, code
+
+
+def test_notebook_skill_exists_and_follows_prompt_rules():
+    """The notebook skill carries the rules the system prompt no longer inlines."""
+    text = (PLUGIN_ROOT / "skills" / "notebook" / "SKILL.md").read_text(encoding="utf-8")
+    assert text.startswith("---\nname: notebook\n")
+    assert "—" not in text
+    for phrase in (
+        "MultipleDefinitionError",
+        "fig.savefig(sp.artifact_path(",
+        "sp.dashboard_dataset",
+        "Write SQL in the dialect of the connection",
+        "SP_CHAT_ARTIFACTS_DIRECTORY",
+    ):
+        assert phrase in text, phrase

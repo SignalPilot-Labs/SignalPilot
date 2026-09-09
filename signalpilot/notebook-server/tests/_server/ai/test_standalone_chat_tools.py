@@ -369,7 +369,11 @@ def test_agent_contract_includes_default_signalpilot_mcp_tools():
     assert "analytics-steps.md" in _prompt_flat
     assert "prebuild-state.md" in _prompt_flat
     # The filesystem is the artifact API. No publish or report tools.
-    assert "## Files and charts" in STANDALONE_SYSTEM_PROMPT
+    assert "## Notebook and files" in STANDALONE_SYSTEM_PROMPT
+    # Notebook detail lives in the notebook skill; the prompt only points at it.
+    assert "`signalpilot-dbt:notebook`" in _prompt_flat
+    assert "MultipleDefinitionError" not in _prompt_flat
+    assert "fig.savefig(" not in _prompt_flat
     assert "SP_CHAT_ARTIFACTS_DIRECTORY" in _prompt_flat
     assert "sp.artifact_path(" in _prompt_flat
     assert "![Revenue by month, 2025](artifacts/revenue_by_month.png)" in (

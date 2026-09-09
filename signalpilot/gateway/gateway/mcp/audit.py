@@ -27,6 +27,8 @@ _mcp_logger = _logging.getLogger("gateway.mcp_audit")
 # the registration boundary makes a newly added tool fail closed until its
 # capability is reviewed and classified here.
 MCP_TOOL_SCOPES: dict[str, str] = {
+    "list_artifacts": "agent:run",
+    "download_artifacts": "agent:run",
     "run_signalpilot_agent": "agent:run",
     "continue_signalpilot_agent": "agent:run",
     "get_signalpilot_agent": "agent:run",
@@ -34,6 +36,8 @@ MCP_TOOL_SCOPES: dict[str, str] = {
     "wait_signalpilot_agent": "agent:run",
     "get_signalpilot_agent_event": "agent:run",
     "get_signalpilot_agent_context": "agent:run",
+    "read_signalpilot_chat_view": "agent:run",
+    "show_signalpilot_chat": "agent:run",
     "list_database_connections": "read",
     "connection_health": "query",
     "connector_capabilities": "read",
@@ -163,6 +167,8 @@ STANDALONE_CHAT_BLOCKED_TOOLS = frozenset(
         "wait_signalpilot_agent",
         "get_signalpilot_agent_event",
         "get_signalpilot_agent_context",
+        "read_signalpilot_chat_view",
+        "show_signalpilot_chat",
         "schema_diff_branches",
         "xata_branch_diff",
         "xata_list_branches",
@@ -206,6 +212,7 @@ async def _audit_tool_call(
     if org_id and tool_name not in {
         "get_signalpilot_agent", "wait_signalpilot_agent",
         "get_signalpilot_agent_event", "get_signalpilot_agent_context",
+        "read_signalpilot_chat_view", "show_signalpilot_chat",
     }:
         daily_query_counter.increment(org_id)
 
@@ -287,8 +294,10 @@ def _audited_tool(fn):
                     result = await fn(*args, **kwargs)
             duration_ms = (time.time() - t0) * 1000
             # Detect blocked queries from return value
-            result_str = str(result) if result else ""
-            is_blocked = result_str.startswith(("Query blocked:", "Error:")) or bool(getattr(result, "is_error", False))
+            result_str = result if isinstance(result, str) else (str(result) if result and not is_agent else "")
+            is_blocked = result_str.startswith(("Query blocked:", "Error:")) or bool(
+                getattr(result, "is_error", False) or getattr(result, "isError", False)
+            )
             asyncio.create_task(
                 _audit_tool_call(
                     tool_name=tool_name,

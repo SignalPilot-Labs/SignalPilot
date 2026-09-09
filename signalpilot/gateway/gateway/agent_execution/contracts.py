@@ -14,6 +14,8 @@ class AgentLaunchRequest(BaseModel):
 
 
 class AgentResult(BaseModel):
+    artifacts: list[dict] = Field(default_factory=list)
+    artifact_scope: str = "current_chat_manifest"
     status: Literal["queued", "running", "completed", "input_required", "cancelled", "failed"]
     thread_id: str
     run_id: str
@@ -42,6 +44,8 @@ class AgentResult(BaseModel):
 
 
 class AgentContextResult(BaseModel):
+    artifacts: list[dict] = Field(default_factory=list)
+    artifact_scope: str = "current_chat_manifest"
     thread_id: str
     chat_url: str
     messages: list[dict] = Field(default_factory=list)

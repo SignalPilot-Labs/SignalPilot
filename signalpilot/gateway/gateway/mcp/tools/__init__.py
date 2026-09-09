@@ -16,6 +16,8 @@ assert type(_mcp).tool is MCPServer.tool, (
 # The "as X" form tells ruff these are explicit re-exports (not unused imports).
 from gateway.mcp.tools import connections as connections  # noqa: E402
 from gateway.mcp.tools import agent as agent  # noqa: E402
+from gateway.mcp.tools import artifacts as artifacts  # noqa: E402
+from gateway.mcp.tools import chat_view as chat_view  # noqa: E402
 from gateway.mcp.tools import dbt_project as dbt_project  # noqa: E402
 from gateway.mcp.tools import knowledge as knowledge  # noqa: E402
 from gateway.mcp.tools import model_map as model_map  # noqa: E402

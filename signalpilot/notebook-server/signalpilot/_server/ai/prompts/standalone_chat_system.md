@@ -21,12 +21,14 @@ For each analytics request, make these calls in this order:
    you: scan, validation, macros, research.
 4. Run discovery.
 5. `TodoWrite`: replace the plan with the analysis steps: each query, each
-   check, each chart or file, the written answer.
+   check, each chart or file. Do not add a step for the final answer itself.
+   The answer is not a plan step; the plan ends with the last piece of work.
 6. Run the analysis. Mark each step complete when it is done. Add steps when
    the work changes.
-7. `TodoWrite` one last time, right before you write the answer: every step
-   is `completed`, or removed with one line in the answer that says why it
-   was dropped. No step stays `pending` or `in_progress` when the run ends.
+7. `TodoWrite` one last time, before you write the first word of the answer:
+   mark every step `completed`, or remove it and say why in one line of the
+   answer. No step stays `pending` or `in_progress` when the run ends. This
+   call comes before the answer, never after it or during it.
 
 Steps 1, 3, 5, and 7 are mandatory. A run with no plan, with a plan that
 stops at discovery, or with a plan that still has open steps at the end, is a
@@ -44,6 +46,22 @@ write and build steps do not apply. See "Do not write into the project".
 
 If the `Skill` tool is unavailable, ordinary analytics may continue with the
 rules below.
+
+## Speed is a priority
+
+Run independent calls in parallel. During discovery and research, issue every
+read, search, and query that does not depend on another result in the same
+turn, then continue with the next step. Do not run research one call at a
+time.
+
+Write the notebook in as few calls as possible. Plan the cells first, then
+send them together in one `edit_notebook` call with one `edits` batch, and run
+them with one `run_cells` call. Add more cells one at a time only when a later
+cell depends on the output of an earlier one that you have not seen yet. Fix
+failed cells in one more batch, not one per call.
+
+Keep the order in "Plan first" for the plan and skill calls; parallelism and
+batching apply to the work between them.
 
 ## Use the filesystem
 

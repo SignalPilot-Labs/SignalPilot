@@ -35,7 +35,7 @@ async def _call(operation, *args):
         return CallToolResult(isError=True, content=[TextContent(type="text", text=str(exc))])
 
 
-@audited_tool(mcp)
+@audited_tool(mcp, meta={"ui": {"resourceUri": "ui://signalpilot/pulse-v1.html"}})
 async def run_signalpilot_agent(
     task: str,
     ctx: Context,
@@ -52,6 +52,10 @@ async def run_signalpilot_agent(
     Do not search source code or local files to guess workspace IDs or connections.
 
     Returns a queued thread and chat_url immediately. Let the user watch Chats.
+    This response does not subscribe the caller to automatic completion alerts.
+    To receive the final result, call wait_signalpilot_agent with mode="completion"
+    and the returned thread_id and run_id. Use the host's background-tool execution
+    if available to keep working while that wait is pending.
     Wait only when the calling task needs a result or the user asks for progress.
     Do not continuously poll or narrate routine activity after launching.
     Reuse client_request_id when retrying a launch to avoid duplicate execution.
@@ -81,8 +85,17 @@ async def continue_signalpilot_agent(thread_id: str, task: str, ctx: Context) ->
 async def wait_signalpilot_agent(
     thread_id: str, after_sequence: int = 0, run_id: str | None = None, wait_seconds: float = 20,
     detail: Literal["summary", "full"] = "summary",
+    mode: Literal["bounded", "completion"] = "bounded",
 ) -> CallToolResult:
-    """Wait up to 25 seconds only when a result or requested progress is needed.
+    """Wait for a delegated agent. Use mode="completion" to receive only its final result.
+
+    Completion mode ignores wait_seconds and forces summary detail. It holds the
+    call for up to 25 seconds and returns on completion, failure, cancellation,
+    or input_required so the caller can resolve a clarification or approval.
+    If the run is still active at the ceiling it returns a heartbeat with
+    next_action; repeat the wait with the same thread_id, run_id and
+    next_sequence. Never relaunch the agent to retry a wait, and do not poll
+    with get_signalpilot_agent instead. Bounded mode waits up to wait_seconds.
 
     Pass returned next_sequence as after_sequence on the next wait and retain run_id.
     Summary mode omits repetitive deltas and large tool inputs/results.
@@ -90,7 +103,7 @@ async def wait_signalpilot_agent(
     Disconnecting
     this call does not cancel the background job. Use cancel_signalpilot_agent to stop it.
     """
-    return await _call(AgentService().wait, thread_id, after_sequence, run_id, wait_seconds, detail)
+    return await _call(AgentService().wait, thread_id, after_sequence, run_id, wait_seconds, detail, mode)
 
 
 @audited_tool(mcp, annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True))

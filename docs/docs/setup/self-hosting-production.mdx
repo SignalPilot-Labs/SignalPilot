@@ -146,7 +146,7 @@ gateway listens on port `3300`; terminate TLS in front of it.
 
 <MiniCopyBlock
   label="build and push the gateway image"
-  code={`docker build -f Dockerfile.gateway -t your-registry/gateway:VERSION signalpilot/gateway/\ndocker push your-registry/gateway:VERSION`}
+  code={`docker build -f Dockerfile.gateway -t your-registry/gateway:VERSION .\ndocker push your-registry/gateway:VERSION`}
 />
 
 <MiniCopyBlock

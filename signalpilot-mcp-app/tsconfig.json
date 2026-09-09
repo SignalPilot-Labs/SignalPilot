@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "target": "ES2022",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    "noUncheckedIndexedAccess": true,
+    "types": ["vitest/globals"]
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "test/**/*.ts", "build.mjs"]
+}

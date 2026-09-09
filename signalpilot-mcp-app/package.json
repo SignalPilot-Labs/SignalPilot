@@ -1,0 +1,29 @@
+{
+  "name": "signalpilot-mcp-app",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "SignalPilot Pulse: the MCP App activity panel served by the gateway.",
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm run test && npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/client": "2.0.0",
+    "@modelcontextprotocol/core": "2.0.0",
+    "@modelcontextprotocol/ext-apps": "2.0.0",
+    "lucide-react": "^0.563.0",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4"
+  },
+  "devDependencies": {
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "esbuild": "^0.25.0",
+    "jsdom": "^30.0.1",
+    "typescript": "^5",
+    "vitest": "^4.1.10"
+  }
+}

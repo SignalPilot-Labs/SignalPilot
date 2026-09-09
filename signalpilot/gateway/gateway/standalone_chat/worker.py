@@ -62,6 +62,7 @@ from gateway.standalone_chat.worker_events import (
     _update_summary,
     _worker_id,
 )
+from gateway.standalone_chat.worker_recovery import load_interrupted_tool_completions
 from gateway.standalone_chat.worker_tool_results import (
     cache_tool_input,
     handle_tool_result,
@@ -200,6 +201,13 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                 if report_context is not None:
                     warm_context["report_context"] = report_context.model_dump(mode="json")
 
+        if recovering:
+            # Tool calls left open by the previous attempt can never report
+            # back; close them before the resumed turn starts streaming.
+            async with factory() as db:
+                interrupted = await load_interrupted_tool_completions(db, run_id)
+            for closing in interrupted:
+                await _append(run_id, "tool_completed", closing)
         await _append(
             run_id,
             "status",

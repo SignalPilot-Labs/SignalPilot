@@ -17,10 +17,15 @@ from the analysis notebook.
 2. Pass `notebook: "scratch"` (short, lowercase) to start a separate notebook
    for drafting. Each name has its own kernel and `session_id`.
 3. Use the `session_id` from the tool result with every notebook tool.
+4. Make the first visible cell a title: `sp.md("# <title of the analysis>")`.
+   Write a short title from the user's request, not the prompt text. Update
+   it when the question changes. A markdown cell does not need `sp.init()`
+   and must not import `signalpilot` again.
 
 ## The seeded cells
 
-The notebook starts with two hidden cells. Never edit or remove them.
+The notebook starts with two hidden cells and one empty visible cell. Never
+edit or remove the hidden cells. Put the title in the empty cell.
 
 - Cell 1 imports `sp`, sets `SP_CHAT_SCRATCH_DIRECTORY` and
   `SP_CHAT_ARTIFACTS_DIRECTORY`, and returns `sp`.

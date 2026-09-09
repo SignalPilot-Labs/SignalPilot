@@ -74,12 +74,12 @@ def test_named_seed_writes_minimal_template_in_the_shared_scratch(
         assert "token-a-secret" not in source
     # The named notebook path points at its own file.
     assert repr(str(tmp_path / "report.py")) in report_source
-    # Only analysis gets the scaffold; the named notebook gets one visible
-    # empty cell.
-    assert "analysis_summary" in analysis_source
-    assert "analysis_summary" not in report_source
-    assert "analysis_checks" not in report_source
-    assert "@app.cell\ndef _():\n    return" in report_source
+    # Both notebooks end with one visible empty cell and no placeholder text;
+    # the agent writes the title cell itself.
+    for source in (report_source, analysis_source):
+        assert "@app.cell\ndef _():\n    return" in source
+        assert "Pending governed notebook analysis" not in source
+        assert "analysis_summary" not in source
 
 
 @pytest.mark.asyncio

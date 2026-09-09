@@ -203,5 +203,6 @@ def test_notebook_skill_exists_and_follows_prompt_rules():
         "sp.dashboard_dataset",
         "Write SQL in the dialect of the connection",
         "SP_CHAT_ARTIFACTS_DIRECTORY",
+        'sp.md("# <title of the analysis>")',
     ):
         assert phrase in text, phrase

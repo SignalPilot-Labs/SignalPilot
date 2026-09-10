@@ -1,7 +1,7 @@
 # SignalPilot Pulse (MCP App)
 
 The inline activity panel that MCP hosts (Claude, ChatGPT, VS Code, Goose) render after
-`run_signalpilot_agent` or `show_signalpilot_chat`. One fixed-height, non-scrolling surface:
+`run_signalpilot_agent`. One fixed-height, non-scrolling surface:
 an orb that shows the run's state, the current step, the last three streamed thoughts, a strip
 of tool chips, a pulse line, and a link to the full chat in SignalPilot.
 

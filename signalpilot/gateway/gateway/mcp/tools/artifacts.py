@@ -1,5 +1,7 @@
 """Discover saved chat files and issue explicit batch downloads."""
 
+import json
+
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
 
 from gateway.agent_execution.artifacts import read_artifacts
@@ -16,7 +18,7 @@ async def _read(thread_id, artifact_ids=None):
     try:
         data = await read_artifacts(org_id, user_id, thread_id, artifact_ids)
         return CallToolResult(structuredContent=data, content=[TextContent(
-            type="text", text=f"{len(data['artifacts'])} artifacts. " + data.get("instructions", "Use download_artifacts with the selected artifact IDs to retrieve files."),
+            type="text", text=json.dumps(data, ensure_ascii=False, separators=(",", ":")),
         )])
     except ValueError as exc:
         return CallToolResult(isError=True, content=[TextContent(type="text", text=str(exc))])
@@ -32,5 +34,5 @@ async def list_artifacts(thread_id: str) -> CallToolResult:
 
 @audited_tool(mcp, annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True))
 async def download_artifacts(thread_id: str, artifact_ids: list[str]) -> CallToolResult:
-    """Get five-minute download links for 1 to 20 artifact IDs from list_artifacts. Maximum total size is 100 MiB. Download the URLs using the caller's file tools; this tool does not write to the caller's filesystem. Each link pins verified file bytes. Treat links as temporary credentials."""
+    """Get two-minute, single-use gateway links for 1 to 20 artifact IDs. Maximum total size is 100 MiB. Follow the returned POST instructions to download with agent HTTP tools; browsers show a download button. No S3 URL is returned. Treat URL fragments as temporary credentials. Failed downloads require a new link."""
     return await _read(thread_id, artifact_ids)

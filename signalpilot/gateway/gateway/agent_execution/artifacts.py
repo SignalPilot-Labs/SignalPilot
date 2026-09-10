@@ -2,7 +2,6 @@
 
 import asyncio
 import hashlib
-from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 
@@ -13,6 +12,7 @@ from gateway.standalone_chat.config import runtime_env
 from gateway.standalone_chat.object_storage import chat_object_storage, conversation_prefix
 from gateway.store import Store
 from gateway.store.standalone_chat.files import list_conversation_files
+from .downloads import download_endpoint, mint_downloads
 
 MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024
 
@@ -74,8 +74,9 @@ async def read_artifacts(org_id, user_id, thread_id, artifact_ids=None):
         prefix = conversation_prefix(org_id, thread_id) + "/"
         if any(not row.object_key.startswith(prefix) for row in selected):
             raise ValueError("Artifact storage scope is invalid")
+        download_endpoint()
         storage = chat_object_storage()
-        downloads = []
+        prepared = []
         for row in selected:
             content = await storage.get_bytes(row.object_key, max_bytes=MAX_DOWNLOAD_BYTES)
             digest = await asyncio.to_thread(lambda: hashlib.sha256(content).hexdigest())
@@ -83,11 +84,9 @@ async def read_artifacts(org_id, user_id, thread_id, artifact_ids=None):
                 raise ValueError("Artifact changed during download or failed integrity validation. List artifacts again.")
             key = f"{prefix}exports/{row.id}/{digest}"
             await storage.put_bytes(key=key, data=content, content_type="application/octet-stream")
-            url = await storage.presign_get(
-                key, expires_seconds=300,
-                download_filename=row.filename,
-            )
-            downloads.append({**artifact_metadata(row), "download_url": url,
-                              "expires_at": (datetime.now(timezone.utc) + timedelta(seconds=300)).isoformat()})
+            prepared.append((row, key))
+        metadata = [artifact_metadata(row) for row in selected]
+        grants = await mint_downloads(db, org_id, user_id, thread_id, prepared)
+        downloads = [{**item, **grant} for item, grant in zip(metadata, grants)]
         return {**data, "artifacts": downloads,
-                "instructions": "Download each URL to the desired local filename within five minutes. These links grant temporary access; do not share them publicly."}
+                "instructions": "Single-use links expire in two minutes. In a browser, open the URL and click Download. For agent HTTP tools, split download_url at # and POST to the URL before # with Content-Type: application/json and body {\"token\": \"<fragment after #>\"}; save the response bytes. A GET only returns the download page. Do not log tokens. Failed or interrupted downloads consume the token; request a new link through download_artifacts. No storage URL is exposed."}

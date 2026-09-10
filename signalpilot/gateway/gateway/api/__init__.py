@@ -57,6 +57,8 @@ logger = logging.getLogger(__name__)
 
 def register_routers(app: FastAPI) -> None:
     """Include all API routers into the application."""
+    from .artifact_downloads import router as artifact_download_router
+    app.include_router(artifact_download_router)
     app.include_router(health_router)
     app.include_router(settings_router)
     app.include_router(connections_router)

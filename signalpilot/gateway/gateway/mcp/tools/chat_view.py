@@ -26,30 +26,6 @@ def signalpilot_pulse_ui() -> str:
 @audited_tool(
     mcp,
     annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True),
-    meta={"ui": {"resourceUri": PULSE_APP_URI}},
-)
-async def show_signalpilot_chat(thread_id: str) -> CallToolResult:
-    """Display the live SignalPilot activity panel for an existing thread.
-
-    Call once to show the actual app, not a prose description of it.
-    The panel polls its own progress. No agent is started.
-    """
-    from gateway.agent_execution.service import AgentService
-    from gateway.mcp.tools.agent import _call
-
-    result = await _call(AgentService().get, thread_id)
-    if result.is_error:
-        return result
-    data = result.structured_content or {}
-    return CallToolResult(
-        structuredContent={key: data[key] for key in ("thread_id", "run_id", "status", "chat_url") if key in data},
-        content=[TextContent(type="text", text="SignalPilot activity panel ready. Display the inline app.")],
-    )
-
-
-@audited_tool(
-    mcp,
-    annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True),
     meta={"ui": {"resourceUri": PULSE_APP_URI, "visibility": ["app"]}},
 )
 async def read_signalpilot_chat_view(

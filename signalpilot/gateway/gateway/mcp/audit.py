@@ -37,7 +37,6 @@ MCP_TOOL_SCOPES: dict[str, str] = {
     "get_signalpilot_agent_event": "agent:run",
     "get_signalpilot_agent_context": "agent:run",
     "read_signalpilot_chat_view": "agent:run",
-    "show_signalpilot_chat": "agent:run",
     "list_database_connections": "read",
     "connection_health": "query",
     "connector_capabilities": "read",
@@ -168,7 +167,6 @@ STANDALONE_CHAT_BLOCKED_TOOLS = frozenset(
         "get_signalpilot_agent_event",
         "get_signalpilot_agent_context",
         "read_signalpilot_chat_view",
-        "show_signalpilot_chat",
         "schema_diff_branches",
         "xata_branch_diff",
         "xata_list_branches",
@@ -212,7 +210,7 @@ async def _audit_tool_call(
     if org_id and tool_name not in {
         "get_signalpilot_agent", "wait_signalpilot_agent",
         "get_signalpilot_agent_event", "get_signalpilot_agent_context",
-        "read_signalpilot_chat_view", "show_signalpilot_chat",
+        "read_signalpilot_chat_view",
     }:
         daily_query_counter.increment(org_id)
 

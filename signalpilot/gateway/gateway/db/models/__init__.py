@@ -10,6 +10,8 @@ single-module definition order.
 
 from __future__ import annotations
 
+from .downloads import GatewayArtifactDownload as GatewayArtifactDownload
+
 from .base import (
     SSL_SECRET_FIELDS,
     GatewayBase,

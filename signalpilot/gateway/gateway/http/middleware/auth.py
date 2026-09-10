@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 PUBLIC_PATHS = frozenset(
     {
         "/health",
+        "/api/artifact-download",  # Single-use capability, not cookie/API-key auth.
         "/docs",
         "/openapi.json",
         "/api/integrations/notion/oauth/callback",

@@ -21,6 +21,7 @@ import { SectionHeader } from "~/components/ui/section-header";
 import { useToast } from "~/components/ui/toast";
 import { ApiKeysSkeleton } from "~/components/ui/skeleton";
 import { McpAgentDefaultsSettings } from "~/components/settings/mcp-agent-defaults";
+import { McpOAuthConnect } from "~/components/settings/mcp-oauth-connect";
 
 // ---------------------------------------------------------------------------
 // MCP URL derivation
@@ -197,7 +198,7 @@ function McpConnectContent() {
       <PageHeader
         title="mcp connect"
         subtitle="integration"
-        description="connect mcp clients to signalpilot using your api key"
+        description="connect mcp clients to signalpilot by signing in, or with an api key"
       />
 
       <TerminalBar
@@ -216,10 +217,13 @@ function McpConnectContent() {
         </div>
       </TerminalBar>
 
-      {/* ── Section 1: Endpoint (hidden if no keys) ── */}
+      {/* ── Section 0: OAuth sign-in (needs no api key) ── */}
+      <McpOAuthConnect mcpUrl={mcpUrl} />
+
+      {/* ── Section 1: Endpoint with api-key auth (hidden if no keys) ── */}
       <McpAgentDefaultsSettings />
       {!hasKeys ? null : <section className="mb-8">
-        <SectionHeader icon={Plug} title="endpoint" />
+        <SectionHeader icon={Plug} title="endpoint (api key)" />
         <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] rounded-[14px] p-5 space-y-4">
           {/* URL row */}
           <div>
@@ -252,9 +256,9 @@ function McpConnectContent() {
         </div>
       </section>}
 
-      {/* ── Section 2: API Key ── */}
+      {/* ── Section 2: API Key (alternative for headless / ci clients) ── */}
       <section className="mb-8">
-        <SectionHeader icon={Key} title="api key" />
+        <SectionHeader icon={Key} title="api key (alternative)" />
         {keysError ? (
           <div className="border border-[var(--color-error)]/20 bg-[var(--color-error)]/5 rounded-[14px] p-4 flex items-start gap-3">
             <Info
@@ -314,11 +318,11 @@ function McpConnectContent() {
                 strokeWidth={1.5}
               />
               <div className="flex-1">
-                <p className="text-[12px] text-[var(--color-warning)] leading-relaxed mb-1 font-medium">
-                  an api key is required to connect mcp clients.
+                <p className="text-[12px] text-[var(--color-text-muted)] leading-relaxed mb-1 font-medium">
+                  no api key yet — that is fine for interactive clients.
                 </p>
                 <p className="text-[11px] text-[var(--color-text-dim)] leading-relaxed mb-3">
-                  create an api key first — without one, no mcp client (Claude Code, Cursor, etc.) can authenticate with SignalPilot.
+                  claude.ai, claude code and cursor sign in through oauth above. create an api key only for headless or ci clients that cannot open a browser.
                 </p>
                 <Link
                   href="/settings/api-keys"
@@ -333,9 +337,9 @@ function McpConnectContent() {
         )}
       </section>
 
-      {/* ── Section 3: Client Configuration (hidden if no keys) ── */}
+      {/* ── Section 3: API-key client configuration (hidden if no keys) ── */}
       {!hasKeys ? null : <section className="mb-8">
-        <SectionHeader icon={Terminal} title="client configuration" />
+        <SectionHeader icon={Terminal} title="client configuration (api key)" />
 
         {/* Tab selector */}
         <div role="tablist" className="flex items-center gap-0 mb-4 border border-[var(--color-border)] bg-[var(--color-bg-card)] rounded-[10px] overflow-hidden">

@@ -36,6 +36,7 @@ from .notebook_files import router as notebook_files_router
 from .notebook_sessions import router as notebook_sessions_router
 from .notion import router as notion_router
 from .notion import webhook_router as notion_webhook_router
+from .oauth_metadata import router as oauth_metadata_router
 from .org_secrets import router as org_secrets_router
 from .projects import router as projects_router
 from .query import router as query_router
@@ -60,6 +61,7 @@ def register_routers(app: FastAPI) -> None:
     from .artifact_downloads import router as artifact_download_router
     app.include_router(artifact_download_router)
     app.include_router(health_router)
+    app.include_router(oauth_metadata_router)
     app.include_router(settings_router)
     app.include_router(connections_router)
     app.include_router(demo_router)

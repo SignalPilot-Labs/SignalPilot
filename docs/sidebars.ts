@@ -11,7 +11,7 @@ const sidebars: SidebarsConfig = {
       label: 'Start here',
       collapsed: false,
       className: 'sp-cat sp-cat-start',
-      items: ['home', 'quickstart', 'concepts', 'cloud'],
+      items: ['quickstart', 'concepts', 'cloud'],
     },
     {
       type: 'category',

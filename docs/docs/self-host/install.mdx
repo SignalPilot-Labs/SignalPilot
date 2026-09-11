@@ -1,0 +1,109 @@
+---
+sidebar_position: 1
+title: Self-host with Docker Compose
+sidebar_label: Docker Compose install
+hide_title: true
+---
+
+import PageHero from '@site/src/components/PageHero';
+import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+import Callout from '@site/src/components/Callout';
+import { SelfHost } from '@site/src/components/illustrations';
+
+<PageHero
+  eyebrow="Self-host · Docker Compose"
+  title="Self-host with Docker Compose"
+  lede="Run the whole SignalPilot stack on your own machine or inside your network with Docker Compose. It takes about five minutes."
+  illustration={<SelfHost />}
+/>
+
+## Should I self-host?
+
+Most teams should not. [SignalPilot Cloud](/docs/cloud) is the fastest way to get started, and everything in the [main docs](/docs/) assumes it. Self-host when you need the gateway inside your own network, when policy says your warehouse credentials cannot leave your infrastructure, or when you want to develop against the code. If that is you, this page gets a full local stack running in about five minutes.
+
+## Prerequisites
+
+- Docker 24 or newer, with Docker Compose v2
+- Git
+- About 4 GB of free memory for the containers
+- The ports listed below free on your machine
+
+## Install
+
+<MiniCopyBlock
+  label="clone and start the stack"
+  code={`git clone https://github.com/SignalPilot-Labs/signalpilot.git\ncd signalpilot\ncp .env.example .env\ndocker compose up -d`}
+/>
+
+The stack starts in the background. On the first run Docker pulls and builds the images, which takes a few minutes.
+
+<Callout kind="security" title="Replace the example encryption key before you store real credentials">
+The committed `docker-compose.yml` ships with a public example value for `SP_ENCRYPTION_KEY`. It protects every warehouse credential you save. Generate your own key and set it in `.env` before you add a connection:
+
+`python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`
+
+While you are there, change the Postgres password too. The default is `changeme_dev_only`.
+</Callout>
+
+## Verify
+
+<MiniCopyBlock
+  label="verify the stack"
+  code={`docker compose ps\ncurl http://localhost:3300/health\ncurl -I http://localhost:3200`}
+/>
+
+Every service should show `healthy` or `running`. Then open the web UI at `http://localhost:3200`. The MCP endpoint for agents is `http://localhost:3300/mcp`.
+
+## What is running
+
+| Service | Port on your machine | What it does |
+|---|---|---|
+| `web` | `3200` | The web UI |
+| `gateway` | `3300` | The gateway: MCP server, REST API, governance, audit |
+| `notebook` | `2718` | The shared notebook container used in local mode |
+| `db` | `5601` (container port `5432`) | Postgres, the gateway's own database |
+| `minio` | `9000` (API), `9001` (console) | S3-compatible object storage for workspaces, chat artifacts, and eval evidence |
+| `mailpit` | `8025` | Catches outgoing email so you can read it in a browser |
+| `gateway-chat-worker` | internal | Runs chat and agent jobs |
+| `sandbox` | internal | Sandbox manager for DuckDB and SQLite queries over local files |
+| `minio-init` | internal | One-shot job that creates the object storage buckets |
+| `eval-object-proxy` | internal | Read-only bridge from the eval network to object storage |
+
+Every published port is bound to loopback only (`127.0.0.1` and `[::1]`). Nothing is reachable from other machines unless you put a reverse proxy in front of it. When you are ready for that, read [Run in production](/docs/self-host/production).
+
+Override any host port in `.env` with `SP_WEB_PORT`, `SP_GATEWAY_PORT`, `SP_NOTEBOOK_PORT`, or `SP_DB_PORT`.
+
+## Where your data lives
+
+The gateway stores connections, the knowledge base, audit logs, and run history in Postgres. Docker keeps that database, object storage, repositories, and workspace files in named volumes (`signalpilot-pg-data`, `signalpilot-minio-data`, `signalpilot-data`, `signalpilot-repos`, `signalpilot-workspace`, and a few smaller ones), so they survive restarts and upgrades. [Operations](/docs/self-host/operations) lists what to back up.
+
+## Configure
+
+`.env` holds your local overrides. Ports, Anthropic credentials for chat, and optional Slack and Notion settings are all commented in the file. The [configuration reference](/docs/self-host/configuration) covers every variable the gateway reads.
+
+## Read the logs
+
+<MiniCopyBlock
+  label="tail logs"
+  code={`docker compose logs -f gateway\ndocker compose logs -f gateway-chat-worker\ndocker compose logs -f web`}
+/>
+
+## Upgrade
+
+<MiniCopyBlock
+  label="upgrade"
+  code={`git pull\ndocker compose pull\ndocker compose build\ndocker compose up -d`}
+/>
+
+Compose recreates the containers that changed. On a single node that means a few seconds of downtime while the gateway restarts. Database schema changes apply automatically when the gateway boots. Take a backup first, see [Operations](/docs/self-host/operations#schema-changes-on-upgrade).
+
+## Connect a client
+
+Point your agent at `http://localhost:3300/mcp`. The client pages walk through each one: [Claude](/docs/clients/claude), [ChatGPT](/docs/clients/chatgpt), and [Claude Code](/docs/clients/claude-code).
+
+## Next steps
+
+- [Configuration reference](/docs/self-host/configuration) for every environment variable.
+- [Run in production](/docs/self-host/production) for a multi-tenant deployment behind TLS.
+- [Operations](/docs/self-host/operations) for backups, retention, and upgrades.
+- [SSH tunneling](/docs/self-host/ssh-tunneling) to reach a warehouse on a private network.

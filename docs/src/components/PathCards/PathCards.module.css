@@ -1,0 +1,146 @@
+.grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.85rem;
+  margin: 1.5rem 0 2rem;
+}
+
+@media (min-width: 640px) {
+  .cols2,
+  .cols3,
+  .cols4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 997px) {
+  .cols3 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .cols4 {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 1rem;
+  padding: 1.1rem 1.15rem 1.1rem 1.1rem;
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-radius-card);
+  background: var(--sp-card);
+  color: var(--sp-text);
+  text-decoration: none;
+  transition: border-color 200ms var(--sp-ease),
+              background 200ms var(--sp-ease),
+              transform 200ms var(--sp-ease);
+}
+
+.card:hover,
+.card:focus-visible {
+  color: var(--sp-text);
+  text-decoration: none;
+  border-color: color-mix(in srgb, var(--sp-mint) 45%, var(--sp-line-2));
+  background: var(--sp-card-hover);
+  transform: translateY(-2px);
+}
+
+.card:focus-visible {
+  outline: 2px solid var(--sp-mint);
+  outline-offset: 3px;
+}
+
+.icon {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  border-radius: var(--sp-radius-ctl);
+  border: 1px solid var(--sp-line);
+  background: var(--sp-card-solid);
+  color: var(--sp-text);
+  flex-shrink: 0;
+  transition: color 200ms var(--sp-ease), border-color 200ms var(--sp-ease);
+}
+
+.icon > * {
+  width: 24px;
+  height: 24px;
+}
+
+.card:hover .icon,
+.card:focus-visible .icon {
+  color: var(--sp-mint);
+  border-color: color-mix(in srgb, var(--sp-mint) 35%, var(--sp-line));
+}
+
+.text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.titleRow {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.title {
+  font-family: var(--sp-font-sans);
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: var(--sp-track-tight);
+  color: var(--sp-heading);
+  line-height: 1.3;
+}
+
+.badge {
+  font-family: var(--sp-font-mono);
+  font-size: 9.5px;
+  font-weight: 500;
+  letter-spacing: var(--sp-track-wider);
+  text-transform: uppercase;
+  color: var(--sp-mint);
+  border: 1px solid color-mix(in srgb, var(--sp-mint) 40%, transparent);
+  border-radius: var(--sp-radius-pill);
+  padding: 0.12rem 0.5rem;
+  line-height: 1.5;
+}
+
+.description {
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--sp-muted);
+}
+
+.chevron {
+  color: var(--sp-dim);
+  display: grid;
+  place-items: center;
+  transition: color 200ms var(--sp-ease), transform 200ms var(--sp-ease);
+}
+
+.card:hover .chevron,
+.card:focus-visible .chevron {
+  color: var(--sp-mint);
+  transform: translateX(2px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card,
+  .chevron,
+  .icon {
+    transition: none;
+  }
+
+  .card:hover,
+  .card:focus-visible {
+    transform: none;
+  }
+}

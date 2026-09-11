@@ -1,56 +1,73 @@
 ---
 sidebar_position: 1
 slug: /
+title: Get started
+description: Connect a database, add SignalPilot to your AI tool, and ask your first question in about ten minutes.
+hide_title: true
+sidebar_label: Get started
 ---
 
-import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+import PageHero from '@site/src/components/PageHero';
+import { Steps, Step } from '@site/src/components/Steps';
+import { PathCards, PathCard } from '@site/src/components/PathCards';
+import { LinkTiles, LinkTile } from '@site/src/components/LinkTiles';
+import Callout from '@site/src/components/Callout';
+import ClientMark from '@site/src/components/ClientMark';
+import { Connect, Warehouse, Knowledge, Chat } from '@site/src/components/illustrations';
 
-# Quickstart
+<PageHero
+  eyebrow="Start here"
+  title="Get started with SignalPilot"
+  lede="SignalPilot sits between your AI tools and your data. Ask a question in Claude, ChatGPT, or SignalPilot's own chat, and it runs a checked, read-only query against your warehouse and shows its work."
+  illustration={<Connect />}
+  actions={[
+    { label: 'Open SignalPilot', to: 'https://app.signalpilot.ai', primary: true },
+    { label: 'How it works', to: '/docs/concepts' },
+  ]}
+/>
 
-**SignalPilot** is a governed MCP server for AI agents — Snowflake, BigQuery, Postgres, dbt with enterprise guardrails. Works from Claude Code or Codex, backed by three pieces of infrastructure: plugin (skills + tools), MCP server, and an observability platform.
+<Steps>
+  <Step title="Create your workspace">
+    Sign up at [app.signalpilot.ai](https://app.signalpilot.ai). If a colleague invited you, accept the invitation and you land in their workspace with its connections and definitions already in place. Otherwise, name your workspace after your team. The free plan is enough to try everything on this page.
+  </Step>
 
-## Three commands to a working setup
+  <Step title="Connect a database" illustration={<Warehouse />}>
+    Open **Connections → Add connection**, choose your warehouse, and paste read-only credentials. SignalPilot supports Snowflake, BigQuery, Postgres, Redshift, Databricks, SQL Server, and more. The connection is tested before it is saved.
 
-<div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-  <MiniCopyBlock
-    label="1 · clone and start the stack"
-    code={`git clone https://github.com/SignalPilot-Labs/signalpilot.git\ncd signalpilot\ndocker compose up -d`}
-  />
-  <MiniCopyBlock
-    label="2 · connect the mcp server to claude code"
-    code="claude mcp add --transport http signalpilot http://localhost:3300/mcp"
-  />
-  <MiniCopyBlock
-    label="3 · install the plugin for skills + verifier agent (Claude Code)"
-    code={`claude plugin marketplace add SignalPilot-Labs/signalpilot-plugin\nclaude plugin install signalpilot-dbt@signalpilot`}
-  />
-  <MiniCopyBlock
-    label="3 · or install the plugin for Codex"
-    code={`codex plugin marketplace add SignalPilot-Labs/codex-signalpilot-plugin\ncodex plugin add signalpilot@signalpilot`}
-  />
-</div>
+    No database handy? Turn on the [demo warehouse](/docs/product/demo-warehouse) and try everything against sample data first.
+  </Step>
 
-That's it. SignalPilot works with both **Claude Code** and **Codex** as entrypoints — install the plugin for whichever you use. Your agent now has governed access to your databases.
+  <Step title="Ask a question you can check" illustration={<Chat />}>
+    Open **Chats**, pick the project, and ask something you already know the answer to, such as last month's order count. Read the answer, then open the evidence dropdown to see the SQL. If the number is right, you are set. If not, go to the next step.
+  </Step>
 
-## What you get
+  <Step title="Teach it your definitions" illustration={<Knowledge />}>
+    Open the [knowledge base](/docs/product/knowledge-base) and write down the things your team knows but the schema does not: what counts as an active customer, which table is the source of truth for revenue, which fiscal calendar you use. Every later answer uses them automatically.
+  </Step>
 
-- **54 MCP tools** — schema discovery, read-only SQL, dbt model verification, cost estimation, join path finding, sandboxed notebooks, knowledge base, Notion
-- **SQL governance** — DDL/DML blocked at parse time, auto-LIMIT injection, 79+ dangerous functions denied, full audit log
-- **23 Claude Code skills** — battle-tested dbt and SQL skills that auto-load based on your task
-- **Observability** — query history, latency dashboards, per-session budget caps, encrypted credential storage
+  <Step title="Add SignalPilot to the AI tool you already use">
+    You can stay in SignalPilot's chat, or bring the same governed access into your everyday tools.
 
-## Next steps
+    <PathCards>
+      <PathCard title="Claude" description="Add SignalPilot as a connector in claude.ai." to="/docs/clients/claude" icon={<ClientMark client="claude" />} />
+      <PathCard title="ChatGPT and OpenAI" description="ChatGPT connectors, Codex, and the Agents SDK." to="/docs/clients/chatgpt" icon={<ClientMark client="chatgpt" />} />
+      <PathCard title="Claude Code" description="One command, plus skills for dbt and SQL work." to="/docs/clients/claude-code" icon={<ClientMark client="claude-code" />} />
+      <PathCard title="Cursor and other tools" description="Any tool that supports MCP." to="/docs/clients/other-tools" icon={<ClientMark client="cursor" />} />
+    </PathCards>
+  </Step>
+</Steps>
 
-**[Concepts](/docs/concepts)** — Mental model: gateway, governance, MCP, skills.
+<Callout kind="note" title="Nothing is written to your database">
+SignalPilot only ever reads. Statements that would change data are blocked before they run, results are capped, and every query is recorded in the [audit log](/docs/product/audit).
+</Callout>
 
-**[MCP Setup](/docs/mcp/connect-claude-code)** — Verify tools loaded; troubleshoot handshake.
+## Where to go next
 
-**[Plugin](/docs/plugin)** — Install skills and the verifier agent.
-
-**[Tools Reference](/docs/reference/tools-overview)** — All 54 tools, grouped by category.
-
-**[Evals](/docs/evals/overview)** — Grade the agent against questions you know the answer to, and catch regressions before your team does.
-
-## SignalPilot Cloud
-
-Prefer not to self-host? [SignalPilot Cloud](https://app.signalpilot.ai) is free to start — sign up, get an API key, and point Claude Code at `https://gateway.signalpilot.ai/mcp`. See [Cloud setup](/docs/setup/cloud).
+<LinkTiles>
+  <LinkTile eyebrow="Product" title="Chat with your data" description="What happens during a run, and how answers are built." to="/docs/product/chat" />
+  <LinkTile eyebrow="Product" title="Knowledge base" description="The step that makes answers match your business." to="/docs/product/knowledge-base" />
+  <LinkTile eyebrow="Extend" title="Add MCP servers" description="Give the chat agent tools from Linear, GitHub, Notion, and more." to="/docs/settings/connectors" />
+  <LinkTile eyebrow="Trust" title="Governance" description="Exactly what is blocked, limited, and logged." to="/docs/reference/governance" />
+  <LinkTile eyebrow="Teams" title="Evals" description="Grade the agent on questions you know the answer to." to="/docs/evals/overview" />
+  <LinkTile eyebrow="Engineers" title="Self-host" description="Run the whole stack yourself with Docker Compose." to="/docs/self-host/install" />
+</LinkTiles>

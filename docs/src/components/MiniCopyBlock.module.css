@@ -2,6 +2,7 @@
    translucent panel, 18px radius, mono eyebrow header. */
 
 .block {
+  min-width: 0;
   border: 1px solid var(--sp-line-2);
   background: var(--ifm-pre-background);
   border-radius: var(--sp-radius-panel);
@@ -61,6 +62,9 @@
 }
 
 .pre {
+  /* A long command must scroll inside the panel, never widen the page:
+     inline-size containment zeroes its min-content contribution. */
+  contain: inline-size;
   overflow-x: auto;
   padding: 1rem 1.1rem;
   margin: 0;

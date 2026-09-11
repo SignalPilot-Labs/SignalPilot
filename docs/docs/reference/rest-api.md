@@ -14,7 +14,7 @@ automatable. Around 210 routes, grouped below by area.
 - **Auth** — an API key as `Authorization: Bearer sp_…` or `X-API-Key: sp_…`. In
   cloud mode a Clerk session JWT is also accepted for browser calls.
 - **Scope** — each route requires one of `read`, `query`, `write`, `execute`, or
-  `admin`. See [Authentication](/docs/mcp/auth#scopes).
+  `admin`. See [Authentication](/docs/clients/api-keys#permissions-scopes).
 - **Tenancy** — the workspace is always derived from the credential, never from a
   parameter. There is no cross-workspace read.
 - **Rate limits** — 10,000 req/min per IP general, 1,000/min on expensive routes,

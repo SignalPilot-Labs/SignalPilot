@@ -35,7 +35,7 @@ what it thinks is sensitive, per table, with a suggested rule:
 
 The scan is a *proposal*, not an enforcement — it detects, it does not change
 behaviour on its own. Detection is available on every plan; enforced redaction on
-query results is a paid feature (see [plan limits](/docs/setup/cloud#plan-limits)).
+query results is a paid feature (see [plan limits](/docs/cloud#plan-limits)).
 
 The scan matches on column names, so it finds `email`, `ssn`, `phone_number`, and
 misses a sensitive column called `field_7`. Treat it as a first pass over a

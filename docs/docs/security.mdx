@@ -1,14 +1,22 @@
 ---
 sidebar_position: 3
+title: Security
+hide_title: true
 ---
 
-# Security
+import PageHero from '@site/src/components/PageHero';
+import { Governance } from '@site/src/components/illustrations';
 
-SignalPilot was designed to make AI database access safe by default. This page covers the full security model.
+<PageHero
+  eyebrow="Trust · Security"
+  title="Security"
+  lede="SignalPilot is designed to make AI access to your data safe by default. This page describes the full security model and how to report a problem."
+  illustration={<Governance />}
+/>
 
 ## Reporting a vulnerability
 
-If you believe you've found a security vulnerability in SignalPilot, please report it privately — do **not** open a public GitHub issue.
+If you believe you have found a security vulnerability in SignalPilot, please report it privately. Do **not** open a public GitHub issue.
 
 **Email: security@signalpilot.ai**
 
@@ -23,7 +31,7 @@ Please include:
 
 - Acknowledgement within 3 business days
 - Triage and initial assessment within 7 business days
-- Coordinated disclosure — we'll work with you on a fix timeline and credit you in the advisory if you'd like
+- Coordinated disclosure. We will work with you on a fix timeline and credit you in the advisory if you would like.
 
 We use [GitHub Security Advisories](https://github.com/SignalPilot-Labs/signalpilot/security/advisories) to publish fixed vulnerabilities once a patch is available.
 
@@ -34,7 +42,7 @@ We use [GitHub Security Advisories](https://github.com/SignalPilot-Labs/signalpi
 - The SignalPilot gateway (FastAPI backend, MCP server, REST API)
 - The web UI (Next.js frontend)
 - The Claude Code plugin
-- The gVisor sandbox (`sp-sandbox/`)
+- The sandbox manager (`sp-sandbox/`) and the notebook and chat sandboxes
 - Database connectors and credential storage
 
 **Out of scope:**
@@ -47,7 +55,7 @@ We use [GitHub Security Advisories](https://github.com/SignalPilot-Labs/signalpi
 
 - **Read-only enforcement**: DDL and DML statements are blocked at the parse layer. No `CREATE`, `DROP`, `ALTER`, `INSERT`, `UPDATE`, `DELETE`.
 - **Dangerous function denylist**: 79+ functions blocked across PostgreSQL, MySQL, SQLite, SQL Server, Snowflake, Databricks, and BigQuery.
-- **LIMIT injection**: Fail-closed — if LIMIT can't be injected, the query is rejected.
+- **LIMIT injection**: Fail-closed. If LIMIT cannot be injected, the query is rejected.
 - **Multi-statement blocking**: Prevents SQL stacking attacks.
 - **INTO clause detection**: Blocks `SELECT INTO`, `COPY TO`, and similar exfiltration patterns.
 
@@ -57,7 +65,7 @@ See [Governance reference](/docs/reference/governance) for the complete rule set
 
 - **Clerk JWT** verification with JWKS rotation, clock leeway, and required claims (cloud mode)
 - **API keys** with Fernet encryption at rest, org-scoped, with brute-force rate limiting (60/min/IP)
-- **Org role enforcement**: Admin-only endpoints require `org:admin` role
+- **Org role enforcement**: Admin-only endpoints require the `org:admin` role
 
 ## Network
 
@@ -65,22 +73,25 @@ See [Governance reference](/docs/reference/governance) for the complete rule set
 - **DNS rebinding defense**: Hostnames resolved and validated before connection
 - **Non-root containers**: Gateway and backend run as UID 10001
 
-## Sandboxed Workspaces
+## Sandboxed workspaces
 
-- **gVisor isolation**: Notebook pods (`run_notebook`) execute under the gVisor runtime, not a shared host kernel.
-- **Per-org NetworkPolicy**: Each org's notebook pods are network-isolated from other tenants' workloads.
-- **Read-only rootfs**: Pod root filesystem is mounted read-only.
-- **IMDS egress blocked**: Access to the cloud instance metadata service is denied from inside the pod.
+Notebooks and chat sessions run user- and agent-supplied code, so each one is isolated from the gateway and from every other tenant:
+
+- **One microVM per session.** Each session runs in its own isolated microVM. Nothing is shared with other sessions or with the host.
+- **Restricted egress.** A sandbox can reach DNS, the gateway, and the hosts in the `SP_NOTEBOOK_EGRESS_ALLOW` allowlist. Nothing else.
+- **Fixed resources.** CPU and memory are fixed per sandbox (`SP_NOTEBOOK_VCPUS`, `SP_NOTEBOOK_MEMORY_MB`).
+- **Per-org concurrency cap.** `SP_NOTEBOOK_MAX_RUNNING_PER_ORG` (default 20) bounds how many sandboxes one organization can run at once.
+- **Short-lived.** Idle sessions are snapshotted and destroyed after `SP_NOTEBOOK_IDLE_SNAPSHOT_SECONDS` (15 minutes). Durable state is the committed workspace, not the sandbox.
 
 ## Evaluation workloads
 
 - Eval configuration, execution, evidence, and live-sandbox routes require a user ID listed in `SP_ADMIN_USER_IDS` and an org listed in `SP_EVAL_ALLOWED_ORGS`.
 - Every task receives a short-lived API key bound to one run, one task, and one database connection. The key cannot access query history, workspace integrations, notebooks, connection mutation, or Xata branch-control tools.
 - Write tasks receive a disposable branch credential. The local Postgres provider refuses to start a task while its role can connect to any other non-template database.
-- Eval pods run non-root with a read-only root filesystem, all Linux capabilities dropped, no service-account token, resource limits, and mandatory NetworkPolicy in cloud mode.
+- Eval sandboxes run non-root with fixed CPU and memory limits and restricted egress. In cloud mode the runner image must be digest-pinned.
 - The local eval runtime cannot join the control database or object-store networks. It receives artifacts through a signed, GET/HEAD-only proxy and uses a dedicated disposable warehouse service.
 
-Eval containers execute model-authored commands and hold the task's source checkout and branch credential. The current cloud policy permits public HTTPS so the agent can reach its model provider. Deployments that treat eval repositories as hostile must route that egress through an allowlisting proxy; Kubernetes NetworkPolicy alone cannot restrict destinations by hostname.
+Eval containers execute model-authored commands and hold the task's source checkout and branch credential. The current cloud policy permits public HTTPS so the agent can reach its model provider. Deployments that treat eval repositories as hostile must route that egress through an allowlisting proxy; a network-level allowlist alone cannot restrict destinations by hostname.
 
 ## Audit
 
@@ -90,7 +101,7 @@ Eval containers execute model-authored commands and hold the task's source check
 
 ## Encryption
 
-- **Fernet with MultiFernet rotation** for credential storage; prior keys are decrypt-only and rows are rewritten under the primary key on access
+- **Fernet with MultiFernet rotation** for credential storage. Set the new key in `SP_ENCRYPTION_KEY` and keep prior keys in `SP_ENCRYPTION_KEY_OLD`; prior keys are decrypt-only and rows are rewritten under the primary key on access.
 
 ## Rate limiting
 
@@ -101,7 +112,7 @@ Eval containers execute model-authored commands and hold the task's source check
 
 ## Tenant isolation
 
-In multi-tenant (cloud) mode, every API key is scoped to an org. A key can only access connections registered by that org. Cross-tenant access is blocked at the data layer — not just at the API layer.
+In multi-tenant (cloud) mode, every API key is scoped to an org. A key can only access connections registered by that org. Cross-tenant access is blocked at the data layer, not just at the API layer.
 
 ## Supported versions
 

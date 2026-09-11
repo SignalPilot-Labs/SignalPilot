@@ -41,7 +41,7 @@ Sync and fetch actions pull the latest commit into the workspace.
 - The gateway exchanges the App's private key for an **installation token** with
   a short lifetime, scoped to that installation.
 - The token is used gateway-side to clone. It is **never** handed to a sandbox:
-  eval and notebook pods receive a presigned tarball of the checked-out tree, so
+  eval and notebook sandboxes receive a presigned tarball of the checked-out tree, so
   a compromised sandbox has no path back to your repositories.
 - A repository your installation does not cover is refused with a clear error
   rather than attempted anonymously.
@@ -51,7 +51,7 @@ Sync and fetch actions pull the latest commit into the workspace.
 Configure the App with `SP_GITHUB_APP_ID`, `SP_GITHUB_APP_CLIENT_ID`,
 `SP_GITHUB_APP_CLIENT_SECRET`, `SP_GITHUB_APP_PRIVATE_KEY`, and
 `SP_GITHUB_APP_SLUG`, plus `SP_WEB_URL` so the OAuth redirect returns to your web
-app. See [Configuration](/docs/setup/configuration#github-app).
+app. See [Configuration](/docs/self-host/configuration#integrations).
 
 There is also a bot path — `SP_GITHUB_BOT_TOKEN`, `SP_GITHUB_WEBHOOK_SECRET`,
 `SP_GITHUB_BOT_CONNECTION` — used for webhook-driven automation. The webhook

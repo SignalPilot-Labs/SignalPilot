@@ -27,9 +27,9 @@ Skills are **conditionally loaded**, mostly orchestrated by `dbt-workflow`. The 
 
 Multiple skills are active at once — e.g. `dbt-workflow` + `duckdb-sql` + `domain-ecommerce` + `dbt-write` for a DuckDB-backed e-commerce dbt project.
 
-The plugin ships **23 skills** and **2 verifier agents**.
+The plugin ships **24 skills** and **2 verifier agents**.
 
-## The 23 skills, by group
+## The 24 skills, by group
 
 ### Orchestration
 
@@ -102,4 +102,4 @@ Both are dispatched in parallel in Step 8. Both are strictly **read-only** — t
 | `verifier` | Structure verification | CHECK 1 table existence, CHECK 2 column completeness (`map-columns` + `check_model_schema`), CHECK 3 row count / fan-out / cardinality (`audit_model_sources`), CHECK 4 non-deterministic SQL, CHECK 5 source-table preservation. |
 | `value-verifier` | Aggregate value verification | CHECK 1 sample value spot-check, CHECK 2 aggregate cross-validation via `verify_model_values` (COUNT(*) vs COUNT(DISTINCT) alignment to column names), CHECK 3 status-column filtering (returns/cancellations excluded per the domain skill). |
 
-See [Skills reference](/docs/plugin/skills-reference) for the per-skill load triggers and coverage of all 23 skills.
+See [Skills reference](/docs/plugin/skills-reference) for the per-skill load triggers and coverage of all 24 skills.

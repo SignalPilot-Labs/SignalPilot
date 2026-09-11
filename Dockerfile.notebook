@@ -1,10 +1,24 @@
 # syntax=docker/dockerfile:1.7
+
+# Dashboard screenshot renderer. The chat sandbox renders a
+# `artifacts/<name>.dashboard.json` file to PNG with ECharts server-side SVG
+# plus resvg, driven by a small Node CLI. This stage builds that CLI from the
+# standalone package under signalpilot/web/dashboard-renderer/ (its own
+# package.json; no access to the rest of the web app). The final image copies
+# only the node binary, the bundle, the resvg native module, and the fonts.
+FROM node:24-bookworm-slim AS dashboard-renderer
+WORKDIR /build
+COPY signalpilot/web/dashboard-renderer/package.json signalpilot/web/dashboard-renderer/package-lock.json ./
+RUN npm ci --ignore-scripts
+COPY signalpilot/web/dashboard-renderer/ ./
+RUN npm run build && node -e "require('@resvg/resvg-js')"
+
 FROM python:3.13-slim
 
 RUN groupadd -g 10001 notebook && \
     useradd -r -u 10001 -g notebook notebook && \
     mkdir -p /workspace /home/notebook/.sp && \
-    apt-get update && apt-get install -y git curl gnupg && \
+    apt-get update && apt-get install -y git curl gnupg libstdc++6 fonts-dejavu-core && \
     # Microsoft ODBC driver for dbt-sqlserver (SQL Server customers). A prod
     # sandbox is recreated constantly — anything not baked here does not exist.
     curl -fsSL https://packages.microsoft.com/keys/microsoft.asc -o /usr/share/keyrings/microsoft.asc && \
@@ -50,6 +64,22 @@ COPY --chown=notebook:notebook signalpilot/notebook-server/signalpilot/ signalpi
 COPY --chown=notebook:notebook signalpilot-plugin/.claude-plugin/ /opt/signalpilot-plugin/.claude-plugin/
 COPY --chown=notebook:notebook signalpilot-plugin/skills/ /opt/signalpilot-plugin/skills/
 COPY --chown=notebook:notebook signalpilot-plugin/agents/ /opt/signalpilot-plugin/agents/
+
+# Dashboard screenshot CLI (see the dashboard-renderer stage above). Node is
+# needed only for this; the Claude Agent SDK ships its own native binary.
+COPY --from=dashboard-renderer /usr/local/bin/node /usr/local/bin/node
+COPY --from=dashboard-renderer --chown=notebook:notebook /build/dist/render-cli.js /opt/sp-dashboard/render-cli.js
+COPY --from=dashboard-renderer --chown=notebook:notebook /build/node_modules/@resvg/ /opt/sp-dashboard/node_modules/@resvg/
+COPY --from=dashboard-renderer --chown=notebook:notebook /build/fonts/ /opt/sp-dashboard/fonts/
+ENV SP_DASHBOARD_RENDER_CLI=/opt/sp-dashboard/render-cli.js
+# Smoke test in the final layer: an empty spec must fail validation with exit
+# code 2 (the CLI's invalid-spec path), which proves node runs, the bundle
+# loads, and the resvg native module resolves from /opt/sp-dashboard.
+RUN set +e; \
+    echo '{"spec":{}}' | node /opt/sp-dashboard/render-cli.js --out /tmp/x.png; \
+    code=$?; set -e; \
+    if [ "$code" -ne 2 ]; then echo "render-cli smoke test: expected exit 2, got $code" >&2; exit 1; fi; \
+    rm -f /tmp/x.png
 
 # Install only the local package after copying source. Source edits should not
 # invalidate the heavyweight dependency layer above.

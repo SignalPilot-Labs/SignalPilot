@@ -40,7 +40,7 @@ export function createNetworkRequests(): EditRequests & RunRequests {
   } | null = null;
   const getClient = () => {
     const runtimeManager = getRuntimeManager();
-    const base = runtimeManager.httpURL.toString();
+    const base = runtimeManager.httpBaseURL.toString();
     if (!cachedClient || cachedClient.base !== base) {
       cachedClient = {
         base,

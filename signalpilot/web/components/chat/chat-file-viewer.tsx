@@ -1,17 +1,17 @@
 "use client";
 
 import { AlertCircle, Download, Loader2 } from "lucide-react";
-import { useEffect, useState } from "react";
-import {
-  downloadConversationFile,
-  getConversationFileText,
-  type ConversationFileInfo,
-} from "~/lib/api";
-import { formatByteSize } from "~/lib/chat-artifacts";
+import { useContext, useState } from "react";
+import type { ConversationFileInfo } from "~/lib/api";
+import { formatByteSize, isRunStreaming } from "~/lib/chat-artifacts";
 import { ArtifactLightbox } from "~/components/chat/artifact-lightbox";
 import { ChatCode, type ChatCodeLanguage } from "~/components/chat/chat-code";
 import { ChatCsvPreview } from "~/components/chat/chat-csv-preview";
 import { ChatMarkdown } from "~/components/chat/chat-markdown";
+import { ChatUiContext } from "~/components/chat/chat-ui-context";
+import { DashboardFileView } from "~/components/chat/dashboard-file-view";
+import { downloadUiFile } from "~/components/chat/download-ui-file";
+import { useFileText } from "~/components/chat/use-file-text";
 import { SandboxedHtml } from "~/components/chat/sandboxed-html";
 import { useFileObjectUrl } from "~/components/chat/use-file-object-url";
 
@@ -28,45 +28,6 @@ function languageForFilename(filename: string): ChatCodeLanguage {
 /** CSV and TSV get the table preview; other data kinds keep the text view. */
 function isDelimitedData(file: ConversationFileInfo): boolean {
   return file.kind === "data" && /\.(csv|tsv)$/i.test(file.filename);
-}
-
-type TextState =
-  | { phase: "loading" }
-  | { phase: "error"; message: string }
-  | { phase: "text"; text: string };
-
-function useFileText(
-  conversationId: string,
-  file: ConversationFileInfo,
-): TextState {
-  // The result is keyed by file version, so a version change reads as
-  // loading without a reset inside the effect.
-  const key = `${conversationId}:${file.id}:${file.content_hash}`;
-  const [loaded, setLoaded] = useState<{ key: string; state: TextState } | null>(
-    null,
-  );
-  useEffect(() => {
-    let cancelled = false;
-    getConversationFileText(conversationId, file.id)
-      .then((text) => {
-        if (!cancelled) setLoaded({ key, state: { phase: "text", text } });
-      })
-      .catch((error: unknown) => {
-        if (cancelled) return;
-        setLoaded({
-          key,
-          state: {
-            phase: "error",
-            message:
-              error instanceof Error ? error.message : "Could not load the file",
-          },
-        });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [conversationId, file.id, key]);
-  return loaded?.key === key ? loaded.state : { phase: "loading" };
 }
 
 function Loading() {
@@ -96,6 +57,16 @@ function TruncationNotice({ shownChars }: { shownChars: number }) {
   );
 }
 
+/** A dashboard spec resolves its datasets against the manifest and shows
+ * pending tiles while the producing run still streams. Its JSON is parsed
+ * in full; the display cap applies only to the raw view inside. */
+function DashboardBody({ file, text }: { file: ConversationFileInfo; text: string }) {
+  const ui = useContext(ChatUiContext);
+  const files = ui?.files ?? [];
+  const running = isRunStreaming(ui?.events ?? [], file.origin_run_id);
+  return <DashboardFileView file={file} text={text} files={files} running={running} />;
+}
+
 function TextBody({
   file,
   text,
@@ -105,6 +76,7 @@ function TextBody({
   text: string;
   onDownload: () => void;
 }) {
+  if (file.kind === "dashboard") return <DashboardBody file={file} text={text} />;
   const truncated = text.length > MAX_TEXT_CHARS;
   const shown = truncated ? text.slice(0, MAX_TEXT_CHARS) : text;
   if (file.kind === "markdown") {
@@ -204,7 +176,7 @@ function ImageViewer({
 /**
  * Read-only viewer for one conversation file. Dispatches on the file kind:
  * markdown renders, code highlights, html sandboxes, csv tabulates, images
- * zoom.
+ * zoom, dashboards render through the shared DashboardRenderer.
  */
 export function ChatFileViewer({
   conversationId,
@@ -213,15 +185,21 @@ export function ChatFileViewer({
   conversationId: string;
   file: ConversationFileInfo;
 }) {
+  // Downloads go through the context override when one is set (the shared
+  // page); owner pages use the conversation route.
+  const ui = useContext(ChatUiContext);
   const download = () => {
-    void downloadConversationFile(conversationId, file.id, file.filename).catch(
-      () => undefined,
-    );
+    void downloadUiFile(
+      { conversationId, downloadFile: ui?.downloadFile },
+      file,
+    ).catch(() => undefined);
   };
   return (
     <div
       data-testid="chat-file-viewer"
-      className="overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-card)]"
+      // flex-none: the card grows with its content so the panel scrolls it;
+      // as a shrinking flex child it would clip tall views like dashboards.
+      className="flex-none overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-card)]"
     >
       <div className="flex items-center justify-between gap-3 border-b border-[var(--color-border)] px-3.5 py-2">
         <div className="flex min-w-0 items-baseline gap-2">

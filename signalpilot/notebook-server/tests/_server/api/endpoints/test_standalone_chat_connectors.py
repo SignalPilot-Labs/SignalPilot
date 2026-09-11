@@ -175,7 +175,7 @@ async def test_execute_injects_connectors_into_the_agent_run(
     async def execution_directory(**_kwargs: Any) -> tuple[Path, bool]:
         return tmp_path, False
 
-    def build_server(_collector: Any, **kwargs: Any) -> object:
+    def build_server(**kwargs: Any) -> object:
         server_kwargs.update(kwargs)
         return object()
 

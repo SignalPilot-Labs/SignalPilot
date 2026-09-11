@@ -1,0 +1,20 @@
+{
+  "name": "@signalpilot/dashboard-renderer-cli",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Standalone build of the dashboard screenshot CLI (dist/render-cli.js). The React tiles in this directory are consumed by the web app, not by this package.",
+  "license": "UNLICENSED",
+  "scripts": {
+    "build": "node build-cli.mjs"
+  },
+  "dependencies": {
+    "@resvg/resvg-js": "^2.6.2",
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
+    "echarts": "5.6.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "typescript": "^5"
+  }
+}

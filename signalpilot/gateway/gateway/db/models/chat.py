@@ -36,7 +36,8 @@ class GatewayChatConversation(GatewayBase):
     user_id: Mapped[str] = mapped_column(String, nullable=False)
     project_id: Mapped[str | None] = mapped_column(String)
     surface: Mapped[str] = mapped_column(String(20), nullable=False, default="notebook", server_default="notebook")
-    # "user" (person-initiated) or "improvement" (system-initiated improvement run)
+    # "user" (person-initiated), "improvement" (system-initiated improvement
+    # run), or "dashboard_refresh" (system-initiated agent-mode dashboard refresh)
     origin: Mapped[str] = mapped_column(String(20), nullable=False, default="user", server_default="user")
     branch: Mapped[str | None] = mapped_column(String(100))
     commit_sha: Mapped[str | None] = mapped_column(String(40))

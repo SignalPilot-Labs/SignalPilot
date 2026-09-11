@@ -2,8 +2,8 @@
 
 import { useState, useEffect } from "react";
 import { useSignIn, useAuth, useClerk } from "@clerk/nextjs";
-import { useRouter } from "next/navigation";
 import { AuthShell } from "~/components/auth/auth-shell";
+import { currentPostSignInRedirect } from "~/lib/auth/post-sign-in-redirect";
 import { Loader2 } from "lucide-react";
 
 const INPUT_CLASS =
@@ -41,7 +41,6 @@ export default function SignInPage() {
   const { isLoaded, signIn, setActive } = useSignIn();
   const { isSignedIn, orgId } = useAuth();
   const clerk = useClerk();
-  const router = useRouter();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -69,12 +68,13 @@ export default function SignInPage() {
     const activeSession = sessions.find((s: { status: string }) => s.status === "active");
 
     if (activeSession) {
-      // Fully active session — redirect based on org
+      // Fully active session — redirect based on org. A `redirect_url` from
+      // Clerk (OAuth consent for MCP clients) wins over the dashboard.
       setRedirecting(true);
       if (!orgId) {
         window.location.href = "/onboarding";
       } else {
-        window.location.href = "/dashboard";
+        window.location.href = clerk.buildUrlWithAuth(currentPostSignInRedirect());
       }
       return;
     }
@@ -110,7 +110,7 @@ export default function SignInPage() {
       await signIn!.authenticateWithRedirect({
         strategy,
         redirectUrl: "/sign-in/sso-callback",
-        redirectUrlComplete: "/dashboard",
+        redirectUrlComplete: currentPostSignInRedirect(),
       });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Social sign-in failed";
@@ -172,7 +172,7 @@ export default function SignInPage() {
 
       if (result.status === "complete") {
         await setActive!({ session: result.createdSessionId });
-        router.push("/dashboard");
+        window.location.href = clerk.buildUrlWithAuth(currentPostSignInRedirect());
       } else if (result.status === "needs_second_factor") {
         setStep("totp");
       } else {
@@ -200,7 +200,7 @@ export default function SignInPage() {
 
       if (result.status === "complete") {
         await setActive!({ session: result.createdSessionId });
-        router.push("/dashboard");
+        window.location.href = clerk.buildUrlWithAuth(currentPostSignInRedirect());
       } else {
         setError("Verification failed");
       }

@@ -94,6 +94,8 @@ export function guessKindFromPath(path: string): ConversationFileKind {
   if (["png", "jpg", "jpeg", "gif", "svg", "webp"].includes(ext))
     return "image";
   if (ext === "ipynb") return "notebook";
+  // `.dashboard.json` is a dashboard spec, not a data export: check first.
+  if (/\.dashboard\.json$/i.test(path)) return "dashboard";
   if (["csv", "tsv", "parquet", "json", "jsonl", "xlsx"].includes(ext))
     return "data";
   if (["py", "sql", "js", "ts", "sh", "r", "rs", "go", "yml", "yaml"].includes(ext))
@@ -110,7 +112,7 @@ type PathTouch = {
 };
 
 /** Paths a tool_started event touches: one for Write/Edit tools. */
-function toolTouchPaths(event: StandaloneChatEvent): string[] {
+export function toolTouchPaths(event: StandaloneChatEvent): string[] {
   const tool = text(event.payload.tool);
   if (!tool || (!WRITE_TOOLS.has(tool) && !EDIT_TOOLS.has(tool))) return [];
   const input =
@@ -135,6 +137,23 @@ function filesChangedTouchPaths(event: StandaloneChatEvent): string[] {
     if (record.deleted === true) continue;
     const path = text(record.path);
     if (path) paths.push(path);
+  }
+  return paths;
+}
+
+/** Every path a `files_changed` event names, in either payload shape: the
+ * runtime capture (`files: [{path}]`, deleted entries skipped) or the legacy
+ * content-free mirror (`changed: [path]`). Unlike `filesChangedTouchPaths`
+ * this carries no anchor semantics; it answers "did the mirror confirm this
+ * path yet", which is what the replay needs to reveal a manifest row. */
+export function filesChangedNamedPaths(event: StandaloneChatEvent): string[] {
+  const paths = filesChangedTouchPaths(event);
+  const changed = event.payload.changed;
+  if (Array.isArray(changed)) {
+    for (const entry of changed) {
+      const path = text(entry);
+      if (path) paths.push(path);
+    }
   }
   return paths;
 }
@@ -313,6 +332,8 @@ export function cardKindLabel(kind: string, filename: string): string {
       return "Document";
     case "notebook":
       return "Notebook";
+    case "dashboard":
+      return "Dashboard";
     case "code":
       if (ext === "sql") return "SQL query";
       if (ext === "py") return "Script";
@@ -327,6 +348,7 @@ export function primaryActionLabel(kind: string): string {
   switch (kind) {
     case "html":
     case "image":
+    case "dashboard":
       return "Open";
     case "data":
       return "Preview";

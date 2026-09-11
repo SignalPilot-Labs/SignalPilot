@@ -130,7 +130,7 @@ export type ToolResult =
     }
   | {
       kind: "artifact";
-      artifact_kind: "dashboard" | "notebook";
+      artifact_kind: "notebook";
       published: boolean;
       filename?: string;
       artifact_index?: number;
@@ -139,7 +139,69 @@ export type ToolResult =
       session_id?: string;
       notebook_path?: string;
       notebook?: string;
-      dashboard_session_id?: string;
+    }
+  | {
+      /** `dashboard_sample_data`: prepared sample rows per chart. */
+      kind: "dashboard_sample";
+      dashboard_valid: boolean;
+      errors?: string[];
+      charts: {
+        id: string;
+        type?: string;
+        dataset?: string;
+        row_count: number;
+        issue_count: number;
+        columns: ({ name: string; inferred_type?: string } | string)[];
+        rows: Record<string, ToolResultCell>[];
+        issues?: { code: string; message: string }[];
+      }[];
+    }
+  | {
+      /** `dashboard_screenshot`: render outcome (the PNG is not projected). */
+      kind: "dashboard_screenshot";
+      dashboard_valid?: boolean;
+      errors?: string[];
+      rendered: string[];
+      failed: { id: string; code: string; message: string }[];
+      width?: number | null;
+      height?: number | null;
+      preview_path?: string | null;
+      error?: string;
+    }
+  | {
+      /** `dashboard_list_published`: the gallery entries the agent may read. */
+      kind: "dashboard_list";
+      dashboards: {
+        id: string;
+        slug: string;
+        name: string;
+        description?: string | null;
+        chart_count?: number;
+        visibility?: string;
+        updated_at?: string | null;
+        last_refresh_at?: string | null;
+        can_edit?: boolean;
+      }[];
+      total?: number;
+      dashboards_truncated?: boolean;
+    }
+  | {
+      /** `dashboard_load_published`: the spec written into the sandbox, or
+       * the refusal (`error` + `message`). */
+      kind: "dashboard_load";
+      path?: string | null;
+      dashboard?: {
+        id: string;
+        slug: string;
+        name: string;
+        version_no?: number | null;
+        chart_count?: number | null;
+      } | null;
+      datasets?: Record<string, { rows?: number | null; snapshot?: string | null }>;
+      datasets_truncated?: boolean;
+      next?: string | null;
+      error?: string;
+      message?: string;
     }
   | { kind: "json"; value: unknown }
   | { kind: "text" };

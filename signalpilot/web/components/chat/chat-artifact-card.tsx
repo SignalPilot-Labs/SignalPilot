@@ -9,7 +9,6 @@
 
 import { AlertCircle, ArrowDownToLine, ChevronDown, ChevronRight } from "lucide-react";
 import { memo, useEffect, useRef, useState } from "react";
-import { downloadConversationFile } from "~/lib/api";
 import {
   cardKindLabel,
   middleTruncate,
@@ -20,6 +19,7 @@ import {
 import { formatByteSize } from "~/lib/chat-artifacts";
 import { kindIcon } from "~/components/chat/artifacts-panel";
 import { useChatUi } from "~/components/chat/chat-ui-context";
+import { downloadUiFile } from "~/components/chat/download-ui-file";
 import { useFileObjectUrl } from "~/components/chat/use-file-object-url";
 import { useToast } from "~/components/ui/toast";
 
@@ -56,14 +56,13 @@ type CardActionsProps = {
 
 function useDownload(conversationId: string | null) {
   const { toast } = useToast();
+  // The shared page has no owner conversation id; its context injects a
+  // token-scoped `downloadFile` override instead.
+  const { downloadFile } = useChatUi();
   return async (card: ArtifactCardModel) => {
-    if (!conversationId || !card.file) return;
+    if (!card.file) return;
     try {
-      await downloadConversationFile(
-        conversationId,
-        card.file.id,
-        card.filename,
-      );
+      await downloadUiFile({ conversationId, downloadFile }, card.file);
     } catch {
       toast("This file is no longer available.", "error");
     }
@@ -83,7 +82,7 @@ function ImageThumb({
   card,
   onOpen,
 }: {
-  conversationId: string;
+  conversationId: string | null;
   card: ArtifactCardModel;
   onOpen: (fileId: string) => void;
 }) {
@@ -125,7 +124,7 @@ function ImagePreviewToggle({
   card,
   onOpen,
 }: {
-  conversationId: string;
+  conversationId: string | null;
   card: ArtifactCardModel;
   onOpen: (fileId: string) => void;
 }) {
@@ -209,6 +208,7 @@ const FullCard = memo(function FullCard({
   onOpen,
 }: CardActionsProps) {
   const download = useDownload(conversationId);
+  const { getFileObjectUrl } = useChatUi();
   const flash = useUpdateFlash(card.file?.content_hash);
   const now = useCardNow();
   if (card.state === "unfinished") return <UnfinishedStub card={card} />;
@@ -273,7 +273,7 @@ const FullCard = memo(function FullCard({
           </button>
         </div>
       </div>
-      {card.kind === "image" && conversationId && (
+      {card.kind === "image" && (conversationId || getFileObjectUrl) && (
         <ImagePreviewToggle
           conversationId={conversationId}
           card={card}

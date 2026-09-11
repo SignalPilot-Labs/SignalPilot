@@ -13,6 +13,7 @@ import {
 import type { ChatModelSettings } from "~/components/chat/chat-settings-panel";
 import type { DetailMutator } from "~/components/chat/use-standalone-chat-run";
 import { useToast } from "~/components/ui/toast";
+import { toastRequestError } from "~/components/chat/toast-request-error";
 
 export function useChatModelSettings({
   conversationId,
@@ -75,10 +76,7 @@ export function useChatModelSettings({
         )
         .catch((error) => {
           setSelectedModel(previous);
-          toast(
-            error instanceof Error ? error.message : "Could not change model",
-            "error",
-          );
+          toastRequestError(toast, error, "Could not change model");
         });
     },
     [conversationId, mutateDetail, selectedModel, toast],
@@ -104,12 +102,7 @@ export function useChatModelSettings({
         )
         .catch((error) => {
           setSelectedEffort(previous);
-          toast(
-            error instanceof Error
-              ? error.message
-              : "Could not change thinking level",
-            "error",
-          );
+          toastRequestError(toast, error, "Could not change thinking level");
         });
     },
     [conversationId, mutateDetail, selectedEffort, toast],

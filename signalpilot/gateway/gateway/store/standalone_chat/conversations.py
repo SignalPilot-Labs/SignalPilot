@@ -31,6 +31,7 @@ from gateway.store.standalone_chat.helpers import (
     _now,
     _owned_conversation_row,
     _run_info,
+    _token_usage,
 )
 
 
@@ -95,6 +96,7 @@ async def create_conversation_with_run(
         user_message_id=user_message.id,
         status=RunStatus.queued.value,
         runtime_env=chat_config.runtime_env(),
+        created_at=_now(),
     )
     db.add_all([conversation, user_message, run])
     if not commit:
@@ -150,6 +152,7 @@ async def list_conversations(
     user_id: str,
     limit: int = 100,
     offset: int = 0,
+    project_id: str | None = None,
 ) -> list[StandaloneConversationInfo]:
     """List the caller's active conversations, newest first.
 
@@ -202,8 +205,9 @@ async def list_conversations(
                 GatewayChatConversation.user_id == user_id,
                 GatewayChatConversation.surface == "standalone",
                 GatewayChatConversation.status == "active",
+                GatewayChatConversation.project_id == project_id if project_id else True,
             )
-            .order_by(GatewayChatConversation.updated_at.desc())
+            .order_by(GatewayChatConversation.updated_at.desc(), GatewayChatConversation.id.desc())
             .limit(limit)
             .offset(offset)
         )
@@ -280,14 +284,19 @@ async def get_conversation_detail(
         .scalars()
         .all()
     )
-    current_run = (
-        await db.execute(
-            select(GatewayChatRun)
-            .where(GatewayChatRun.conversation_id == conversation_id)
-            .order_by(GatewayChatRun.created_at.desc())
-            .limit(1)
+    runs = list(
+        (
+            await db.execute(
+                select(GatewayChatRun)
+                .where(GatewayChatRun.conversation_id == conversation_id)
+                .order_by(GatewayChatRun.created_at.desc())
+            )
         )
-    ).scalar_one_or_none()
+        .scalars()
+        .all()
+    )
+    current_run = runs[0] if runs else None
+    run_usage = {run.id: usage for run in runs if (usage := _token_usage(run.usage_json)) is not None}
     events = list(
         (
             await db.execute(
@@ -318,7 +327,7 @@ async def get_conversation_detail(
             actual_spend_usd=conversation.actual_spend_usd,
             reserved_spend_usd=conversation.reserved_spend_usd,
         ),
-        messages=[_message_info(row) for row in messages],
+        messages=[_message_info(row, run_usage=run_usage) for row in messages],
         current_run=_run_info(current_run) if current_run else None,
         run_events=[_event_info(row) for row in events],
     )

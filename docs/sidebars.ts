@@ -48,6 +48,7 @@ const sidebars: SidebarsConfig = {
         'product/audit',
         'product/activity',
         'product/chat-files',
+        'product/dashboards',
         'product/demo-warehouse',
       ],
     },

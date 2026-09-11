@@ -26,6 +26,7 @@ from gateway.db.models import (
     GatewayConnection,
     GatewayCredential,
     GatewayDbtManifest,
+    GatewayGovernedQueryExecution,
     GatewayStructuredQueryResult,
     GatewayWorkspaceProject,
 )
@@ -193,6 +194,57 @@ async def _completed_shared_conversation(
             caveats=["Partial current day"],
         )
     )
+    db.add(
+        GatewayGovernedQueryExecution(
+            id="execution-a",
+            org_id="org-a",
+            user_id="user-a",
+            conversation_id=conversation_id,
+            run_id=run.id,
+            project_id="project-a",
+            connection_name="production",
+            query_path="sdk",
+            sql_hash="h" * 64,
+            status="completed",
+            timeout_seconds=30,
+            estimated_cost_usd=0.01,
+            row_count=1,
+        )
+    )
+    db.add(
+        GatewayStructuredQueryResult(
+            id="result-a",
+            execution_id="execution-a",
+            org_id="org-a",
+            owner_user_id="user-a",
+            conversation_id=conversation_id,
+            run_id=run.id,
+            columns_json=[{"name": "revenue"}],
+            rows_json=[[112]],
+            preview_rows_json=[[112]],
+            saved_row_count=1,
+            source_completeness="complete",
+            result_completeness="complete",
+            display_completeness="complete",
+            provenance_json={"connection_name": "production"},
+        )
+    )
+    db.add(
+        GatewayChatRunEvent(
+            id="event-a",
+            org_id="org-a",
+            user_id="user-a",
+            conversation_id=conversation_id,
+            run_id=run.id,
+            sequence=1,
+            event_type="tool_completed",
+            payload_json={
+                "tool": "run_query",
+                "result": {"result_id": "result-a", "execution_id": "execution-a"},
+            },
+        )
+    )
+    run.last_event_sequence = 1
     conversation.title = "Revenue trend"
     conversation.internal_summary = "Hidden execution summary"
     conversation.message_count = 2
@@ -295,7 +347,7 @@ async def test_same_org_peer_cannot_discover_private_conversation(db_session):
 
 @pytest.mark.asyncio
 async def test_share_grant_is_hashed_same_org_and_trace_free(db_session):
-    conversation_id, _, _ = await _completed_shared_conversation(db_session)
+    conversation_id, run, _ = await _completed_shared_conversation(db_session)
     result = await chat_store.create_share_grant(
         db_session,
         org_id="org-a",
@@ -315,7 +367,15 @@ async def test_share_grant_is_hashed_same_org_and_trace_free(db_session):
     assert shared is not None
     assert shared.conversation.title == "Revenue trend"
     assert [message.role for message in shared.messages] == ["user", "assistant"]
-    assert not hasattr(shared.messages[1], "metadata")
+    assert "internal" not in shared.messages[1].metadata
+    assert shared.messages[1].metadata["run_id"] == run.id
+    assert [event.type for event in shared.run_events] == ["tool_completed"]
+    assert shared.run_events[0].run_id == run.id
+    assert shared.files == []
+    assert shared.conversation.branch == "main"
+    assert shared.conversation.commit_sha == "a" * 40
+    assert not hasattr(shared.conversation, "per_query_budget_usd")
+    assert not hasattr(shared.conversation, "id")
     assert (
         await chat_store.get_shared_conversation(
             db_session,
@@ -402,11 +462,19 @@ async def test_rotating_revoking_and_archiving_share_returns_not_found(db_sessio
 
 
 @pytest.mark.asyncio
-async def test_same_org_viewer_can_fork_share_safe_snapshot(db_session):
-    conversation_id, _, assistant_message_id = await _completed_shared_conversation(db_session)
+async def test_same_org_viewer_can_fork_the_whole_chat(db_session):
+    conversation_id, run, assistant_message_id = await _completed_shared_conversation(db_session)
     source = await db_session.get(GatewayChatConversation, conversation_id)
     assert source is not None
     source.model = "claude-fable-5-1"
+    db_session.add(
+        GatewayChatUserPreference(
+            org_id="org-a",
+            user_id="user-b",
+            default_per_query_budget_usd=0.4,
+            default_chat_budget_usd=1.5,
+        )
+    )
     await db_session.commit()
     shared = await chat_store.create_share_grant(
         db_session,
@@ -422,17 +490,18 @@ async def test_same_org_viewer_can_fork_share_safe_snapshot(db_session):
         org_id="org-a",
         user_id="user-b",
         token=token,
-        per_query_budget_usd=0.5,
-        chat_budget_usd=2.0,
     )
     assert fork is not None
     assert fork.id != conversation_id
     assert fork.user_id == "user-b"
     assert fork.internal_summary is None
+    assert fork.agent_session_id is None
     assert fork.commit_sha == "a" * 40
     assert fork.forked_from_conversation_id == conversation_id
-    assert fork.per_query_budget_usd == 0.5
-    assert fork.chat_budget_usd == 2.0
+    # Budgets come from the caller's saved defaults, not the source chat.
+    assert fork.per_query_budget_usd == 0.4
+    assert fork.chat_budget_usd == 1.5
+    assert fork.actual_spend_usd == 0.0
     assert fork.model == "claude-fable-5-1"
 
     detail = await chat_store.get_conversation_detail(
@@ -447,7 +516,41 @@ async def test_same_org_viewer_can_fork_share_safe_snapshot(db_session):
         "Revenue increased by 12%.",
     ]
     assert detail.messages[1].id != assistant_message_id
-    assert detail.current_run is None
+    assert detail.messages[1].metadata["forked"] is True
+    assert "internal" not in detail.messages[1].metadata
+    new_run_id = detail.messages[1].metadata["run_id"]
+    assert new_run_id != run.id
+    # The copied run is terminal, so the fork is idle and continuable.
+    assert detail.current_run is not None
+    assert detail.current_run.id == new_run_id
+    assert detail.current_run.status == "completed"
+    assert detail.current_run.runtime_archive_available is False
+    # The timeline copied with every id reference rewritten.
+    assert [event.type for event in detail.run_events] == ["tool_completed"]
+    assert detail.run_events[0].run_id == new_run_id
+    new_result_id = detail.run_events[0].payload["result"]["result_id"]
+    new_execution_id = detail.run_events[0].payload["result"]["execution_id"]
+    assert new_result_id != "result-a"
+    assert new_execution_id != "execution-a"
+    copied_result = await db_session.get(GatewayStructuredQueryResult, new_result_id)
+    assert copied_result is not None
+    assert copied_result.owner_user_id == "user-b"
+    assert copied_result.conversation_id == fork.id
+    assert copied_result.run_id == new_run_id
+    assert copied_result.execution_id == new_execution_id
+    assert copied_result.rows_json == [[112]]
+    copied_execution = await db_session.get(GatewayGovernedQueryExecution, new_execution_id)
+    assert copied_execution is not None
+    assert copied_execution.user_id == "user-b"
+    assert copied_execution.conversation_id == fork.id
+    assert copied_execution.run_id == new_run_id
+    copied_run = await db_session.get(GatewayChatRun, new_run_id)
+    assert copied_run is not None
+    assert copied_run.user_message_id == detail.messages[0].id
+    assert copied_run.lease_owner is None
+    assert copied_run.execution_session_id is None
+    # The source rows are untouched.
+    assert (await db_session.get(GatewayStructuredQueryResult, "result-a")).conversation_id == conversation_id
 
     reshared = await chat_store.create_share_grant(
         db_session,
@@ -467,41 +570,45 @@ async def test_same_org_viewer_can_fork_share_safe_snapshot(db_session):
         "What changed in revenue?",
         "Revenue increased by 12%.",
     ]
+    assert [event.run_id for event in reshared_detail.run_events] == [new_run_id]
 
 
 @pytest.mark.asyncio
-async def test_fork_preview_preserves_project_commit_and_recipient_budgets(db_session):
+async def test_fork_budgets_fall_back_to_product_defaults(db_session):
     conversation_id, _, _ = await _completed_shared_conversation(db_session)
     shared = await chat_store.create_share_grant(
-        db_session,
-        org_id="org-a",
-        user_id="user-a",
-        conversation_id=conversation_id,
+        db_session, org_id="org-a", user_id="user-a", conversation_id=conversation_id
     )
     assert shared is not None
     _, token = shared
-    db_session.add(
-        GatewayChatUserPreference(
-            org_id="org-a",
-            user_id="user-b",
-            default_per_query_budget_usd=0.4,
-            default_chat_budget_usd=1.5,
-        )
+    fork = await chat_store.fork_shared_conversation(
+        db_session, org_id="org-a", user_id="user-b", token=token
     )
-    await db_session.commit()
+    assert fork is not None
+    assert fork.per_query_budget_usd == 0.25
+    assert fork.chat_budget_usd == 1.0
 
-    preview = await chat_store.get_fork_preview(
-        db_session,
-        org_id="org-a",
-        user_id="user-b",
-        token=token,
-    )
-    assert preview is not None
-    assert preview["project_id"] == "project-a"
-    assert preview["commit_sha"] == "a" * 40
-    assert preview["per_query_budget_usd"] == 0.4
-    assert preview["chat_budget_usd"] == 1.5
-    assert "live warehouse data" in preview["warehouse_cost_notice"]
+
+def test_remap_ids_rewrites_whole_string_values_only():
+    id_map = {"old-run": "new-run", "old-result": "new-result"}
+    payload = {
+        "run_id": "old-run",
+        "nested": {"ids": ["old-result", "keep", 3, None], "text": "old-run/extra"},
+        "old-run": "value",
+        "tuple": ("old-run",),
+    }
+    remapped = chat_store.remap_ids(payload, id_map)
+    assert remapped == {
+        "run_id": "new-run",
+        "nested": {"ids": ["new-result", "keep", 3, None], "text": "old-run/extra"},
+        "old-run": "value",
+        "tuple": ("new-run",),
+    }
+    # Pure: the input is untouched and the output is a fresh structure.
+    assert payload["run_id"] == "old-run"
+    assert remapped["nested"] is not payload["nested"]
+    assert chat_store.remap_ids("old-run", id_map) == "new-run"
+    assert chat_store.remap_ids(42, id_map) == 42
 
 
 @pytest.mark.asyncio
@@ -521,15 +628,15 @@ async def test_share_fork_rejects_active_run_and_cross_org(db_session):
         token=token,
     )
     assert shared_detail is not None
-    assert [message.role for message in shared_detail.messages] == ["user"]
+    # The queued run and its user message stay private until it finishes.
+    assert shared_detail.messages == []
+    assert shared_detail.run_events == []
     with pytest.raises(RuntimeError, match="finish before forking"):
         await chat_store.fork_shared_conversation(
             db_session,
             org_id="org-a",
             user_id="user-b",
             token=token,
-            per_query_budget_usd=0.25,
-            chat_budget_usd=1.0,
         )
     assert (
         await chat_store.fork_shared_conversation(
@@ -537,8 +644,6 @@ async def test_share_fork_rejects_active_run_and_cross_org(db_session):
             org_id="org-b",
             user_id="user-b",
             token=token,
-            per_query_budget_usd=0.25,
-            chat_budget_usd=1.0,
         )
         is None
     )
@@ -1145,6 +1250,55 @@ async def test_one_nonterminal_run_and_atomic_initial_state(db_session):
 
 
 @pytest.mark.asyncio
+async def test_conversation_detail_exposes_sanitized_token_usage_on_run_and_agent_message(
+    db_session,
+):
+    conversation_id, run = await _conversation_and_run(db_session)
+    run.usage_json = {
+        "input_tokens": 120,
+        "output_tokens": 30,
+        "cache_creation_input_tokens": 40,
+        "cache_read_input_tokens": 500,
+        "ignored_provider_field": "not exposed",
+    }
+    conversation = await db_session.get(GatewayChatConversation, conversation_id)
+    assert conversation is not None
+    conversation.message_count = 2
+    db_session.add(
+        GatewayChatMessage(
+            id="assistant-with-usage",
+            org_id="org-a",
+            user_id="user-a",
+            project_id=run.project_id,
+            conversation_id=conversation_id,
+            role="assistant",
+            content="The analysis is complete.",
+            metadata_json={"run_id": run.id, "status": "completed"},
+            sequence=2,
+            created_at=2.0,
+        )
+    )
+    await db_session.commit()
+
+    detail = await chat_store.get_conversation_detail(
+        db_session,
+        org_id="org-a",
+        user_id="user-a",
+        conversation_id=conversation_id,
+    )
+    assert detail is not None and detail.current_run is not None
+    expected = {
+        "input_tokens": 120,
+        "output_tokens": 30,
+        "cache_creation_input_tokens": 40,
+        "cache_read_input_tokens": 500,
+    }
+    assert detail.current_run.usage == expected
+    assert detail.messages[-1].metadata["token_usage"] == expected
+    assert "ignored_provider_field" not in detail.messages[-1].metadata["token_usage"]
+
+
+@pytest.mark.asyncio
 async def test_running_run_steering_is_durable_and_marked_picked_up(db_session):
     conversation_id, run = await _conversation_and_run(db_session)
     assert await chat_store.claim_runs(
@@ -1290,6 +1444,29 @@ async def test_event_ordering_refreshes_a_stale_locked_run(db_session):
 
 
 @pytest.mark.asyncio
+async def test_append_event_keeps_the_loaded_run_sequence_current(db_session):
+    """Lifecycle writers stage events from the in-session run after append_event."""
+    _, run = await _conversation_and_run(db_session)
+    assert run.last_event_sequence == 0
+    appended = await chat_store.append_event(
+        db_session,
+        run_id=run.id,
+        event_type="progress",
+        payload={"label": "Started"},
+    )
+    assert appended.sequence == 1
+    assert run.last_event_sequence == 1
+    staged = chat_store._stage_run_event(
+        db_session,
+        run=run,
+        event_type="status",
+        payload={"status": "completed"},
+    )
+    await db_session.commit()
+    assert staged.sequence == 2
+
+
+@pytest.mark.asyncio
 async def test_claim_completion_and_final_message_are_idempotent(db_session):
     conversation_id, run = await _conversation_and_run(db_session)
     claimed = await chat_store.claim_runs(
@@ -1310,13 +1487,6 @@ async def test_claim_completion_and_final_message_are_idempotent(db_session):
         run_id=run.id,
         worker_id="worker-a",
         content="Revenue increased.",
-        dashboard_preview={
-            "authoring_session_id": "authoring-session-1",
-            "dashboard_name": "Executive Revenue",
-            "summary": "A governed executive dashboard.",
-            "chart_count": 4,
-            "chart_titles": ["must-not-be-exposed"],
-        },
     )
     second = await chat_store.complete_run(
         db_session,
@@ -1326,14 +1496,6 @@ async def test_claim_completion_and_final_message_are_idempotent(db_session):
     )
     assert first is not None
     assert "report_action_outcome" not in first.metadata_json
-    assert first.metadata_json["dashboard_preview"] == {
-        "authoring_session_id": "authoring-session-1",
-        "dashboard_name": "Executive Revenue",
-        "summary": "A governed executive dashboard.",
-        "chart_count": 4,
-        "requires_review": True,
-        "apply_required": True,
-    }
     assert second is None
     count = await db_session.scalar(
         select(func.count(GatewayChatMessage.id)).where(
@@ -1827,10 +1989,12 @@ async def test_fork_copies_conversation_files_under_new_keys(db_session, monkeyp
         org_id="org-a",
         user_id="user-b",
         token=token,
-        per_query_budget_usd=0.5,
-        chat_budget_usd=2.0,
     )
     assert fork is not None
+    detail = await chat_store.get_conversation_detail(
+        db_session, org_id="org-a", user_id="user-b", conversation_id=fork.id
+    )
+    assert detail is not None and detail.current_run is not None
 
     copied_rows = await chat_store.list_conversation_files(
         db_session, org_id="org-a", user_id="user-b", conversation_id=fork.id
@@ -1843,7 +2007,10 @@ async def test_fork_copies_conversation_files_under_new_keys(db_session, monkeyp
     assert copied.kind == "image"
     assert copied.mime_type == "image/png"
     assert copied.origin == "fork"
-    assert copied.origin_run_id is None
+    # Inline artifact cards key on the run that wrote the file: the copy
+    # points at the copied run, never at the source run.
+    assert copied.origin_run_id == detail.current_run.id
+    assert copied.origin_run_id != run.id
     assert copied.object_key != active.object_key
     assert copied.object_key.startswith(f"{conversation_prefix('org-a', fork.id)}/files/")
     assert copies == [(active.object_key, copied.object_key)]

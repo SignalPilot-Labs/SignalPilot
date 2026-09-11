@@ -3,6 +3,7 @@
 import {
   FastForward,
   FlaskConical,
+  History,
   Pause,
   Play,
   RotateCcw,
@@ -16,6 +17,10 @@ import {
   type UiMessage,
 } from "~/components/chat/standalone-data-chat";
 import { ArtifactsPanel } from "~/components/chat/artifacts-panel";
+import { ChatReplayView } from "~/components/chat/chat-replay-view";
+import { StandaloneChatComposer } from "~/components/chat/standalone-chat-composer";
+import { useDockScrollCompensation } from "~/components/chat/use-dock-scroll-compensation";
+import { selectComposerPlan } from "~/lib/chat-composer-plan";
 import { hasArtifactsContent } from "~/lib/chat-artifacts";
 import { pickDefaultNotebook } from "~/lib/chat-live-notebook";
 import {
@@ -45,6 +50,7 @@ import {
   FIXTURE_QUERY_RESULT_ID,
   fixtureQueryResultPage,
 } from "~/lib/chat-test-fixture-tools";
+import { createFixtureDashboardPublishApi } from "~/lib/chat-test-fixture-dashboard";
 
 const SPEEDS = [1, 2, 4] as const;
 const TICK_MS = 50;
@@ -75,6 +81,12 @@ export function StandaloneChatTestHarness() {
     () => createFixtureConnectorsApi({ latencyMs: 120 }),
     [],
   );
+  // "Publish" on the dashboard file talks to this in-memory gallery
+  // instead of the gateway.
+  const dashboardsApi = useMemo(
+    () => createFixtureDashboardPublishApi({ latencyMs: 120 }),
+    [],
+  );
   const [elapsed, setElapsed] = useState(initialAt);
   const [playing, setPlaying] = useState(!initiallyPaused);
   // Flipped by an effect, so it is observable only after React has hydrated
@@ -82,6 +94,9 @@ export function StandaloneChatTestHarness() {
   // a click that lands before hydration is silently lost.
   const [hydrated, setHydrated] = useState(false);
   useEffect(() => setHydrated(true), []);
+  // Conversation replay mode, as on the chat page (the transcript swaps
+  // for the replay view; the harness clock keeps its own position).
+  const [replaying, setReplaying] = useState(false);
   const [speed, setSpeed] = useState<(typeof SPEEDS)[number]>(1);
   const [selectedModel, setSelectedModel] =
     useState<StandaloneChatModel>("claude-opus-5");
@@ -154,6 +169,15 @@ export function StandaloneChatTestHarness() {
     if (!content) throw new Error(`No fixture content for file ${fileId}`);
     return URL.createObjectURL(new Blob([content.body], { type: content.mime }));
   }, []);
+  // Text stub for the same files: the dashboard viewer reads its spec and
+  // datasets through it, so the real DashboardRenderer runs at /chats/test.
+  const getFileText = useCallback(async (fileId: string) => {
+    const content = fixtureFileContent(fileId);
+    if (!content) throw new Error(`No fixture content for file ${fileId}`);
+    return typeof content.body === "string"
+      ? content.body
+      : new TextDecoder().decode(content.body);
+  }, []);
   // Full-rows stub for the governed query result: the table card's "Load
   // all rows" pages the same deterministic 1,204 rows the gateway would.
   const getToolResultRows = useCallback(
@@ -189,7 +213,9 @@ export function StandaloneChatTestHarness() {
         role: "user",
         content: FIXTURE_USER_PROMPT,
         sequence: 1,
-        created_at: 0,
+        // Epoch seconds, as the gateway records them: the replay anchors
+        // user messages on this clock.
+        created_at: fixtureNowMs(0) / 1_000,
         metadata: {},
       },
       {
@@ -197,7 +223,7 @@ export function StandaloneChatTestHarness() {
         role: "assistant",
         content: fixtureAssembledText(elapsed),
         sequence: 2,
-        created_at: 0,
+        created_at: fixtureNowMs(FIXTURE_TOTAL_MS) / 1_000,
         metadata: { run_id: FIXTURE_RUN_ID },
         runId: FIXTURE_RUN_ID,
         runStatus: status,
@@ -209,7 +235,9 @@ export function StandaloneChatTestHarness() {
               role: "user",
               content: FIXTURE_FOLLOW_UP_PROMPT,
               sequence: 3,
-              created_at: 0,
+              // A minute after the first run ended: the replay collapses
+              // the pause to the gap cap.
+              created_at: fixtureNowMs(FIXTURE_TOTAL_MS + 60_000) / 1_000,
               metadata: {},
             },
             {
@@ -217,7 +245,7 @@ export function StandaloneChatTestHarness() {
               role: "assistant",
               content: "",
               sequence: 4,
-              created_at: 0,
+              created_at: fixtureNowMs(FIXTURE_TOTAL_MS + 60_000) / 1_000,
               metadata: { run_id: FIXTURE_FOLLOW_UP_RUN_ID },
               runId: FIXTURE_FOLLOW_UP_RUN_ID,
               runStatus: "running",
@@ -227,6 +255,24 @@ export function StandaloneChatTestHarness() {
     ],
     [elapsed, status, withFollowUp],
   );
+
+  // The docked composer mirrors the chat page: the plan of the current run
+  // (the follow-up turn under ?followup=1, which has no plan yet) sits above
+  // a real, inert input so the dock stays e2e-verifiable at /chats/test.
+  const currentRun = useMemo(
+    () =>
+      withFollowUp
+        ? { id: FIXTURE_FOLLOW_UP_RUN_ID, status: "running" as const }
+        : { id: FIXTURE_RUN_ID, status },
+    [status, withFollowUp],
+  );
+  const composerPlan = useMemo(
+    () => selectComposerPlan(events, currentRun),
+    [events, currentRun],
+  );
+  const [draft, setDraft] = useState("");
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const composerDockRef = useDockScrollCompensation(viewportRef);
 
   const progress = Math.round((elapsed / FIXTURE_TOTAL_MS) * 100);
   return (
@@ -317,6 +363,20 @@ export function StandaloneChatTestHarness() {
         </span>
         <button
           type="button"
+          aria-label="Replay chat"
+          aria-pressed={replaying}
+          data-testid="chat-replay-button"
+          onClick={() => setReplaying((value) => !value)}
+          className={`flex h-7 w-7 items-center justify-center rounded-lg border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] ${
+            replaying
+              ? "bg-[var(--color-bg-hover)] text-[var(--color-text)]"
+              : "bg-[var(--color-bg-input)] text-[var(--color-text-muted)]"
+          }`}
+        >
+          <History className="h-3.5 w-3.5" />
+        </button>
+        <button
+          type="button"
           aria-label="Chat settings"
           aria-expanded={settingsPanel.open}
           data-testid="chat-settings-gear"
@@ -331,34 +391,64 @@ export function StandaloneChatTestHarness() {
         </button>
       </header>
       <ConnectorsProvider api={connectorsApi} fixture currentUserId={FIXTURE_ME}>
+      {/* The provider wraps the panels too: the artifacts panel joins query
+          descriptions from the same run events. */}
+      <ChatUiContext.Provider
+        value={{
+          events,
+          conversationId: "conversation-fixture-1",
+          files: conversationFiles,
+          openArtifact,
+          getFileObjectUrl,
+          getFileText,
+          getToolResultRows,
+          dashboardsApi,
+          // Frozen replay clock, so relative timestamps are honest on
+          // every frame instead of measuring from the real wall clock.
+          nowMs: fixtureNowMs(elapsed),
+          openChatSettings: settingsPanel.openPanel,
+          onStop: async () => undefined,
+          onRetry: async () => undefined,
+        }}
+      >
       <div className="relative flex min-h-0 flex-1 overflow-hidden">
         <div
+          ref={viewportRef}
           className="min-h-0 min-w-0 flex-1 overflow-y-auto"
           data-testid="chat-test-viewport"
         >
-          <ChatUiContext.Provider
-            value={{
-              events,
-              conversationId: "conversation-fixture-1",
-              files: conversationFiles,
-              openArtifact,
-              getFileObjectUrl,
-              getToolResultRows,
-              // Frozen replay clock, so relative timestamps are honest on
-              // every frame instead of measuring from the real wall clock.
-              nowMs: fixtureNowMs(elapsed),
-              openChatSettings: settingsPanel.openPanel,
-              onStop: async () => undefined,
-              onRetry: async () => undefined,
-              onOpenDashboardPreview: () => undefined,
-            }}
-          >
+          {replaying ? (
+            <ChatReplayView
+              messages={messages}
+              onExit={() => setReplaying(false)}
+              viewportRef={viewportRef}
+            />
+          ) : (
             <div className="py-6" data-testid="standalone-chat-messages">
               {messages.map((message) => (
                 <ChatMessage key={message.id} message={message} />
               ))}
             </div>
-          </ChatUiContext.Provider>
+          )}
+          {!replaying && (
+          <div
+            ref={composerDockRef}
+            data-testid="chat-composer-dock"
+            className="sticky bottom-0 isolate z-30 bg-gradient-to-t from-[var(--color-bg)] via-[var(--color-bg)] to-transparent pt-3"
+          >
+            <StandaloneChatComposer
+              value={draft}
+              onValueChange={setDraft}
+              onSubmit={() => undefined}
+              submitDisabled
+              disabledReason="Fixture replay: the composer is inert"
+              running={currentRun.status === "running"}
+              placeholder="Ask anything about this project…"
+              plan={composerPlan?.plan ?? null}
+              planRunning={composerPlan?.running ?? false}
+            />
+          </div>
+          )}
         </div>
         {hasArtifactsContent(
           conversationNotebooks,
@@ -421,17 +511,22 @@ export function StandaloneChatTestHarness() {
                 Live notebook view stub
               </div>
             }
-            fileViewOverride={
-              <div
-                data-testid="chat-file-stub"
-                className="flex h-full items-center justify-center text-xs text-[var(--color-text-dim)]"
-              >
-                File viewer stub
-              </div>
+            fileViewOverride={(file) =>
+              // Dashboards render for real (their viewer needs no gateway);
+              // every other kind keeps the stub.
+              file.kind === "dashboard" ? undefined : (
+                <div
+                  data-testid="chat-file-stub"
+                  className="flex h-full items-center justify-center text-xs text-[var(--color-text-dim)]"
+                >
+                  File viewer stub
+                </div>
+              )
             }
           />
         )}
       </div>
+      </ChatUiContext.Provider>
       </ConnectorsProvider>
     </div>
   );

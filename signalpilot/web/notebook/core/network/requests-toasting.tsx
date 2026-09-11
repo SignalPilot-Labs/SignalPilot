@@ -5,6 +5,7 @@ import { Spinner } from "@/components/icons/spinner";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/use-toast";
 import { NoKernelConnectedError, prettyError } from "@/utils/errors";
+import { isNotebookSessionAuthError } from "~/lib/api/client";
 import { Logger } from "@/utils/Logger";
 import { useConnectToRuntime } from "../runtime/config";
 import { store } from "../state/jotai";
@@ -108,7 +109,9 @@ export function createErrorToastingRequests(
 
         const title = MESSAGES[keyString];
         const message = prettyError(error);
-        if (title) {
+        // A sandbox whose session token expired reports it on every
+        // request. Nothing on the page can act on it, so keep it silent.
+        if (title && !isNotebookSessionAuthError(message)) {
           toast({
             title: title,
             description: message,

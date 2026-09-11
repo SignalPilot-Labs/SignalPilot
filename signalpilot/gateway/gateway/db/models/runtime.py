@@ -197,6 +197,8 @@ class GatewayDbtManifest(GatewayBase):
     node_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     manifest_key: Mapped[str | None] = mapped_column(String(500))
     graph_key: Mapped[str | None] = mapped_column(String(500))
+    # Per-node raw/compiled SQL artifact; null for maps compiled before 0025.
+    sql_key: Mapped[str | None] = mapped_column(String(500))
     manifest_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     # A live compile refreshes the lease; the reaper fails runs whose gateway
     # process died mid-compile so the UI never shows an eternal "running".

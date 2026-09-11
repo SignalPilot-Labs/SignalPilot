@@ -148,7 +148,6 @@ async def test_validated_retry_survives_offline_development_archive(
     app = SimpleNamespace()
     sessions: dict[str, Any] = {}
     lifecycles: list[Any] = []
-    collectors: list[Any] = []
     seeded_paths: list[Path] = []
     event_sinks: list[Any] = []
     closed: list[str] = []
@@ -160,8 +159,7 @@ async def test_validated_retry_survives_offline_development_archive(
     async def execution_directory(**_kwargs: Any) -> tuple[Path, bool]:
         return tmp_path, False
 
-    def build_server(collector: Any, **kwargs: Any) -> object:
-        collectors.append(collector)
+    def build_server(**kwargs: Any) -> object:
         lifecycles.append(kwargs["notebook_lifecycle"])
         seeded_paths.append(kwargs["analysis_notebook_path"])
         event_sinks.append(kwargs["event_sink"])
@@ -380,7 +378,7 @@ async def test_two_dirty_attempts_emit_one_validation_error_and_no_final(
     async def execution_directory(**_kwargs: Any) -> tuple[Path, bool]:
         return tmp_path, False
 
-    def build_server(_collector: Any, **kwargs: Any) -> object:
+    def build_server(**kwargs: Any) -> object:
         lifecycles.append(kwargs["notebook_lifecycle"])
         event_sinks.append(kwargs["event_sink"])
         return object()

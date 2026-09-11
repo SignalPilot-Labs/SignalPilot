@@ -44,6 +44,14 @@ _NOTEBOOK_PROXY_PATH_RE = re.compile(r"^/notebook/[^/]+/")
 # the header it set, and only when it set one.
 _PRIVATE_CACHEABLE_PATH_RE = re.compile(r"^/api/mcp/connectors/[^/]+/icon$")
 
+# dbt-map reads are ETag-revalidated (`private, max-age=0, must-revalidate`),
+# set by the route itself. Same rule: keep it only when the route set one.
+_DBT_MAP_PATH_RE = re.compile(r"^/api/workspace-projects/[^/]+/dbt-map(/|$)")
+
+
+def _keeps_own_cache_control(path: str) -> bool:
+    return bool(_PRIVATE_CACHEABLE_PATH_RE.match(path) or _DBT_MAP_PATH_RE.match(path))
+
 _CSP_DEFAULT_POLICY = (
     "default-src 'self'; "
     "script-src 'self'; "
@@ -81,10 +89,12 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-XSS-Protection"] = "0"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        if request.url.path == "/api/artifact-download":
+            response.headers["Referrer-Policy"] = "no-referrer"
         # Cache-Control: only set on non-proxy paths. For /notebook/* let upstream's
         # own headers pass through (or leave absent if upstream sets nothing).
         keeps_own_cache_control = bool(
-            _PRIVATE_CACHEABLE_PATH_RE.match(request.url.path) and response.headers.get("Cache-Control")
+            _keeps_own_cache_control(request.url.path) and response.headers.get("Cache-Control")
         )
         if not is_proxy and not keeps_own_cache_control:
             response.headers["Cache-Control"] = "no-store"
@@ -101,7 +111,9 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         # CSP: SP_GATEWAY_CSP_POLICY overrides the default entirely when set.
         # The deployer owns the full policy — no merging or layering.
         # Proxy paths get a minimal policy: frame-ancestors 'self' only.
-        if is_proxy:
+        if request.url.path == "/api/artifact-download" and response.headers.get("Content-Security-Policy"):
+            pass  # This route supplies a nonce policy for its token-redemption page.
+        elif is_proxy:
             response.headers["Content-Security-Policy"] = _build_proxy_csp()
         else:
             csp_policy = os.environ.get("SP_GATEWAY_CSP_POLICY") or _CSP_DEFAULT_POLICY

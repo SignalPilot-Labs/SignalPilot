@@ -211,7 +211,7 @@ export const API = {
 
 export function createClientWithRuntimeManager(runtimeManager: RuntimeManager) {
   const spClient = createSpClient({
-    baseUrl: runtimeManager.httpURL.toString(),
+    baseUrl: runtimeManager.httpBaseURL.toString(),
   });
 
   spClient.use({

@@ -10,6 +10,7 @@ export type ConversationFileKind =
   | "image"
   | "notebook"
   | "data"
+  | "dashboard"
   | "other";
 
 /** One agent-produced file in a conversation, manifest only. */
@@ -111,7 +112,8 @@ export async function downloadConversationFile(
   saveBlobAs(await response.blob(), filename);
 }
 
-function saveBlobAs(blob: Blob, filename: string): void {
+/** Trigger a browser download of `blob` under `filename`. */
+export function saveBlobAs(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
@@ -132,6 +134,11 @@ export const getSharedConversationFiles = (token: string) =>
     `/api/chat/shared/${encodeURIComponent(token)}/files`,
   );
 
+export const getSharedConversationSqlTrace = (token: string) =>
+  request<{ executions: SqlTraceExecution[] }>(
+    `/api/chat/shared/${encodeURIComponent(token)}/sql-trace`,
+  );
+
 async function fetchSharedConversationFileContent(
   token: string,
   fileId: string,
@@ -147,6 +154,15 @@ async function fetchSharedConversationFileContent(
     throw new Error(`File content unavailable (${response.status})`);
   }
   return response;
+}
+
+/** Text content of a shared file. Use for markdown, code, html, and data. */
+export async function getSharedConversationFileText(
+  token: string,
+  fileId: string,
+): Promise<string> {
+  const response = await fetchSharedConversationFileContent(token, fileId);
+  return response.text();
 }
 
 /** Object URL for a shared file's bytes. The caller revokes it. */

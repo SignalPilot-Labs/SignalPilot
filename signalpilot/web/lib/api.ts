@@ -8,6 +8,8 @@ export {
   getAuthHeaders,
   getGatewayAuthToken,
   request,
+  ApiRequestError,
+  requestErrorStatus,
 } from "./api/client";
 export * from "./api/eval-upload";
 export * from "./api/evals";

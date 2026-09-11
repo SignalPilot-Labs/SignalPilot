@@ -217,7 +217,7 @@ class FakeUpstream:
         self.fail = fail
 
     async def list_tools(self):
-        return [types.Tool(name=n, inputSchema={"type": "object"}) for n in ("search", "delete", "hidden")]
+        return [types.Tool(name=n, input_schema={"type": "object"}) for n in ("search", "delete", "hidden")]
 
     async def call_tool(self, name, arguments):
         if self.fail is not None:
@@ -238,9 +238,9 @@ async def test_proxy_denies_off_tool_and_writes_denied_audit_row(db: AsyncSessio
     assert [t.name for t in listed] == ["search"]
 
     denied = await proxy.call_tool("delete", {"id": 1})
-    assert denied.isError and 'Tool "delete" on connector "Vendor" is turned off' in denied.content[0].text
+    assert denied.is_error and 'Tool "delete" on connector "Vendor" is turned off' in denied.content[0].text
     ok = await proxy.call_tool("search", {"q": "x"})
-    assert not ok.isError and upstream.calls == [("search", {"q": "x"})]
+    assert not ok.is_error and upstream.calls == [("search", {"q": "x"})]
 
     rows = list((await db.execute(select(GatewayMcpToolCall).order_by(GatewayMcpToolCall.called_at))).scalars())
     assert [(r.tool, r.outcome, r.run_id, r.conversation_id, r.user_id) for r in rows] == [
@@ -253,7 +253,7 @@ async def test_proxy_denies_off_tool_and_writes_denied_audit_row(db: AsyncSessio
     # Org turn-off is enforced per call, even mid-run.
     await connector_store.update_connector(db, connector, enabled=False)
     off = await proxy.call_tool("search", {})
-    assert off.isError and "turned off by your organization" in off.content[0].text
+    assert off.is_error and "turned off by your organization" in off.content[0].text
     assert await proxy.list_tools() == []
 
 
@@ -266,7 +266,7 @@ async def test_proxy_401_without_refresh_signs_member_out(db: AsyncSession, monk
     proxy = ConnectorProxy(db, connector, ProxyCaller(org_id="org-a", user_id="user-a", run_id=None, conversation_id=None))
     monkeypatch.setattr(proxy, "_upstream", AsyncMock(return_value=FakeUpstream(fail=UpstreamError("401", status=401))))
     result = await proxy.call_tool("search", {})
-    assert result.isError and result.content[0].text == 'Connector "Vendor" needs you to sign in again from Chat settings'
+    assert result.is_error and result.content[0].text == 'Connector "Vendor" needs you to sign in again from Chat settings'
     await db.refresh(member)
     assert member_store.oauth_tokens(member) is None
     rows = list((await db.execute(select(GatewayMcpToolCall))).scalars())
@@ -346,6 +346,19 @@ def test_proxy_http_endpoint_authenticates_run_token_and_enforces_capability(tmp
 
         denied = client.post(url, json=_jsonrpc("tools/call", {"name": "delete", "arguments": {}}, id=4), headers=auth)
         assert denied.json()["result"]["isError"] is True and "turned off" in denied.json()["result"]["content"][0]["text"]
+
+        modern_auth = {**auth, "MCP-Protocol-Version": "2026-07-28"}
+        modern_params = {"_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {},
+        }}
+        discovery = client.post(url, json=_jsonrpc("server/discover", modern_params, id=5), headers={**modern_auth, "MCP-Method": "server/discover"})
+        assert discovery.status_code == 200, discovery.text
+        assert "2026-07-28" in discovery.json()["result"]["supportedVersions"]
+        modern_list = client.post(url, json=_jsonrpc("tools/list", modern_params, id=6), headers={**modern_auth, "MCP-Method": "tools/list"})
+        assert modern_list.status_code == 200, modern_list.text
+        assert modern_list.json()["result"]["resultType"] == "complete"
+        assert [t["name"] for t in modern_list.json()["result"]["tools"]] == ["search"]
 
         assert client.post(url, json=_jsonrpc("tools/list"), headers=headers).status_code in (401, 403)
 

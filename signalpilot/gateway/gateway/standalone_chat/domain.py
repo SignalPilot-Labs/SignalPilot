@@ -10,12 +10,15 @@ _ERROR_SECRET_VALUE_RE = re.compile(
     r"(?i)(authorization\s*[:=]\s*(?:bearer\s+)?|"
     r"(?:api[_-]?key|token|secret|password)\s*[:=]\s*)[^\s,;]+"
 )
+_ERROR_QUOTED_SECRET_RE = re.compile(
+    r'''(?i)((?:["']?)(?:authorization|api[_-]?key|access[_-]?token|token|secret|password)["']?\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')'''
+)
 _ERROR_TOKEN_LITERAL_RE = re.compile(
     r"(?i)\b(?:sk-ant-[A-Za-z0-9_-]+|xox[abprs]-[A-Za-z0-9-]+|"
-    r"gh[pousr]_[A-Za-z0-9_]+|sp_[A-Za-z0-9_-]{16,})\b"
+    r"gh[pousr]_[A-Za-z0-9_]+|sp_[A-Za-z0-9_-]{16,}|spa_[A-Za-z0-9_.-]+|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)\b"
 )
 _ERROR_CONNECTION_LITERAL_RE = re.compile(
-    r"(?i)\b(?:postgres(?:ql)?|mysql|snowflake|redshift|clickhouse)://[^\s]+"
+    r"(?i)\b(?:postgres(?:ql)?|mysql|mssql|snowflake|redshift|clickhouse)://[^\s]+"
 )
 
 
@@ -142,9 +145,8 @@ def redact_public_payload(value: Any) -> Any:
 
 def redact_error_text(raw: str) -> str:
     """Redact credential values without paraphrasing or truncating an error."""
-    redacted = _ERROR_CONNECTION_LITERAL_RE.sub(
-        "[REDACTED_CONNECTION]", str(raw)
-    )
+    redacted = _ERROR_QUOTED_SECRET_RE.sub(lambda match: match.group(1) + "[REDACTED]", str(raw))
+    redacted = _ERROR_CONNECTION_LITERAL_RE.sub("[REDACTED_CONNECTION]", redacted)
     redacted = _ERROR_SECRET_VALUE_RE.sub(
         lambda match: f"{match.group(1)}[REDACTED]", redacted
     )

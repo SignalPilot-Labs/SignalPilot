@@ -4,6 +4,7 @@ import { lineageCone, parseMap, type RawMapGraph } from "./parse-map";
 import {
   canonicalRef,
   lineagePath,
+  parseLineagePath,
   pathBetween,
   rawSourcesFor,
   resolveModelRef,
@@ -200,5 +201,29 @@ describe("pathBetween", () => {
     expect(path.has(S_CUSTOMERS)).toBe(false);
     expect(path.has(STG_CUSTOMERS)).toBe(false);
     expect(path.has(LEGACY)).toBe(false);
+  });
+});
+
+describe("parseLineagePath", () => {
+  it("reads the model ref, the raw flag and the project override", () => {
+    expect(parseLineagePath("/lineage", null)).toEqual({ ref: null, raw: false, projectId: null });
+    expect(parseLineagePath("/lineage/fct_orders", "p1")).toEqual({
+      ref: "fct_orders",
+      raw: false,
+      projectId: "p1",
+    });
+    expect(parseLineagePath("/lineage/fct_orders/raw", null)).toEqual({
+      ref: "fct_orders",
+      raw: true,
+      projectId: null,
+    });
+    expect(parseLineagePath("/lineage/model.demo.fct_orders/RAW", null).raw).toBe(true);
+    // A model literally named "raw" is a ref, not the flag.
+    expect(parseLineagePath("/lineage/raw", null)).toEqual({ ref: "raw", raw: false, projectId: null });
+  });
+
+  it("round-trips lineagePath, decoding escaped refs", () => {
+    const ref = "model.demo.some model";
+    expect(parseLineagePath(lineagePath(ref, true), null)).toEqual({ ref, raw: true, projectId: null });
   });
 });

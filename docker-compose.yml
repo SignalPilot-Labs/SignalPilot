@@ -39,8 +39,8 @@ services:
     # The durable chat worker reuses this exact image with a different command.
     image: ${GATEWAY_IMAGE:-signalpilot-gateway:latest}
     build:
-      context: ./signalpilot/gateway
-      dockerfile: ../../Dockerfile.gateway
+      context: .
+      dockerfile: Dockerfile.gateway
     ports:
       # The gateway listens on loopback unless SP_GATEWAY_HOST specifies another host.
       # Local mode grants all scopes to requests without an API key.
@@ -80,6 +80,8 @@ services:
       SP_FEATURE_CHAT_RUNTIME_RESULTS: ${SP_FEATURE_CHAT_RUNTIME_RESULTS:-true}
       SP_FEATURE_CHAT_RUNTIME_ARTIFACTS: ${SP_FEATURE_CHAT_RUNTIME_ARTIFACTS:-true}
       SP_FEATURE_CHAT_DATASET_REFS: ${SP_FEATURE_CHAT_DATASET_REFS:-false}
+      SP_FEATURE_CHAT_ORG_SHARING: ${SP_FEATURE_CHAT_ORG_SHARING:-false}
+      SP_FEATURE_CHAT_FORKING: ${SP_FEATURE_CHAT_FORKING:-false}
       # Dedicated billing key for automated improvement runs (from root .env).
       SP_IMPROVEMENT_ANTHROPIC_KEY: ${SP_IMPROVEMENT_ANTHROPIC_KEY:-}
       SP_CHAT_OBJECTS_BUCKET: ${SP_CHAT_OBJECTS_BUCKET:-sp-chat-runtime}
@@ -228,6 +230,8 @@ services:
       SP_FEATURE_CHAT_RUNTIME_RESULTS: ${SP_FEATURE_CHAT_RUNTIME_RESULTS:-true}
       SP_FEATURE_CHAT_RUNTIME_ARTIFACTS: ${SP_FEATURE_CHAT_RUNTIME_ARTIFACTS:-true}
       SP_FEATURE_CHAT_DATASET_REFS: ${SP_FEATURE_CHAT_DATASET_REFS:-false}
+      SP_FEATURE_CHAT_ORG_SHARING: ${SP_FEATURE_CHAT_ORG_SHARING:-false}
+      SP_FEATURE_CHAT_FORKING: ${SP_FEATURE_CHAT_FORKING:-false}
       # Dedicated billing key for automated improvement runs (from root .env).
       SP_IMPROVEMENT_ANTHROPIC_KEY: ${SP_IMPROVEMENT_ANTHROPIC_KEY:-}
       SP_CHAT_OBJECTS_BUCKET: ${SP_CHAT_OBJECTS_BUCKET:-sp-chat-runtime}
@@ -327,6 +331,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.web
+      args:
+        NEXT_PUBLIC_CHAT_TELEMETRY_ENABLED: ${NEXT_PUBLIC_CHAT_TELEMETRY_ENABLED:-false}
     ports:
       # The web service listens on loopback unless SP_WEB_HOST specifies another host.
       # Local mode grants all scopes to requests without an API key.

@@ -1,31 +1,22 @@
 "use client";
 
 import { AlertTriangle, ArrowDownToLine } from "lucide-react";
-import { downloadConversationFile, type ConversationFileInfo } from "~/lib/api";
+import type { ConversationFileInfo } from "~/lib/api";
 import { middleTruncate } from "~/lib/chat-artifact-cards";
 import { formatByteSize } from "~/lib/chat-artifacts";
 import { kindIcon } from "~/components/chat/artifacts-panel";
 import type { ChatUiContextValue } from "~/components/chat/chat-ui-context";
+import { downloadUiFile } from "~/components/chat/download-ui-file";
 import { useToast } from "~/components/ui/toast";
 
-/**
- * Download a file's bytes through the context override when one is set
- * (the shared page), else through the owner conversation route. Resolves
- * without doing anything when neither is available.
- */
-export function downloadUiFile(
-  ui: Pick<ChatUiContextValue, "conversationId" | "downloadFile">,
-  file: Pick<ConversationFileInfo, "id" | "filename">,
-): Promise<void> {
-  if (ui.downloadFile) return ui.downloadFile(file.id, file.filename);
-  if (!ui.conversationId) return Promise.resolve();
-  return downloadConversationFile(ui.conversationId, file.id, file.filename);
-}
+// Re-exported so existing importers keep working; the implementation lives
+// in its own module to avoid an import cycle with the file viewer.
+export { downloadUiFile } from "~/components/chat/download-ui-file";
 
 /** Primary verb by kind. Data previews, documents open, the rest download. */
 export function chipActionLabel(kind: string): "Preview" | "Open" | "Download" {
   if (kind === "data") return "Preview";
-  if (kind === "html" || kind === "markdown") return "Open";
+  if (kind === "html" || kind === "markdown" || kind === "dashboard") return "Open";
   return "Download";
 }
 

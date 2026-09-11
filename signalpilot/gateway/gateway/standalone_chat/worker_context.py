@@ -80,7 +80,6 @@ def warm_context(
         for result in context.get("query_results", [])
     ]
 
-    dashboard_session = context.get("dashboard_authoring_session")
     return {
         "project": {
             "id": project.id,
@@ -97,21 +96,6 @@ def warm_context(
         "query_decisions": query_decisions,
         "structured_results": result_refs,
         "report_reference": _latest_message_reference(context, "report_reference"),
-        "dashboard_chart_reference": _latest_message_reference(
-            context, "dashboard_chart_reference"
-        ),
-        "dashboard_authoring": (
-            {
-                "authoring_session_id": dashboard_session.id,
-                "dashboard_id": dashboard_session.dashboard_id,
-                "dashboard_name": (dashboard_session.definition_json or {}).get("name", "Dashboard"),
-                "draft_revision": dashboard_session.draft_revision,
-                "status": dashboard_session.status,
-                "instruction": "Refine this dashboard session when the user asks for dashboard changes.",
-            }
-            if dashboard_session is not None
-            else None
-        ),
         "runtime": {
             "gateway_version": gateway_version,
             "plugin_version": os.getenv("SIGNALPILOT_PLUGIN_VERSION", "deployed"),

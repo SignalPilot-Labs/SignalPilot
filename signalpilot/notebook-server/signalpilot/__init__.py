@@ -30,6 +30,7 @@ __all__ = [  # noqa: RUF022
     "connections",
     "connect",
     "artifact_path",
+    "dashboard_dataset",
     "open_dataset",
     "publish_result",
     # Agent SDK
@@ -162,6 +163,7 @@ from signalpilot._sdk import (
     artifact_path,
     connect,
     connections,
+    dashboard_dataset,
     init,
     open_dataset,
     publish_result,

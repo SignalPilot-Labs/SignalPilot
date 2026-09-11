@@ -19,6 +19,10 @@ export type ToolResultKind =
   | "terminal"
   | "knowledge"
   | "artifact"
+  | "dashboard_sample"
+  | "dashboard_screenshot"
+  | "dashboard_list"
+  | "dashboard_load"
   | "json"
   | "text";
 
@@ -177,7 +181,7 @@ export type KnowledgeResult = ToolResultBase & {
 
 export type ArtifactResult = ToolResultBase & {
   kind: "artifact";
-  artifactKind: "dashboard" | "notebook";
+  artifactKind: "notebook";
   published: boolean;
   filename: string | null;
   artifactIndex: number | null;
@@ -186,7 +190,92 @@ export type ArtifactResult = ToolResultBase & {
   sessionId: string | null;
   notebookPath: string | null;
   notebook: string | null;
-  dashboardSessionId: string | null;
+};
+
+export type DashboardIssue = { code: string; message: string };
+
+export type DashboardSampleChart = {
+  id: string;
+  type: string | null;
+  dataset: string | null;
+  rowCount: number;
+  issueCount: number;
+  columns: { name: string; inferredType: string | null }[];
+  rows: Record<string, ToolResultCell>[];
+  issues: DashboardIssue[];
+};
+
+/** `dashboard_sample_data`: the prepared rows and checks per chart. */
+export type DashboardSampleResult = ToolResultBase & {
+  kind: "dashboard_sample";
+  dashboardValid: boolean;
+  errors: string[];
+  charts: DashboardSampleChart[];
+};
+
+/** `dashboard_screenshot`: which tiles rendered; the PNG itself is not
+ * carried on the event. */
+export type DashboardScreenshotResult = ToolResultBase & {
+  kind: "dashboard_screenshot";
+  dashboardValid: boolean;
+  errors: string[];
+  rendered: string[];
+  failed: { id: string; code: string; message: string }[];
+  width: number | null;
+  height: number | null;
+  previewPath: string | null;
+  error: string | null;
+};
+
+export type DashboardListEntry = {
+  id: string;
+  slug: string;
+  name: string;
+  description: string | null;
+  chartCount: number;
+  visibility: string | null;
+  updatedAt: string | null;
+  lastRefreshAt: string | null;
+  canEdit: boolean;
+};
+
+/** `dashboard_list_published`: the gallery as the agent sees it. */
+export type DashboardListResult = ToolResultBase & {
+  kind: "dashboard_list";
+  dashboards: DashboardListEntry[];
+  /** Gallery size when the projector reported it; else the entries shown. */
+  total: number;
+  /** The projector capped the entry list. */
+  dashboardsTruncated: boolean;
+};
+
+export type DashboardLoadDataset = {
+  name: string;
+  rows: number | null;
+  /** Scratch-relative snapshot path the tool wrote, when it wrote one. */
+  snapshot: string | null;
+};
+
+/** `dashboard_load_published`: the spec the agent pulled into the sandbox
+ * (`artifacts/<slug>.dashboard.json`) or the refusal. */
+export type DashboardLoadResult = ToolResultBase & {
+  kind: "dashboard_load";
+  path: string | null;
+  dashboard: {
+    id: string;
+    slug: string;
+    name: string;
+    versionNo: number | null;
+    chartCount: number | null;
+  } | null;
+  datasets: DashboardLoadDataset[];
+  /** The projector dropped the dataset list to fit the event. */
+  datasetsTruncated: boolean;
+  /** The tool's hint on what to do next. */
+  next: string | null;
+  /** Error code when the load was refused (`not_found`, `forbidden`, ...). */
+  error: string | null;
+  message: string | null;
 };
 
 export type JsonResult = ToolResultBase & { kind: "json"; value: unknown };
@@ -206,6 +295,10 @@ export type ToolResult =
   | TerminalResult
   | KnowledgeResult
   | ArtifactResult
+  | DashboardSampleResult
+  | DashboardScreenshotResult
+  | DashboardListResult
+  | DashboardLoadResult
   | JsonResult
   | TextResult
   | LegacyResult;

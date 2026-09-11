@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pulse host simulator</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { margin: 0; font: 13px system-ui, sans-serif; background: #efeeea; color: #1c1c1a; }
+  body[data-theme="dark"] { background: #101012; color: #ececea; }
+  .bar { display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 12px 16px; border-bottom: 1px solid rgba(128,128,128,.3); align-items: center; }
+  .bar label { display: inline-flex; gap: 6px; align-items: center; }
+  .stage { padding: 32px 16px; display: flex; justify-content: center; }
+  .frame { width: 100%; max-width: 720px; transition: max-width .3s; }
+  .hostrow { font-size: 12px; opacity: .6; margin-bottom: 8px; }
+  iframe { display: block; width: 100%; height: 256px; border: 0; background: transparent; }
+  #log { font: 11px ui-monospace, monospace; padding: 8px 16px; white-space: pre-wrap; opacity: .7; max-height: 160px; overflow: auto; }
+</style>
+</head>
+<body data-theme="dark">
+<div class="bar">
+  <label>Scenario <select id="scenario"><option value="run">Scripted run</option><option value="waiting">Waiting</option><option value="failed">Failed</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option></select></label>
+  <label>Theme <select id="theme"><option value="dark">dark</option><option value="light">light</option></select></label>
+  <label>Host styles <select id="styles"><option value="none">none (SignalPilot fallback)</option><option value="chatgpt">ChatGPT-like variables</option></select></label>
+  <label>Width <select id="width"><option value="720">720</option><option value="480">480</option><option value="320">320</option></select></label>
+  <label><input type="checkbox" id="pip" checked> pip</label>
+  <button id="reload">Reload app</button>
+</div>
+<div class="stage"><div class="frame" id="frame"><div class="hostrow">SignalPilot · run_signalpilot_agent</div><iframe id="app" title="SignalPilot Pulse" sandbox="allow-scripts"></iframe></div></div>
+<pre id="log"></pre>
+<script>
+(async () => {
+  const $ = (s) => document.querySelector(s);
+  const params = new URLSearchParams(location.search);
+  for (const key of ["scenario", "theme", "styles", "width"]) if (params.get(key)) $("#" + key).value = params.get(key);
+  if (params.has("pip")) $("#pip").checked = params.get("pip") !== "0";
+  const log = (line) => { const el = $("#log"); el.textContent = (line + "\n" + el.textContent).slice(0, 6000); };
+  const appHtml = await (await fetch(params.get("app") ?? "../../signalpilot/gateway/gateway/mcp/apps/pulse.html")).text();
+
+  const CHATGPT_VARS = {
+    dark: { "--color-background-primary": "#212121", "--color-background-secondary": "#1a1a1a", "--color-border-primary": "#383838", "--color-border-secondary": "#4a4a4a", "--color-text-primary": "#ececec", "--color-text-secondary": "#b4b4b4", "--color-text-tertiary": "#8a8a8a", "--font-sans": "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif", "--font-mono": "ui-monospace, Menlo, Consolas, monospace", "--border-radius-lg": "16px" },
+    light: { "--color-background-primary": "#ffffff", "--color-background-secondary": "#f6f6f6", "--color-border-primary": "#e6e6e6", "--color-border-secondary": "#cfcfcf", "--color-text-primary": "#0d0d0d", "--color-text-secondary": "#5d5d5d", "--color-text-tertiary": "#8f8f8f", "--font-sans": "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif", "--font-mono": "ui-monospace, Menlo, Consolas, monospace", "--border-radius-lg": "16px" },
+  };
+
+  // ── Scripted run: the same Q3 margin story as the design mockup ──────
+  const STEPS = [
+    ["Load dbt workflow skill", "Loading dbt workflow skill"],
+    ["Scan project and find the order marts", "Scanning project"],
+    ["Check freshness and grain of rpt_daily_profitability", "Checking freshness and grain"],
+    ["Compute Q3 margin by region", "Computing Q3 margin by region"],
+    ["Isolate the APAC refund batch", "Isolating the APAC refund batch"],
+    ["Build mart_q3_margin_by_region", "Building mart_q3_margin_by_region"],
+    ["Write the report", "Writing the report"],
+  ];
+  const PLAN = (done) => STEPS.map(([content, active], index) => ({ content, active, status: index < done ? "completed" : index === done ? "in_progress" : "pending" }));
+  const T0 = Date.now();
+  const stamp = (ms) => new Date(T0 + ms).toISOString();
+  const script = [
+    [0, "runtime_boot", { phase: "provisioning", label: "Starting secure runtime" }],
+    [2400, "runtime_boot", { phase: "ready" }],
+    [3400, "thinking_delta", { delta: "Q3 gross margin by region needs the finance mart, not the raw invoices. " }],
+    [4300, "tool_started", { tool: "mcp__signalpilot__list_tables", tool_call_id: "a" }],
+    [5700, "tool_completed", { tool: "mcp__signalpilot__list_tables", tool_call_id: "a", summary: "42 tables" }],
+    [5900, "tool_started", { tool: "mcp__signalpilot__explore_columns", tool_call_id: "b" }],
+    [7600, "tool_completed", { tool: "mcp__signalpilot__explore_columns", tool_call_id: "b", summary: "18 columns" }],
+    [8000, "thinking_delta", { delta: "rpt_daily_profitability carries both booked_at and invoiced_at; margin should follow invoiced_at. " }],
+    [9000, "tool_started", { tool: "TodoWrite", tool_call_id: "p", plan: PLAN(0) }],
+    [9500, "tool_completed", { tool: "TodoWrite", tool_call_id: "p", summary: "Plan updated · 0/4 done" }],
+    [9800, "tool_started", { tool: "mcp__signalpilot__query_database", tool_call_id: "c", label: "Checking the date range of rpt_daily_profitability" }],
+    [12400, "tool_completed", { tool: "mcp__signalpilot__query_database", tool_call_id: "c", summary: "1 row · 0.6 s" }],
+    [12800, "thinking_delta", { delta: "Data runs through 2026-08-31, so Q3 covers July and August only. I will say so in the answer. " }],
+    [13600, "tool_started", { tool: "mcp__signalpilot__query_database", tool_call_id: "d", label: "Gross margin by region for Q3, invoiced basis" }],
+    [16800, "tool_completed", { tool: "mcp__signalpilot__query_database", tool_call_id: "d", summary: "6 rows · 1.4 s" }],
+    [17000, "tool_started", { tool: "TodoWrite", tool_call_id: "p2", plan: PLAN(1) }],
+    [17100, "tool_completed", { tool: "TodoWrite", tool_call_id: "p2", summary: "Plan updated · 1/4 done" }],
+    [17200, "tool_started", { tool: "mcp__signalpilot__validate_sql", tool_call_id: "e" }],
+    [18400, "tool_completed", { tool: "mcp__signalpilot__validate_sql", tool_call_id: "e", summary: "No issues" }],
+    [18800, "thinking_delta", { delta: "EMEA margin is 41.2%, up 3 points. APAC drops to 28% on a single refund batch; worth isolating. " }],
+    [19700, "tool_started", { tool: "mcp__signalpilot__query_database", tool_call_id: "f", label: "Checking APAC refunds in fct_refunds for August" }],
+    [22100, "tool_completed", { tool: "mcp__signalpilot__query_database", tool_call_id: "f", summary: "14 rows · 0.9 s" }],
+    [22300, "tool_started", { tool: "TodoWrite", tool_call_id: "p3", plan: PLAN(2) }],
+    [22400, "tool_completed", { tool: "TodoWrite", tool_call_id: "p3", summary: "Plan updated · 2/4 done" }],
+    [22700, "tool_started", { tool: "mcp__signalpilot__dbt_execute", tool_call_id: "g" }],
+    [26500, "tool_completed", { tool: "mcp__signalpilot__dbt_execute", tool_call_id: "g", summary: "1 model · 2 tests passed" }],
+    [27000, "tool_started", { tool: "Write", tool_call_id: "h" }],
+    [27900, "tool_completed", { tool: "Write", tool_call_id: "h", summary: "reports/q3_margin.md" }],
+    [28000, "tool_started", { tool: "TodoWrite", tool_call_id: "p4", plan: PLAN(6) }],
+    [28100, "tool_completed", { tool: "TodoWrite", tool_call_id: "p4", summary: "Plan updated · 4/4 done" }],
+    [28400, "status", { status: "running", reset_text: true }],
+    [28900, "text_delta", { delta: "## Q3 margin\n\nQ3 gross margin came in at **37.8%** on an invoiced basis, two points above Q2. " }],
+    [31600, "text_delta", { delta: "EMEA led at 41.2%. APAC fell to 28.1% because of one refund batch on 14 August. " }],
+    [34300, "text_delta", { delta: "Excluding that batch, APAC is flat at 33%. The full table and SQL are in the report." }],
+    [36600, "status", { status: "completed" }],
+  ];
+  const FINAL = "## Q3 margin\n\nQ3 gross margin came in at 37.8% on an invoiced basis, two points above Q2. EMEA led at 41.2%. APAC fell to 28.1% because of one refund batch on 14 August.";
+
+  function snapshotEvents(kind) {
+    const base = script.slice(0, 22).filter(([, type]) => type !== "status");
+    if (kind === "waiting") return [...base, [23000, "clarification_requested", { question: "Should margin follow the invoice date or the booking date? The two marts disagree for Q3 by 1.6 points." }]];
+    if (kind === "failed") return [...base, [23000, "tool_started", { tool: "mcp__signalpilot__query_database", tool_call_id: "z", label: "Checking APAC refunds in fct_refunds for August" }], [24000, "tool_completed", { tool: "mcp__signalpilot__query_database", tool_call_id: "z", error: "Query timed out after 300 s" }], [24100, "error", { message: "Query timed out after 300 s on fct_refunds", raw_error: "QueryTimeout: statement exceeded 300 s\n  hint: fct_refunds has no partition filter on refunded_at" }]];
+    if (kind === "cancelled") return base;
+    return script.filter(([, type]) => type !== "status");
+  }
+
+  function page(after, afterMessage) {
+    const scenario = $("#scenario").value;
+    const elapsed = Date.now() - T0;
+    let rows, status;
+    if (scenario === "run") {
+      rows = script.filter(([ms]) => ms <= elapsed);
+      status = elapsed >= 36600 ? "completed" : "running";
+    } else {
+      rows = snapshotEvents(scenario);
+      status = { waiting: "input_required", failed: "failed", completed: "completed", cancelled: "cancelled" }[scenario];
+    }
+    const events = rows.map(([ms, type, payload], index) => ({ run_id: "run-demo", sequence: index + 1, type, payload, created_at: stamp(ms) })).filter((event) => event.sequence > after);
+    const messages = status === "completed" && afterMessage < 2 ? [{ id: "m2", role: "assistant", content: FINAL, sequence: 2, run_id: "run-demo" }] : [];
+    return {
+      thread_id: "thread-demo", run_id: "run-demo", chat_url: "https://app.signalpilot.ai/chats/thread-demo", status,
+      events, messages, next_sequence: rows.length, next_message_sequence: messages.length ? 2 : afterMessage,
+      has_more: false, has_more_messages: false, elapsed_seconds: Math.floor(Math.min(elapsed, 36600) / 1000),
+      ...(status === "input_required" ? { question: "Should margin follow the invoice date or the booking date? The two marts disagree for Q3 by 1.6 points." } : {}),
+      ...(status === "failed" ? { error: "Query timed out after 300 s on fct_refunds", raw_error: "QueryTimeout: statement exceeded 300 s\n  hint: fct_refunds has no partition filter on refunded_at" } : {}),
+    };
+  }
+
+  // ── Host side of the MCP Apps postMessage protocol ───────────────────
+  const iframe = $("#app");
+  const send = (message) => iframe.contentWindow.postMessage(message, "*");
+  const hostContext = () => {
+    const theme = $("#theme").value;
+    document.body.dataset.theme = theme;
+    const styles = $("#styles").value === "chatgpt" ? { variables: CHATGPT_VARS[theme] } : undefined;
+    return { theme, displayMode: "inline", availableDisplayModes: ["inline", ...($("#pip").checked ? ["pip", "fullscreen"] : [])], containerDimensions: { width: iframe.clientWidth }, locale: "en-US", platform: "web", ...(styles ? { styles } : {}) };
+  };
+  window.addEventListener("message", (event) => {
+    if (event.source !== iframe.contentWindow) return;
+    const msg = event.data;
+    if (!msg || msg.jsonrpc !== "2.0") return;
+    if (msg.method === "ui/initialize") {
+      const hostCapabilities = { serverTools: {}, openLinks: {}, message: { text: {} } };
+      send({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: msg.params.protocolVersion, hostInfo: { name: "pulse-host-simulator", version: "1.0.0" }, hostCapabilities, hostContext: hostContext() } });
+      return;
+    }
+    if (msg.method === "ui/notifications/initialized") {
+      const first = page(0, 0);
+      send({ jsonrpc: "2.0", method: "ui/notifications/tool-result", params: { content: [{ type: "text", text: "ready" }], structuredContent: { thread_id: first.thread_id, run_id: first.run_id, status: first.status, chat_url: first.chat_url } } });
+      return;
+    }
+    if (msg.method === "ui/notifications/size-changed") {
+      if (msg.params?.height) iframe.style.height = `${Math.ceil(msg.params.height)}px`;
+      return;
+    }
+    if (msg.method === "tools/call") {
+      const args = msg.params.arguments ?? {};
+      if (msg.params.name === "read_signalpilot_chat_view") {
+        const data = page(args.after_sequence ?? 0, args.after_message_sequence ?? 0);
+        send({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: "updated" }], structuredContent: data } });
+      } else {
+        send({ jsonrpc: "2.0", id: msg.id, result: { isError: true, content: [{ type: "text", text: `Unknown tool ${msg.params.name}` }] } });
+      }
+      return;
+    }
+    if (msg.method === "ui/open-link") { log(`open-link ${msg.params.url}`); send({ jsonrpc: "2.0", id: msg.id, result: {} }); return; }
+    if (msg.method === "ui/request-display-mode") { log(`display-mode ${msg.params.mode}`); send({ jsonrpc: "2.0", id: msg.id, result: { mode: msg.params.mode } }); send({ jsonrpc: "2.0", method: "ui/notifications/host-context-changed", params: { displayMode: msg.params.mode } }); return; }
+    if (msg.method === "ui/message") { log(`message ${JSON.stringify(msg.params.content)}`); send({ jsonrpc: "2.0", id: msg.id, result: {} }); return; }
+    if (msg.id !== undefined && msg.method) { send({ jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: `Unhandled ${msg.method}` } }); log(`unhandled ${msg.method}`); }
+  });
+
+  const load = () => { iframe.srcdoc = appHtml; };
+  $("#reload").addEventListener("click", load);
+  $("#width").addEventListener("change", () => { $("#frame").style.maxWidth = `${$("#width").value}px`; });
+  $("#theme").addEventListener("change", () => send({ jsonrpc: "2.0", method: "ui/notifications/host-context-changed", params: hostContext() }));
+  $("#styles").addEventListener("change", load);
+  $("#scenario").addEventListener("change", load);
+  $("#frame").style.maxWidth = `${$("#width").value}px`;
+  load();
+})();
+</script>
+</body>
+</html>

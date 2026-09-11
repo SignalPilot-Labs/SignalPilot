@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   fileKindLabel,
+  isRunStreaming,
   filesRefreshRevision,
   formatByteSize,
   hasArtifactsContent,
@@ -165,6 +166,36 @@ describe("formatByteSize", () => {
   });
 });
 
+describe("isRunStreaming", () => {
+  const event = (
+    run_id: string,
+    type: string,
+    payload: Record<string, unknown> = {},
+    sequence = 1,
+  ): StandaloneChatEvent => ({
+    run_id,
+    sequence,
+    type: type as StandaloneChatEvent["type"],
+    payload,
+    created_at: "2026-01-01T00:00:00Z",
+  });
+
+  it("is true while the run has events and no terminal status", () => {
+    expect(isRunStreaming([event("run-1", "text_delta", { delta: "x" })], "run-1")).toBe(true);
+  });
+
+  it("is false after a terminal status, for unknown runs, and without a run id", () => {
+    expect(
+      isRunStreaming(
+        [event("run-1", "text_delta"), event("run-1", "status", { status: "completed" }, 2)],
+        "run-1",
+      ),
+    ).toBe(false);
+    expect(isRunStreaming([event("run-2", "text_delta")], "run-1")).toBe(false);
+    expect(isRunStreaming([event("run-1", "text_delta")], null)).toBe(false);
+  });
+});
+
 describe("fileKindLabel", () => {
   it("maps known kinds to labels", () => {
     expect(fileKindLabel("markdown")).toBe("Markdown");
@@ -173,6 +204,7 @@ describe("fileKindLabel", () => {
     expect(fileKindLabel("image")).toBe("Image");
     expect(fileKindLabel("notebook")).toBe("Notebook");
     expect(fileKindLabel("data")).toBe("Data");
+    expect(fileKindLabel("dashboard")).toBe("Dashboard");
   });
 
   it("falls back to File for unknown kinds", () => {

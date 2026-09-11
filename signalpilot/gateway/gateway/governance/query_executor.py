@@ -20,7 +20,7 @@ from sqlalchemy import select
 from gateway import __version__ as gateway_version
 from gateway.connectors.health_monitor import health_monitor
 from gateway.connectors.pool_manager import pool_manager
-from gateway.connectors.registry import get_dashboard_dialect
+from gateway.connectors.registry import get_connector_dialect
 from gateway.db.models import GatewayGovernedQueryExecution, GatewayStructuredQueryResult
 from gateway.engine import inject_limit, sqlglot_dialect, validate_sql
 from gateway.governance.annotations import load_annotations
@@ -161,14 +161,14 @@ class GovernedQueryExecutor:
             blocked_tables.extend(table for table in settings.blocked_tables if table not in blocked_tables)
 
         try:
-            dashboard_dialect = get_dashboard_dialect(info.db_type)
+            connector_dialect = get_connector_dialect(info.db_type)
             connection_db_type = str(getattr(info.db_type, "value", info.db_type)).lower()
             if bound_query is None:
                 bound_query = BoundQuery.from_legacy(
                     sql=sql,
                     parameters=list(parameters or []),
                     db_type=connection_db_type,
-                    parameter_style=dashboard_dialect.parameter_style,
+                    parameter_style=connector_dialect.parameter_style,
                 )
             elif bound_query.db_type != connection_db_type:
                 raise BoundQueryError("Bound query database type does not match the connection")

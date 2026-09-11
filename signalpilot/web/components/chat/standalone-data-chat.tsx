@@ -2,7 +2,7 @@
 
 // Standalone data chat container; UI details live in sibling modules.
 
-import { Bot, PanelLeft, Share2 } from "lucide-react";
+import { Bot, PanelLeft } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import useSWR from "swr";
@@ -27,6 +27,10 @@ import { hasArtifactsContent } from "~/lib/chat-artifacts";
 import { ChatUiContext } from "~/components/chat/chat-ui-context";
 import { ChatMessage } from "~/components/chat/chat-message";
 import {
+  ChatReplayView,
+  useReplayMode,
+} from "~/components/chat/chat-replay-view";
+import {
   isImprovementConversation,
   isStreamingStatus,
 } from "~/components/chat/standalone-chat-helpers";
@@ -46,15 +50,17 @@ import { ChatComposerPanel } from "~/components/chat/chat-composer-panel";
 import {
   useChatAutoScroll,
   useChatDraft,
-  useMentionOptions,
   useNotebookPanelState,
+  useSelectedChatProject,
   useStandaloneQueryApproval,
   useStandaloneRunStream,
   useStandaloneUiMessages,
 } from "~/components/chat/use-standalone-chat-run";
 import { useStandaloneChatActions } from "~/components/chat/use-standalone-chat-actions";
+import { ShareLinkDialog } from "~/components/chat/share-link-dialog";
 import { ChatEmptyHero } from "~/components/chat/chat-empty-hero";
 import {
+  chatShellClassName,
   composerDisabledReason,
   readinessNotice,
 } from "~/components/chat/standalone-chat-derivations";
@@ -63,9 +69,11 @@ import {
   ChatRightPanels,
 } from "~/components/chat/standalone-chat-panels";
 import { useChatRightSlot } from "~/components/chat/use-chat-right-slot";
+import { useDockScrollCompensation } from "~/components/chat/use-dock-scroll-compensation";
 import { ConnectorsProvider } from "~/components/connectors/connectors-context";
 import { useChatModelSettings } from "~/components/chat/use-chat-model-settings";
 import { useChatBudgetSettings } from "~/components/chat/use-chat-budget-settings";
+import { ChatTelemetryBoundary } from "~/components/chat/chat-telemetry-panel";
 
 export { ChatUiContext, useChatUi } from "~/components/chat/chat-ui-context";
 export type { UiMessage } from "~/components/chat/chat-ui-context";
@@ -126,8 +134,10 @@ export function StandaloneDataChat({
         version_id: selectedReport.current_version_id,
       }
     : undefined;
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
-    null,
+  const [selectedProjectId, setSelectedProjectId] = useSelectedChatProject(
+    bootstrap,
+    requestedProject,
+    detail?.conversation.project_id,
   );
   const { perQueryBudgetUsd, chatBudgetUsd, budgetSettings } =
     useChatBudgetSettings(bootstrap, conversationId);
@@ -141,27 +151,12 @@ export function StandaloneDataChat({
   const [loadingConversationId, setLoadingConversationId] = useState<
     string | null
   >(null);
-  const selectedInitialized = useRef(false);
 
   useEffect(() => {
     if (!requestedPrompt || promptInitialized.current) return;
     setDraft(requestedPrompt);
     promptInitialized.current = true;
   }, [requestedPrompt, setDraft]);
-
-  useEffect(() => {
-    if (!bootstrap || selectedInitialized.current) return;
-    const requested = bootstrap.projects.find(
-      (project) => project.id === requestedProject,
-    );
-    setSelectedProjectId(
-      requested?.id ??
-        bootstrap.selected_project_id ??
-        bootstrap.projects[0]?.id ??
-        null,
-    );
-    selectedInitialized.current = true;
-  }, [bootstrap, requestedProject]);
 
   useEffect(() => {
     if (!requestedReportId || selectedReport?.report_id === requestedReportId)
@@ -186,13 +181,6 @@ export function StandaloneDataChat({
       active = false;
     };
   }, [requestedReportId, selectedReport?.report_id, toast]);
-
-  useEffect(() => {
-    if (detail?.conversation.project_id) {
-      setSelectedProjectId(detail.conversation.project_id);
-      selectedInitialized.current = true;
-    }
-  }, [detail?.conversation.project_id]);
 
   const { data: readiness } = useSWR(
     selectedProjectId ? `standalone-chat-readiness:${selectedProjectId}` : null,
@@ -228,7 +216,7 @@ export function StandaloneDataChat({
     mutateDetail,
     mutateHistory,
   });
-  useStandaloneRunStream({
+  const eventArrivals = useStandaloneRunStream({
     conversationId,
     currentRunId: currentRun?.id,
     streamStatus: currentRun?.status,
@@ -245,24 +233,21 @@ export function StandaloneDataChat({
     pendingSubmission,
     setPendingSubmission,
   });
-  // Right-hand slot: artifacts, chat settings, or dashboard — one at a time.
+  // Right-hand slot: artifacts or chat settings — one at a time.
   const {
-    dashboard: dashboardPanel,
     settings: settingsPanel,
     openArtifacts: openArtifactsPanel,
     openFileRequest,
     openArtifact,
   } = useChatRightSlot({
-    conversationId,
-    uiMessages,
-    events,
-    currentRun,
     artifactsOpen: notebookPanelOpen,
     setArtifactsOpen: setNotebookPanelOpen,
   });
 
   const { viewportRef, shouldStickToBottomRef, onViewportScroll } =
     useChatAutoScroll(conversationId, uiMessages);
+  // The plan dock grows upward; keep the last transcript line above it.
+  const composerDockRef = useDockScrollCompensation(viewportRef);
   const { selectedModel, selectedEffort, modelSettings } = useChatModelSettings({
     conversationId,
     conversationModel: detail?.conversation.model,
@@ -284,6 +269,8 @@ export function StandaloneDataChat({
     renameConversation,
     archiveConversation,
     shareConversation,
+    shareLink,
+    dismissShareLink,
     revokeShare,
   } = useStandaloneChatActions({
     conversationId,
@@ -315,14 +302,17 @@ export function StandaloneDataChat({
 
   const runIsStreaming =
     currentRun?.status === "queued" || currentRun?.status === "running";
+  const { canReplay, replaying, enterReplay, exitReplay } = useReplayMode(
+    conversationId,
+    events,
+    runIsStreaming,
+  );
 
   const disabledReason = composerDisabledReason(
     selectedProjectId,
     readiness,
     currentRun,
   );
-
-  const mentionOptions = useMentionOptions(selectedProjectId);
 
   const conversations = historyData?.conversations ?? [];
   const starters =
@@ -361,7 +351,6 @@ export function StandaloneDataChat({
       runIsStreaming={runIsStreaming}
       currentRun={currentRun}
       onStop={onStop}
-      mentionOptions={mentionOptions}
       conversationId={conversationId}
       bootstrap={bootstrap}
       selectedProjectId={selectedProjectId}
@@ -376,6 +365,13 @@ export function StandaloneDataChat({
   );
 
   return (
+    <ChatTelemetryBoundary
+      messages={uiMessages}
+      events={events}
+      currentRun={currentRun}
+      arrivals={eventArrivals}
+      running={runIsStreaming}
+    >
     <ConnectorsProvider enabled={connectorsEnabled}>
     <ChatUiContext.Provider
       value={{
@@ -386,21 +382,14 @@ export function StandaloneDataChat({
         openChatSettings: settingsPanel.openPanel,
         onStop,
         onRetry,
-        onOpenDashboardPreview: dashboardPanel.open,
       }}
     >
       <div
-        className={
-          embedded
-            ? "h-full min-w-0 overflow-hidden"
-            : `h-screen overflow-hidden p-4 ${
-                settingsPanel.open
-                  ? "min-w-[1180px]"
-                  : notebookPanelOpen || dashboardPanel.sessionId
-                    ? "min-w-[1360px]"
-                    : "min-w-[960px]"
-              }`
-        }
+        className={chatShellClassName(
+          embedded,
+          settingsPanel.open,
+          notebookPanelOpen,
+        )}
       >
         <div className="relative flex h-full overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg)] shadow-2xl shadow-black/20">
           {!embedded && (
@@ -441,20 +430,6 @@ export function StandaloneDataChat({
             />
           )}
           <main className="relative flex min-w-0 flex-1 flex-col">
-            {!embedded &&
-              conversationId &&
-              detail &&
-              bootstrap.enterprise_features.organization_sharing && (
-                <button
-                  type="button"
-                  aria-label="Share conversation"
-                  title="Create a new authenticated team link and revoke any previous link"
-                  onClick={() => void shareConversation(detail.conversation)}
-                  className="absolute right-4 top-4 z-20 flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-card)] text-[var(--color-text-muted)] shadow-lg shadow-black/20 hover:border-[var(--color-border-hover)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
-                >
-                  <Share2 className="h-4 w-4" />
-                </button>
-              )}
             {conversationId &&
               isImprovementConversation(detail?.conversation) && (
                 <div className="flex-none px-6 pt-4">
@@ -524,18 +499,29 @@ export function StandaloneDataChat({
                     <StarterQuestionsSkeleton />
                   )}
                 </div>
+              ) : replaying ? (
+                <ChatReplayView
+                  messages={uiMessages}
+                  onExit={exitReplay}
+                  viewportRef={viewportRef}
+                />
               ) : (
                 <div data-testid="standalone-chat-messages">
-                  {uiMessages.map((message) => (
+                  {uiMessages.map((message, index) => (
                     <ChatMessage
                       key={standaloneMessageKey(conversationId, message)}
                       message={message}
+                      previousMessageAt={uiMessages[index - 1]?.created_at}
                     />
                   ))}
                 </div>
               )}
-              {!isEmptyNewChat && (
-                <div className="sticky bottom-0 isolate z-30 bg-gradient-to-t from-[var(--color-bg)] via-[var(--color-bg)] to-transparent pt-3">
+              {!isEmptyNewChat && !replaying && (
+                <div
+                  ref={composerDockRef}
+                  data-testid="chat-composer-dock"
+                  className="sticky bottom-0 isolate z-30 bg-gradient-to-t from-[var(--color-bg)] via-[var(--color-bg)] to-transparent pt-3"
+                >
                   {approvalEvent && (
                     <QueryApprovalCard
                       event={approvalEvent}
@@ -556,9 +542,14 @@ export function StandaloneDataChat({
                 artifactsLoading={artifactsLoading}
                 artifactsOpen={notebookPanelOpen}
                 onOpenArtifacts={openArtifactsPanel}
-                dashboardSessionId={dashboardPanel.latestSessionId}
-                dashboardOpen={Boolean(dashboardPanel.sessionId)}
-                onOpenDashboard={dashboardPanel.open}
+                onShare={
+                  !embedded &&
+                  detail &&
+                  bootstrap.enterprise_features.organization_sharing
+                    ? () => void shareConversation(detail.conversation)
+                    : undefined
+                }
+                onReplay={canReplay ? enterReplay : undefined}
               />
             )}
           </main>
@@ -581,18 +572,13 @@ export function StandaloneDataChat({
                 budgets: budgetSettings,
                 onClose: settingsPanel.closePanel,
               }}
-              dashboard={{
-                sessionId: conversationId ? dashboardPanel.sessionId : null,
-                updateLabel: dashboardPanel.updateLabel,
-                updateRevision: dashboardPanel.updateRevision,
-                queriesEnabled: currentRun?.status !== "cancelled",
-                onClose: dashboardPanel.close,
-              }}
             />
           ) : null}
         </div>
       </div>
     </ChatUiContext.Provider>
+    <ShareLinkDialog url={shareLink} onClose={dismissShareLink} />
     </ConnectorsProvider>
+    </ChatTelemetryBoundary>
   );
 }

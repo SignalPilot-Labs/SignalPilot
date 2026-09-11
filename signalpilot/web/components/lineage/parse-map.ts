@@ -2,12 +2,17 @@
  * Distilled dbt map (gateway /dbt-map graph payload) -> typed structures for
  * the lineage page: model nodes, edges, layer classification, schema grouping,
  * per-model test rollups, and upstream/downstream reachability.
+ *
+ * Accepts every graph variant the gateway serves: `full` (test nodes present,
+ * columns inline as a record), `skeleton` (no test nodes, no columns, each
+ * node carries `column_count` and inline `tests`), and `cone` (skeleton
+ * nodes limited to one model's lineage, the focused model with columns).
  */
 
 import type { MapLayer } from "./palette";
 
 // Shape served by the gateway (a strict subset of a dbt manifest).
-interface RawNode {
+export interface RawNode {
   name?: string;
   resource_type?: string;
   path?: string | null;
@@ -18,12 +23,33 @@ interface RawNode {
   description?: string | null;
   tags?: string[];
   config?: { materialized?: string | null };
-  columns?: Record<string, { name?: string; description?: string; data_type?: string | null }>;
+  columns?: RawColumn[] | Record<string, RawColumn>;
+  /** Skeleton nodes: column total without the column payload. */
+  column_count?: number;
+  /** Skeleton nodes: the model's tests inline (no test nodes in the graph). */
+  tests?: { name?: string; test_metadata?: RawNode["test_metadata"] }[];
   test_metadata?: { name?: string; kwargs?: Record<string, unknown> };
 }
 
+export interface RawColumn {
+  name?: string;
+  description?: string | null;
+  data_type?: string | null;
+}
+
+export interface MapColumn {
+  name: string;
+  description: string;
+  dataType?: string;
+}
+
 export interface RawMapGraph {
-  metadata?: { dbt_version?: string; project_name?: string; generated_at?: string };
+  metadata?: {
+    dbt_version?: string;
+    project_name?: string;
+    generated_at?: string;
+    variant?: "full" | "skeleton" | "cone";
+  };
   nodes?: Record<string, RawNode>;
   sources?: Record<string, RawNode>;
   parent_map?: Record<string, string[]>;
@@ -47,7 +73,12 @@ export interface MapModel {
   description: string;
   path: string;
   tags: string[];
-  columns: { name: string; description: string; dataType?: string }[];
+  /** Empty until loaded for skeleton nodes; see `columnsLoaded`. */
+  columns: MapColumn[];
+  /** Column total, known even when `columns` is not loaded yet. */
+  columnCount: number;
+  /** False for skeleton nodes whose columns must be fetched on demand. */
+  columnsLoaded: boolean;
   tests: MapTest[];
   parents: string[];
   children: string[];
@@ -67,6 +98,8 @@ export interface ParsedMap {
   layerCounts: Record<MapLayer, number>;
   projectName: string;
   dbtVersion: string;
+  /** Which gateway variant produced this graph. */
+  variant: "full" | "skeleton" | "cone";
 }
 
 const NON_GRAPH_TYPES = new Set(["test", "unit_test", "operation", "macro", "exposure", "metric"]);
@@ -93,25 +126,40 @@ function classifyLayer(id: string, node: RawNode): MapLayer {
   return "other";
 }
 
+/** Normalize a column payload (record in `full`, array in `skeleton`/`cone`). */
+export function parseColumns(raw: RawNode["columns"] | null | undefined): MapColumn[] {
+  if (!raw) return [];
+  const list = Array.isArray(raw) ? raw : Object.values(raw);
+  return list.map((c) => ({
+    name: c.name ?? "",
+    description: c.description ?? "",
+    dataType: c.data_type ?? undefined,
+  }));
+}
+
+function testEntry(name: string, meta: RawNode["test_metadata"]): MapTest {
+  return {
+    name,
+    type: meta?.name ?? "generic",
+    column:
+      (meta?.kwargs?.column_name as string | undefined) ??
+      (meta?.kwargs?.field as string | undefined),
+  };
+}
+
 export function parseMap(raw: RawMapGraph): ParsedMap {
   const parentMap = raw.parent_map ?? {};
   const childMap = raw.child_map ?? {};
   const all: Record<string, RawNode> = { ...(raw.nodes ?? {}), ...(raw.sources ?? {}) };
 
-  // Per-model tests come from test nodes hanging off child_map.
-  const testsFor = (id: string): MapTest[] => {
+  // Per-model tests: inline on skeleton nodes, else test nodes off child_map.
+  const testsFor = (id: string, node: RawNode): MapTest[] => {
+    if (node.tests) return node.tests.map((t) => testEntry(t.name ?? "test", t.test_metadata));
     const tests: MapTest[] = [];
     for (const childId of childMap[id] ?? []) {
       if (!childId.startsWith("test.") && !childId.startsWith("unit_test.")) continue;
       const t = all[childId];
-      if (!t) continue;
-      tests.push({
-        name: t.name ?? childId,
-        type: t.test_metadata?.name ?? "generic",
-        column:
-          (t.test_metadata?.kwargs?.column_name as string | undefined) ??
-          (t.test_metadata?.kwargs?.field as string | undefined),
-      });
+      if (t) tests.push(testEntry(t.name ?? childId, t.test_metadata));
     }
     return tests;
   };
@@ -127,6 +175,8 @@ export function parseMap(raw: RawMapGraph): ParsedMap {
     const layer = classifyLayer(id, node);
     const graphRel = (ids: string[] | undefined) =>
       (ids ?? []).filter((p) => all[p] && isGraphNode(p, all[p]));
+    const columns = parseColumns(node.columns);
+    const columnsLoaded = node.columns !== undefined && node.columns !== null;
     models.set(id, {
       id,
       name: node.name ?? id.split(".").pop() ?? id,
@@ -139,12 +189,10 @@ export function parseMap(raw: RawMapGraph): ParsedMap {
       description: node.description ?? "",
       path: node.path ?? node.original_file_path ?? "",
       tags: node.tags ?? [],
-      columns: Object.values(node.columns ?? {}).map((c) => ({
-        name: c.name ?? "",
-        description: c.description ?? "",
-        dataType: c.data_type ?? undefined,
-      })),
-      tests: testsFor(id),
+      columns,
+      columnCount: columnsLoaded ? columns.length : node.column_count ?? 0,
+      columnsLoaded,
+      tests: testsFor(id, node),
       parents: graphRel(parentMap[id]),
       children: graphRel(childMap[id]),
     });
@@ -184,6 +232,7 @@ export function parseMap(raw: RawMapGraph): ParsedMap {
     layerCounts,
     projectName: raw.metadata?.project_name ?? "dbt project",
     dbtVersion: raw.metadata?.dbt_version ?? "",
+    variant: raw.metadata?.variant ?? "full",
   };
 }
 

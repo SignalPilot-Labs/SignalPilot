@@ -66,6 +66,33 @@ export function lineagePath(ref: string, raw = false): string {
   return `/lineage/${encodeURIComponent(ref)}${raw ? "/raw" : ""}`;
 }
 
+export interface LineageRoute {
+  /** Model ref from the URL path: bare name or dbt unique_id. */
+  ref: string | null;
+  /** True when the path ends in /raw (Raw Tables view). */
+  raw: boolean;
+  /** Optional ?project= override. */
+  projectId: string | null;
+}
+
+/** Inverse of `lineagePath`: `/lineage/<ref>[/raw]` -> route parts. */
+export function parseLineagePath(pathname: string, projectId: string | null): LineageRoute {
+  const segments = pathname
+    .split("/")
+    .filter(Boolean)
+    .slice(1)
+    .map((s) => {
+      try {
+        return decodeURIComponent(s);
+      } catch {
+        return s;
+      }
+    });
+  const raw = segments.length > 1 && segments[segments.length - 1].toLowerCase() === "raw";
+  const ref = segments.length > 0 ? segments.slice(0, raw ? -1 : undefined).join("/") : null;
+  return { ref: ref || null, raw, projectId };
+}
+
 // ── Fuzzy suggestions ────────────────────────────────────────────────────────
 
 function editDistance(a: string, b: string, cap: number): number {

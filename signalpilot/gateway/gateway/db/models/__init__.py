@@ -10,6 +10,8 @@ single-module definition order.
 
 from __future__ import annotations
 
+from .downloads import GatewayArtifactDownload as GatewayArtifactDownload
+
 from .base import (
     SSL_SECRET_FIELDS,
     GatewayBase,
@@ -44,6 +46,11 @@ from .core import (
     GatewaySessionBudget,
     GatewaySetting,
     GatewayUploadSession,
+)
+from .dashboards import (
+    GatewayDashboardRefresh,
+    GatewayPublishedDashboard,
+    GatewayPublishedDashboardVersion,
 )
 from .evals import (
     GatewayEvalAccuracyHistory,
@@ -88,11 +95,6 @@ from .queries import (
     GatewayChatRuntimeArchive,
     GatewayChatTraceEvent,
     GatewayChatTraceThread,
-    GatewayDashboard,
-    GatewayDashboardAuthoringSession,
-    GatewayDashboardChartDraft,
-    GatewayDashboardResult,
-    GatewayDashboardVersion,
     GatewayGovernedQueryExecution,
     GatewayQueryApproval,
     GatewayQueryPlan,
@@ -140,11 +142,7 @@ __all__ = [
     "GatewayChatUserPreference",
     "GatewayConnection",
     "GatewayCredential",
-    "GatewayDashboard",
-    "GatewayDashboardAuthoringSession",
-    "GatewayDashboardChartDraft",
-    "GatewayDashboardResult",
-    "GatewayDashboardVersion",
+    "GatewayDashboardRefresh",
     "GatewayDbtManifest",
     "GatewayEvalAccuracyHistory",
     "GatewayEvalConfig",
@@ -170,6 +168,8 @@ __all__ = [
     "GatewayOrgSecrets",
     "GatewayProject",
     "GatewayProjectBranch",
+    "GatewayPublishedDashboard",
+    "GatewayPublishedDashboardVersion",
     "GatewayQueryApproval",
     "GatewayQueryPlan",
     "GatewayQueryProposal",

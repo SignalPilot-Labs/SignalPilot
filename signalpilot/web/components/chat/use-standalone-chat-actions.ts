@@ -4,13 +4,7 @@
 // conversation load/select, and rail management.
 
 import { useRouter } from "next/navigation";
-import {
-  useCallback,
-  useRef,
-  type Dispatch,
-  type MutableRefObject,
-  type SetStateAction,
-} from "react";
+import { type Dispatch, type MutableRefObject, type SetStateAction, useCallback, useRef, useState } from "react";
 import { useSWRConfig } from "swr";
 import {
   archiveStandaloneConversation,
@@ -32,6 +26,7 @@ import {
   type StandaloneConversationDetail,
 } from "~/lib/api";
 import { useToast } from "~/components/ui/toast";
+import { toastRequestError } from "~/components/chat/toast-request-error";
 import {
   appendOptimisticUserMessage,
   markStandaloneRunStopped,
@@ -234,10 +229,7 @@ export function useStandaloneChatActions({
         }
         setPendingSubmission(null);
         setDraft(text);
-        toast(
-          error instanceof Error ? error.message : "Could not send message",
-          "error",
-        );
+        toastRequestError(toast, error, "Could not send message");
       } finally {
         setIsSubmitting(false);
       }
@@ -299,10 +291,7 @@ export function useStandaloneChatActions({
       } catch (error) {
         void mutateDetail();
         void mutateHistory();
-        toast(
-          error instanceof Error ? error.message : "Could not stop the run",
-          "error",
-        );
+        toastRequestError(toast, error, "Could not stop the run");
       }
     },
     [conversationId, mutateDetail, mutateHistory, toast],
@@ -324,10 +313,7 @@ export function useStandaloneChatActions({
         void mutateDetail();
         await mutateHistory();
       } catch (error) {
-        toast(
-          error instanceof Error ? error.message : "Could not retry the run",
-          "error",
-        );
+        toastRequestError(toast, error, "Could not retry the run");
       }
     },
     [mutateDetail, mutateHistory, toast],
@@ -369,12 +355,7 @@ export function useStandaloneChatActions({
         await loadConversation(id);
         router.push(`/chats/${id}`);
       } catch (error) {
-        toast(
-          error instanceof Error
-            ? error.message
-            : "Could not load the conversation",
-          "error",
-        );
+        toastRequestError(toast, error, "Could not load the conversation");
       } finally {
         setLoadingConversationId(null);
       }
@@ -399,10 +380,7 @@ export function useStandaloneChatActions({
       await mutateHistory();
       if (conversation.id === conversationId) await mutateDetail();
     } catch (error) {
-      toast(
-        error instanceof Error ? error.message : "Could not rename the chat",
-        "error",
-      );
+      toastRequestError(toast, error, "Could not rename the chat");
     }
   };
   const archiveConversation = async (conversation: StandaloneConversation) => {
@@ -418,39 +396,32 @@ export function useStandaloneChatActions({
       await mutateHistory();
       if (conversation.id === conversationId) router.push("/chats");
     } catch (error) {
-      toast(
-        error instanceof Error ? error.message : "Could not remove the chat",
-        "error",
-      );
+      toastRequestError(toast, error, "Could not remove the chat");
     }
   };
+  // The new link opens in a centered dialog (ShareLinkDialog) that copies
+  // it and spells out who can open it. A corner toast was too easy to miss.
+  // `shareLink` drives the dialog: "pending" opens it with a loader the
+  // moment the button is pressed, a string fills in the link, null closes.
+  const [shareLink, setShareLink] = useState<string | "pending" | null>(null);
   const shareConversation = async (conversation: StandaloneConversation) => {
+    setShareLink("pending");
     try {
       const grant = await shareStandaloneConversation(conversation.id);
-      const url = `${window.location.origin}/chats/shared/${grant.token}`;
-      try {
-        await navigator.clipboard.writeText(url);
-        toast("Team link copied", "success");
-      } catch {
-        window.prompt("Copy team link", url);
-      }
+      setShareLink(`${window.location.origin}/chats/shared/${grant.token}`);
     } catch (error) {
-      toast(
-        error instanceof Error ? error.message : "Could not share the chat",
-        "error",
-      );
+      setShareLink(null);
+      toastRequestError(toast, error, "Could not share the chat");
     }
   };
+  const dismissShareLink = () => setShareLink(null);
   const revokeShare = async (conversation: StandaloneConversation) => {
     if (!window.confirm("Revoke all active team links for this chat?")) return;
     try {
       await revokeStandaloneConversationShare(conversation.id);
       toast("Team link revoked", "success");
     } catch (error) {
-      toast(
-        error instanceof Error ? error.message : "Could not revoke the link",
-        "error",
-      );
+      toastRequestError(toast, error, "Could not revoke the link");
     }
   };
 
@@ -464,6 +435,8 @@ export function useStandaloneChatActions({
     renameConversation,
     archiveConversation,
     shareConversation,
+    shareLink,
+    dismissShareLink,
     revokeShare,
   };
 }

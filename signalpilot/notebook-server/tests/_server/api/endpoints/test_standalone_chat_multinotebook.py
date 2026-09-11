@@ -12,7 +12,6 @@ from starlette.requests import Request
 
 from signalpilot._server.ai.claude_agent import AgentEvent
 from signalpilot._server.ai.standalone_chat_tools import (
-    StandaloneArtifactCollector,
     StandaloneNotebookLifecycle,
     build_standalone_chat_mcp_server,
 )
@@ -75,12 +74,12 @@ def test_named_seed_writes_minimal_template_in_the_shared_scratch(
         assert "token-a-secret" not in source
     # The named notebook path points at its own file.
     assert repr(str(tmp_path / "report.py")) in report_source
-    # Only analysis gets the scaffold; the named notebook gets one visible
-    # empty cell.
-    assert "analysis_summary" in analysis_source
-    assert "analysis_summary" not in report_source
-    assert "analysis_checks" not in report_source
-    assert "@app.cell\ndef _():\n    return" in report_source
+    # Both notebooks end with one visible empty cell and no placeholder text;
+    # the agent writes the title cell itself.
+    for source in (report_source, analysis_source):
+        assert "@app.cell\ndef _():\n    return" in source
+        assert "Pending governed notebook analysis" not in source
+        assert "analysis_summary" not in source
 
 
 @pytest.mark.asyncio
@@ -113,7 +112,6 @@ async def test_start_tool_named_notebook_starts_a_distinct_lazy_session(
 
     lifecycle = StandaloneNotebookLifecycle()
     server = build_standalone_chat_mcp_server(
-        StandaloneArtifactCollector(),
         notebook_mcp_app=object(),
         analysis_notebook_path=seeded,
         notebook_lifecycle=lifecycle,
@@ -298,7 +296,7 @@ async def test_run_archives_each_notebook_and_gates_only_the_analysis(
     async def execution_directory(**_kwargs: Any) -> tuple[Path, bool]:
         return tmp_path, False
 
-    def build_server(_collector: Any, **kwargs: Any) -> object:
+    def build_server(**kwargs: Any) -> object:
         lifecycles.append(kwargs["notebook_lifecycle"])
         event_sinks.append(kwargs["event_sink"])
         return object()
@@ -427,7 +425,7 @@ def _patch_execution(
     async def execution_directory(**_kwargs: Any) -> tuple[Path, bool]:
         return tmp_path, False
 
-    def build_server(_collector: Any, **kwargs: Any) -> object:
+    def build_server(**kwargs: Any) -> object:
         captured["lifecycle"] = kwargs["notebook_lifecycle"]
         captured["event_sink"] = kwargs["event_sink"]
         return object()
@@ -473,7 +471,6 @@ async def test_start_tool_rejects_traversal_and_bad_slugs(
     seeded.write_text("import marimo\n", encoding="utf-8")
     seeds: list[str] = []
     server = build_standalone_chat_mcp_server(
-        StandaloneArtifactCollector(),
         notebook_mcp_app=object(),
         analysis_notebook_path=seeded,
         notebook_lifecycle=StandaloneNotebookLifecycle(),

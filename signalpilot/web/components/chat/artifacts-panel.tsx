@@ -1,7 +1,9 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useArtifactsWidth } from "~/components/chat/artifacts-panel-width";
+import { ArtifactsResizeHandle } from "~/components/chat/artifacts-resize-handle";
 import {
   ArrowLeft,
   ExternalLink,
@@ -10,6 +12,7 @@ import {
   FileText,
   File as FileIcon,
   Globe,
+  LayoutDashboard,
   Loader2,
   NotebookPen,
   Table2,
@@ -48,6 +51,12 @@ const ChatNotebookView = dynamic(
 
 type ArtifactsTab = "notebook" | "files" | "queries";
 
+/** Test-only replacement for the file viewer: a node, or a function of the
+ * selected file that returns `undefined` to keep the real viewer. */
+export type FileViewOverride =
+  | ReactNode
+  | ((file: ConversationFileInfo) => ReactNode | undefined);
+
 export function kindIcon(
   kind: string,
   className = "h-3.5 w-3.5 flex-none text-[var(--color-text-dim)]",
@@ -65,6 +74,8 @@ export function kindIcon(
       return <NotebookPen className={className} />;
     case "data":
       return <Table2 className={className} />;
+    case "dashboard":
+      return <LayoutDashboard className={className} />;
     default:
       return <FileIcon className={className} />;
   }
@@ -128,9 +139,15 @@ function FilesTab({
   /** Controlled by the panel; null means "show the list". */
   selectedFileId: string | null;
   onSelectFile: (fileId: string | null) => void;
-  fileViewOverride?: ReactNode;
+  fileViewOverride?: FileViewOverride;
 }) {
   const selected = files.find((file) => file.id === selectedFileId) ?? null;
+  const override =
+    typeof fileViewOverride === "function" && selected
+      ? fileViewOverride(selected)
+      : typeof fileViewOverride === "function"
+        ? undefined
+        : fileViewOverride;
 
   if (files.length === 0) {
     return (
@@ -160,7 +177,7 @@ function FilesTab({
           <ArrowLeft className="h-3 w-3" />
           All files
         </button>
-        {fileViewOverride ?? (
+        {override ?? (
           <ChatFileViewer conversationId={conversationId} file={selected} />
         )}
       </div>
@@ -228,7 +245,7 @@ export function ArtifactsPanel({
   /** Test-only: rendered instead of the notebook view (the fixture harness has no gateway). */
   liveViewOverride?: ReactNode;
   /** Test-only: rendered instead of the file viewer (the fixture harness has no gateway). */
-  fileViewOverride?: ReactNode;
+  fileViewOverride?: FileViewOverride;
 }) {
   // The agent's one-line query descriptions live in the run events; the
   // trace rows come from the gateway without them, so join here.
@@ -272,15 +289,32 @@ export function ArtifactsPanel({
     setSelectedTab("files");
     setSelectedFileId(openFileRequest.fileId);
   }, [openFileRequest]);
+  // The row the panel shares with the transcript bounds the drag, so a
+  // stored width never squeezes the transcript out on a small window. The
+  // hook reads that row from the panel's parent while measuring.
+  const panelRef = useRef<HTMLElement | null>(null);
+  const { width, measured, bounds, preview, commit, reset, nudge } =
+    useArtifactsWidth(panelRef);
+
   const activeTab =
     selectedTab ??
     (showNotebook ? "notebook" : files.length > 0 ? "files" : "queries");
 
   return (
     <aside
+      ref={panelRef}
       data-testid="live-notebook-panel"
-      className="flex w-[46%] min-w-[420px] max-w-[820px] flex-none flex-col border-l border-[var(--color-border)] bg-[var(--color-bg)]"
+      style={measured ? { width } : undefined}
+      className="relative flex w-[46%] min-w-[360px] flex-none flex-col border-l border-[var(--color-border)] bg-[var(--color-bg)]"
     >
+      <ArtifactsResizeHandle
+        width={width}
+        bounds={bounds}
+        onPreview={preview}
+        onCommit={commit}
+        onReset={reset}
+        onNudge={nudge}
+      />
       <div className="flex h-11 flex-none items-center justify-between border-b border-[var(--color-border)] px-3">
         <div className="flex min-w-0 items-center gap-2">
           <NotebookPen className="h-3.5 w-3.5 flex-none text-[var(--color-text-dim)]" />

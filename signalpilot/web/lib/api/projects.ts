@@ -2,8 +2,11 @@
 
 import { request } from "./client";
 import type {
+  DbtMapColumnsResponse,
+  DbtMapConeResponse,
   DbtMapInfo,
   DbtMapResponse,
+  DbtModelSqlResponse,
   GitCredentials,
   GitHubInstallation,
   GitHubRepo,
@@ -223,13 +226,47 @@ export const getDbtProjectDir = (projectId: string, branch?: string) =>
   );
 
 // The following functions support the centrally stored dbt map.
-export const getDbtMap = (projectId: string, branch?: string, includeGraph = true) => {
+export type DbtMapGraphVariant = "full" | "skeleton";
+
+export const getDbtMap = (
+  projectId: string,
+  branch?: string,
+  includeGraph = true,
+  graph: DbtMapGraphVariant = "full",
+) => {
   const qs = new URLSearchParams();
   if (branch) qs.set("branch", branch);
   if (!includeGraph) qs.set("include_graph", "false");
+  else if (graph !== "full") qs.set("graph", graph);
   const suffix = qs.toString() ? `?${qs.toString()}` : "";
   return request<DbtMapResponse>(
     `/api/workspace-projects/${projectId}/dbt-map${suffix}`,
+  );
+};
+
+/** One model with its full lineage cone; 404 unknown, 409 ambiguous. */
+export const getDbtMapCone = (projectId: string, ref: string, branch?: string) => {
+  const qs = new URLSearchParams({ hops: "all" });
+  if (branch) qs.set("branch", branch);
+  return request<DbtMapConeResponse>(
+    `/api/workspace-projects/${projectId}/dbt-map/model/${encodeURIComponent(ref)}?${qs.toString()}`,
+  );
+};
+
+/** A model's SQL; 404 unknown or source node, 409 ambiguous. */
+export const getDbtMapModelSql = (projectId: string, ref: string, branch?: string) => {
+  const qs = branch ? `?branch=${encodeURIComponent(branch)}` : "";
+  return request<DbtModelSqlResponse>(
+    `/api/workspace-projects/${projectId}/dbt-map/model/${encodeURIComponent(ref)}/sql${qs}`,
+  );
+};
+
+/** Columns for up to 50 node ids. */
+export const getDbtMapColumns = (projectId: string, nodeIds: string[], branch?: string) => {
+  const qs = new URLSearchParams({ nodes: nodeIds.join(",") });
+  if (branch) qs.set("branch", branch);
+  return request<DbtMapColumnsResponse>(
+    `/api/workspace-projects/${projectId}/dbt-map/columns?${qs.toString()}`,
   );
 };
 

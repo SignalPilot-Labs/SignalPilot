@@ -34,9 +34,7 @@ def notebook_session_lines(sessions: dict[str, str]) -> str:
     )
 
 
-def continuity_injection(
-    prompt: str, adopted_sessions: dict[str, str]
-) -> str:
+def continuity_injection(prompt: str, adopted_sessions: dict[str, str]) -> str:
     """Prompt injection for adopted kernels from the previous turn."""
     analysis_id = adopted_sessions.get("analysis")
     if set(adopted_sessions) == {"analysis"}:
@@ -216,7 +214,6 @@ async def archive_run_notebooks(
 
 
 def build_final_payload(
-    collector: Any,
     *,
     accepted_text: str,
     agent_cost_usd: float | None,
@@ -232,8 +229,6 @@ def build_final_payload(
         final_payload["cost_usd"] = agent_cost_usd
     if agent_usage is not None:
         final_payload["usage"] = agent_usage
-    if collector.dashboard_preview is not None:
-        final_payload["dashboard_preview"] = collector.dashboard_preview
     if archive_id is not None:
         final_payload["archive_id"] = archive_id
         final_payload["kernel_stopped"] = kernel_stopped

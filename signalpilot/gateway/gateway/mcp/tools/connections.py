@@ -9,6 +9,7 @@ from gateway.mcp.context import (
     _gateway_url,
     _gw_headers,
     _store_session,
+    mcp_allowed_connection_var,
     mcp_eval_connection_var,
     mcp_org_id_var,
 )
@@ -31,7 +32,7 @@ async def list_database_connections() -> str:
     # Eval runs see exactly one connection. Listing the others would tell the
     # agent a second copy of this warehouse exists, which is the thing the pin
     # is there to hide.
-    pinned = mcp_eval_connection_var.get(None)
+    pinned = mcp_eval_connection_var.get(None) or mcp_allowed_connection_var.get(None)
     if pinned:
         connections = [c for c in connections if c.name == pinned]
 
@@ -65,7 +66,7 @@ async def connection_health(connection_name: str = "") -> str:
     org_id = mcp_org_id_var.get(None) or "local"
     token = current_org_id_var.set(org_id)
     try:
-        pinned = mcp_eval_connection_var.get(None)
+        pinned = mcp_eval_connection_var.get(None) or mcp_allowed_connection_var.get(None)
         if connection_name:
             if err := _validate_connection_name(connection_name):
                 return f"Error: {err}"

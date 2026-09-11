@@ -8,15 +8,6 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   output: process.env.VERCEL ? undefined : "standalone",
   poweredByHeader: false,
-  async redirects() {
-    return [
-      {
-        source: "/dashboards/new",
-        destination: "/chats",
-        permanent: false,
-      },
-    ];
-  },
   serverExternalPackages: [
     "@tailwindcss/oxide",
     "lightningcss",

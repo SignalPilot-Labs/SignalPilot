@@ -1,5 +1,6 @@
 // Chat traces and the standalone data chat.
 
+import type { ConversationFileInfo } from "./chat-files";
 import { GATEWAY_URL, getAuthHeaders, request } from "./client";
 
 // The following functions support chat traces on the /chats page.
@@ -110,6 +111,14 @@ export type StandaloneChatRun = {
   terminal_at: string | null;
   last_event_sequence: number;
   runtime_archive_available?: boolean;
+  usage?: ChatTokenUsage | null;
+};
+
+export type ChatTokenUsage = {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_creation_input_tokens?: number;
+  cache_read_input_tokens?: number;
 };
 
 export type StandaloneChatEvent = {
@@ -192,26 +201,31 @@ export type StandaloneConversationDetail = {
   run_events: StandaloneChatEvent[];
 };
 
-export type SharedConversationDetail = {
-  conversation: {
-    title: string;
-    project_name: string | null;
-    created_at: number;
-    updated_at: number;
-    /** How the conversation was started; "improvement" means an automated improvement run. */
-    origin?: string;
-  };
-  messages: Array<Omit<StandaloneChatMessage, "metadata">>;
-  shared_at: string;
+/** Share-safe header of a shared chat: no owner ids, budgets, or spend. */
+export type SharedConversation = {
+  title: string;
+  project_name: string | null;
+  /** How the conversation was started; "improvement" means an automated improvement run. */
+  origin: string;
+  model: StandaloneChatModel;
+  effort: StandaloneChatEffort;
+  commit_sha: string | null;
+  branch: string;
+  created_at: number;
+  updated_at: number;
 };
 
-export type StandaloneForkPreview = {
-  project_id: string;
-  project_name: string;
-  commit_sha: string;
-  per_query_budget_usd: number;
-  chat_budget_usd: number;
-  warehouse_cost_notice: string;
+/**
+ * Read-only snapshot of a shared chat. Messages and events have the owner
+ * shapes so the shared page renders through the live chat components;
+ * `files` is the share-safe manifest. Only finished runs are included.
+ */
+export type SharedConversationDetail = {
+  conversation: SharedConversation;
+  messages: StandaloneChatMessage[];
+  run_events: StandaloneChatEvent[];
+  files: ConversationFileInfo[];
+  shared_at: string;
 };
 
 export const getStandaloneChatBootstrap = () =>
@@ -326,25 +340,12 @@ export const getSharedStandaloneConversation = (token: string) =>
   request<SharedConversationDetail>(
     `/api/chat/shared/${encodeURIComponent(token)}`,
   );
-export const getSharedStandaloneForkPreview = (token: string) =>
-  request<StandaloneForkPreview>(
-    `/api/chat/shared/${encodeURIComponent(token)}/fork-preview`,
-  );
-export const forkSharedStandaloneConversation = (
-  token: string,
-  perQueryBudgetUsd: number,
-  chatBudgetUsd: number,
-) =>
+/** Copy the whole shared chat into the caller's chats. Budgets come from
+ * the caller's saved defaults; there is nothing to confirm. */
+export const forkSharedStandaloneConversation = (token: string) =>
   request<{ id: string }>(
     `/api/chat/shared/${encodeURIComponent(token)}/fork`,
-    {
-      method: "POST",
-      body: JSON.stringify({
-        confirmed: true,
-        per_query_budget_usd: perQueryBudgetUsd,
-        chat_budget_usd: chatBudgetUsd,
-      }),
-    },
+    { method: "POST", body: JSON.stringify({}) },
   );
 export const createStandaloneRun = (
   conversationId: string,

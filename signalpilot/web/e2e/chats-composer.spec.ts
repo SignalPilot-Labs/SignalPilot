@@ -71,7 +71,7 @@ test("composer autosizes, gives disabled feedback, and the project picker search
   const after = await textarea.evaluate((el) => el.clientHeight);
   expect(after).toBeGreaterThan(before);
 
-  // Helper hint documents Enter / Shift+Enter / @.
+  // Helper hint documents Enter / Shift+Enter.
   await textarea.fill("");
   await expect(page.getByText(/Enter to send/)).toBeVisible();
 

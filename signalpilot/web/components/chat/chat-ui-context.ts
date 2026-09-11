@@ -11,6 +11,7 @@ import type {
   StandaloneChatRunStatus,
 } from "~/lib/api";
 import type { StandaloneRunActivity } from "~/lib/standalone-chat-state";
+import type { DashboardPublishApi } from "~/components/chat/dashboard-publish-form";
 
 export type UiMessage = StandaloneChatMessage & {
   runId?: string;
@@ -42,6 +43,12 @@ export type ChatUiContextValue = {
    */
   downloadFile?: (fileId: string, filename: string) => Promise<void>;
   /**
+   * Override for fetching a text file's content. The shared read-only page
+   * injects it so the artifacts panel viewer reads through the share-token
+   * route; owner pages omit it and the viewer uses the conversation route.
+   */
+  getFileText?: (fileId: string) => Promise<string>;
+  /**
    * Override for paging the full rows of a governed query result. The
    * fixture harness injects a deterministic generator; live pages omit it
    * and the table card falls back to the authenticated API helper.
@@ -60,11 +67,23 @@ export type ChatUiContextValue = {
    * it and the cards tick on the real clock.
    */
   nowMs?: number;
+  /**
+   * Override for the dashboards API behind "Publish" on a dashboard file.
+   * The fixture harness injects an in-memory gallery; live pages omit it
+   * and the publish dialog calls the gateway.
+   */
+  dashboardsApi?: DashboardPublishApi;
+  /** True on read-only surfaces (the shared page): no Stop/Retry actions. */
+  readOnly?: boolean;
+  /**
+   * Replay frame that was paused or scrubbed to: every text block renders
+   * complete, with no smoothing and no caret. Set only by the replay view.
+   */
+  textInstant?: boolean;
   /** Opens the right-side Chat settings panel (connectors, budgets). */
   openChatSettings?: () => void;
   onStop: (runId: string) => Promise<void>;
   onRetry: (runId: string) => Promise<void>;
-  onOpenDashboardPreview: (sessionId: string) => void;
 };
 
 export const ChatUiContext = createContext<ChatUiContextValue | null>(null);

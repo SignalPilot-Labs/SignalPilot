@@ -22,7 +22,7 @@ import { parseManifest } from "./parse-manifest";
 
 function getApiBase(): string {
   const rm = getRuntimeManager();
-  const base = rm.httpURL.toString().replace(/\/$/, "");
+  const base = rm.httpBaseURL.toString().replace(/\/$/, "");
   return `${base}/api/dbt`;
 }
 

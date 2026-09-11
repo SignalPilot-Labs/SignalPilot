@@ -122,7 +122,7 @@ const config: Config = {
         height: 26,
       },
       items: [
-        {to: '/docs/', position: 'left', label: 'Docs'},
+        {to: '/docs/quickstart', position: 'left', label: 'Docs'},
         {to: '/docs/clients/claude', position: 'left', label: 'Connect'},
         {to: '/docs/product/knowledge-base', position: 'left', label: 'Product'},
         {to: '/docs/self-host/install', position: 'left', label: 'Self-host'},
@@ -149,7 +149,7 @@ const config: Config = {
           items: [
             {
               label: 'Quickstart',
-              to: '/docs/',
+              to: '/docs/quickstart',
             },
             {
               label: 'Connect Claude',

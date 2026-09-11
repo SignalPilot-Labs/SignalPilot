@@ -1,12 +1,20 @@
 ---
 sidebar_position: 5
+sidebar_label: Connect a database
+title: Connect a database
+hide_title: true
 ---
 
+import PageHero from '@site/src/components/PageHero';
 import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+import { Warehouse } from '@site/src/components/illustrations';
 
-# Connect a Database
-
-SignalPilot supports 11 SQL dialects. Connection credentials are encrypted at rest with Fernet.
+<PageHero
+  eyebrow="Your data · Connect a database"
+  title="Connect a database"
+  lede="SignalPilot connects to 11 databases and warehouses. Credentials are encrypted at rest and never shown to the AI. It only ever sees results."
+  illustration={<Warehouse />}
+/>
 
 ## Supported databases
 
@@ -133,7 +141,7 @@ Trino runs federated queries across catalogs. A password switches the connection
 
 ## Environment variables for connections
 
-For self-hosted deployments, you can pre-configure connections via environment variables instead of the API. See [Configuration](/docs/setup/configuration) for the variable names.
+For self-hosted deployments, you can pre-configure connections via environment variables instead of the API. See [Configuration](/docs/self-host/configuration) for the variable names.
 
 ## SSH tunneling
 
@@ -142,7 +150,7 @@ For databases that are not directly reachable from the gateway container, SSH tu
 <MiniCopyBlock
   label="ssh tunnel config"
   plain
-  code={`{\n  "name": "tunneled-postgres",\n  "db_type": "postgresql",\n  "host": "db.internal.example.com",\n  "port": 5432,\n  "database": "analytics",\n  "username": "readonly",\n  "password": "...",\n  "ssh_tunnel": {\n    "host": "bastion.example.com",\n    "port": 22,\n    "username": "ec2-user",\n    "private_key": "-----BEGIN OPENSSH PRIVATE KEY-----..."\n  }\n}`}
+  code={`{\n  "name": "tunneled-postgres",\n  "db_type": "postgresql",\n  "host": "db.internal.example.com",\n  "port": 5432,\n  "database": "analytics",\n  "username": "readonly",\n  "password": "...",\n  "ssh_tunnel": {\n    "host": "bastion.example.com",\n    "port": 22,\n    "username": "ubuntu",\n    "private_key": "-----BEGIN OPENSSH PRIVATE KEY-----..."\n  }\n}`}
 />
 
 ## SSRF allow-list (cloud mode)

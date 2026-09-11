@@ -1,0 +1,64 @@
+---
+sidebar_position: 6
+sidebar_label: Files and charts
+title: Files and charts in chat
+hide_title: true
+---
+
+import PageHero from '@site/src/components/PageHero';
+import { Chat } from '@site/src/components/illustrations';
+
+<PageHero
+  eyebrow="Product · Files and charts"
+  title="Files and charts in chat"
+  lede="Every chart, table, or report the chat agent saves appears next to the conversation as soon as it is written. There is no publish step."
+  illustration={<Chat />}
+/>
+
+Every file the chat agent saves during a run is a conversation artifact. There
+is no publish step. The agent writes a PNG, a CSV, an HTML report, or a
+markdown document into its working directory, SignalPilot captures it from the
+sandbox, and the file appears in the **Artifacts** panel on the right of the
+chat while the run is still streaming.
+
+## What you see
+
+- **Inline images.** When the answer references a chart the agent saved, the
+  chart renders at that point in the answer with its caption. Click it to open
+  a full-size view, or use the hover actions to open it in the panel or
+  download it.
+- **File cards.** A link to a data file or a report renders as a small card
+  with the file name, its size, and a primary action: preview a CSV as a
+  table, open an HTML report in a sandboxed viewer, or download.
+- **The Files tab.** Every captured file for the conversation, newest change
+  first. A file the agent saves again under the same name replaces the earlier
+  version.
+
+Files that the answer does not reference still get a card under the run so
+nothing the agent produced is hidden.
+
+## How capture works
+
+The agent works in a per-conversation scratch directory inside its sandbox.
+After every tool call that can write to disk, the sandbox compares the
+directory with a snapshot, uploads what changed to SignalPilot, and records
+the change on the run. A final sweep runs when the run ends, so a file written
+by the last step is never lost.
+
+Captured files are stored in the workspace object store under the
+conversation and are removed with it. HTML files are sanitized and served
+with a strict content security policy. SVG files are never opened as a
+document.
+
+Limits, all configurable on the gateway:
+
+| Setting | Default |
+| --- | --- |
+| `SP_CHAT_FILE_MAX_BYTES` | 25 MB per file |
+| `SP_CHAT_CONVERSATION_FILE_QUOTA_BYTES` | 250 MB per conversation |
+| `SP_CHAT_CONVERSATION_FILE_QUOTA_COUNT` | 500 files per conversation |
+
+## Sharing
+
+A shared conversation link shows the same inline images and file cards to the
+reader. Forking a shared conversation copies its files into the fork.

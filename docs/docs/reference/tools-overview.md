@@ -4,7 +4,7 @@ sidebar_position: 1
 
 # Tools Reference
 
-All 54 SignalPilot MCP tools across 12 categories. The catalog below groups every tool by category (click a category for full parameter and example documentation). The [Tools by workflow stage](#tools-by-workflow-stage) section then maps the same tools onto the four stages of a governed dbt/SQL run — Scan/Map, Explore/Research, Write, and Verify.
+all 62 SignalPilot MCP tools across 12 categories. The catalog below groups every tool by category (click a category for full parameter and example documentation). The [Tools by workflow stage](#tools-by-workflow-stage) section then maps the same tools onto the four stages of a governed dbt/SQL run — Scan/Map, Explore/Research, Write, and Verify.
 
 ## Tools by workflow stage
 
@@ -87,7 +87,7 @@ Used when the task asks for a notebook deliverable or a published report. `conne
 | Tool | Role |
 |------|------|
 | `list_workspace_projects` | List notebook workspace projects |
-| `run_notebook` | Execute an analysis notebook in a sandboxed cloud pod |
+| `run_notebook` | Execute an analysis notebook in an isolated cloud sandbox |
 | `list_notion_integrations` | List configured Notion integrations |
 | `notion_search` | Search Notion source pages |
 | `notion_fetch_page` | Fetch full content of a Notion page |
@@ -161,7 +161,7 @@ See [Operational tools](/docs/reference/tools-ops).
 | Tool | Description |
 |------|-------------|
 | `list_workspace_projects` | List the dbt/notebook projects in the user's workspace |
-| `run_notebook` | Run a `.py` notebook in a sandboxed cloud pod, return output + view URL |
+| `run_notebook` | Run a `.py` notebook in an isolated cloud sandbox, return output + view URL |
 
 ## Knowledge Base (5 tools)
 

@@ -1,0 +1,88 @@
+---
+sidebar_position: 1
+title: Use SignalPilot in Claude
+description: Add SignalPilot to Claude as a custom connector so you can ask questions about your data from any chat.
+hide_title: true
+sidebar_label: Claude
+---
+
+import PageHero from '@site/src/components/PageHero';
+import { Steps, Step } from '@site/src/components/Steps';
+import FieldTable from '@site/src/components/FieldTable';
+import Callout from '@site/src/components/Callout';
+import ClientMark from '@site/src/components/ClientMark';
+import { Connect, ApiKey } from '@site/src/components/illustrations';
+
+<PageHero
+  eyebrow="Connect · Claude"
+  title="Use SignalPilot in Claude"
+  lede="Add SignalPilot to Claude as a connector. After that, any chat can ask questions about your data, and every query is checked, limited, and logged before it reaches your database."
+  illustration={<Connect />}
+/>
+
+You need two things: a SignalPilot account with at least one database connected, and a Claude plan that allows custom connectors. The whole setup takes about five minutes and you never leave the browser.
+
+<Steps>
+  <Step title="Copy your SignalPilot API key" illustration={<ApiKey />}>
+    Open [SignalPilot](https://app.signalpilot.ai), go to **Settings → API Keys**, and choose **Create key**. Give it a name you will recognise later, such as `claude`, and keep the default **read** and **query** permissions.
+
+    The key starts with `sp_` and is shown **once**. Copy it now. If you lose it, delete it and create a new one.
+  </Step>
+
+  <Step title="Open Claude's connector settings">
+    In Claude, open **Settings → Connectors**. Choose **Add**, then **Add custom connector**.
+  </Step>
+
+  <Step title="Fill in the connector form">
+    Use these values exactly. Paste your own key in place of the placeholder.
+
+    <FieldTable
+      rows={[
+        { label: 'Name', value: 'SignalPilot' },
+        { label: 'URL', value: 'https://gateway.signalpilot.ai/mcp', mono: true, copy: true },
+        { label: 'Authentication', value: 'None', note: 'The API key travels as a request header instead.' },
+        { label: 'Request header name', value: 'x-api-key', mono: true, copy: true },
+        { label: 'Request header value', value: 'sp_your_key_here', mono: true, note: 'Replace with the key from step 1.' },
+      ]}
+    />
+
+    Choose **Add**. Claude connects to SignalPilot and lists the tools it found.
+  </Step>
+
+  <Step title="Allow SignalPilot's domain">
+    Still in Claude's settings, find the **domain allowlist** for connectors and set it to **All domains**. Without this, Claude may refuse to call the connector even though it was added successfully.
+  </Step>
+
+  <Step title="Ask your first question">
+    Start a new chat, open the connector menu, and make sure **SignalPilot** is switched on. Then ask something you already know the answer to:
+
+    > Which five customers had the highest revenue last quarter?
+
+    Claude calls SignalPilot, SignalPilot runs a governed read-only query, and the answer comes back with the SQL it used. Checking a known number first is the fastest way to confirm everything is wired up.
+  </Step>
+</Steps>
+
+<Callout kind="security" title="Your key is a password">
+Anyone with the key can read the data your workspace exposes, within the limits you set. Do not paste it into shared documents or chats. You can revoke a key at any time under **Settings → API Keys**, and it stops working immediately.
+</Callout>
+
+## What Claude can do once connected
+
+- **Answer questions in plain language.** Claude explores your schema, writes SQL, runs it read-only, and explains the result.
+- **Use your team's definitions.** Anything in the [knowledge base](/docs/product/knowledge-base) (what counts as an active customer, which table is the source of truth) is applied automatically.
+- **Stay inside the guardrails.** Writes are blocked, result sizes are capped, sensitive columns can be hidden, and every query lands in the [audit log](/docs/product/audit).
+
+## If something does not work
+
+| What you see | What to do |
+|---|---|
+| Claude says the connector could not be reached | Check the URL is exactly `https://gateway.signalpilot.ai/mcp` with no trailing slash. |
+| "Authentication required" | The header name must be `x-api-key` and the value must be the full key including the `sp_` prefix. |
+| Tools appear but every question fails | Set the domain allowlist to **All domains** (step 4), then start a new chat. |
+| Claude answers but the numbers look wrong | Add the missing business definition to the [knowledge base](/docs/product/knowledge-base) and ask again. |
+
+## Next
+
+- [Connect a database](/docs/connect-database) if you have not added one yet.
+- [Add other MCP servers](/docs/settings/connectors) so SignalPilot's own chat can reach tools like Notion or Slack.
+- Prefer a coding tool? See [Claude Code](/docs/clients/claude-code) or [Cursor and other tools](/docs/clients/other-tools).

@@ -1,0 +1,107 @@
+---
+sidebar_position: 3
+title: Use SignalPilot in Claude Code
+description: Add SignalPilot to Claude Code with one command, then install the plugin for skills and verifier agents.
+hide_title: true
+sidebar_label: Claude Code
+---
+
+import PageHero from '@site/src/components/PageHero';
+import { Steps, Step } from '@site/src/components/Steps';
+import Callout from '@site/src/components/Callout';
+import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+import { Connect, ApiKey } from '@site/src/components/illustrations';
+
+<PageHero
+  eyebrow="Connect · Claude Code"
+  title="Use SignalPilot in Claude Code"
+  lede="Claude Code is the client SignalPilot supports most fully. One command connects the governed data tools, and the plugin adds skills that guide dbt and SQL work plus verifier agents that check the result."
+  illustration={<Connect />}
+/>
+
+You need a SignalPilot account with at least one database connected, and Claude Code installed on your machine. Setup takes a couple of minutes.
+
+<Steps>
+  <Step title="Create an API key" illustration={<ApiKey />}>
+    Open [SignalPilot](https://app.signalpilot.ai), go to **Settings → API Keys**, and choose **Create new key**. Name it after where it will live, such as `claude-code-laptop`, and keep the default **read** and **query** permissions.
+
+    The key starts with `sp_` and is shown **once**. Copy it now. If you lose it, delete it and create another.
+  </Step>
+
+  <Step title="Add the server">
+    Run this in a terminal, replacing the placeholder with your key:
+
+    <MiniCopyBlock
+      label="add signalpilot to claude code"
+      code={`claude mcp add --transport http signalpilot https://gateway.signalpilot.ai/mcp \\\n  --header "x-api-key: sp_your_key_here"`}
+    />
+
+    By default the server is added for the current project only. Add `--scope user` to make it available in every project on your machine.
+
+    If you would rather not type this, **Settings → MCP Connect** in SignalPilot generates the exact command for your workspace.
+  </Step>
+
+  <Step title="Check the connection">
+    Start a Claude Code session and type:
+
+    <MiniCopyBlock label="check mcp servers" plain code="/mcp" />
+
+    You should see `signalpilot` with the status **connected** and a list of tools. You can also just ask:
+
+    > List the MCP tools available from SignalPilot.
+
+    Claude should name tools such as `query_database`, `list_tables`, and `dbt_error_parser`.
+  </Step>
+
+  <Step title="Install the plugin">
+    The plugin is what turns a set of tools into a workflow. It adds skills (guides Claude follows for dbt and SQL tasks) and verifier agents (checks that run after a build).
+
+    <MiniCopyBlock
+      label="install the plugin"
+      code={`claude plugin marketplace add SignalPilot-Labs/signalpilot-plugin\nclaude plugin install signalpilot-dbt@signalpilot`}
+    />
+
+    Restart Claude Code after installing. The [plugin overview](/docs/plugin) explains what each skill and agent does.
+  </Step>
+
+  <Step title="Ask your first question">
+    Ask something you already know the answer to:
+
+    > How many orders shipped last week?
+
+    Claude calls SignalPilot, SignalPilot runs a governed read-only query, and the answer comes back with the SQL it used. Checking a known number first is the fastest way to confirm everything works.
+  </Step>
+</Steps>
+
+<Callout kind="security" title="Your key is a password">
+Anyone with the key can read the data your workspace exposes, within the limits you set. Keep it out of shared documents and committed files. You can revoke a key at any time under **Settings → API Keys**, and it stops working immediately.
+</Callout>
+
+## Self-hosted gateway
+
+If you run SignalPilot yourself, point Claude Code at your own gateway instead:
+
+<MiniCopyBlock
+  label="add a self-hosted gateway"
+  code="claude mcp add --transport http signalpilot http://localhost:3300/mcp"
+/>
+
+A fresh self-hosted gateway accepts MCP requests without a key until the first API key is created. After that, add the same `--header "x-api-key: sp_your_key_here"` flag as the cloud command. See [API keys and permissions](/docs/clients/api-keys) for the self-hosted details.
+
+## If something does not work
+
+| What you see | What to do |
+|---|---|
+| `/mcp` shows `signalpilot` as **failed** | Check the URL is exactly `https://gateway.signalpilot.ai/mcp` with no trailing slash, then remove and re-add: `claude mcp remove signalpilot` followed by the add command above. |
+| "Authentication required" or "Unauthorized" | The header must be `x-api-key` and the value must be the full key including `sp_`. If you are not sure the key is still valid, create a new one. |
+| The server connects but tools are missing | Quit and reopen Claude Code so it reconnects. `claude mcp list` shows what is registered. |
+| Skills do not load | Confirm the plugin is installed with `claude plugin list`, then restart Claude Code. |
+| Self-hosted: server unreachable | Open `http://localhost:3300/health` in a browser. If it does not answer, the gateway is not running. Note the port is `3300`, not `8081` (an old default). |
+| Claude answers but the numbers look wrong | Add the missing business definition to the [knowledge base](/docs/product/knowledge-base) and ask again. |
+
+## Next
+
+- [Connect a database](/docs/connect-database) if you have not added one yet.
+- [Plugin overview](/docs/plugin) for what the skills and verifier agents do.
+- [Running SignalPilot next to other MCP servers](/docs/clients/multiple-mcps) if you already use GitHub or filesystem servers in Claude Code.
+- [API keys and permissions](/docs/clients/api-keys) for scopes, rotation, and rate limits.

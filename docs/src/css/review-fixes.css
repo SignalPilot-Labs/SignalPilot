@@ -1,0 +1,102 @@
+/* ============================================================================
+   Design-review fixes (round 2). Loaded last so it wins the cascade.
+   Holds: mobile table scrolling, code overflow, sidebar and TOC contrast,
+   illustration sizing inside figures, single-entry TOC, card alignment.
+   ========================================================================= */
+
+/* ── Tables scroll on narrow viewports instead of clipping ─────────────── */
+@media (max-width: 996px) {
+  .markdown table {
+    display: block;
+    width: max-content;
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    border-radius: var(--sp-radius-sm);
+  }
+
+  .markdown table th:first-child,
+  .markdown table td:first-child {
+    white-space: nowrap;
+  }
+}
+
+.markdown table td code,
+.markdown table th code {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+/* ── Code blocks never widen the page ──────────────────────────────────── */
+.markdown pre,
+.theme-code-block pre {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.markdown :not(pre) > code {
+  overflow-wrap: anywhere;
+}
+
+/* ── Sidebar and table of contents: lift inactive items to readable contrast */
+.menu__link {
+  color: var(--sp-text);
+  opacity: 0.78;
+}
+
+.menu__list .menu__list .menu__link {
+  color: var(--sp-text);
+  opacity: 0.72;
+}
+
+.menu__link:hover,
+.menu__link--active,
+.menu__list .menu__list .menu__link--active {
+  opacity: 1;
+}
+
+.table-of-contents__link {
+  color: var(--sp-muted);
+}
+
+.table-of-contents__link:hover,
+.table-of-contents__link--active {
+  color: var(--sp-text);
+}
+
+/* A table of contents with a single entry is noise. */
+.table-of-contents:has(> li:only-child) {
+  display: none;
+}
+
+/* ── Illustrations placed inside a figure stay at schematic size ───────── */
+.sp-figure-illustration {
+  max-width: 560px;
+  margin: 2rem auto;
+}
+
+.sp-figure-illustration svg {
+  width: 100%;
+  height: auto;
+}
+
+.sp-figure-illustration figcaption {
+  color: var(--sp-muted);
+  font-size: 0.85rem;
+}
+
+/* ── Choice cards align to the top so a badge does not offset siblings ── */
+.sp-pathcard-row > * {
+  align-items: flex-start;
+}
+
+/* ── Step titles keep their own rhythm even where .markdown h3 rules apply ─ */
+.markdown h3.sp-step-title,
+.markdown .tabs-container h3.sp-step-title {
+  margin: 0.2rem 0 0.35rem;
+  padding: 0;
+  font-family: var(--sp-font-sans);
+  font-size: 1.05rem;
+  line-height: 1.4;
+  border: 0;
+}

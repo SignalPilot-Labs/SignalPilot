@@ -30,9 +30,8 @@ missing or unknown, or the warehouse does not match the set's build fingerprint.
 
 While a run is live the page shows each active task and the phase it is in —
 `provisioning`, `setup`, `agent`, `grading`, `capture`, `teardown` — plus the
-sandbox backing it. The sandbox panel streams container logs and surfaces pod
-events, including `oom_killed` with the hint that the container exceeded
-`SP_EVAL_MEMORY_LIMIT`. That is usually the fastest way to explain a task that
+sandbox backing it. The sandbox panel streams container logs and surfaces sandbox
+events, including `oom_killed` when the task ran out of memory. That is usually the fastest way to explain a task that
 died without an answer.
 
 Log streams are bounded: eight concurrent streams per gateway (a ninth gets
@@ -155,7 +154,7 @@ platform staff **and** the org to be allow-listed for evals.
 | `GET /evals/runs/{id}/artifacts` · `…/{task}/{file}` | `query` | Evidence listing and download. |
 | `GET /evals/runs/{id}/export` | `query` | Whole-run zip. |
 | `GET /evals/accuracy` | `read` | Accuracy history and regressions. |
-| `GET /evals/sandboxes` · `…/{name}/events` · `…/{name}/logs/stream` | `read` | Live sandboxes, pod events, log stream. |
+| `GET /evals/sandboxes` · `…/{name}/events` · `…/{name}/logs/stream` | `read` | Live sandboxes, sandbox events, log stream. |
 | `POST /evals/upload/{initiate,complete,abort}` | `write` | Eval-set zip intake. Not staff- or allow-list-gated. |
 
 The three tiers are deliberate: `read` sees status and configuration, `query`

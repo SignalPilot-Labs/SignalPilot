@@ -1,0 +1,145 @@
+---
+sidebar_position: 7
+sidebar_label: Dashboards
+title: Published dashboards
+hide_title: true
+---
+
+import PageHero from '@site/src/components/PageHero';
+import { Dashboard } from '@site/src/components/illustrations';
+
+<PageHero
+  eyebrow="Product · Dashboards"
+  title="Published dashboards"
+  lede="A chat can save an answer as a dashboard. Publish turns that dashboard into one your team can open on its own, outside the conversation, and refresh on a schedule."
+  illustration={<Dashboard />}
+/>
+
+A chat can save a dashboard as `artifacts/<name>.dashboard.json`. The
+**Artifacts** panel renders it in place. **Publish** turns that file into a
+team dashboard that lives on its own, independent of the conversation, and
+can refresh on a schedule.
+
+## A dataset is its SQL
+
+Every dataset in a dashboard file is one of two things:
+
+- **SQL**: `{"connection": "warehouse", "sql": "select ..."}`. The dataset
+  *is* the query. Its rows are whatever that SQL returns, so every
+  derivation lives in the SQL: window functions for trailing sums,
+  `CASE` for groupings, CTEs for shares and ranks. Nothing is shaped outside
+  the query.
+- **Static**: `{"rows": [...]}`. Constants that never change, such as
+  labels or targets. They stay inside the spec and are never refreshed.
+
+In the chat, the agent calls `sp.dashboard_dataset("monthly",
+connection=..., sql=...)` once per SQL dataset. That helper runs the query
+through the governed path and writes the **snapshot** at
+`artifacts/datasets/monthly.csv`. The snapshot is only the cached result of
+the SQL; it is what the Artifacts panel renders, and it is the only way a
+snapshot gets written. The sandbox checks flag a dataset whose snapshot is
+missing (`snapshot_missing`) or whose snapshot was produced by different SQL
+(`snapshot_stale`).
+
+## Publish from a chat
+
+Open the dashboard in the Artifacts panel and click **Publish**. Choose a
+name, who can see it, and a refresh schedule. The dialog lists each dataset
+as **SQL** (with its connection) or **Static**, and whether its snapshot
+was found at `artifacts/datasets/<name>.csv`.
+
+Before anything is stored, publish **verifies that the SQL reproduces the
+dashboard**. For every SQL dataset it runs the recorded query on its
+connection with a one-row limit, through the governed query path, and checks
+that the result has every column the charts and filters read from that
+dataset. This is one small query per dataset, at publish time.
+
+- If a query fails, publish is refused with `sql_failed` and the error text
+  per dataset.
+- If a result lacks a referenced column, publish is refused with
+  `not_repeatable` and the missing columns per dataset. This is the case
+  where a column was derived after the query, for example in pandas, so the
+  SQL alone could not rebuild the snapshot. Move the derivation into the SQL
+  and call `sp.dashboard_dataset` again. A query that returns no rows exposes
+  no columns and is refused the same way.
+
+Static datasets skip the check. When every SQL dataset passes, SignalPilot
+copies the spec and each snapshot into dashboard-owned storage and creates
+**version 1**. Publishing again from the same or another chat, with
+**Update existing** selected, adds a new version to the chosen dashboard.
+
+## The gallery
+
+**Dashboards** in the sidebar lists every dashboard you can see in your
+organization, newest change first. A dashboard is visible to you when its
+visibility is **Team**, or when you published it. Only the
+publisher and organization admins can edit, refresh, archive, or delete it.
+
+| Visibility | Who can open it |
+|---|---|
+| Private | The publisher, and organization admins through the API |
+| Team | Every signed-in member of the organization |
+
+## Versions
+
+Every publish, refresh, and restore creates an immutable version. The live
+version is the one the gallery shows and the one refreshes start from.
+**Restore** on an older version creates a new version with that version's
+content; nothing is ever overwritten. A refresh that fails validation never
+replaces the live version. The version drawer offers each SQL dataset's
+stored snapshot as a `<name>.csv` download.
+
+## Refresh
+
+Refresh is off by default. The schedule has three parts:
+
+- **Interval**: every 15 minutes, every hour, every 2, 4, 8, or 12 hours, or
+  daily.
+- **Aligned to**: a wall-clock time (`HH:MM`). Daily refreshes run at that
+  time. Shorter intervals run at that time plus whole multiples of the
+  interval, so "every 4 hours aligned to 06:00" runs at 02:00, 06:00, 10:00,
+  and so on.
+- **Timezone**: an IANA zone such as `America/New_York`. The schedule follows
+  local time through daylight-saving changes.
+
+The scheduler checks once a minute. If a refresh is still running when the
+next one is due, the new one is recorded as **skipped**. **Refresh now**
+starts one immediately and returns `409` while another is queued or running.
+
+### Refresh modes
+
+**SQL re-run** executes each SQL dataset's `sql` on its `connection`
+through the governed query path, with a 50 000 row limit and a 120 second
+timeout, and stores the rows as CSV. Static datasets are part of the spec
+and need nothing. No agent is involved, so this mode is fast and
+deterministic. Because publish already proved the SQL reproduces the
+columns, this is the normal mode.
+
+**Agent run** starts a chat run in the dashboard's project. The agent calls
+`sp.dashboard_dataset` for every SQL dataset with the exact connection and
+SQL from the spec, writes the dashboard file again unchanged, and checks
+every chart with `dashboard_sample_data`. When the run ends, SignalPilot
+reads the snapshots the run wrote and validates them. The run is refused if
+it changed a chart id, a dataset name, or a dataset's SQL. The run appears in
+the chat list, and the refresh history links to it.
+
+### Validation before swap
+
+In both modes, the new datasets are checked against every chart before they
+go live. The refresh **fails**, and the previous version stays live, when:
+
+- any SQL dataset errored or timed out,
+- any chart would fail to render (a referenced column is missing), or
+- a dataset that had rows before is empty now.
+
+The refresh history shows the outcome per dataset. With **Notify on
+failure** enabled, a failed refresh is written to the gateway log at
+`WARNING` and recorded on the refresh entry.
+
+## Edit in chat
+
+**Edit in chat** opens a new conversation in the dashboard's project. The
+first message carries the current spec. The agent writes it back to
+`artifacts/`, rebuilds each SQL dataset's snapshot with
+`sp.dashboard_dataset`, and iterates with you. Publish the result as a new
+version when you are done.

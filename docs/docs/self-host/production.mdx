@@ -1,0 +1,141 @@
+---
+sidebar_position: 3
+title: Run in production
+sidebar_label: Run in production
+---
+
+import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+import Callout from '@site/src/components/Callout';
+
+# Run in production
+
+This page covers running SignalPilot yourself in **cloud mode**: a multi-tenant deployment with Clerk sign-in, behind TLS, with hosted sandboxes for notebooks and chat. If you want the single-machine stack for one team, [Self-host with Docker Compose](/docs/self-host/install) is enough. If you would rather not run anything, use [SignalPilot Cloud](/docs/cloud).
+
+## What cloud mode changes
+
+`SP_DEPLOYMENT_MODE=cloud` switches on three things:
+
+- **Multi-tenant auth.** Users sign in through Clerk. API keys are scoped to an organization, and plan quotas are enforced.
+- **Hosted sandboxes.** Notebooks and chat sessions run on the hosted sandbox backend instead of the shared local notebook container. Each session gets its own isolated microVM.
+- **Hardening checks.** At boot the gateway verifies its configuration and refuses to start if a rule is broken. The error lists variable names only, never values.
+
+The rules are exactly these:
+
+| Rule | Why |
+|---|---|
+| `SP_NOTEBOOK_DIRECT_URL` must be empty | The shared notebook container is a local-only convenience. |
+| `SP_DISABLE_SANDBOX` must not be `true`, `1`, or `yes` | Sandboxing cannot be switched off for tenants. |
+| `SP_ALLOWED_ORIGINS` must be set, with no wildcards, and every entry `https://` or loopback | Browsers must only reach the gateway from your own app. |
+
+A broken rule produces `Cloud mode hardening violations: [...]. Refusing to boot.` in the logs.
+
+## Prerequisites
+
+- **Postgres** for the gateway's own state.
+- **S3-compatible object storage** with buckets for workspaces, chat artifacts, and eval evidence. MinIO works.
+- **A sandbox backend.** Cloud mode uses the hosted sandbox backend. Its credentials are provisioned outside this configuration surface; ask us before you plan a cloud-mode deployment.
+- **A Clerk application** for sign-in.
+- **A TLS reverse proxy** such as Caddy, nginx, or your load balancer.
+- **A container registry** you control, for the gateway image and the digest-pinned sandbox image.
+
+## Required environment
+
+Everything from the [configuration reference](/docs/self-host/configuration) still applies. These are the values cloud mode cannot run without.
+
+| Variable | Set it to |
+|---|---|
+| `SP_DEPLOYMENT_MODE` | `cloud` |
+| `DATABASE_URL` | `postgresql+asyncpg://user:pass@host:5432/signalpilot` |
+| `SP_ENCRYPTION_KEY` | A Fernet key you generated. Never the example value from `docker-compose.yml`. |
+| `SP_SESSION_JWT_SECRET` | A long random string. |
+| `SP_ALLOWED_ORIGINS` | Your app origin, for example `https://app.your-domain.example` |
+| `SP_PUBLIC_GATEWAY_URL` | The HTTPS URL sandboxes use to reach the gateway, for example `https://gateway.your-domain.example` |
+| `CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY` | From the Clerk dashboard, under API Keys. |
+| `SP_EXPECTED_AZP` | Your app origin. Recommended; binds Clerk session tokens to your front end. |
+| `SP_ADMIN_USER_IDS` | Comma-separated Clerk user ids for your platform admins. |
+| `SP_NOTEBOOK_EXECUTION_BACKEND` | `vercel` (the hosted sandbox backend) |
+| `SP_NOTEBOOK_VERCEL_IMAGE` | `your-registry/notebook@sha256:<64 hex>` |
+| `SP_WORKSPACE_S3_BUCKET` and its `_ENDPOINT`, `_REGION`, `_ACCESS_KEY`, `_SECRET_KEY` | Your workspace bucket. |
+| `SP_CHAT_OBJECTS_BUCKET` and its `_S3_ENDPOINT`, `_S3_REGION`, `_S3_ACCESS_KEY`, `_S3_SECRET_KEY` | Your chat artifacts bucket. |
+
+Leave `CLERK_JWT_AUDIENCE` unset unless you configured a Clerk JWT template that emits an `aud` claim. Clerk's default session tokens carry `azp`, which is why `SP_EXPECTED_AZP` is the check to use.
+
+### Pin the sandbox image by digest
+
+A floating tag such as `:latest` could be re-pushed under you, so cloud mode refuses it. Resolve the digest after you push:
+
+<MiniCopyBlock
+  label="resolve the image digest"
+  code={`crane digest your-registry/notebook:VERSION\n# or\ndocker buildx imagetools inspect your-registry/notebook:VERSION`}
+/>
+
+### Generate the secrets
+
+<MiniCopyBlock
+  label="generate secrets"
+  code={`# SP_ENCRYPTION_KEY\npython -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"\n# SP_SESSION_JWT_SECRET\nopenssl rand -hex 32`}
+/>
+
+## Run the gateway and worker
+
+Build the gateway image from the `signalpilot/gateway/` directory and push it to your registry:
+
+<MiniCopyBlock
+  label="build and push the gateway image"
+  code={`docker build -f Dockerfile.gateway -t your-registry/gateway:VERSION signalpilot/gateway/\ndocker push your-registry/gateway:VERSION`}
+/>
+
+The gateway and the chat worker share one image. Run both, from the same environment file, and always upgrade them together:
+
+<MiniCopyBlock
+  label="docker-compose.prod.yml"
+  plain
+  code={`services:\n  gateway:\n    image: your-registry/gateway:VERSION\n    env_file: gateway.env\n    ports:\n      - "127.0.0.1:3300:3300"\n    restart: unless-stopped\n\n  gateway-chat-worker:\n    image: your-registry/gateway:VERSION\n    env_file: gateway.env\n    command: signalpilot-chat-worker\n    restart: unless-stopped`}
+/>
+
+<MiniCopyBlock
+  label="start"
+  code={`docker compose -f docker-compose.prod.yml up -d`}
+/>
+
+Bind the gateway to loopback and terminate TLS in front of it. A minimal Caddy configuration:
+
+<MiniCopyBlock
+  label="caddy reverse proxy"
+  plain
+  code={`gateway.your-domain.example {\n  reverse_proxy 127.0.0.1:3300\n}`}
+/>
+
+`SP_ALLOWED_ORIGINS` and `SP_PUBLIC_GATEWAY_URL` must use the public HTTPS origin, not the container address.
+
+## Secrets and key rotation
+
+- **Never bake secrets into images.** Inject `SP_ENCRYPTION_KEY`, `SP_SESSION_JWT_SECRET`, `CLERK_SECRET_KEY`, `DATABASE_URL`, and the object storage credentials at runtime from your platform's secret manager.
+- **The gateway never logs secret values.** Hardening violations name variables only. Keep it that way; do not echo the environment into logs.
+- **Rotate `SP_ENCRYPTION_KEY` without downtime.** Set the new key in `SP_ENCRYPTION_KEY` and move the old one into `SP_ENCRYPTION_KEY_OLD` (comma-separate several if needed). Old keys decrypt only; every credential is re-encrypted under the new key the next time it is read. Once every connection has been used at least once, drop the old key.
+
+<Callout kind="warning" title="Losing the key loses the credentials">
+`SP_ENCRYPTION_KEY` (and `SP_ENCRYPTION_SALT` if you use a passphrase) is the only way to read stored warehouse credentials. Back it up separately from the database and test the restore. See [Operations](/docs/self-host/operations#back-this-up).
+</Callout>
+
+## Health checks
+
+- `GET /health` returns `{"status":"healthy"}` when the process is up. It does not touch the database. Use it as a liveness probe.
+- For readiness, call an authenticated route that exercises the database, such as `GET /api/connections` with a valid API key.
+
+<MiniCopyBlock
+  label="smoke test"
+  code={`curl -sf https://gateway.your-domain.example/health\ncurl -sf https://gateway.your-domain.example/api/connections -H "X-API-Key: sp_..."`}
+/>
+
+Then point an MCP client at `https://gateway.your-domain.example/mcp`, run `connection_health`, and confirm every connection reports reachable. If the gateway fails to start, search the logs for `Cloud mode hardening violations`.
+
+## Upgrading
+
+1. Back up Postgres and confirm your encryption key is stored safely.
+2. Pull or build the new gateway image and, if the release notes say so, push a new sandbox image and update `SP_NOTEBOOK_VERCEL_IMAGE` with its digest.
+3. Recreate the gateway **and** the worker from the same image. A worker on an older image than the gateway will pick up runs it cannot handle.
+4. Watch the first boot. Schema migrations run automatically under a database lock, so multiple replicas starting at once is safe. To run them by hand instead, use `uv run alembic upgrade head` from `signalpilot/gateway/`.
+5. Existing warm sandboxes keep their old image until their idle snapshot. Test new behaviour in a fresh session.
+
+For backups, retention, and the background loops to watch, read [Operations](/docs/self-host/operations).

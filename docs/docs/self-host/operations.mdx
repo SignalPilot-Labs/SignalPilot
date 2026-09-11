@@ -1,0 +1,101 @@
+---
+sidebar_position: 4
+title: Operations
+---
+
+import Callout from '@site/src/components/Callout';
+
+# Operations
+
+What a self-hosted deployment needs after it is running: what to back up, what happens on upgrade, what grows without bound, and what the background loops are doing.
+
+Cloud customers can skip this page. It is all managed.
+
+## Back this up
+
+Losing any of these costs you data. Losing the first two costs you data you cannot reconstruct.
+
+| What | Where | If you lose it |
+|------|-------|----------------|
+| **`SP_ENCRYPTION_KEY`** (and any `SP_ENCRYPTION_KEY_OLD`) | Your secret store | **Every stored credential becomes undecryptable.** Keep retired keys until you have confirmed every credential is re-encrypted. |
+| **Encryption salt** | `SP_DATA_DIR/.encryption_salt`, or `SP_ENCRYPTION_SALT` | Same as above when the key is a passphrase. A new random salt derives a different key. |
+| **Postgres database** | `DATABASE_URL` | Connections, knowledge base, audit log, eval history, projects. Everything. |
+| **Session JWT secret** | `SP_SESSION_JWT_SECRET`, or the `signalpilot-gateway-secrets` volume in local mode | Live notebook and sandbox sessions are invalidated. |
+| **Repositories and workspaces** | `SP_REPOS_DIR`, the workspace bucket | Uncommitted workspace state. |
+| **Object storage** | The workspace, chat artifacts, and eval evidence buckets | Chat files, dashboards, and eval transcripts beyond the retention window. |
+
+<Callout kind="warning" title="Test the restore">
+An encryption key backed up but never restored is a backup you do not have. Restore into a scratch environment and confirm a connection still works before you need it for real.
+</Callout>
+
+## Schema changes on upgrade
+
+The schema is managed with Alembic. At boot the gateway takes a Postgres advisory lock and upgrades the database to the latest revision, so several replicas starting at once do not race. You do not need to run anything by hand.
+
+- **To migrate manually**, run `uv run alembic upgrade head` from `signalpilot/gateway/` with `DATABASE_URL` set. The gateway will find nothing left to do when it boots.
+- **Pre-Alembic databases** are handled once by a legacy bootstrap that brings the schema up to the first tracked revision, then stamps it. After that, Alembic owns the sequence.
+- **Take a backup before upgrading.** Roll back by restoring the database, not by starting an older image against a newer schema.
+
+## Retention and growth
+
+Some things are pruned automatically. The important one is not.
+
+| Data | Retention |
+|------|-----------|
+| Knowledge retrieval events | 90 days |
+| Connection-health events | 7 days |
+| Eval artifacts | Last 10 runs per workspace |
+| Eval transcripts | Last 100 runs per workspace |
+| Eval accuracy history | Never pruned (small) |
+| Idle sandboxes | Snapshotted and destroyed after `SP_NOTEBOOK_IDLE_SNAPSHOT_SECONDS` (15 min); snapshots resumable for `SP_NOTEBOOK_SNAPSHOT_EXPIRATION_SECONDS` (7 days) |
+| **Audit log** | **Never pruned** |
+| **Chat traces, analysis trails** | **Never pruned** |
+
+`audit_retention_days` in the plan table is a *cloud plan* attribute; it does not prune a self-hosted `gateway_audit_logs`. Schedule your own deletion to match your policy, and keep an export first if you need the history:
+
+```sql
+-- keep 400 days
+DELETE FROM gateway_audit_logs
+WHERE timestamp < EXTRACT(EPOCH FROM now() - INTERVAL '400 days');
+```
+
+## Background loops
+
+Each gateway process runs about a dozen `asyncio` loops. There is **no leader election**: every replica runs all of them. Two are worth knowing about before you scale out:
+
+- **Health ping** opens a real connection to every connection in every workspace every 30 seconds. With many workspaces and a small database pool this is real load; it is also what makes the health page useful.
+- **Eval reaper** deletes `eval-*` branch databases whose run lease has expired, matching across the whole server rather than per workspace. Give eval branches a dedicated Postgres server. See [Deploying the eval harness](/docs/evals/deploying).
+
+Others sweep pools, refresh schemas, prune knowledge retrievals, run schema watches, snapshot idle sandboxes, and enforce eval retention. The chat worker is a separate process (`gateway-chat-worker`) that claims and runs chat and agent jobs; run at least one.
+
+## Health and metrics
+
+- **`GET /health`** returns `{"status":"healthy"}` and checks only that the process is up. Treat it as a liveness probe.
+- **For readiness**, probe a cheap authenticated route that exercises the database, such as `GET /api/connections`.
+- **`GET /api/metrics`** is an authenticated server-sent event stream, not a Prometheus endpoint, capped at 20 concurrent streams. Scrape-based monitoring needs an adapter.
+
+## Fixed ceilings
+
+Not configurable, worth knowing:
+
+| Limit | Value |
+|-------|-------|
+| Request body | 2 MiB |
+| Concurrent eval runs | 2 per gateway **process** |
+| Eval export archive | 256 MB, assembled in memory |
+| Report HTML | 5 MB |
+| Audit export rows | `SP_MAX_EXPORT_ROWS`, default 50,000 |
+| Open eval-set uploads | 3 per user |
+| Concurrent local-file sandboxes | 10 |
+| Concurrent metrics streams | 20 |
+
+## Compose stack hygiene
+
+The bundled `docker-compose.yml` is a development stack. Before exposing it anywhere:
+
+- **Replace `SP_ENCRYPTION_KEY`.** The committed value is public.
+- **Replace the database password.** `changeme_dev_only` is the literal default.
+- **Know what you are running.** Besides the web UI, gateway, and Postgres, the stack starts a chat worker, a notebook container, a sandbox manager, MinIO with a bucket-creation job, Mailpit, and a read-only object proxy on a separate eval network. Every published port is bound to loopback.
+- **Upgrades restart containers.** `docker compose up -d` on one node recreates changed containers with a few seconds of downtime. Recreate the gateway and the chat worker together; they share an image.
+
+See [Run in production](/docs/self-host/production) for the hardened path.

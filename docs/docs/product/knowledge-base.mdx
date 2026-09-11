@@ -1,124 +1,164 @@
 ---
 sidebar_position: 1
+title: Knowledge base
+sidebar_label: Knowledge base
+hide_title: true
 ---
 
-# Knowledge Base
+import PageHero from '@site/src/components/PageHero';
+import { Knowledge } from '@site/src/components/illustrations';
 
-The knowledge base is what stops your agent relearning your warehouse every
-session. It holds the things that are true about *your* data and are not
-discoverable from the schema: which mart is authoritative, why a join is a
-`LEFT JOIN`, what "active customer" means here, which table lies about its grain.
+<PageHero
+  eyebrow="Product · Knowledge base"
+  title="Knowledge base"
+  lede="The knowledge base is where your team writes down what is true about your data and cannot be read from the tables themselves: which report to trust, what a term means here, and which rules every answer must follow. The AI reads it before it answers, so everyone gets the same numbers."
+  illustration={<Knowledge />}
+/>
 
-Agents read from it through `get_knowledge`, `search_knowledge` and
-`read_knowledge`, and write back to it through `propose_knowledge` — proposals
-land as **pending** until a human approves them.
+Without it, the AI relearns your warehouse every time someone asks a question,
+and two people asking the same thing can get two different answers. With it,
+the definition of "active customer" is the same in Claude, in ChatGPT, in
+SignalPilot chat, and in every model the AI builds.
 
-## Scopes and categories
+<figure className="sp-screenshot">
+  <img src={require('./images/knowledge-base.png').default} alt="The Knowledge base page, with scope and category filters on the left, the list of entries in the middle, and the selected entry open on the right" />
+  <figcaption>The Knowledge base page. Filters on the left, entries in the middle, the open entry on the right.</figcaption>
+</figure>
 
-Every entry has a **scope** (who it applies to) and a **category** (what kind of
-thing it is). The two are constrained against each other: not every category is
-valid at every scope.
+## What to write down
 
-| Scope | `scope_ref` | Valid categories |
-|-------|-------------|------------------|
-| `org` | — | Context, Agent Decisions, Rules |
-| `project` | project id | Context, Agent Decisions, Rules, Troubleshooting |
-| `connection` | connection name | Context, Troubleshooting |
+Write down the things a new analyst would need to be told in their first week.
+The AI can already see table and column names. It cannot see:
 
-| Category | What belongs here |
-|----------|-------------------|
-| **Context** | The always-loaded brief for this org, project or connection — the CLAUDE.md-equivalent. Every agent gets it on every task. |
-| **Agent Decisions** | What the project does and why models are built the way they are: grain, joins, filters, and the reasoning behind them. |
-| **Rules** | How to write models here, plus the business rules encoded in the data. |
-| **Troubleshooting** | Known errors, fixes, and database-specific quirks the team has already hit. |
+- **Which table is the right one.** "Use `fct_orders` for revenue, not `stg_orders`."
+- **What a business term means.** "An active customer has placed an order in the last 90 days."
+- **Rules every answer must follow.** "Revenue is always reported net of refunds."
+- **Known traps.** "`fct_orders` has one row per line item, so count distinct order ids."
+- **Fixes for errors the team has already hit.** Include the error text people actually see.
 
-The distinction that matters most is **Context vs everything else**. Context is
-loaded unconditionally, so it costs tokens on every single task — keep it short
-and stable. The other three are retrieved on demand, so they can be numerous and
-specific.
+Keep out anything the tables already say, anything that will be stale next
+month, and anything you would not want repeated on every single question.
 
-## Using the page
+A good entry is a fact with a reason. "`fct_orders` is one row per line item,
+so use `count(distinct order_id)`" helps more than "be careful with
+fct_orders". Short entries about one thing each work better than one long
+entry about six things.
 
-![The Knowledge Base page](./images/knowledge-base.png)
+## Categories
 
-The left rail filters by scope (`All` / `Org` / `Project` / `Conn`) and by
-category, with live counts. The middle column lists entries; sort cycles through
-**views**, **recent**, **alphabetical**, and **least-viewed**. The right pane
-renders the selected entry.
+Every entry has a category. It tells the AI what kind of thing it is reading.
 
-- **⌘E / Ctrl-E** starts editing the open entry. Unsaved edits prompt before you
-  navigate away.
-- **`[[wikilinks]]`** resolve to other entries by title or slug. The entry footer
-  lists **backlinks** — every other entry that links to this one — which is the
-  fastest way to find the cluster of notes around one model.
-- **History** shows every prior version with its author and lets you revert. How
-  many versions are kept depends on plan (5 on Free and Pro, 25 on Team, 50 on
-  Enterprise).
-- **Archive** is a soft delete: the entry stops being retrieved but stays
-  readable under the archived filter.
+| Category | Plain meaning |
+|----------|---------------|
+| **Context** | The short brief the AI reads on every task. Who you are, what the data is about, what matters most. Keep it short and stable. |
+| **Agent decisions** | Why things are built the way they are: which tables join to which, what gets filtered out, and the reasoning behind it. |
+| **Rules** | Business rules and house style. How a metric is defined, and how new models should be written here. |
+| **Troubleshooting** | Known errors and their fixes, plus the quirks of a particular database. |
 
-### Pending proposals
+The difference that matters most is **Context versus everything else**.
+Context goes to the AI on every task, whether or not it is relevant, so it
+should be a few paragraphs at most. The other three categories are looked up
+only when a question needs them, so you can have as many of those as you like.
 
-When an agent calls `propose_knowledge`, the entry appears under **pending** with
-a count badge. Review it as you would a pull request — the agent's proposals are
-generated from what it inferred during a task, and an inference that was true
-once is not automatically a rule.
+## Scopes
 
-Two buttons matter on a pending entry:
+Every entry also has a scope. It says where the entry applies.
 
-- **Approve** promotes it to active, and it starts being retrieved immediately.
-- **Evaluate Change** runs your eval set with this entry overlaid on the live
-  knowledge base, so you can see what it does to accuracy *before* approving it.
-  See [Evals](/docs/evals/overview).
+| Scope | Applies to | Categories allowed |
+|-------|------------|--------------------|
+| **Org** | Everyone and everything in your workspace | Context, Agent decisions, Rules |
+| **Project** | One dbt project | Context, Agent decisions, Rules, Troubleshooting |
+| **Connection** | One database connection | Context, Troubleshooting |
+
+Pick the narrowest scope that is true. A rule that only holds for one
+connection belongs on that connection, not on the org. That way it never
+confuses a question about a different database.
+
+## Add and edit entries
+
+Open **Knowledge base** from the sidebar.
+
+1. Choose **New entry**, or pick an entry from the list and press **Edit**
+   (⌘E on Mac, Ctrl-E on Windows).
+2. Give it a title, a scope, and a category. See the note on titles below.
+3. Write the body. You can link to another entry by wrapping its title in
+   double square brackets, like `[[fct-orders-grain]]`. The footer of an entry
+   lists every other entry that links to it, which is the quickest way to find
+   the cluster of notes around one model.
+4. Save. The entry is live straight away. If you navigate away with unsaved
+   edits, the page asks first.
+
+The left rail filters by scope and category, with live counts. The middle
+column lists entries. Sort cycles through most viewed, most recent,
+alphabetical, and least viewed. The right pane shows the selected entry.
+
+Two more things you can do from an open entry:
+
+- **History** shows every earlier version with its author and lets you go
+  back to one. The Free and Pro plans keep 5 versions, Team keeps 25, and
+  Enterprise keeps 50.
+- **Archive** hides the entry from the AI but keeps it readable under the
+  archived filter. Nothing is lost.
+
+:::note
+
+Titles are slugs. A title must be lowercase letters, numbers, and hyphens, up to 120 characters: `fct-orders-grain`, not `fct_orders grain` or `Fct Orders Grain`. Anything else is rejected with the message *"title must be lowercase alphanumeric with hyphens, no leading/trailing hyphens"*. Links written as `[[wikilinks]]` match on these slugs.
+
+:::
+
+## How the AI uses entries
+
+Before it answers, the AI reads the Context entries for your org, the project,
+and the connection it is working with. Then it searches the rest of the
+knowledge base for entries that match the question and reads the ones that
+look relevant. Titles carry the most weight in that search, so name an entry
+after the thing someone would look for.
+
+The AI can also suggest new entries. When it learns something during a task,
+it can propose an entry, which appears under **Pending** with a count badge.
+Nothing the AI proposes is used until a person approves it.
+
+Review a pending entry the way you would review a change from a colleague.
+Something that was true in one session is not automatically a rule.
+
+- **Approve** makes it live, and the AI starts using it straight away.
+- **Evaluate change** runs your [eval set](/docs/evals/overview) with this
+  entry added, so you can see whether it helps or hurts accuracy before you
+  approve it.
 
 ### Retrieval heatmap
 
-The heatmap shows which entries were actually retrieved, and how often. Use it in
-both directions: an entry with high retrieval and low usefulness is polluting
-every prompt, and an entry that is never retrieved is either badly titled or
-answering a question nobody asks. Retrieval events are kept for 90 days.
-
-## How retrieval works
-
-`search_knowledge` runs three arms and fuses them with reciprocal rank fusion:
-Postgres full-text search, a lexical keyword match, and an in-process BM25 index
-over word and character-4-gram tokens. There are no embeddings and no external
-model calls. Arms degrade independently — if one is unavailable the search still
-returns.
-
-Two practical consequences:
-
-- **Titles matter more than prose.** Both the FTS and BM25 arms weight the title
-  heavily, so name an entry after the thing someone would search for.
-- **Short, single-concept entries retrieve better** than long ones. An entry
-  covering six unrelated quirks ranks for none of them well.
-
-:::note Titles are slugs
-A title must be lowercase alphanumeric with hyphens — `fct-orders-grain`, not
-`fct_orders grain` or `Fct Orders Grain`. Anything else is rejected with
-*"title must be lowercase alphanumeric with hyphens, no leading/trailing
-hyphens"*, and the limit is 120 characters. `[[wikilinks]]` resolve against these
-slugs.
-:::
-
-## Writing entries that help
-
-The failure mode is a knowledge base full of things that were true in one
-session. What earns its place:
-
-- **A fact with a reason.** "`fct_orders` is at line grain, not order grain — use
-  `count(distinct order_id)`" beats "be careful with fct_orders".
-- **A rule with a scope.** If it is only true for one connection, scope it to
-  that connection rather than the org.
-- **A quirk with a symptom.** Troubleshooting entries are retrieved by the error
-  text people actually see, so include it.
-
-And what to keep out: anything the schema already says, anything that will be
-stale next month, and anything you would not want repeated to every agent on
-every task (that last one especially applies to Context).
+The heatmap shows which entries the AI actually read, and how often. Use it
+both ways. An entry that is read a lot but never helps is adding noise to
+every question. An entry that is never read is either badly titled or answers
+a question nobody asks. Retrieval counts are kept for 90 days.
 
 ## Limits
 
-Knowledge storage is capped per workspace by plan — 50 MB on Free, 250 MB on Pro,
-1 GB on Team, 5 GB on Enterprise. Retrieval events are pruned after 90 days;
-entries and their history are not pruned.
+Knowledge storage is capped per workspace by plan: 50 MB on Free, 250 MB on
+Pro, 1 GB on Team, and 5 GB on Enterprise. Retrieval counts are pruned after
+90 days. Entries and their history are never pruned.
+
+## For engineers
+
+**Tools.** Agents read through `get_knowledge`, `search_knowledge`, and
+`read_knowledge`, and write back through `propose_knowledge`. Proposals land
+as `pending` until a human approves them. The `scope_ref` for a project scope
+is the project id and for a connection scope it is the connection name. Org
+scope has none.
+
+**Retrieval.** `search_knowledge` runs three arms and fuses them with
+reciprocal rank fusion: Postgres full-text search, a lexical keyword match,
+and an in-process BM25 index over word and character 4-gram tokens. There are
+no embeddings and no external model calls. The arms degrade independently, so
+if one is unavailable the search still returns. Both the full-text and BM25
+arms weight the title heavily, which is why titles matter more than prose and
+why short, single-concept entries rank better than long ones.
+
+**Versioning.** Every save writes a new version with its author. History and
+revert work from those versions, and the number kept is set by plan (5 on Free
+and Pro, 25 on Team, 50 on Enterprise). Archive is a tombstone: the entry stays
+in the database and stays readable under the archived filter, but it is
+excluded from every retrieval arm. `[[wikilinks]]` and backlinks resolve
+against slugs, so renaming an entry breaks inbound links until they are
+updated.

@@ -66,14 +66,14 @@ This gives you a public hostname like `your-machine.tail1234.ts.net`. Use that a
 
 If you're self-hosting (not using SignalPilot Cloud), the simplest option is to install Tailscale directly on the machine running the gateway. Then the gateway can reach Tailscale IPs directly — no tunnel needed. This doesn't work for cloud/multi-tenant deployments since you can't install every user's VPN on a shared server.
 
-## Example: AWS VPC
+## Example: private subnet behind a bastion
 
 Your database is in a private subnet (`10.0.2.x`). You have a bastion host in the public subnet.
 
 <MiniCopyBlock
-  label="aws vpc tunnel config"
+  label="private subnet tunnel config"
   plain
-  code={`{\n  "name": "prod-analytics",\n  "db_type": "postgres",\n  "host": "10.0.2.45",\n  "port": 5432,\n  "database": "analytics",\n  "username": "readonly",\n  "password": "...",\n  "ssh_tunnel": {\n    "enabled": true,\n    "host": "bastion.example.com",\n    "port": 22,\n    "username": "ec2-user",\n    "auth_method": "key",\n    "private_key": "-----BEGIN OPENSSH PRIVATE KEY-----\\n..."\n  }\n}`}
+  code={`{\n  "name": "prod-analytics",\n  "db_type": "postgres",\n  "host": "10.0.2.45",\n  "port": 5432,\n  "database": "analytics",\n  "username": "readonly",\n  "password": "...",\n  "ssh_tunnel": {\n    "enabled": true,\n    "host": "bastion.example.com",\n    "port": 22,\n    "username": "ubuntu",\n    "auth_method": "key",\n    "private_key": "-----BEGIN OPENSSH PRIVATE KEY-----\\n..."\n  }\n}`}
 />
 
 ## SSH tunnel fields

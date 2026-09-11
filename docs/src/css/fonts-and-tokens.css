@@ -1,0 +1,230 @@
+/* ============================================================================
+   SignalPilot docs — V5 design system
+   Mirrors landing-page/app/globals.css + web/app/globals.css:
+   warm ink surfaces, translucent panels, generous radii, Playfair editorial
+   headings, DM Sans chrome, JetBrains Mono for evidence, restrained mint.
+   ========================================================================= */
+
+@font-face {
+  font-family: "DM Sans";
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+  src: url("/fonts/DMSans-Variable.woff2") format("woff2-variations"),
+       url("/fonts/DMSans-Variable.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Playfair Display";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("/fonts/PlayfairDisplay-Variable.woff2") format("woff2-variations"),
+       url("/fonts/PlayfairDisplay-Variable.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Playfair Display";
+  font-style: italic;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("/fonts/PlayfairDisplay-Italic-Variable.woff2") format("woff2-variations"),
+       url("/fonts/PlayfairDisplay-Italic-Variable.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url("/fonts/JetBrainsMono-Variable.woff2") format("woff2-variations"),
+       url("/fonts/JetBrainsMono-Variable.woff2") format("woff2");
+}
+
+/* ── Shared tokens ─────────────────────────────────────────────────────── */
+:root {
+  --sp-font-sans: "DM Sans", -apple-system, "Segoe UI", system-ui, sans-serif;
+  --sp-font-serif: "Playfair Display", Georgia, "Times New Roman", serif;
+  --sp-font-mono: "JetBrains Mono", "SF Mono", "Cascadia Code", ui-monospace, monospace;
+
+  /* Radii — landing V5Card 22, CodePanel 18, web app ctl 10 */
+  --sp-radius-ctl: 10px;
+  --sp-radius-panel: 18px;
+  --sp-radius-card: 22px;
+  --sp-radius-sm: 8px;
+  --sp-radius-xs: 6px;
+  --sp-radius-pill: 999px;
+
+  /* Tracking */
+  --sp-track-tighter: -0.02em;
+  --sp-track-tight: -0.015em;
+  --sp-track-wide: 0.05em;
+  --sp-track-wider: 0.1em;
+  --sp-track-eyebrow: 0.22em;
+
+  --sp-ease: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* Infima typography — sans base, serif display */
+  --ifm-font-family-base: var(--sp-font-sans);
+  --ifm-font-family-monospace: var(--sp-font-mono);
+  --ifm-heading-font-family: var(--sp-font-serif);
+  --ifm-font-weight-base: 400;
+  --ifm-font-weight-semibold: 600;
+  --ifm-font-size-base: 15.5px;
+  --ifm-line-height-base: 1.75;
+  --ifm-heading-line-height: 1.15;
+  --ifm-code-font-size: 88%;
+  --ifm-h1-font-size: clamp(2.1rem, 4.2vw, 3rem);
+  --ifm-h2-font-size: clamp(1.55rem, 2.6vw, 1.95rem);
+  --ifm-h3-font-size: 1.2rem;
+  --ifm-h4-font-size: 0.72rem;
+  --ifm-h5-font-size: 0.68rem;
+  --ifm-h6-font-size: 0.68rem;
+
+  /* Layout */
+  --doc-sidebar-width: 280px;
+  --ifm-navbar-height: 62px;
+  --ifm-navbar-padding-horizontal: 1.5rem;
+  --ifm-spacing-horizontal: 1.5rem;
+  --ifm-global-radius: var(--sp-radius-panel);
+  --ifm-button-border-radius: var(--sp-radius-pill);
+  --ifm-alert-border-radius: var(--sp-radius-panel);
+  --ifm-code-border-radius: var(--sp-radius-xs);
+  --ifm-pre-border-radius: var(--sp-radius-panel);
+  --ifm-menu-link-padding-vertical: 0.4rem;
+  --ifm-menu-link-padding-horizontal: 0.7rem;
+  --ifm-toc-padding-vertical: 0.35rem;
+  --ifm-global-shadow-lw: none;
+  --ifm-global-shadow-md: none;
+  --ifm-navbar-shadow: none;
+  --ifm-transition-fast: 180ms;
+}
+
+/* ── Dark theme (canonical — matches landing page exactly) ─────────────── */
+[data-theme="dark"] {
+  --sp-ink: #0e0e0e;
+  --sp-panel: #0a0a0a;
+  --sp-card: rgba(255, 255, 255, 0.045);
+  --sp-card-solid: #131313;
+  --sp-card-hover: rgba(255, 255, 255, 0.07);
+  --sp-line: rgba(255, 255, 255, 0.1);
+  --sp-line-2: rgba(255, 255, 255, 0.18);
+  --sp-text: #ededed;
+  --sp-muted: #9c9c96;
+  --sp-dim: #6b6b66;
+  --sp-green: #00ff88;
+  --sp-mint: #3ee69a;
+  --sp-amber: #ffaa00;
+  --sp-red: #ff4444;
+  --sp-blue: #60a5fa;
+  --sp-glow: rgba(0, 255, 136, 0.1);
+  --sp-selection: rgba(0, 255, 136, 0.18);
+  --sp-heading: #ffffff;
+  --sp-nav-bg: rgba(14, 14, 14, 0.78);
+  --sp-band: radial-gradient(900px 520px at 72% 0%, rgba(0, 255, 136, 0.1), transparent 60%),
+             linear-gradient(170deg, #131613, #0e0e0e 62%);
+  --sp-ill-stroke: rgba(255, 255, 255, 0.28);
+  --sp-footer: #0a0a0a;
+
+  --ifm-color-primary: #00ff88;
+  --ifm-color-primary-dark: #00e077;
+  --ifm-color-primary-darker: #00cc6e;
+  --ifm-color-primary-darkest: #00a85a;
+  --ifm-color-primary-light: #33ffa0;
+  --ifm-color-primary-lighter: #66ffb8;
+  --ifm-color-primary-lightest: #99ffd0;
+  --ifm-link-color: var(--sp-mint);
+  --ifm-link-hover-color: var(--sp-green);
+  --ifm-background-color: var(--sp-ink);
+  --ifm-background-surface-color: var(--sp-card-solid);
+  --ifm-color-content: var(--sp-text);
+  --ifm-color-content-secondary: var(--sp-muted);
+  --ifm-color-emphasis-200: var(--sp-line);
+  --ifm-color-emphasis-300: var(--sp-line);
+  --ifm-color-emphasis-500: var(--sp-line-2);
+  --ifm-navbar-background-color: var(--sp-nav-bg);
+  --ifm-footer-background-color: var(--sp-footer);
+  --ifm-code-background: rgba(255, 255, 255, 0.06);
+  --ifm-pre-background: rgba(0, 0, 0, 0.45);
+  --ifm-toc-border-color: var(--sp-line);
+  --ifm-table-stripe-background: rgba(255, 255, 255, 0.02);
+  --ifm-table-border-color: var(--sp-line);
+  --ifm-hr-border-color: var(--sp-line);
+  --ifm-blockquote-color: var(--sp-muted);
+  --ifm-blockquote-border-color: var(--sp-line-2);
+  --docusaurus-highlighted-code-line-bg: rgba(0, 255, 136, 0.09);
+
+  --sp-syntax-keyword: #60a5fa;
+  --sp-syntax-string: #00ff88;
+  --sp-syntax-function: #60a5fa;
+  --sp-syntax-number: #ffaa00;
+  --sp-syntax-comment: #6b6b66;
+  --sp-syntax-variable: #ededed;
+  --sp-syntax-operator: #9c9c96;
+  --sp-syntax-punctuation: #6b6b66;
+}
+
+/* ── Light theme (derived counterpart — same system, inverted surfaces) ── */
+:root:not([data-theme="dark"]),
+[data-theme="light"] {
+  --sp-ink: #fbfbfa;
+  --sp-panel: #ffffff;
+  --sp-card: rgba(16, 17, 20, 0.03);
+  --sp-card-solid: #ffffff;
+  --sp-card-hover: rgba(16, 17, 20, 0.05);
+  --sp-line: rgba(16, 17, 20, 0.11);
+  --sp-line-2: rgba(16, 17, 20, 0.2);
+  --sp-text: #16171a;
+  --sp-muted: #5c5f66;
+  --sp-dim: #8b8f96;
+  --sp-green: #00854c;
+  --sp-mint: #04a45e;
+  --sp-amber: #b06f00;
+  --sp-red: #c62d2d;
+  --sp-blue: #2563eb;
+  --sp-glow: rgba(0, 168, 90, 0.08);
+  --sp-selection: rgba(0, 168, 90, 0.16);
+  --sp-heading: #0a0b0d;
+  --sp-nav-bg: rgba(251, 251, 250, 0.8);
+  --sp-band: radial-gradient(900px 520px at 72% 0%, rgba(0, 168, 90, 0.09), transparent 60%),
+             linear-gradient(170deg, #f2f5f2, #fbfbfa 62%);
+  --sp-ill-stroke: rgba(16, 17, 20, 0.28);
+  --sp-footer: #f4f4f2;
+
+  --ifm-color-primary: #00854c;
+  --ifm-color-primary-dark: #007544;
+  --ifm-color-primary-darker: #006e3f;
+  --ifm-color-primary-darkest: #005a34;
+  --ifm-color-primary-light: #009554;
+  --ifm-color-primary-lighter: #009e59;
+  --ifm-color-primary-lightest: #00b866;
+  --ifm-link-color: #00764a;
+  --ifm-link-hover-color: #00a85a;
+  --ifm-background-color: var(--sp-ink);
+  --ifm-background-surface-color: var(--sp-card-solid);
+  --ifm-color-content: var(--sp-text);
+  --ifm-color-content-secondary: var(--sp-muted);
+  --ifm-color-emphasis-200: var(--sp-line);
+  --ifm-color-emphasis-300: var(--sp-line);
+  --ifm-color-emphasis-500: var(--sp-line-2);
+  --ifm-navbar-background-color: var(--sp-nav-bg);
+  --ifm-footer-background-color: var(--sp-footer);
+  --ifm-code-background: rgba(16, 17, 20, 0.05);
+  --ifm-pre-background: #f4f4f2;
+  --ifm-toc-border-color: var(--sp-line);
+  --ifm-table-stripe-background: rgba(16, 17, 20, 0.02);
+  --ifm-table-border-color: var(--sp-line);
+  --ifm-hr-border-color: var(--sp-line);
+  --ifm-blockquote-color: var(--sp-muted);
+  --ifm-blockquote-border-color: var(--sp-line-2);
+  --docusaurus-highlighted-code-line-bg: rgba(0, 168, 90, 0.09);
+
+  --sp-syntax-keyword: #2563eb;
+  --sp-syntax-string: #00764a;
+  --sp-syntax-function: #2563eb;
+  --sp-syntax-number: #b06f00;
+  --sp-syntax-comment: #8b8f96;
+  --sp-syntax-variable: #16171a;
+  --sp-syntax-operator: #5c5f66;
+  --sp-syntax-punctuation: #8b8f96;
+}

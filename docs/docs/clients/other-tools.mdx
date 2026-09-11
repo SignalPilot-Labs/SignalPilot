@@ -1,0 +1,111 @@
+---
+sidebar_position: 4
+title: Cursor, Claude Desktop, and other tools
+description: Ready-to-paste MCP configs for Cursor, Claude Desktop, Windsurf, and any other tool that speaks streamable HTTP.
+hide_title: true
+sidebar_label: Cursor and other tools
+---
+
+import PageHero from '@site/src/components/PageHero';
+import FieldTable from '@site/src/components/FieldTable';
+import Callout from '@site/src/components/Callout';
+import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+import { Connect } from '@site/src/components/illustrations';
+
+<PageHero
+  eyebrow="Connect · Other tools"
+  title="Cursor, Claude Desktop, and other tools"
+  lede="SignalPilot is a standard MCP server, so any tool that can reach an MCP endpoint over HTTP can use it. Every config on this page uses the same address and the same key."
+  illustration={<Connect />}
+/>
+
+Create the key once under **Settings → API Keys** in [SignalPilot](https://app.signalpilot.ai). It starts with `sp_` and is shown only when created. **Settings → MCP Connect** can generate these configs for you with the right values filled in.
+
+<FieldTable
+  rows={[
+    { label: 'Endpoint', value: 'https://gateway.signalpilot.ai/mcp', mono: true, copy: true },
+    { label: 'Header', value: 'x-api-key: sp_your_key_here', mono: true, note: 'Bearer tokens work too: Authorization: Bearer sp_…' },
+  ]}
+/>
+
+<Callout kind="note" title="Tools everywhere, skills in Claude Code and Codex">
+Every tool on this page gets the full set of governed data tools, and governance runs on SignalPilot's side no matter which client you use. The plugin's skills and verifier agents are a Claude Code and Codex feature, so in other tools you guide the model yourself with your own instructions. If that workflow matters to you, [Claude Code](/docs/clients/claude-code) or [Codex](/docs/clients/chatgpt) is the better fit.
+</Callout>
+
+Using ChatGPT, Codex, or the OpenAI Agents SDK? Those have their own page: [Use SignalPilot with ChatGPT and OpenAI](/docs/clients/chatgpt).
+
+## Cursor
+
+Add this to `.cursor/mcp.json` in your project root, or to `~/.cursor/mcp.json` to make it available in every project. Cursor picks it up without a restart; open **Settings → MCP** to confirm the server shows as connected.
+
+<MiniCopyBlock
+  label=".cursor/mcp.json"
+  plain
+  code={`{\n  "mcpServers": {\n    "signalpilot": {\n      "url": "https://gateway.signalpilot.ai/mcp",\n      "headers": {\n        "x-api-key": "sp_your_key_here"\n      }\n    }\n  }\n}`}
+/>
+
+## Claude Desktop
+
+The simplest route is the **Connectors** screen, which needs no config file at all: follow [Use SignalPilot in Claude](/docs/clients/claude). The same steps work in the desktop app and in the browser.
+
+If you manage `claude_desktop_config.json` by hand (macOS: `~/Library/Application Support/Claude/`, Windows: `%APPDATA%\Claude\`), the file only launches local commands, so a small bridge called `mcp-remote` forwards to the cloud endpoint:
+
+<MiniCopyBlock
+  label="claude_desktop_config.json"
+  plain
+  code={`{\n  "mcpServers": {\n    "signalpilot": {\n      "command": "npx",\n      "args": [\n        "-y",\n        "mcp-remote",\n        "https://gateway.signalpilot.ai/mcp",\n        "--header",\n        "x-api-key:\${SP_API_KEY}"\n      ],\n      "env": {\n        "SP_API_KEY": "sp_your_key_here"\n      }\n    }\n  }\n}`}
+/>
+
+Restart Claude Desktop after saving. The key is passed through an environment variable because the desktop app splits arguments on spaces.
+
+## Windsurf
+
+Add this to `~/.codeium/windsurf/mcp_config.json`, or open **Cascade → MCP servers → Configure** to edit the same file from the app. Windsurf uses `serverUrl` rather than `url` for remote servers.
+
+<MiniCopyBlock
+  label="~/.codeium/windsurf/mcp_config.json"
+  plain
+  code={`{\n  "mcpServers": {\n    "signalpilot": {\n      "serverUrl": "https://gateway.signalpilot.ai/mcp",\n      "headers": {\n        "x-api-key": "sp_your_key_here"\n      }\n    }\n  }\n}`}
+/>
+
+To keep the key out of the file, Windsurf can read it from an environment variable: `"x-api-key": "${env:SP_API_KEY}"`.
+
+## Any other MCP client
+
+Anything that implements the MCP streamable HTTP transport can connect. Most tools use a config shaped like this, sometimes with `"type": "http"` added:
+
+<MiniCopyBlock
+  label="generic streamable-http config"
+  plain
+  code={`{\n  "mcpServers": {\n    "signalpilot": {\n      "type": "http",\n      "url": "https://gateway.signalpilot.ai/mcp",\n      "headers": {\n        "x-api-key": "sp_your_key_here"\n      }\n    }\n  }\n}`}
+/>
+
+If your tool asks for a bearer token instead of a named header, use `Authorization: Bearer sp_your_key_here`. Both formats reach the same key.
+
+<details>
+<summary>Self-hosted gateway</summary>
+
+If you run SignalPilot yourself, swap the endpoint for your own gateway, typically `http://localhost:3300/mcp`. A fresh self-hosted gateway accepts requests without a key until the first API key is created; after that, add the same `x-api-key` header.
+
+<MiniCopyBlock
+  label="self-hosted config"
+  plain
+  code={`{\n  "mcpServers": {\n    "signalpilot": {\n      "type": "http",\n      "url": "http://localhost:3300/mcp"\n    }\n  }\n}`}
+/>
+
+</details>
+
+## If something does not work
+
+| What you see | What to do |
+|---|---|
+| The server never shows as connected | Check the address is exactly `https://gateway.signalpilot.ai/mcp` with no trailing slash, then restart the tool. |
+| "Authentication required" or "Unauthorized" | The header name must be `x-api-key` and the value must include the `sp_` prefix. Create a new key if you are unsure the old one is valid. |
+| The tool lists servers but no tools | Some tools cache the tool list. Turn the server off and on again in the tool's MCP settings, or restart. |
+| Queries run but the numbers look wrong | Add the missing definition to the [knowledge base](/docs/product/knowledge-base) so every client gets the same answer. |
+
+## Next
+
+- [API keys and permissions](/docs/clients/api-keys) for scopes, rotation, and rate limits.
+- [Connect a database](/docs/connect-database) if the workspace has none yet.
+- [Use SignalPilot in Claude](/docs/clients/claude) and [Claude Code](/docs/clients/claude-code) if your team uses those too.

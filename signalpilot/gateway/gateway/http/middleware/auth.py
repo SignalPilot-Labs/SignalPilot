@@ -82,6 +82,11 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
         if request.url.path in PUBLIC_PATHS:
             return await call_next(request)
 
+        # OAuth discovery documents (RFC 9728 / RFC 8414) must be readable
+        # before a client has any credential.
+        if request.url.path.startswith("/.well-known/"):
+            return await call_next(request)
+
         # MCP endpoints have their own auth (MCPAuthMiddleware): skip
         if request.url.path.startswith("/mcp"):
             return await call_next(request)

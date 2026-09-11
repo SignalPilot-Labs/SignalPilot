@@ -239,6 +239,15 @@ class MCPAuthMiddleware:
 
         raw_bearer = _extract_bearer_key(scope)
         if raw_bearer and not raw_bearer.startswith("sp_"):
+            from . import mcp_oauth
+
+            # Clerk-issued OAuth access tokens (Claude.ai, Claude Code, Cursor
+            # signing in through the OAuth flow) take precedence over the
+            # gateway-minted notebook session JWT check below.
+            if mcp_oauth.oauth_enabled() and mcp_oauth.is_oauth_candidate(raw_bearer):
+                await self._authenticate_oauth(scope, receive, send, raw_bearer)
+                return
+
             from ..auth.notebook_jwt import NotebookSessionJWTError, verify_session_jwt
             from ..mcp.context import (
                 mcp_allowed_connection_var,
@@ -457,6 +466,36 @@ class MCPAuthMiddleware:
             await _send_503(send, "Authentication service unavailable. Please try again.")
 
 
+    async def _authenticate_oauth(
+        self, scope: dict[str, Any], receive: Callable, send: Callable, raw_token: str,
+    ) -> None:
+        """Verify a Clerk OAuth access token and run the MCP app as that principal."""
+        from . import mcp_oauth
+
+        try:
+            principal = await mcp_oauth.verify_oauth_token(raw_token)
+        except mcp_oauth.OAuthTokenError as exc:
+            if exc.status == 401:
+                client_ip = _extract_client_ip(scope)
+                if not _check_auth_rate(client_ip or "unknown"):
+                    await _send_429(send, "Too many authentication attempts. Try again later.")
+                    return
+            await mcp_oauth.send_oauth_error(send, exc)
+            return
+
+        from ..http import check_principal_rate_limit
+        from ..mcp import mcp_client_ip_var, mcp_user_agent_var
+
+        rate_error = check_principal_rate_limit(f"oauth:{principal.user_id}", principal.org_id)
+        if rate_error:
+            await _send_429(send, rate_error)
+            return
+        mcp_oauth.apply_principal(scope, principal, raw_token)
+        mcp_client_ip_var.set(_extract_client_ip(scope))
+        mcp_user_agent_var.set(_extract_user_agent(scope))
+        await self._app(scope, receive, send)
+
+
 def _extract_client_ip(scope: dict[str, Any]) -> str | None:
     """Extract the client IP from ASGI scope, respecting reverse-proxy headers."""
     headers: list[tuple[bytes, bytes]] = scope.get("headers", [])
@@ -507,11 +546,24 @@ def _extract_api_key_header(scope: dict[str, Any]) -> str | None:
 
 
 async def _send_401(send: Callable, message: str) -> None:
-    """Send a minimal 401 JSON response through the ASGI send callable."""
-    await _send_json(send, 401, message)
+    """Send a 401 JSON response, with the OAuth discovery challenge when enabled.
+
+    RFC 9728 §5.1: the ``WWW-Authenticate`` header is how an MCP client learns
+    where the protected-resource metadata (and so the authorization server)
+    lives. Without it Claude.ai / Claude Code cannot start the sign-in flow.
+    """
+    from . import mcp_oauth
+
+    extra: list[tuple[bytes, bytes]] = []
+    if mcp_oauth.oauth_enabled():
+        challenge = mcp_oauth.www_authenticate("invalid_token", message)
+        extra.append((b"www-authenticate", challenge.encode()))
+    await _send_json(send, 401, message, extra)
 
 
-async def _send_json(send: Callable, status: int, message: str) -> None:
+async def _send_json(
+    send: Callable, status: int, message: str, extra_headers: list[tuple[bytes, bytes]] | None = None,
+) -> None:
     """Send a minimal ``{"detail": message}`` JSON response with ``status``."""
     body = json.dumps({"detail": message}).encode()
     await send(
@@ -521,6 +573,7 @@ async def _send_json(send: Callable, status: int, message: str) -> None:
             "headers": [
                 (b"content-type", b"application/json"),
                 (b"content-length", str(len(body)).encode()),
+                *(extra_headers or []),
             ],
         }
     )
@@ -535,43 +588,9 @@ async def _send_json(send: Callable, status: int, message: str) -> None:
 
 async def _send_429(send: Callable, message: str) -> None:
     """Send a minimal 429 JSON response through the ASGI send callable."""
-    body = json.dumps({"detail": message}).encode()
-    await send(
-        {
-            "type": "http.response.start",
-            "status": 429,
-            "headers": [
-                (b"content-type", b"application/json"),
-                (b"content-length", str(len(body)).encode()),
-            ],
-        }
-    )
-    await send(
-        {
-            "type": "http.response.body",
-            "body": body,
-            "more_body": False,
-        }
-    )
+    await _send_json(send, 429, message)
 
 
 async def _send_503(send: Callable, message: str) -> None:
     """Send a minimal 503 JSON response through the ASGI send callable."""
-    body = json.dumps({"detail": message}).encode()
-    await send(
-        {
-            "type": "http.response.start",
-            "status": 503,
-            "headers": [
-                (b"content-type", b"application/json"),
-                (b"content-length", str(len(body)).encode()),
-            ],
-        }
-    )
-    await send(
-        {
-            "type": "http.response.body",
-            "body": body,
-            "more_body": False,
-        }
-    )
+    await _send_json(send, 503, message)

@@ -38,7 +38,8 @@ class GatewaySettings(BaseModel):
 
     # Automated improvement runs — when true, the scheduler seeds one
     # system-initiated improvement chat per America/New_York calendar day.
-    improvement_runs_enabled: bool = False
+    # On by default; org admins turn it off in settings.
+    improvement_runs_enabled: bool = True
 
     # Knowledge Base — number of edit history versions to keep per doc.
     # None = follow plan default. 0 = unlimited. >= 1 = exact count.
@@ -47,22 +48,22 @@ class GatewaySettings(BaseModel):
     # Org-wide visual tokens for generated HTML deliverables. None = SignalPilot defaults.
     deliverable_theme: DeliverableTheme | None = None
 
-    @field_validator("blocked_tables")
     # Billing: user ids whose chat threads are data-team tuning work. Their
     # threads write a zero-credit ledger row with reason "tuning". Set by an
     # org admin through the settings endpoint.
     tuning_users: list[str] = Field(default_factory=list, max_length=500)
 
+    @field_validator("blocked_tables")
     @classmethod
     def validate_blocked_tables(cls, v: list[str]) -> list[str]:
         return _validate_string_list(v, 256, "blocked_tables")
 
-    @field_validator("knowledge_history_versions_override")
     @field_validator("tuning_users")
     @classmethod
     def validate_tuning_users(cls, v: list[str]) -> list[str]:
         return _validate_string_list(v, 256, "tuning_users")
 
+    @field_validator("knowledge_history_versions_override")
     @classmethod
     def validate_knowledge_history_versions_override(cls, v: int | None) -> int | None:
         if v is None:

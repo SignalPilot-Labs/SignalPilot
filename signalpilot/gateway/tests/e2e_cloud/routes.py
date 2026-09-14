@@ -29,32 +29,18 @@ ADMIN_PROBE_SKIP: frozenset[tuple[str, str]] = frozenset(
     }
 )
 
-# Routes that require a PLATFORM-STAFF identity (user_id in SP_ADMIN_USER_IDS, a
-# deployment-operator allowlist defaulting to {"local"}) on top of the org-admin
-# role. A tenant org admin is *correctly* refused on these, so the matrix asserts
-# the refusal rather than the "admin is not locked out" probe, and asserts a staff
-# identity gets through.
-STAFF_ONLY_PATH_PREFIXES: tuple[str, ...] = (
-    "/api/evals/",
-)
-STAFF_ONLY_ROUTES: frozenset[tuple[str, str]] = frozenset({("GET", "/api/security/status")})
+# There is no platform-staff identity. The only entitlement is the org's plan
+# (``RequireBillablePlan`` -> 402 ``plan_required``); the deployment's ability to run
+# something is a separate answer (``RequireDeploymentCapability`` -> 503). Routes that
+# carry the plan gate are discovered below as guard "BillablePlan"; the matrix asserts
+# that a free org's admin is refused with 402 there and that a billable org's admin
+# is never refused with 401/402/403.
 
-# Sub claim of the staff token; matches SP_ADMIN_USER_IDS on the booted gateway.
-STAFF_USER_ID = "user_staff"
-
-
-def is_staff_only(method: str, path: str) -> bool:
-    return (method, path) in STAFF_ONLY_ROUTES or path.startswith(STAFF_ONLY_PATH_PREFIXES)
-
-# These markers identify policy-based status 403 responses.
+# These markers identify policy-based status 403 responses (abuse ceilings).
 # They distinguish policy denials from authorization denials.
 NON_AUTHZ_403_MARKERS: tuple[str, ...] = (
-    "not available on the free plan",
-    "Upgrade to",
-    "plan limit",
-# The test gateway has an empty SP_EVAL_ALLOWED_ORGS allowlist.
-# This policy denial does not indicate an authorization failure.
-    "Evals are not enabled for this workspace.",
+    "limit_reached",
+    "limit reached",
 )
 
 # Exact detail strings the authorization layer emits. Seeing any of these on a member
@@ -64,7 +50,6 @@ AUTHZ_DENIAL_DETAILS: tuple[str, ...] = (
     "Insufficient scope",
     "Unknown authentication method",
     "Admin access required",
-    "Platform staff access required",
 )
 
 
@@ -116,7 +101,7 @@ def _collect() -> list[dict]:
     """Walk the live FastAPI dependency tree. Runs inside the cloud-mode child."""
     from fastapi.routing import APIRoute
 
-    from gateway.api.deps import require_platform_staff
+    from gateway.api.deps import require_billable_plan
     from gateway.auth.user import require_org_admin
     from gateway.main import app
 
@@ -132,8 +117,8 @@ def _collect() -> list[dict]:
         for dep in deps:
             if dep.call is require_org_admin:
                 guards.add("OrgAdmin")
-            if dep.call is require_platform_staff:
-                guards.add("PlatformStaff")
+            if dep.call is require_billable_plan:
+                guards.add("BillablePlan")
             found = _scopes_of(dep.call)
             if found is not None:
                 all_scopes |= set(found)
@@ -197,11 +182,18 @@ def discover() -> tuple[list[RouteSpec], list[RouteSpec]]:
     scoped: list[RouteSpec] = []
     for row in rows:
         spec = RouteSpec(row["method"], row["path"], tuple(row["guards"]), row["name"])
-        if row["guards"]:
+        if set(row["guards"]) - {"BillablePlan"}:
             admin.append(spec)
         elif row["scopes"]:
             scoped.append(spec)
     return admin, scoped
+
+
+@lru_cache(maxsize=1)
+def plan_gated() -> list[RouteSpec]:
+    """Every route that carries RequireBillablePlan, admin-gated or not."""
+    admin, scoped = discover()
+    return [r for r in admin + scoped if "BillablePlan" in r.guards]
 
 
 # A curated subset of ordinary member routes. A false-positive lockout (member

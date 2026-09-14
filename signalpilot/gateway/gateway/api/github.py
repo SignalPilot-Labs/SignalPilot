@@ -22,7 +22,7 @@ from ..models.github import (
 from ..runtime.mode import is_cloud_mode
 from ..security.scope_guard import RequireScope
 from ._oauth_state import make_state, verify_state
-from .deps import ProjectsGate, StoreD
+from .deps import RequireBillablePlan, StoreD
 
 logger = logging.getLogger(__name__)
 
@@ -391,7 +391,7 @@ def _project_slug_for_repo(repo_full_name: str) -> str:
     "/api/github/import",
     status_code=201,
     response_model=GitHubRepoImportResult,
-    dependencies=[RequireScope("write"), ProjectsGate],
+    dependencies=[RequireScope("write"), RequireBillablePlan],
 )
 async def import_github_repo(body: GitHubRepoImportRequest, store: StoreD):
     """One-click import: auto-create a workspace project for a repo and link it.

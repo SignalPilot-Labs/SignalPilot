@@ -264,7 +264,7 @@ def _workspace_app(storage, factory):
     from fastapi import FastAPI
 
     import gateway.api.workspace_files as wf
-    from gateway.api.deps import require_projects_feature
+    from gateway.api.deps import require_billable_plan
     from gateway.api.workspace_files import router as files_router
     from gateway.api.workspace_projects import router as projects_router
     from gateway.auth import resolve_org_id, resolve_user_id
@@ -292,7 +292,7 @@ def _workspace_app(storage, factory):
     app.dependency_overrides[resolve_user_id] = _user
     app.dependency_overrides[resolve_org_id] = _org
     app.dependency_overrides[scope_resolve_user_id] = _user
-    app.dependency_overrides[require_projects_feature] = _no_gate
+    app.dependency_overrides[require_billable_plan] = _no_gate
     from gateway.workspace_store import WorkspaceStore
 
     app.dependency_overrides[wf.get_workspace_store] = lambda: WorkspaceStore(storage)
@@ -515,7 +515,7 @@ class TestWorkspaceFilesAPI:
         """
         from fastapi.testclient import TestClient
 
-        from gateway.api.deps import require_projects_feature
+        from gateway.api.deps import require_billable_plan
         from gateway.api.workspace_files import get_workspace_store
         from gateway.db.engine import get_db
 
@@ -536,8 +536,8 @@ class TestWorkspaceFilesAPI:
         anonymous_app.dependency_overrides[get_workspace_store] = (
             api.app.dependency_overrides[get_workspace_store]
         )
-        anonymous_app.dependency_overrides[require_projects_feature] = (
-            api.app.dependency_overrides[require_projects_feature]
+        anonymous_app.dependency_overrides[require_billable_plan] = (
+            api.app.dependency_overrides[require_billable_plan]
         )
         anonymous = TestClient(anonymous_app, raise_server_exceptions=False)
         response = anonymous.put(

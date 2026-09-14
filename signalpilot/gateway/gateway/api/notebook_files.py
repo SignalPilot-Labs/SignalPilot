@@ -33,7 +33,7 @@ from ..auth import DBSession, OrgID, UserID
 from ..security.scope_guard import RequireScope
 from ..workspace_store import WorkspaceStore
 from ..workspace_store.store import RevisionNotFound, Upsert
-from .deps import ProjectsGate, StoreD
+from .deps import RequireBillablePlan, StoreD
 from .workspace_files import (
     WorkspaceStoreD,
     _confined,
@@ -41,7 +41,7 @@ from .workspace_files import (
     _valid_branch,
 )
 
-router = APIRouter(prefix="/api", dependencies=[ProjectsGate])
+router = APIRouter(prefix="/api", dependencies=[RequireBillablePlan])
 
 NOTEBOOK_EXTENSIONS = {".py", ".md", ".qmd"}
 IGNORE_NAMES = {"__pycache__", ".git", "node_modules", ".venv", "target"}

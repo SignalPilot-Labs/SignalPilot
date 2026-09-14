@@ -15,7 +15,6 @@ from gateway.mcp.context import (
     mcp_audit_id_var,
     mcp_client_ip_var,
     mcp_execution_identity_var,
-    mcp_org_id_var,
     mcp_user_agent_var,
 )
 from gateway.models import AuditEntry
@@ -182,15 +181,7 @@ async def _audit_tool_call(
     sql: str | None = None,
     audit_id: str | None = None,
 ):
-    """Log an MCP tool call to the gateway audit log and increment usage counter."""
-    from gateway.governance.plan_limits import daily_query_counter
-
-    org_id = mcp_org_id_var.get(None)
-
-    # Increment daily usage counter for every tool call
-    if org_id:
-        daily_query_counter.increment(org_id)
-
+    """Log an MCP tool call to the gateway audit log."""
     client_ip = mcp_client_ip_var.get(None)
     user_agent = mcp_user_agent_var.get(None)
 

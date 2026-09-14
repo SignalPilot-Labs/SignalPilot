@@ -28,7 +28,6 @@ from gateway.dashboard.semantic_resolver import resolve_from_authorities
 from gateway.db.models import GatewayBase
 from gateway.dbt.types import ColumnSpec, ModelInfo, ModelStatus, ProjectMap
 from gateway.governance.bindings import BoundQuery, BoundQueryError, ParameterStyle
-from gateway.governance.plan_limits import PLAN_TIERS
 from gateway.governance.query_executor import GovernedQueryContext, GovernedQueryExecutor
 from gateway.models import ConnectionCreate, DBType
 from gateway.models.dashboards import (
@@ -451,10 +450,6 @@ async def test_duckdb_dashboard_golden_path(tmp_path, monkeypatch) -> None:
             )
         )
 
-        async def unlimited(_org_id: str):
-            return PLAN_TIERS["unlimited"]
-
-        monkeypatch.setattr("gateway.governance.query_executor.get_org_limits", unlimited)
         compiled = compile_metric_query(_metric_query(), _context("duckdb"))
         assert "?" in compiled.sql
         result = await GovernedQueryExecutor().execute(

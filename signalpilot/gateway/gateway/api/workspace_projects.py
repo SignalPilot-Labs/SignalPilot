@@ -18,14 +18,14 @@ from ..runtime.mode import is_cloud_mode
 from ..security.scope_guard import RequireScope
 from ..workspace_store.dbt_detect import resolve_dbt_project_dir_detailed
 from ..workspace_store.store import RevisionNotFound
-from .deps import ProjectsGate, StoreD
+from .deps import RequireBillablePlan, StoreD
 from .workspace_files import WorkspaceStoreD, _valid_branch
 
 logger = logging.getLogger(__name__)
 
 # All workspace-project routes require the paid "projects" feature.
 # In local mode the tier resolves to "unlimited", so the gate is a no-op.
-router = APIRouter(prefix="/api", dependencies=[ProjectsGate])
+router = APIRouter(prefix="/api", dependencies=[RequireBillablePlan])
 
 
 def _is_loopback_gateway_url(url: str) -> bool:

@@ -1,5 +1,7 @@
 """API key management endpoints + plan usage."""
 
+from __future__ import annotations
+
 import logging
 import time
 import uuid
@@ -25,8 +27,8 @@ async def list_keys(store: StoreD) -> list[ApiKeyResponse]:
 
 @router.post("/keys", dependencies=[RequireScope("admin")])
 async def create_key(body: ApiKeyCreate, store: StoreD, _role: OrgAdmin, request: Request) -> ApiKeyCreatedResponse:
-    # Enforce API key limit based on org's plan tier
-    from ..governance.plan_limits import check_api_key_limit, get_org_limits
+    # Abuse ceiling on API keys, read from the org's entitlement.
+    from ..governance.org_limits import check_api_key_limit, get_org_limits
 
     plan = await get_org_limits(store.org_id)
     existing_keys = await store.list_api_keys()
@@ -82,33 +84,31 @@ async def delete_key(key_id: str, store: StoreD, _role: OrgAdmin, request: Reque
 
 @router.get("/plan", dependencies=[RequireScope("read")])
 async def get_plan_usage(_user: UserID, org_id: OrgID, store: StoreD):
-    """Return current plan tier, limits, and usage for the org."""
-    from ..governance.plan_limits import daily_query_counter, get_org_limits
+    """Return the org's entitlement, its abuse ceilings, and current usage against them.
 
-    plan = await get_org_limits(org_id)
+    Usage of metered units (threads, queries, models, seats, eval runs) is the
+    credit ledger's business; this route covers only the hard ceilings.
+    """
+    from ..billing.entitlements import get_entitlement
+    from ..governance.org_limits import limits_for
+
+    entitlement = await get_entitlement(org_id)
+    limits = limits_for(entitlement)
     connections = await store.list_connections()
     keys = await store.list_api_keys()
-    queries_today = daily_query_counter.get_count(org_id)
 
     return {
-        "tier": plan.tier,
+        "tier": entitlement.tier,
+        "is_billable": entitlement.is_billable,
+        "entitlement": entitlement.to_dict(),
         "limits": {
-            "connections": plan.connections or "unlimited",
-            "users": plan.users or "unlimited",
-            "api_keys": plan.api_keys or "unlimited",
-            "queries_per_day": plan.queries_per_day or "unlimited",
-            "audit_retention_days": plan.audit_retention_days or "unlimited",
+            "connections": limits.connections or "unlimited",
+            "api_keys": limits.api_keys or "unlimited",
+            "knowledge_storage_mb": limits.knowledge_storage_mb or "unlimited",
+            "knowledge_history_versions": limits.knowledge_history_versions or "unlimited",
         },
         "usage": {
             "connections": len(connections),
             "api_keys": len(keys),
-            "queries_today": queries_today,
-        },
-        "features": {
-            "pii_redaction": plan.pii_redaction,
-            "byok": plan.byok,
-            "sso": plan.sso,
-            "budget_controls": plan.budget_controls,
-            "audit_export": plan.audit_export,
         },
     }

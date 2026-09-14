@@ -24,7 +24,6 @@ import httpx
 import pytest
 
 from .jwks import FakeClerk, start_fake_clerk
-from .routes import STAFF_USER_ID
 
 GATEWAY_DIR = Path(__file__).resolve().parents[2]
 
@@ -44,6 +43,8 @@ PREFERRED_GATEWAY_PORT = int(os.environ.get("SP_E2E_GATEWAY_PORT", "3399"))
 
 ORG_ID = "org_e2ecloudtest"
 OTHER_ORG_ID = "org_e2eother"
+# An org with no subscription row: the plan gate must answer 402 for it.
+FREE_ORG_ID = "org_e2efree"
 
 BOOT_TIMEOUT_SECONDS = 150
 
@@ -105,18 +106,19 @@ def _require_db_container() -> None:
 
 
 def seed_plan_tier(database: str, *org_ids: str) -> None:
-    """Pin orgs to the top plan tier in the backend-owned `subscriptions` table.
+    """Put orgs on an active Team plan in the backend-owned `subscriptions` table.
 
     That table is not part of the gateway schema, so without it every org resolves to
-    the free tier and plan gating answers its own 403 — which would masquerade as an
-    authorization denial.
+    the free tier and the plan gate answers 402 everywhere. ``FREE_ORG_ID`` is
+    deliberately never seeded.
     """
-    values = ", ".join(f"('{oid}', 'unlimited')" for oid in org_ids)
+    values = ", ".join(f"('{oid}', 'team', 'active')" for oid in org_ids)
     _psql(
         "CREATE TABLE IF NOT EXISTS subscriptions ("
-        " org_id text PRIMARY KEY, plan_tier text NOT NULL);"
-        f" INSERT INTO subscriptions (org_id, plan_tier) VALUES {values}"
-        " ON CONFLICT (org_id) DO UPDATE SET plan_tier = EXCLUDED.plan_tier;",
+        " org_id text PRIMARY KEY, plan_tier text NOT NULL, status text NOT NULL DEFAULT 'active',"
+        " current_period_end timestamptz NULL);"
+        f" INSERT INTO subscriptions (org_id, plan_tier, status) VALUES {values}"
+        " ON CONFLICT (org_id) DO UPDATE SET plan_tier = EXCLUDED.plan_tier, status = EXCLUDED.status;",
         database=database,
     )
 
@@ -225,10 +227,9 @@ def _child_env(workdir: Path, database_url: str, port: int, publishable_key: str
         "SP_REPOS_DIR": str(repos_dir),
         "SP_DATA_DIR": str(workdir / "data"),
 
-        # Platform-staff allowlist. Without it the default is {"local"} and no
-        # cloud identity can reach the staff-only routes, which would make the
-        # positive half of the staff matrix unassertable.
-        "SP_ADMIN_USER_IDS": STAFF_USER_ID,
+        # Entitlements are read from the `subscriptions` table when a backend is
+        # configured; nothing here ever calls the URL.
+        "SP_BACKEND_URL": "https://backend.invalid",
 
         # Narrow, deliberate deviation from cloud defaults: lets the credential
         # exfiltration suite seed a connection with a real password without sending
@@ -428,9 +429,9 @@ def admin_token(gateway: Gateway, azp: str) -> str:
 
 
 @pytest.fixture(scope="session")
-def staff_token(gateway: Gateway, azp: str) -> str:
-    """Org admin whose sub is also in the gateway's SP_ADMIN_USER_IDS allowlist."""
-    return gateway.clerk.mint(sub=STAFF_USER_ID, org_id=ORG_ID, org_role="admin", azp=azp)
+def free_org_admin_token(gateway: Gateway, azp: str) -> str:
+    """Org admin of an org with no subscription row: the plan gate must refuse it."""
+    return gateway.clerk.mint(sub="user_free_admin", org_id=FREE_ORG_ID, org_role="admin", azp=azp)
 
 
 @pytest.fixture(scope="session")

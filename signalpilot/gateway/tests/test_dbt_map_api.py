@@ -16,7 +16,7 @@ from sqlalchemy.pool import StaticPool
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from gateway.api import dbt_map as dbt_map_api
-from gateway.api.deps import get_store, require_projects_feature
+from gateway.api.deps import get_store, require_billable_plan
 from gateway.db.models import GatewayBase, GatewayDbtManifest
 from gateway.dbt_map.graph_cache import GraphCache, graph_cache, sql_map_cache
 from gateway.dbt_map.row_cache import row_cache
@@ -216,7 +216,7 @@ def harness(monkeypatch):
 
     app.dependency_overrides[get_store] = _store
     app.dependency_overrides[scope_resolve_user_id] = _user
-    app.dependency_overrides[require_projects_feature] = _no_gate
+    app.dependency_overrides[require_billable_plan] = _no_gate
 
     client = TestClient(app)
     yield client, graph, storage, _insert

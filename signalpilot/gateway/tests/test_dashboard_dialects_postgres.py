@@ -17,7 +17,6 @@ from gateway.connectors.drivers.postgres import PostgresConnector
 from gateway.dashboard.compiler import compile_distinct_values_query, compile_metric_query
 from gateway.dashboard.domain import SemanticChartQuery
 from gateway.db.models import GatewayBase
-from gateway.governance.plan_limits import PLAN_TIERS
 from gateway.governance.query_executor import GovernedQueryContext, GovernedQueryExecutor
 from gateway.models import ConnectionCreate, DBType
 from gateway.models.dashboards import (
@@ -164,10 +163,6 @@ async def test_postgres_dashboard_golden_path(monkeypatch) -> None:
                 )
             )
 
-            async def unlimited(_org_id: str):
-                return PLAN_TIERS["unlimited"]
-
-            monkeypatch.setattr("gateway.governance.query_executor.get_org_limits", unlimited)
             compiled = compile_metric_query(_query(), _context())
             assert "$1" in compiled.sql and "$4" in compiled.sql
             result = await GovernedQueryExecutor().execute(

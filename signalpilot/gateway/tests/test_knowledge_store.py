@@ -13,8 +13,9 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 import pytest
 from sqlalchemy.exc import IntegrityError
 
+from gateway.billing.entitlements import OrgEntitlement, local_entitlement
 from gateway.governance.knowledge_limits import MAX_DOC_BYTES, check_doc_size, check_org_storage
-from gateway.governance.plan_limits import PLAN_TIERS
+from gateway.governance.org_limits import limits_for
 from gateway.models.knowledge import (
     KnowledgeCategory,
     KnowledgeDoc,
@@ -251,27 +252,29 @@ class TestIncrementKnowledgeView:
         session.execute.assert_awaited_once()
 
 
-class TestPlanLimitsTiersUpdated:
-    """Verify all 5 tier literals have the new knowledge fields."""
+class TestKnowledgeCeilingsFromEntitlement:
+    """The knowledge ceilings come from the entitlement: billable, free, or local."""
 
-    def test_all_tiers_have_knowledge_storage_mb(self):
-        for tier_name, limits in PLAN_TIERS.items():
-            assert hasattr(limits, "knowledge_storage_mb"), f"{tier_name} missing knowledge_storage_mb"
-            assert isinstance(limits.knowledge_storage_mb, int)
+    def test_billable_org_ceilings(self):
+        limits = limits_for(OrgEntitlement(org_id="o", tier="scale", status="active"))
+        assert limits.knowledge_storage_mb == 500
+        assert limits.knowledge_history_versions == 50
 
-    def test_all_tiers_have_knowledge_history_versions(self):
-        for tier_name, limits in PLAN_TIERS.items():
-            assert hasattr(limits, "knowledge_history_versions"), f"{tier_name} missing knowledge_history_versions"
-            assert isinstance(limits.knowledge_history_versions, int)
+    def test_free_org_ceilings(self):
+        limits = limits_for(OrgEntitlement(org_id="o", tier="free", status="none"))
+        assert limits.knowledge_storage_mb == 25
+        assert limits.knowledge_history_versions == 5
 
-    def test_free_tier_storage_mb(self):
-        assert PLAN_TIERS["free"].knowledge_storage_mb == 50
+    def test_local_mode_is_unlimited(self):
+        limits = limits_for(local_entitlement("local"))
+        assert limits.knowledge_storage_mb == 0
+        assert limits.knowledge_history_versions == 0
 
-    def test_unlimited_tier_storage_mb(self):
-        assert PLAN_TIERS["unlimited"].knowledge_storage_mb == 0
-
-    def test_unlimited_tier_history_versions(self):
-        assert PLAN_TIERS["unlimited"].knowledge_history_versions == 100
+    def test_org_storage_check_honours_the_free_ceiling(self):
+        limits = limits_for(OrgEntitlement(org_id="o", tier="free", status="none"))
+        check_org_storage(0, 24 * 1024 * 1024, 0, limits)
+        with pytest.raises(KnowledgeOrgQuotaExceeded):
+            check_org_storage(0, 26 * 1024 * 1024, 0, limits)
 
 
 class TestKnowledgeDocCreateValidation:

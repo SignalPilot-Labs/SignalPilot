@@ -613,9 +613,9 @@ class TestAPIKeyAudit:
 
         body = ApiKeyCreate(name="ci-key", scopes=["query", "read"])
 
-        with patch("gateway.governance.plan_limits.get_org_limits", new_callable=AsyncMock) as mock_limits:
-            mock_limits.return_value = MagicMock(api_keys=None)
-            with patch("gateway.governance.plan_limits.check_api_key_limit"):
+        with patch("gateway.governance.org_limits.get_org_limits", new_callable=AsyncMock) as mock_limits:
+            mock_limits.return_value = MagicMock(api_keys=0)
+            with patch("gateway.governance.org_limits.check_api_key_limit"):
                 try:
                     await create_key(body=body, store=store, _role=None, request=request)
                 except Exception:

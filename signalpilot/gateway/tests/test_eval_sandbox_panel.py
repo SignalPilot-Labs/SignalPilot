@@ -23,13 +23,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from gateway.api.deps import get_store
 from gateway.api.eval_runs import router as eval_runs_router
-from gateway.config import get_governance_settings
 from gateway.config.evals import EvalRunSettings, get_eval_run_settings
 from gateway.db.models import GatewayBase
 from gateway.evals import runner, sandboxes
 from gateway.store import evals as evals_store
 
-STAFF_USER = "platform-staff"
+STAFF_USER = "user_org_admin"
 RUN_A = "run-20260101-010101-aaaaaa"
 RUN_B = "run-20260101-020202-bbbbbb"
 POD_A = "sp-eval-aaaaaaaaaaaa"
@@ -57,14 +56,6 @@ class FakeStore:
 
     async def get_eval_run(self, run_id: str):
         return None
-
-
-@pytest.fixture(autouse=True)
-def _staff_ids(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("SP_ADMIN_USER_IDS", STAFF_USER)
-    get_governance_settings.cache_clear()
-    yield
-    get_governance_settings.cache_clear()
 
 
 @pytest.fixture(autouse=True)
@@ -448,9 +439,9 @@ class TestLogStream:
             assert client.get(f"/api/evals/sandboxes/{POD_A}/logs/stream?tail=0").status_code == 422
 
     def test_concurrent_streams_are_capped(self, monkeypatch) -> None:
-        from gateway.api import eval_runs
+        from gateway.api import eval_sandboxes
 
-        monkeypatch.setattr(eval_runs, "_log_stream_semaphore", _LockedSemaphore())
+        monkeypatch.setattr(eval_sandboxes, "_log_stream_semaphore", _LockedSemaphore())
         with _client("org-a") as client:
             resp = client.get(f"/api/evals/sandboxes/{POD_A}/logs/stream")
         assert resp.status_code == 429

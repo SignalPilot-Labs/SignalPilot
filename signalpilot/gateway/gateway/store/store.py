@@ -962,8 +962,8 @@ class Store:
     # Knowledge Base.
 
     async def _knowledge_limits(self):
-        """Resolve the org's plan limits for knowledge enforcement."""
-        from gateway.governance.plan_limits import get_org_limits
+        """Resolve the org's knowledge ceilings from its entitlement."""
+        from gateway.governance.org_limits import get_org_limits
 
         return await get_org_limits(self._require_org_id())
 

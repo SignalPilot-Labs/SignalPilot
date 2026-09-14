@@ -31,9 +31,9 @@ from ..workspace_store import (
     workspace_object_storage,
 )
 from ..workspace_store.store import RevisionNotFound, Upsert
-from .deps import ProjectsGate, StoreD
+from .deps import RequireBillablePlan, StoreD
 
-router = APIRouter(prefix="/api", dependencies=[ProjectsGate])
+router = APIRouter(prefix="/api", dependencies=[RequireBillablePlan])
 
 _BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")

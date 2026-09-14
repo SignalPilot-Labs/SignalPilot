@@ -28,14 +28,16 @@ from gateway.security.scope_guard import RequireScope
 from gateway.standalone_chat.config import enterprise_chat_feature_flags, standalone_chat_enabled
 from gateway.store import chat_reports as report_store
 
-from .deps import StoreD
+from .deps import RequireBillablePlan, StoreD, not_available_error
 
-router = APIRouter(prefix="/api/chat")
+# Reports are a chat surface: every route needs a billable plan (402 otherwise).
+router = APIRouter(prefix="/api/chat", dependencies=[RequireBillablePlan])
 
 
 def _require_enabled() -> None:
+    """Kill switch only: 503 when SP_FEATURE_STANDALONE_CHAT is off."""
     if not standalone_chat_enabled():
-        raise HTTPException(status_code=404, detail="Data Chat reports are not available")
+        raise not_available_error("chat")
 
 
 def _require_browser_principal(request: Request) -> None:

@@ -63,8 +63,8 @@ async def test_disabled_router_skips_estimation_and_shadow_metadata(
 ) -> None:
     from gateway.governance import query_planner
 
-    monkeypatch.delenv("SP_FEATURE_CHAT_SIZE_ROUTER", raising=False)
-    monkeypatch.delenv("SP_FEATURE_CHAT_QUERY_APPROVAL", raising=False)
+    monkeypatch.setenv("SP_FEATURE_CHAT_SIZE_ROUTER", "false")
+    monkeypatch.setenv("SP_FEATURE_CHAT_QUERY_APPROVAL", "false")
     monkeypatch.setattr(
         query_planner,
         "load_annotations",
@@ -139,7 +139,7 @@ def _route(
 
 @pytest.mark.asyncio
 async def test_chat_approval_is_not_required_when_feature_is_disabled(monkeypatch):
-    monkeypatch.delenv("SP_FEATURE_CHAT_QUERY_APPROVAL", raising=False)
+    monkeypatch.setenv("SP_FEATURE_CHAT_QUERY_APPROVAL", "false")
     context = GovernedQueryContext(
         path="mcp",
         conversation_id="conversation-a",

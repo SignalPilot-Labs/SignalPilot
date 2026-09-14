@@ -387,7 +387,7 @@ def test_public_query_event_vocabulary_is_complete_and_versioned():
         QueryPublicEvent(**{**event.model_dump(), "payload": {}, "sql": "SELECT secret"})
 
 
-def test_enterprise_feature_boundaries_are_independent_and_disabled_by_default(monkeypatch):
+def test_enterprise_feature_kill_switches_are_independent_and_on_by_default(monkeypatch):
     names = [
         "SP_FEATURE_CHAT_SANDBOX_RUNTIME",
         "SP_FEATURE_CHAT_QUERY_APPROVAL",
@@ -398,30 +398,29 @@ def test_enterprise_feature_boundaries_are_independent_and_disabled_by_default(m
         "SP_FEATURE_CHAT_RUNTIME_RESULTS",
         "SP_FEATURE_CHAT_RUNTIME_ARTIFACTS",
         "SP_FEATURE_CHAT_DATASET_REFS",
+        "SP_FEATURE_CHAT_MCP_CONNECTORS",
     ]
     for name in names:
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.delenv("SP_FEATURE_CHAT_MCP_CONNECTORS", raising=False)
-    opt_in_flags = {k: v for k, v in vars(enterprise_chat_feature_flags()).items() if k != "mcp_connectors"}
-    assert not any(opt_in_flags.values())
-    # Connectors are the one flag that is on in every mode unless explicitly turned off.
-    monkeypatch.setenv("SP_DEPLOYMENT_MODE", "local")
-    assert enterprise_chat_feature_flags().mcp_connectors
-    monkeypatch.setenv("SP_DEPLOYMENT_MODE", "cloud")
-    assert enterprise_chat_feature_flags().mcp_connectors
+    # Every capability is on in every mode unless its switch is explicitly turned off.
+    for mode in ("local", "cloud"):
+        monkeypatch.setenv("SP_DEPLOYMENT_MODE", mode)
+        flags = enterprise_chat_feature_flags().as_dict()
+        assert flags.pop("size_router_shadow") is False
+        assert all(flags.values()), flags
+
     monkeypatch.setenv("SP_FEATURE_CHAT_MCP_CONNECTORS", "false")
-    assert not enterprise_chat_feature_flags().mcp_connectors
-    monkeypatch.setenv("SP_DEPLOYMENT_MODE", "local")
     assert not enterprise_chat_feature_flags().mcp_connectors
     monkeypatch.delenv("SP_FEATURE_CHAT_MCP_CONNECTORS", raising=False)
 
-    monkeypatch.setenv("SP_FEATURE_CHAT_QUERY_APPROVAL", "true")
+    # One switch off turns off exactly that capability.
+    monkeypatch.setenv("SP_FEATURE_CHAT_QUERY_APPROVAL", "false")
     flags = enterprise_chat_feature_flags()
-    assert flags.query_approval
-    assert not flags.sandbox_runtime
-    assert not flags.structured_results
-    assert not flags.organization_sharing
-    assert not flags.forking
+    assert not flags.query_approval
+    assert flags.sandbox_runtime
+    assert flags.structured_results
+    assert flags.organization_sharing
+    assert flags.forking
 
     monkeypatch.setenv("SP_FEATURE_CHAT_SIZE_ROUTER", "shadow")
     flags = enterprise_chat_feature_flags()

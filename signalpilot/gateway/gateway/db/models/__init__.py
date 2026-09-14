@@ -205,3 +205,8 @@ __all__ = [
     "TZDateTime",
     "strip_ssl_secrets",
 ]
+
+# The credit ledger model lives in gateway.billing but registers on the shared
+# metadata so create_all and Alembic autogenerate both see it. A module
+# import (not a name import) keeps this safe in either import order.
+import gateway.billing.models  # noqa: F401

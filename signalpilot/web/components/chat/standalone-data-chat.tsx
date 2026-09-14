@@ -8,10 +8,7 @@ import { useEffect, useRef, useState } from "react";
 import useSWR from "swr";
 import {
   getSavedChatReport,
-  getStandaloneChatBootstrap,
   getStandaloneChatProjectReadiness,
-  getStandaloneConversation,
-  listStandaloneConversations,
   setDefaultStandaloneChatProject,
   type ChatReportMention,
 } from "~/lib/api";
@@ -32,10 +29,7 @@ import {
   ChatReplayView,
   useReplayMode,
 } from "~/components/chat/chat-replay-view";
-import {
-  isImprovementConversation,
-  isStreamingStatus,
-} from "~/components/chat/standalone-chat-helpers";
+import { isImprovementConversation } from "~/components/chat/standalone-chat-helpers";
 import {
   AttachedReportBanner,
   ChatBootstrapSpinner,
@@ -59,6 +53,7 @@ import {
   useStandaloneUiMessages,
 } from "~/components/chat/use-standalone-chat-run";
 import { useStandaloneChatActions } from "~/components/chat/use-standalone-chat-actions";
+import { useStandaloneChatData } from "~/components/chat/use-standalone-chat-data";
 import { ShareLinkDialog } from "~/components/chat/share-link-dialog";
 import { ChatEmptyHero } from "~/components/chat/chat-empty-hero";
 import {
@@ -93,39 +88,17 @@ export function StandaloneDataChat({
   const { toast } = useToast();
   const subscription = useSubscription();
   const {
-    data: bootstrap,
-    error: bootstrapError,
-    isLoading: bootstrapLoading,
-  } = useSWR("standalone-chat-bootstrap", getStandaloneChatBootstrap, {
-    revalidateOnFocus: false,
-  });
-  const {
-    data: historyData,
-    isLoading: historyLoading,
-    mutate: mutateHistory,
-  } = useSWR("standalone-chat-conversations", listStandaloneConversations, {
-    // Poll fast only while a run streams (the rail shows its status change).
-    // An idle page refreshes slowly; submit/stop paths mutate on demand.
-    refreshInterval: (latest) =>
-      latest?.conversations.some((conversation) =>
-        isStreamingStatus(conversation.run_status ?? undefined),
-      )
-        ? 4_000
-        : 30_000,
-  });
-  const {
-    data: detail,
-    error: detailError,
-    isLoading: detailLoading,
-    mutate: mutateDetail,
-  } = useSWR(
-    conversationId ? `standalone-chat-conversation:${conversationId}` : null,
-    () => getStandaloneConversation(conversationId!),
-    {
-      refreshInterval: (latestDetail) =>
-        isStreamingStatus(latestDetail?.current_run?.status) ? 1_000 : 0,
-    },
-  );
+    bootstrap,
+    bootstrapError,
+    bootstrapLoading,
+    historyData,
+    historyLoading,
+    mutateHistory,
+    detail,
+    detailError,
+    detailLoading,
+    mutateDetail,
+  } = useStandaloneChatData(conversationId);
   const requestedProject = searchParams.get("project");
   const requestedReportId = searchParams.get("report");
   const requestedPrompt = searchParams.get("prompt");

@@ -135,9 +135,9 @@ storage networks. Two rules apply:
 
 Nothing to deploy. What you control:
 
-1. **Enablement.** Evals are allow-listed per workspace, and every eval route
-   additionally requires platform-staff access. If the page reports evals are not
-   enabled for your workspace, that is what it means.
+1. **Enablement.** Evals are on for every organization on a paid plan. If the
+   page shows a plan prompt, your organization is on the free plan; if it shows
+   a deployment notice, the deployment is not wired to run evals.
 2. **The eval repo.** Cloud mode accepts `https://github.com/…` only, no other
    host, no local paths, no SSH URLs. The same rule applies to the manifest's
    `project_repo`.
@@ -167,7 +167,6 @@ Every variable the eval harness reads. See the
 | `SP_EVAL_MCP_URL` | `http://gateway:3300/mcp` | MCP endpoint the sandboxes call back on. |
 | `SP_EVAL_CLAUDE_TOKEN` | unset | `CLAUDE_CODE_OAUTH_TOKEN` passed to task containers. Falls back to `CLAUDE_KEY_1` if unset. |
 | `SP_EVAL_ANTHROPIC_KEY` | unset | Alternative: `ANTHROPIC_API_KEY` for task containers. |
-| `SP_EVAL_ALLOWED_ORGS` | `""` | Comma-separated org ids allowed to use evals. **Empty denies everyone in cloud mode** and allows the single local tenant in local mode. |
 | `SP_EVAL_TIMEOUT_SECONDS` | `600` | Per-task agent container timeout. |
 | `SP_EVAL_PROJECT_ENV` | `""` | Extra `KEY=VALUE` entries (newline- or comma-separated) injected into **agent** containers, for example read-only warehouse credentials a `profiles.yml` reads via `env_var`. Gateway-controlled variables always win. Setup and teardown containers do *not* receive these; give those what they need through the manifest's `setup.env_file`. |
 
@@ -243,7 +242,7 @@ Optional intake path for customers mailing in an eval set as a zip
 | Variable | Relevance |
 |---|---|
 | `SP_DEPLOYMENT_MODE` | `cloud` requires the hosted sandbox backend, digest-pinned images, and GitHub HTTPS repos. |
-| `SP_ADMIN_USER_IDS` | Only these users pass the platform-staff check on eval routes. |
+| `SP_BACKEND_URL` | When set, the organization's plan decides access to evals (paid plans only). When unset, the local organization is unlimited. |
 | `SP_GITHUB_APP_*` | Needed to clone private eval or project repositories. |
 
 ## Isolation and data handling
@@ -274,8 +273,8 @@ Worth knowing before you point this at production data:
 | `runner disabled — SP_EVAL_RUNNER_IMAGE unset on gateway` | The feature is off. |
 | `Eval evidence bucket is not configured (SP_EVAL_S3_BUCKET)` | No evidence store. |
 | `An eval connection pin is required` / `does not exist in this workspace` | Set **Connection** on the Evals page to a real connection name. |
-| `Evals are not enabled for this workspace` | The org is not in `SP_EVAL_ALLOWED_ORGS`. |
-| `Platform staff access required` | The caller is not in `SP_ADMIN_USER_IDS`. |
+| `402 {"error": "plan_required"}` | The organization is on the free plan. |
+| `503 {"error": "not_available_in_deployment", "capability": "evals"}` | The runner image, evidence bucket, or (in cloud mode) the `vercel` backend is not configured. |
 | `only https://github.com/ repositories are allowed` | Cloud mode; use a GitHub HTTPS URL. |
 | `local paths must live under /eval-projects` | Move the set under `SP_EVAL_PROJECTS_DIR`. |
 | `no branch provider: pin a Xata connection …` | The set has write tasks but no provider is configured. |

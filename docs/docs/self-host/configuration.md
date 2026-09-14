@@ -45,9 +45,8 @@ All configuration is through environment variables. Copy `.env.example` to `.env
 | `CLERK_SECRET_KEY` | unset | **Cloud-required.** Clerk secret key. |
 | `CLERK_JWT_AUDIENCE` | unset | Expected `aud` claim on Clerk tokens. Leave unset unless your Clerk JWT template emits one. |
 | `SP_EXPECTED_AZP` | unset | Comma-separated origins allowed in the `azp` claim, for example `https://app.your-domain.example`. Recommended in cloud mode. |
-| `SP_ADMIN_USER_IDS` | `local` | **Cloud-required.** Comma-separated user ids that count as platform admins for security administration and eval routes. `local` is the single-user sentinel for local mode. |
 | `SP_ORG_ID` | `local` | Organization id used in local mode. |
-| `SP_BACKEND_URL` | unset | URL of a separate backend API. When set, every MCP request must carry an `sp_` API key. |
+| `SP_BACKEND_URL` | unset | URL of a separate backend API. When set, every MCP request must carry an `sp_` API key, and the gateway reads each organization's plan from the backend's `subscriptions` table. When unset, the single local organization is unlimited: every feature is on and nothing is metered. See [What each plan includes](/docs/product/plans). |
 
 The gateway no longer reads ciphertext produced by retired pre-PBKDF2 key derivations. If you are upgrading from a very old release, rotate every credential on that release first.
 
@@ -133,20 +132,31 @@ The gateway no longer reads ciphertext produced by retired pre-PBKDF2 key deriva
 | `CHAT_WORKER_POLL_SECONDS` | `1.0` | How often a worker polls for new runs. |
 | `SIGNALPILOT_DELIVERY_MODEL` | provider default | Model used for delivery flows such as Slack and Notion. |
 
-Feature flags. Each accepts `true` or `false`:
+Kill switches. Every chat capability is **on by default** for every organization
+on a paid plan (and for the single local organization). These variables exist
+only so an operator can take one capability offline in an emergency; they are
+not entitlements and do not vary by plan. Set one to `false` to switch the
+capability off; when it is off, the affected routes answer `503` with
+`{"error": "not_available_in_deployment", "capability": "..."}` and the web app
+shows a deployment notice. Unset or `true` means on.
 
-| Variable | Default | What it does |
+| Variable | Default | What it switches off when `false` |
 |---|---|---|
-| `SP_FEATURE_STANDALONE_CHAT` | unset | Enable the standalone chat page. |
-| `SP_FEATURE_MCP_AGENT` | `true` | Expose the agent tools over MCP. |
-| `SP_FEATURE_CHAT_QUERY_APPROVAL` | unset | Ask before the agent runs a query. |
-| `SP_FEATURE_CHAT_STRUCTURED_RESULTS` | unset | Return structured results in chat. |
-| `SP_FEATURE_CHAT_SIZE_ROUTER` | unset | Route large results through the size router. |
-| `SP_FEATURE_CHAT_RUNTIME_RESULTS` | unset | Show runtime query results in the chat panel. |
-| `SP_FEATURE_CHAT_RUNTIME_ARTIFACTS` | unset | Capture files the agent writes as chat artifacts. |
-| `SP_FEATURE_CHAT_DATASET_REFS` | unset | Let chats reference saved datasets. |
-| `SP_FEATURE_CHAT_ORG_SHARING` | unset | Allow sharing chats across the organization. |
-| `SP_FEATURE_CHAT_FORKING` | unset | Allow forking a chat. |
+| `SP_FEATURE_STANDALONE_CHAT` | on | The whole chat and reports surface. |
+| `SP_FEATURE_MCP_AGENT` | on | The agent tools over MCP. |
+| `SP_FEATURE_CHAT_SANDBOX_RUNTIME` | on | Running chat turns on the sandbox runtime. |
+| `SP_FEATURE_CHAT_QUERY_APPROVAL` | on | Asking before the agent runs a large query. |
+| `SP_FEATURE_CHAT_STRUCTURED_RESULTS` | on | Structured results in chat. |
+| `SP_FEATURE_CHAT_SIZE_ROUTER` | on | Routing large results through the size router. `shadow` estimates without enforcing. |
+| `SP_FEATURE_CHAT_RUNTIME_RESULTS` | on | Runtime query results in the chat panel. |
+| `SP_FEATURE_CHAT_RUNTIME_ARTIFACTS` | on | Capturing files the agent writes as chat artifacts. |
+| `SP_FEATURE_CHAT_DATASET_REFS` | on | Chats referencing saved datasets. |
+| `SP_FEATURE_CHAT_ORG_SHARING` | on | Sharing chats across the organization. |
+| `SP_FEATURE_CHAT_FORKING` | on | Forking a chat. |
+| `SP_FEATURE_CHAT_MCP_CONNECTORS` | on | External MCP connectors for the chat agent. |
+
+Who may use chat at all is decided by the organization's plan, never by these
+variables. See [What each plan includes](/docs/product/plans).
 
 ## Integrations
 

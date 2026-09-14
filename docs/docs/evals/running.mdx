@@ -138,12 +138,14 @@ read is which questions broke.
 
 ## API surface
 
-All routes are under `/api`. Except where noted, each requires the caller to be
-platform staff **and** the org to be allow-listed for evals.
+All routes are under `/api`. Except where noted, each requires the organization
+to be on a paid plan (`402 plan_required` otherwise). Routes with the `admin`
+scope also require a deployment wired to run evals (`503
+not_available_in_deployment` otherwise).
 
 | Route | Scope | Purpose |
 |---|---|---|
-| `GET /evals/availability` | `read` | Whether evals are enabled for the caller. Staff-gated but **not** allow-list-gated — that is how it can answer "no". |
+| `GET /evals/availability` | `read` | `{"billable", "capable", "enabled"}`: whether the org is on a paid plan, whether the deployment can run evals, and both. **Not** plan-gated — that is how a free org can read its answer. |
 | `GET /evals/config` · `PUT /evals/config` | `read` · `admin` | Read and write the eval configuration. |
 | `GET /evals/tasks` | `read` | Parsed manifest for the configured set. |
 | `POST /evals/runs` | `admin` | Start a run. |
@@ -155,12 +157,12 @@ platform staff **and** the org to be allow-listed for evals.
 | `GET /evals/runs/{id}/export` | `query` | Whole-run zip. |
 | `GET /evals/accuracy` | `read` | Accuracy history and regressions. |
 | `GET /evals/sandboxes` · `…/{name}/events` · `…/{name}/logs/stream` | `read` | Live sandboxes, sandbox events, log stream. |
-| `POST /evals/upload/{initiate,complete,abort}` | `write` | Eval-set zip intake. Not staff- or allow-list-gated. |
+| `POST /evals/upload/{initiate,complete,abort}` | `write` | Eval-set zip intake. Not plan-gated. |
 
 The three tiers are deliberate: `read` sees status and configuration, `query`
 sees evidence (which can contain warehouse data), and `admin` spends money or
 changes what runs. Note that `GET /evals/config` returns the configured runner
-image to any `read`-scoped staff caller.
+image to any `read`-scoped caller of a paid organization.
 
 ### Sending an eval set to the SignalPilot team
 

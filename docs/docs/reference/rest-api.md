@@ -104,7 +104,7 @@ curl -H "X-API-Key: $SP_KEY" http://localhost:3300/api/connections
 
 Covered in full, with semantics, in
 [Running evals](/docs/evals/running#api-surface). All eval routes additionally
-require platform-staff access and an allow-listed workspace.
+require an organization on a paid plan (`402 plan_required` otherwise).
 
 ## Projects, workspaces and notebooks
 

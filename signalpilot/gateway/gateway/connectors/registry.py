@@ -5,7 +5,9 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-from ..dashboard.dialects import (
+from ..models import DBType
+from .base import BaseConnector
+from .dialects import (
     BIGQUERY_DIALECT,
     CLICKHOUSE_DIALECT,
     DATABRICKS_DIALECT,
@@ -18,10 +20,8 @@ from ..dashboard.dialects import (
     SQLITE_DIALECT,
     TRINO_DIALECT,
     XATA_DIALECT,
-    DashboardDialect,
+    ConnectorDialect,
 )
-from ..models import DBType
-from .base import BaseConnector
 from .drivers.bigquery import BigQueryConnector
 from .drivers.clickhouse import ClickHouseConnector
 from .drivers.databricks import DatabricksConnector
@@ -54,7 +54,7 @@ else:
 @dataclass(frozen=True)
 class ConnectorRegistration:
     connector_class: type[BaseConnector]
-    dashboard_dialect: DashboardDialect
+    dialect: ConnectorDialect
 
 
 _REGISTRATIONS: dict[str, ConnectorRegistration] = {
@@ -91,8 +91,8 @@ def get_connector_registration(db_type: DBType | str) -> ConnectorRegistration:
     return registration
 
 
-def get_dashboard_dialect(db_type: DBType | str) -> DashboardDialect:
-    return get_connector_registration(db_type).dashboard_dialect
+def get_connector_dialect(db_type: DBType | str) -> ConnectorDialect:
+    return get_connector_registration(db_type).dialect
 
 
 def registered_connector_types() -> tuple[str, ...]:

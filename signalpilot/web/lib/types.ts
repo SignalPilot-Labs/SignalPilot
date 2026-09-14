@@ -1,3 +1,9 @@
+export interface McpAgentDefaults {
+  mcp_agent_default_project_id: string | null;
+  mcp_agent_default_connection_name: string | null;
+  mcp_agent_default_branch: string | null;
+}
+
 export interface GatewaySettings {
   sandbox_provider: "local" | "remote";
   sandbox_manager_url: string;

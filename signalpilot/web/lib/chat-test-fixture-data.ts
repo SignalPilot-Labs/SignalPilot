@@ -5,6 +5,7 @@ import {
   runCellsEvents,
   runtimeFilesChangedEvents,
 } from "./chat-test-fixture-artifact-files";
+import { dashboardFixtureEvents } from "./chat-test-fixture-dashboard";
 import {
   fixtureSchemaCompletion,
   fixtureTableCompletion,
@@ -90,6 +91,8 @@ const ANSWER_CHUNKS: { at: number; delta: string }[] = [
   { at: 20_500, delta: "Growth percentages were computed in the sandboxed Python runtime from the exact query snapshot, so the numbers match the table to the cent." },
   // A link to the CSV the same cell saved; renders as a file chip.
   { at: 20_650, delta: "\n\n[Download revenue_by_month.csv](artifacts/revenue_by_month.csv)" },
+  // The dashboard the cell wrote; renders as a chip that opens the panel.
+  { at: 20_720, delta: "\n\nThe full picture is in [Revenue overview](artifacts/revenue.dashboard.json)." },
 ];
 
 /**
@@ -505,6 +508,9 @@ const RAW_EVENTS: FixtureEvent[] = [
   // Runtime file capture for the chart (20.6s) and the CSV (20.7s), after
   // the answer referenced them inline.
   ...runtimeFilesChangedEvents(FIXTURE_RUN_ID),
+  // The dashboard spec and its two datasets (20.75s), then the two
+  // dashboard tools checking and rendering it (20.95s to 21.18s).
+  ...dashboardFixtureEvents(FIXTURE_RUN_ID),
   {
     at: 20_800,
     run_id: FIXTURE_RUN_ID,

@@ -210,18 +210,13 @@ export function StandaloneDataChat({
     pendingSubmission,
     setPendingSubmission,
   });
-  // Right-hand slot: artifacts, chat settings, or dashboard — one at a time.
+  // Right-hand slot: artifacts or chat settings — one at a time.
   const {
-    dashboard: dashboardPanel,
     settings: settingsPanel,
     openArtifacts: openArtifactsPanel,
     openFileRequest,
     openArtifact,
   } = useChatRightSlot({
-    conversationId,
-    uiMessages,
-    events,
-    currentRun,
     artifactsOpen: notebookPanelOpen,
     setArtifactsOpen: setNotebookPanelOpen,
   });
@@ -380,14 +375,13 @@ export function StandaloneDataChat({
         openChatSettings: settingsPanel.openPanel,
         onStop,
         onRetry,
-        onOpenDashboardPreview: dashboardPanel.open,
       }}
     >
       <div
         className={chatShellClassName(
           embedded,
           settingsPanel.open,
-          notebookPanelOpen || Boolean(dashboardPanel.sessionId),
+          notebookPanelOpen,
         )}
       >
         <div className="relative flex h-full overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg)] shadow-2xl shadow-black/20">
@@ -541,9 +535,6 @@ export function StandaloneDataChat({
                 artifactsLoading={artifactsLoading}
                 artifactsOpen={notebookPanelOpen}
                 onOpenArtifacts={openArtifactsPanel}
-                dashboardSessionId={dashboardPanel.latestSessionId}
-                dashboardOpen={Boolean(dashboardPanel.sessionId)}
-                onOpenDashboard={dashboardPanel.open}
                 onShare={
                   !embedded &&
                   detail &&
@@ -573,13 +564,6 @@ export function StandaloneDataChat({
                 model: modelSettings,
                 budgets: budgetSettings,
                 onClose: settingsPanel.closePanel,
-              }}
-              dashboard={{
-                sessionId: conversationId ? dashboardPanel.sessionId : null,
-                updateLabel: dashboardPanel.updateLabel,
-                updateRevision: dashboardPanel.updateRevision,
-                queriesEnabled: currentRun?.status !== "cancelled",
-                onClose: dashboardPanel.close,
               }}
             />
           ) : null}

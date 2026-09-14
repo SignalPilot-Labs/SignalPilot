@@ -156,3 +156,116 @@ class TestInjectLimit:
     def test_semicolon_stripped(self):
         result = inject_limit("SELECT * FROM users;")
         assert not result.rstrip().endswith(";")
+
+
+class TestTsqlSetOperationLimit:
+    """T-SQL cannot LIMIT a set operation directly. sqlglot wraps it as a
+    derived table; a trailing ORDER BY / OFFSET / FETCH inside that table is
+    SQL Server error 1033. Those clauses must move to the outer select, the
+    cap must be TOP (or FETCH when an OFFSET exists), and a branch's own TOP
+    must stay on its branch."""
+
+    @pytest.mark.parametrize(
+        ("sql", "expected"),
+        [
+            (
+                "select 'x' as d, a from t union all select 'y', a from u order by d, a desc",
+                "SELECT TOP 100 * FROM (SELECT 'x' AS d, a FROM t UNION ALL SELECT 'y', a FROM u) AS _sp_limit ORDER BY d, a DESC",
+            ),
+            (
+                "select a from t union all select a from u union all select a from v order by a",
+                "SELECT TOP 100 * FROM (SELECT a FROM t UNION ALL SELECT a FROM u UNION ALL SELECT a FROM v) AS _sp_limit ORDER BY a",
+            ),
+            (
+                "select a from t except select a from u order by a",
+                "SELECT TOP 100 * FROM (SELECT a FROM t EXCEPT SELECT a FROM u) AS _sp_limit ORDER BY a",
+            ),
+            (
+                "select a from t intersect select a from u",
+                "SELECT TOP 100 * FROM (SELECT a FROM t INTERSECT SELECT a FROM u) AS _sp_limit",
+            ),
+            (
+                "select a, b from t union all select a, b from u order by 2 desc, 1",
+                "SELECT TOP 100 * FROM (SELECT a, b FROM t UNION ALL SELECT a, b FROM u) AS _sp_limit ORDER BY 2 DESC, 1",
+            ),
+            (
+                "select a from t union select a from u order by a",
+                "SELECT TOP 100 * FROM (SELECT a FROM t UNION SELECT a FROM u) AS _sp_limit ORDER BY a",
+            ),
+            (
+                "select a from t union all select a from u",
+                "SELECT TOP 100 * FROM (SELECT a FROM t UNION ALL SELECT a FROM u) AS _sp_limit",
+            ),
+            (
+                "with c as (select a, n from t) select 'x' as d, a, n from c union all select 'y', a, n from u order by d, n desc",
+                "WITH c AS (SELECT a AS a, n AS n FROM t) SELECT TOP 100 * FROM (SELECT 'x' AS d, a, n FROM c UNION ALL SELECT 'y', a, n FROM u) AS _sp_limit ORDER BY d, n DESC",
+            ),
+            (
+                "select a from t union all select top 3 a from u order by a",
+                "SELECT TOP 100 * FROM (SELECT a FROM t UNION ALL SELECT TOP 3 a FROM u) AS _sp_limit ORDER BY a",
+            ),
+            (
+                "(select top 5 a from t order by a) union all (select top 5 a from u order by a) order by a",
+                "SELECT TOP 100 * FROM ((SELECT TOP 5 a FROM t ORDER BY a) UNION ALL (SELECT TOP 5 a FROM u ORDER BY a)) AS _sp_limit ORDER BY a",
+            ),
+            (
+                "select a from t union all select a from u order by a offset 5 rows fetch next 10 rows only",
+                "SELECT * FROM (SELECT a FROM t UNION ALL SELECT a FROM u) AS _sp_limit ORDER BY a OFFSET 5 ROWS FETCH FIRST 10 ROWS ONLY",
+            ),
+            (
+                "select a from t union all select a from u order by a offset 0 rows fetch next 999999 rows only",
+                "SELECT * FROM (SELECT a FROM t UNION ALL SELECT a FROM u) AS _sp_limit ORDER BY a OFFSET 0 ROWS FETCH FIRST 100 ROWS ONLY",
+            ),
+        ],
+        ids=[
+            "union-order",
+            "three-way-union",
+            "except-order",
+            "intersect-no-order",
+            "order-by-ordinal",
+            "union-distinct",
+            "no-order-no-limit",
+            "cte-hoisted-out",
+            "tail-branch-top-stays",
+            "parenthesised-branches",
+            "offset-fetch-within-cap",
+            "fetch-over-cap",
+        ],
+    )
+    def test_tsql_set_operations(self, sql, expected):
+        assert inject_limit(sql, 100, dialect="tsql") == expected
+
+    def test_order_by_never_lands_inside_the_derived_table(self):
+        out = inject_limit(
+            "select a from t union all select a from u order by a", 100, dialect="tsql"
+        )
+        inner = out[out.index("(") + 1 : out.rindex(") AS _sp_limit")]
+        assert "ORDER BY" not in inner
+
+    @pytest.mark.parametrize(
+        ("sql", "expected"),
+        [
+            ("select a from t order by a", "SELECT TOP 100 a FROM t ORDER BY a"),
+            ("select top 3 a from t order by a", "SELECT TOP 3 a FROM t ORDER BY a"),
+            ("select top 999999 a from t order by a", "SELECT TOP 100 a FROM t ORDER BY a"),
+            (
+                "with c as (select a from t) select a from c order by a",
+                "WITH c AS (SELECT a AS a FROM t) SELECT TOP 100 a FROM c ORDER BY a",
+            ),
+            (
+                "select a from t order by a offset 5 rows fetch next 10 rows only",
+                "SELECT a FROM t ORDER BY a OFFSET 5 ROWS FETCH NEXT 10 ROWS ONLY",
+            ),
+            (
+                "select a from t order by a offset 5 rows fetch next 999999 rows only",
+                "SELECT a FROM t ORDER BY a OFFSET 5 ROWS FETCH FIRST 100 ROWS ONLY",
+            ),
+        ],
+        ids=["plain", "top-under-cap", "top-over-cap", "cte", "offset-fetch-under-cap", "offset-fetch-over-cap"],
+    )
+    def test_tsql_plain_selects(self, sql, expected):
+        assert inject_limit(sql, 100, dialect="tsql") == expected
+
+    def test_postgres_set_operations_keep_a_plain_limit(self):
+        out = inject_limit("select a from t union all select a from u order by a", 100, dialect="postgres")
+        assert out == "SELECT a FROM t UNION ALL SELECT a FROM u ORDER BY a LIMIT 100"

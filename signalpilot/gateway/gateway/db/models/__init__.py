@@ -45,6 +45,12 @@ from .core import (
     GatewaySetting,
     GatewayUploadSession,
 )
+from .dashboards import (
+    GatewayDashboardRefresh,
+    GatewayPublishedDashboard,
+    GatewayPublishedDashboardVersion,
+)
+from .downloads import GatewayArtifactDownload as GatewayArtifactDownload
 from .evals import (
     GatewayEvalAccuracyHistory,
     GatewayEvalConfig,
@@ -88,11 +94,6 @@ from .queries import (
     GatewayChatRuntimeArchive,
     GatewayChatTraceEvent,
     GatewayChatTraceThread,
-    GatewayDashboard,
-    GatewayDashboardAuthoringSession,
-    GatewayDashboardChartDraft,
-    GatewayDashboardResult,
-    GatewayDashboardVersion,
     GatewayGovernedQueryExecution,
     GatewayQueryApproval,
     GatewayQueryPlan,
@@ -140,11 +141,7 @@ __all__ = [
     "GatewayChatUserPreference",
     "GatewayConnection",
     "GatewayCredential",
-    "GatewayDashboard",
-    "GatewayDashboardAuthoringSession",
-    "GatewayDashboardChartDraft",
-    "GatewayDashboardResult",
-    "GatewayDashboardVersion",
+    "GatewayDashboardRefresh",
     "GatewayDbtManifest",
     "GatewayEvalAccuracyHistory",
     "GatewayEvalConfig",
@@ -170,6 +167,8 @@ __all__ = [
     "GatewayOrgSecrets",
     "GatewayProject",
     "GatewayProjectBranch",
+    "GatewayPublishedDashboard",
+    "GatewayPublishedDashboardVersion",
     "GatewayQueryApproval",
     "GatewayQueryPlan",
     "GatewayQueryProposal",

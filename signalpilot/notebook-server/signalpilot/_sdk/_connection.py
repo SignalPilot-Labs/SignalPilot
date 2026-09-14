@@ -25,6 +25,11 @@ class Connection:
         self._name = name
         self._client = client
 
+    @property
+    def name(self) -> str:
+        """The connection name on the gateway."""
+        return self._name
+
     def query(self, sql: str, row_limit: int = 1000) -> list[dict[str, Any]]:
         """Execute a governed SQL query. Compatibility wrapper returning rows."""
         return self.query_result(sql, row_limit).get("rows", [])

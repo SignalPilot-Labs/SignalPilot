@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SignalPilot download</title>
+<h1>SignalPilot artifact</h1>
+<p id="status">This download link can be used once and expires after two minutes.</p>
+<button id="download" disabled>Download</button>
+<script nonce="__NONCE__">
+const token = location.hash.slice(1);
+history.replaceState(null, '', location.pathname);
+const button = document.getElementById('download');
+const status = document.getElementById('status');
+button.disabled = !/^[A-Za-z0-9_-]{43}$/.test(token);
+button.onclick = async () => {
+  button.disabled = true;
+  status.textContent = 'Downloading…';
+  try {
+    const response = await fetch(location.pathname, {
+      method: 'POST', credentials: 'omit', cache: 'no-store',
+      headers: {'Content-Type': 'application/json'}, body: JSON.stringify({token})
+    });
+    if (!response.ok) throw new Error('Download unavailable. Request a new link through SignalPilot.');
+    const name = (response.headers.get('Content-Disposition') || '').split("filename*=UTF-8''")[1];
+    const blob = URL.createObjectURL(await response.blob());
+    const link = document.createElement('a');
+    link.href = blob;
+    link.download = name ? decodeURIComponent(name) : 'artifact';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(blob), 60000);
+    status.textContent = 'Download received. This link cannot be used again.';
+  } catch (error) {
+    status.textContent = error.message;
+  }
+};
+</script>
+</html>

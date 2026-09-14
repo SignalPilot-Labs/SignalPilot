@@ -1,4 +1,11 @@
 # syntax=docker/dockerfile:1.7
+FROM node:22-slim AS pulse-app
+WORKDIR /build/signalpilot-mcp-app
+COPY signalpilot-mcp-app/package.json signalpilot-mcp-app/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci
+COPY signalpilot-mcp-app/ ./
+RUN npm run build
+
 FROM python:3.12-slim
 
 # AWS CLI arch is selected from uname so the image is correct on amd64 and arm64.
@@ -20,14 +27,15 @@ ENV UV_PYTHON_DOWNLOADS=never \
 
 WORKDIR /app
 
-COPY pyproject.toml uv.lock ./
+COPY signalpilot/gateway/pyproject.toml signalpilot/gateway/uv.lock ./
 
 # Core deps + commonly used optional connectors, pinned by the lockfile.
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-install-project \
       --extra snowflake --extra bigquery --extra clickhouse
 
-COPY --chown=10001:10001 gateway/ gateway/
+COPY --chown=10001:10001 signalpilot/gateway/gateway/ gateway/
+COPY --from=pulse-app --chown=10001:10001 /build/signalpilot/gateway/gateway/mcp/apps/ gateway/mcp/apps/
 
 # Install only the local package after copying source, so source edits do not
 # invalidate the expensive dependency layer above.

@@ -16,7 +16,7 @@ export { downloadUiFile } from "~/components/chat/download-ui-file";
 /** Primary verb by kind. Data previews, documents open, the rest download. */
 export function chipActionLabel(kind: string): "Preview" | "Open" | "Download" {
   if (kind === "data") return "Preview";
-  if (kind === "html" || kind === "markdown") return "Open";
+  if (kind === "html" || kind === "markdown" || kind === "dashboard") return "Open";
   return "Download";
 }
 

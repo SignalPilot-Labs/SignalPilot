@@ -6,7 +6,6 @@
  */
 
 export type {
-  DashboardAuthoringProgress,
   PlanItem,
   PlanItemStatus,
   RunBlock,
@@ -45,8 +44,6 @@ export {
   type RunLiveState,
 } from "./live-state";
 export {
-  activeDashboardAuthoringProgress,
-  activeDashboardPreviewLabel,
   describeSubagentWork,
   extractRunPlan,
   extractRuntimeBoot,

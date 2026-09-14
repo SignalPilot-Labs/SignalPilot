@@ -23,6 +23,7 @@ from gateway.standalone_chat.domain import (
     RunStatus,
     assert_run_transition,
 )
+from gateway.store.standalone_chat.admission import admit_existing_agent_chat
 from gateway.store.standalone_chat.helpers import (
     _append_status_message,
     _event_info,
@@ -31,6 +32,7 @@ from gateway.store.standalone_chat.helpers import (
     _owned_run_row,
     _retain_runtime_datasets_after_terminal_run,
     _stage_run_event,
+    new_run_event,
 )
 from gateway.store.standalone_chat.worker import get_worker_run
 
@@ -44,6 +46,7 @@ async def create_run(
     message: str,
     message_metadata: dict[str, Any] | None = None,
 ) -> GatewayChatRun:
+    await admit_existing_agent_chat(db, org_id=org_id, user_id=user_id, conversation_id=conversation_id)
     conversation = await _owned_conversation_row(
         db,
         org_id=org_id,
@@ -87,6 +90,7 @@ async def create_run(
         user_message_id=user_message.id,
         status=RunStatus.queued.value,
         runtime_env=chat_config.runtime_env(),
+        created_at=_now(),
     )
     db.add_all([user_message, run])
     conversation.message_count = sequence
@@ -206,9 +210,7 @@ async def queue_steering_message(
     message: str,
 ) -> GatewayChatMessage | None:
     """Persist a follow-up for delivery to the currently running SDK client."""
-    run = await _owned_run_row(
-        db, org_id=org_id, user_id=user_id, run_id=run_id, lock=True
-    )
+    run = await _owned_run_row(db, org_id=org_id, user_id=user_id, run_id=run_id, lock=True)
     if run is None:
         return None
     if run.status != RunStatus.running.value or run.cancellation_requested_at:
@@ -307,10 +309,7 @@ async def mark_steering_message_picked_up(
     if message is None:
         return False
     metadata = dict(message.metadata_json or {})
-    if (
-        metadata.get("steering_for_run_id") != run.id
-        or metadata.get("steering_status") != "queued"
-    ):
+    if metadata.get("steering_for_run_id") != run.id or metadata.get("steering_status") != "queued":
         return False
     metadata["steering_status"] = "picked_up"
     message.metadata_json = metadata
@@ -371,6 +370,7 @@ async def retry_run(
     user_id: str,
     run_id: str,
 ) -> GatewayChatRun | None:
+    await admit_existing_agent_chat(db, org_id=org_id, user_id=user_id, run_id=run_id)
     failed = await _owned_run_row(db, org_id=org_id, user_id=user_id, run_id=run_id, lock=True)
     if failed is None:
         return None
@@ -405,6 +405,7 @@ async def retry_run(
         status=RunStatus.queued.value,
         retry_of_run_id=failed.id,
         runtime_env=chat_config.runtime_env(),
+        created_at=_now(),
     )
     db.add(retry)
     from gateway.store.chat_reports import rebind_refresh_retry
@@ -423,27 +424,41 @@ async def append_event(
     event_type: str,
     payload: dict[str, Any],
 ) -> GatewayChatRunEvent:
-    run = (
+    # One atomic statement allocates the sequence and locks the run row for
+    # the rest of the transaction, so concurrent appenders serialize exactly
+    # as a SELECT ... FOR UPDATE did, in one round trip instead of two. The
+    # event is streamed at high frequency; every round trip here is paid
+    # per chunk of the answer, so the row is not refreshed after commit.
+    allocated = (
         await db.execute(
-            select(GatewayChatRun)
+            update(GatewayChatRun)
             .where(GatewayChatRun.id == run_id)
-            .with_for_update()
-            .execution_options(populate_existing=True)
+            .values(last_event_sequence=GatewayChatRun.last_event_sequence + 1)
+            .returning(
+                GatewayChatRun.last_event_sequence,
+                GatewayChatRun.org_id,
+                GatewayChatRun.user_id,
+                GatewayChatRun.conversation_id,
+            )
         )
-    ).scalar_one()
-    event = _stage_run_event(
-        db,
-        run=run,
+    ).one()
+    sequence, org_id, user_id, conversation_id = allocated
+    event = new_run_event(
+        org_id=org_id,
+        user_id=user_id,
+        conversation_id=conversation_id,
+        run_id=run_id,
+        sequence=sequence,
         event_type=event_type,
         payload=payload,
     )
+    db.add(event)
     await db.execute(
         update(GatewayChatConversation)
-        .where(GatewayChatConversation.id == run.conversation_id)
+        .where(GatewayChatConversation.id == conversation_id)
         .values(updated_at=time.time())
     )
     await db.commit()
-    await db.refresh(event)
     return event
 
 
@@ -470,9 +485,7 @@ async def set_conversation_notebook_for_run(
     if not NOTEBOOK_NAME_PATTERN.fullmatch(name):
         return
     conversation_id = (
-        await db.execute(
-            select(GatewayChatRun.conversation_id).where(GatewayChatRun.id == run_id)
-        )
+        await db.execute(select(GatewayChatRun.conversation_id).where(GatewayChatRun.id == run_id))
     ).scalar_one_or_none()
     if conversation_id is None:
         return

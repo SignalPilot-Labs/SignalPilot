@@ -50,6 +50,7 @@ import {
   FIXTURE_QUERY_RESULT_ID,
   fixtureQueryResultPage,
 } from "~/lib/chat-test-fixture-tools";
+import { createFixtureDashboardPublishApi } from "~/lib/chat-test-fixture-dashboard";
 
 const SPEEDS = [1, 2, 4] as const;
 const TICK_MS = 50;
@@ -78,6 +79,12 @@ export function StandaloneChatTestHarness() {
   const withFollowUp = searchParams.get("followup") === "1";
   const connectorsApi = useMemo(
     () => createFixtureConnectorsApi({ latencyMs: 120 }),
+    [],
+  );
+  // "Publish" on the dashboard file talks to this in-memory gallery
+  // instead of the gateway.
+  const dashboardsApi = useMemo(
+    () => createFixtureDashboardPublishApi({ latencyMs: 120 }),
     [],
   );
   const [elapsed, setElapsed] = useState(initialAt);
@@ -161,6 +168,15 @@ export function StandaloneChatTestHarness() {
     const content = fixtureFileContent(fileId);
     if (!content) throw new Error(`No fixture content for file ${fileId}`);
     return URL.createObjectURL(new Blob([content.body], { type: content.mime }));
+  }, []);
+  // Text stub for the same files: the dashboard viewer reads its spec and
+  // datasets through it, so the real DashboardRenderer runs at /chats/test.
+  const getFileText = useCallback(async (fileId: string) => {
+    const content = fixtureFileContent(fileId);
+    if (!content) throw new Error(`No fixture content for file ${fileId}`);
+    return typeof content.body === "string"
+      ? content.body
+      : new TextDecoder().decode(content.body);
   }, []);
   // Full-rows stub for the governed query result: the table card's "Load
   // all rows" pages the same deterministic 1,204 rows the gateway would.
@@ -384,14 +400,15 @@ export function StandaloneChatTestHarness() {
           files: conversationFiles,
           openArtifact,
           getFileObjectUrl,
+          getFileText,
           getToolResultRows,
+          dashboardsApi,
           // Frozen replay clock, so relative timestamps are honest on
           // every frame instead of measuring from the real wall clock.
           nowMs: fixtureNowMs(elapsed),
           openChatSettings: settingsPanel.openPanel,
           onStop: async () => undefined,
           onRetry: async () => undefined,
-          onOpenDashboardPreview: () => undefined,
         }}
       >
       <div className="relative flex min-h-0 flex-1 overflow-hidden">
@@ -494,13 +511,17 @@ export function StandaloneChatTestHarness() {
                 Live notebook view stub
               </div>
             }
-            fileViewOverride={
-              <div
-                data-testid="chat-file-stub"
-                className="flex h-full items-center justify-center text-xs text-[var(--color-text-dim)]"
-              >
-                File viewer stub
-              </div>
+            fileViewOverride={(file) =>
+              // Dashboards render for real (their viewer needs no gateway);
+              // every other kind keeps the stub.
+              file.kind === "dashboard" ? undefined : (
+                <div
+                  data-testid="chat-file-stub"
+                  className="flex h-full items-center justify-center text-xs text-[var(--color-text-dim)]"
+                >
+                  File viewer stub
+                </div>
+              )
             }
           />
         )}

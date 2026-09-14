@@ -17,7 +17,6 @@ export type RunStepCategory =
   | "web"
   | "source"
   | "artifact"
-  | "dashboard"
   | "dbt"
   | "plan"
   | "approval"
@@ -108,12 +107,4 @@ export type RunPlan = {
   currentLabel: string | null;
   /** Sequence of the TodoWrite event the plan came from. */
   sequence: number;
-};
-
-/** Current real server-side phase for a running dashboard preview tool. */
-export type DashboardAuthoringProgress = {
-  label: string;
-  phase: string;
-  sessionId: string | null;
-  draftRevision: number;
 };

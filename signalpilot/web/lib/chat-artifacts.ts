@@ -71,6 +71,34 @@ export function hasArtifactsContent(
   return notebookContent || files.length > 0 || executions.length > 0;
 }
 
+/** Run statuses after which no more file events can arrive. */
+const TERMINAL_RUN_STATUSES = new Set(["completed", "failed", "cancelled"]);
+
+/**
+ * True while the run that produced a file is still streaming: the page has
+ * events for it and none of them is a terminal status. A run the page has
+ * no events for (an older turn) is never streaming.
+ */
+export function isRunStreaming(
+  events: StandaloneChatEvent[],
+  runId: string | null,
+): boolean {
+  if (!runId) return false;
+  let seen = false;
+  for (const event of events) {
+    if (event.run_id !== runId) continue;
+    seen = true;
+    if (
+      event.type === "status" &&
+      typeof event.payload.status === "string" &&
+      TERMINAL_RUN_STATUSES.has(event.payload.status)
+    ) {
+      return false;
+    }
+  }
+  return seen;
+}
+
 /** Format a byte count for display, e.g. "1.2 KB" or "3.4 MB". */
 export function formatByteSize(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return "0 B";
@@ -101,6 +129,8 @@ export function fileKindLabel(kind: string): string {
       return "Notebook";
     case "data":
       return "Data";
+    case "dashboard":
+      return "Dashboard";
     default:
       return "File";
   }

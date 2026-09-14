@@ -3,25 +3,21 @@
 import { ExternalLink } from "lucide-react";
 import { useContext } from "react";
 import { ChatUiContext } from "~/components/chat/chat-ui-context";
-import { DashboardPreviewDetails, StepBody } from "~/components/chat/run-timeline/step-body";
 import type { ArtifactResult, RunStep } from "~/lib/chat-run-steps";
 import { KindIcon } from "../card-primitives";
 import { registerToolCard, type ToolCardContext, type ToolCardSummary } from "../registry";
 import { iconForKind } from "../registry-tools";
 
 /**
- * Runtime artifact card: `start_analysis_notebook` and
- * `create_dashboard_preview`. Deliberately thin: the notebook name, the
- * kind, any follow-up the tool asked for, and an "Open" button when the
- * conversation's file manifest carries the file. Dashboard previews keep
- * the existing `DashboardPreviewDetails` body.
+ * Runtime artifact card: `start_analysis_notebook`. Deliberately thin: the
+ * notebook name, the kind, any follow-up the tool asked for, and an "Open"
+ * button when the conversation's file manifest carries the file.
  */
 
 type ArtifactKind = ArtifactResult["artifactKind"];
 
 const KIND_BY_TOOL: Record<string, ArtifactKind> = {
   start_analysis_notebook: "notebook",
-  create_dashboard_preview: "dashboard",
 };
 
 function artifactResult(step: RunStep): ArtifactResult | null {
@@ -52,13 +48,12 @@ export function artifactName(step: RunStep): string | null {
 }
 
 /**
- * Notebook and dashboard steps carry a kind-specific title; any other
- * artifact step keeps the humanized step title so transcript copy stays
- * stable, falling back to a plain label only when the step has none.
+ * Notebook steps carry a kind-specific title; any other artifact step keeps
+ * the humanized step title so transcript copy stays stable, falling back to
+ * a plain label only when the step has none.
  */
 function titleFor(step: RunStep, kind: ArtifactKind | null): string {
   if (kind === "notebook") return "Notebook started";
-  if (kind === "dashboard") return "Dashboard preview";
   return step.title || "Artifact";
 }
 
@@ -93,13 +88,6 @@ function NameLine({ step, running }: { step: RunStep; running: boolean }) {
 }
 
 export function RuntimeRunning({ step }: ToolCardContext) {
-  if (artifactKindForStep(step) === "dashboard") {
-    return (
-      <div data-testid="chat-runtime-card">
-        <StepBody step={step} />
-      </div>
-    );
-  }
   return (
     <div data-testid="chat-runtime-card">
       <NameLine step={step} running />
@@ -131,14 +119,6 @@ function OpenRow({ step, openArtifact }: { step: RunStep; openArtifact: (id: str
 
 export function RuntimeExpanded({ step, openArtifact }: ToolCardContext) {
   const result = artifactResult(step);
-  const kind = artifactKindForStep(step);
-  if (kind === "dashboard") {
-    return (
-      <div data-testid="chat-runtime-card">
-        {step.category === "dashboard" ? <StepBody step={step} /> : <DashboardPreviewDetails step={step} />}
-      </div>
-    );
-  }
   const note = result?.nextRequiredAction?.trim();
   const status = result?.status?.trim();
   return (

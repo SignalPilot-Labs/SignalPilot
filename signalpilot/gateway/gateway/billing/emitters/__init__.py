@@ -4,7 +4,7 @@
 ``threads``    chat run finalizer (store.standalone_chat.lifecycle)
 ``eval_runs``  eval run reaching ``running`` (store.evals.update_run)
 ``tokens``     agent cost per chat run (store.standalone_chat.worker)
-``daily``      model_day + seat_day snapshot (background.loops)
+``daily``      model_day + seat_day snapshot (background.credit_snapshot)
 ``returns``    thread reversals (feedback path, when it lands)
 
 Every public function is a no-op in local mode, idempotent, and never raises.

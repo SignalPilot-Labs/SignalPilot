@@ -11,6 +11,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, BinaryIO
+from urllib.parse import quote
 
 _KEY_PART_RE = re.compile(r"[^a-zA-Z0-9._-]+")
 
@@ -194,12 +195,16 @@ class ChatObjectStorage:
 
         return await asyncio.to_thread(_delete)
 
-    async def presign_get(self, key: str, *, expires_seconds: int = 300) -> str:
+    async def presign_get(self, key: str, *, expires_seconds: int = 300, download_filename: str | None = None) -> str:
         client = self._require_client()
+        params = {"Bucket": self.bucket, "Key": key}
+        if download_filename is not None:
+            params["ResponseContentDisposition"] = "attachment; filename*=UTF-8''" + quote(download_filename, safe="")
+            params["ResponseContentType"] = "application/octet-stream"
         return await asyncio.to_thread(
             client.generate_presigned_url,
             "get_object",
-            Params={"Bucket": self.bucket, "Key": key},
+            Params=params,
             ExpiresIn=min(300, max(30, expires_seconds)),
         )
 

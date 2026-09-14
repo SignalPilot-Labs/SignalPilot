@@ -17,7 +17,20 @@ class SandboxProvider(str, Enum):  # noqa: UP042 — (str,Enum) keeps str(X.A)==
     remote = "remote"  # BYOS -- remote sandbox manager HTTP endpoint
 
 
-class GatewaySettings(BaseModel):
+class MCPAgentDefaults(BaseModel):
+    mcp_agent_default_project_id: str | None = Field(default=None, min_length=1, max_length=128)
+    mcp_agent_default_connection_name: str | None = Field(default=None, min_length=1, max_length=128)
+    mcp_agent_default_branch: str | None = Field(default=None, min_length=1, max_length=100)
+
+    @field_validator(
+        "mcp_agent_default_project_id", "mcp_agent_default_connection_name", "mcp_agent_default_branch", mode="before"
+    )
+    @classmethod
+    def trim_agent_defaults(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+
+class GatewaySettings(MCPAgentDefaults):
     # Sandbox configuration (BYOS -- Bring Your Own Sandbox)
     sandbox_provider: SandboxProvider = SandboxProvider.local
     sandbox_manager_url: str = Field(default="http://localhost:8180", max_length=2048)

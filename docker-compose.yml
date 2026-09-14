@@ -39,8 +39,8 @@ services:
     # The durable chat worker reuses this exact image with a different command.
     image: ${GATEWAY_IMAGE:-signalpilot-gateway:latest}
     build:
-      context: ./signalpilot/gateway
-      dockerfile: ../../Dockerfile.gateway
+      context: .
+      dockerfile: Dockerfile.gateway
     ports:
       # The gateway listens on loopback unless SP_GATEWAY_HOST specifies another host.
       # Local mode grants all scopes to requests without an API key.

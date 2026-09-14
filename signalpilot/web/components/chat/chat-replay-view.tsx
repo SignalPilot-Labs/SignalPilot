@@ -139,7 +139,6 @@ export function ChatReplayView({
       // when nothing carries a parsable timestamp.
       nowMs: replay.nowMs ?? nowMs,
       textInstant: replay.textInstant,
-      onOpenDashboardPreview: () => undefined,
     }),
     [ui, frame.visibleEvents, visibleFiles, replay.nowMs, replay.textInstant, nowMs],
   );

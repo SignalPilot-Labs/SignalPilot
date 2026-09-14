@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .api import register_routers
-from .background.lifespan_loops import start_background_loops
+from .background import cancel_background_tasks, start_background_tasks
 from .byok import DEKCache
 from .byok.factory import make_provider
 from .connectors.health_monitor import health_monitor
@@ -177,8 +177,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("STARTUP: stale session cleanup failed: %s", e)
 
-    background_tasks = start_background_loops()
-
+    background_tasks = start_background_tasks(get_session_factory())
     # Start MCP session manager if mounted
     mcp_ctx = None
     if _mcp_session_manager is not None:
@@ -223,8 +222,7 @@ async def lifespan(app: FastAPI):
             await slack_poc_client.aclose()
         # Flush any remaining health events before shutdown
         await health_monitor.flush_to_db()
-        for task in background_tasks:
-            task.cancel()
+        await cancel_background_tasks(background_tasks)
         await pool_manager.close_all()
         dek_cache.clear()
         await close_db()
@@ -353,8 +351,8 @@ try:
     os.environ.setdefault("SP_GATEWAY_URL", "http://localhost:3300")
 
     from .auth.mcp_api_key import MCPAuthMiddleware
-
-    _mcp_http_app = _mcp_instance.streamable_http_app()
+    from .mcp.server import streamable_http_app
+    _mcp_http_app = streamable_http_app()
     _mcp_session_manager = _mcp_instance.session_manager
     _mcp_http_app = MCPAuthMiddleware(_mcp_http_app)
     # MCP streamable-http app has internal route at /mcp.

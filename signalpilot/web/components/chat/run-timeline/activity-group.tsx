@@ -1,9 +1,8 @@
 "use client";
 
-import { AlertCircle, Check, ChevronRight, LayoutDashboard } from "lucide-react";
+import { Check, ChevronRight } from "lucide-react";
 import { useContext, useEffect, useState } from "react";
 import { summarizeRunSteps, type RunStep } from "~/lib/chat-run-steps";
-import { DashboardPreviewDetails } from "./step-body";
 import {
   ArtifactCardBlock,
   StepArtifactCardsContext,
@@ -30,113 +29,6 @@ export function describeRunWork(steps: RunStep[]): string {
   }
   const detail = parts.length ? ` · ${parts.join(" · ")}` : "";
   return `${summary.total} ${summary.total === 1 ? "step" : "steps"}${detail}`;
-}
-
-export function DashboardPreviewActivityCard({
-  step,
-  live,
-}: {
-  step: RunStep;
-  live: boolean;
-}) {
-  const [userToggle, setUserToggle] = useState<boolean | null>(null);
-  const active = live || step.status === "running";
-  useEffect(() => {
-    if (active) setUserToggle(null);
-  }, [active]);
-  const open = userToggle ?? active;
-  const failed = step.status === "failed";
-  const phase = active
-    ? (step.detail ?? "Preparing governed dashboard preview…")
-    : failed
-      ? (step.detail ?? "Dashboard preview could not be created")
-      : "Governed preview ready for review";
-
-  return (
-    <section
-      data-testid="dashboard-preview-activity"
-      className={`my-3 overflow-hidden rounded-xl border bg-[var(--color-bg-card)]/60 ${
-        active
-          ? "border-[var(--color-success)]/25"
-          : failed
-            ? "border-[var(--color-error)]/30"
-            : "border-[var(--color-border)]"
-      }`}
-    >
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => setUserToggle(!open)}
-        className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left hover:bg-[var(--color-bg-hover)]"
-      >
-        <span
-          className={`flex h-8 w-8 flex-none items-center justify-center rounded-lg border bg-[var(--color-bg-input)] ${
-            active
-              ? "border-[var(--color-success)]/30"
-              : failed
-                ? "border-[var(--color-error)]/30"
-                : "border-[var(--color-border)]"
-          }`}
-        >
-          <LayoutDashboard
-            className={`h-4 w-4 ${
-              active
-                ? "text-[var(--color-success)]"
-                : failed
-                  ? "text-[var(--color-error)]"
-                  : "text-[var(--color-text-muted)]"
-            }`}
-          />
-        </span>
-        <span className="min-w-0 flex-1">
-          <span className="block text-[9px] font-medium uppercase tracking-[0.16em] text-[var(--color-text-dim)]">
-            Dashboard preview
-          </span>
-          <span
-            className={`block truncate text-[12px] font-medium ${
-              active
-                ? "chat-live-label"
-                : failed
-                  ? "text-[var(--color-error)]"
-                  : "text-[var(--color-text)]"
-            }`}
-          >
-            {phase}
-          </span>
-        </span>
-        <span className="ml-auto flex flex-none items-center gap-1.5 text-[10px] text-[var(--color-text-dim)]">
-          {active ? (
-            <>
-              <span className="chat-dot-live h-1.5 w-1.5 rounded-full bg-[var(--color-success)]" />
-              <span>Live</span>
-            </>
-          ) : failed ? (
-            <>
-              <AlertCircle className="h-3 w-3 text-[var(--color-error)]" />
-              <span>Failed</span>
-            </>
-          ) : (
-            <>
-              <Check className="h-3 w-3 text-[var(--color-success)]/80" />
-              <span>Ready</span>
-            </>
-          )}
-          <ChevronRight
-            className={`ml-0.5 h-3 w-3 transition-transform ${
-              open ? "rotate-90" : ""
-            }`}
-          />
-        </span>
-      </button>
-      <div className="chat-collapse" data-open={open}>
-        <div>
-          <div className="border-t border-[var(--color-border)]">
-            <DashboardPreviewDetails step={step} />
-          </div>
-        </div>
-      </div>
-    </section>
-  );
 }
 
 /** The last step of a group whose result is (or will be) a table. */
@@ -274,11 +166,7 @@ export function ActivityGroup({
   isFinalGroup?: boolean;
   runCompleted?: boolean;
 }) {
-  const dashboardStep =
-    steps.length === 1 && steps[0]?.category === "dashboard" ? steps[0] : null;
-  return dashboardStep ? (
-    <DashboardPreviewActivityCard step={dashboardStep} live={live} />
-  ) : (
+  return (
     <StandardActivityGroup
       steps={steps}
       live={live}

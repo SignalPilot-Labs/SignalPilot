@@ -141,7 +141,7 @@ class ClaudeAgentSDKStructuredClient:
                 "CLAUDE_CODE_OAUTH_TOKEN": self.oauth_token,
             }
         )
-        with tempfile.TemporaryDirectory(prefix="signalpilot-dashboard-authoring-") as runtime_dir:
+        with tempfile.TemporaryDirectory(prefix="signalpilot-analysis-delivery-") as runtime_dir:
             agent_env["CLAUDE_CONFIG_DIR"] = runtime_dir
             options: dict[str, Any] = {
                 "model": request_body.get("model"),

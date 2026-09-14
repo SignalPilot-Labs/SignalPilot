@@ -163,36 +163,8 @@ export function GenericInput({ step }: { step: RunStep }) {
   );
 }
 
-export function DashboardPreviewDetails({ step }: { step: RunStep }) {
-  const request =
-    typeof step.input?.request === "string" ? step.input.request.trim() : "";
-  const timezone =
-    typeof step.input?.timezone === "string" ? step.input.timezone : "UTC";
-  return (
-    <div className="px-3.5 py-3">
-      <p className="line-clamp-3 text-[12px] leading-5 text-[var(--color-text)]">
-        {request || "Create a governed dashboard preview"}
-      </p>
-      <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px] text-[var(--color-text-dim)]">
-        <span className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-input)] px-1.5 py-0.5">
-          Private draft
-        </span>
-        <span className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-input)] px-1.5 py-0.5">
-          {timezone}
-        </span>
-        <span className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-input)] px-1.5 py-0.5">
-          Apply required
-        </span>
-      </div>
-    </div>
-  );
-}
-
 export function StepBody({ step }: { step: RunStep }) {
   const running = step.status === "running";
-  if (step.category === "dashboard") {
-    return <DashboardPreviewDetails step={step} />;
-  }
   if (step.category === "error" && (step.fullTrace || step.diagnostics)) {
     const diagnostics = step.diagnostics
       ? Object.entries(step.diagnostics).map(([key, value]) =>

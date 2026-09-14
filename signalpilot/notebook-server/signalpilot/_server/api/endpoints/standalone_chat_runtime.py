@@ -164,26 +164,10 @@ def _seed_analysis_notebook(
 
 
 # Scaffold cells that only the analysis notebook receives.
-_ANALYSIS_SCAFFOLD_CELLS = """
-
-@app.cell(hide_code=True)
-def _(db):
-    analysis_summary = {"status": "pending", "preview": []}
-    return (analysis_summary,)
-
-
-@app.cell(hide_code=True)
-def _(analysis_summary):
-    analysis_checks = {"nulls": None, "duplicates": None, "freshness": None, "reconciled": False}
-    return (analysis_checks,)
-
-
-@app.cell(hide_code=True)
-def _(analysis_checks, analysis_summary, sp):
-    sp.md("## Analysis output\\n\\nPending governed notebook analysis.")
-"""
-
-# Minimal visible empty cell for every other named notebook.
+# Every notebook starts with one visible empty cell after the hidden setup
+# cells. The agent replaces it with a title cell (see the notebook skill).
+# Nothing is pre-populated, so an untouched notebook stays byte-identical to
+# this seed and is detected as unused.
 _NAMED_NOTEBOOK_CELLS = """
 
 @app.cell
@@ -235,13 +219,8 @@ def _(Path, sp):
     db = sp.connect({connection_name!r})
     return (db,)
 """
-    cells = (
-        _ANALYSIS_SCAFFOLD_CELLS
-        if name == "analysis"
-        else _NAMED_NOTEBOOK_CELLS
-    )
     notebook_path.write_text(
-        setup + cells + '\n\nif __name__ == "__main__":\n    app.run()\n',
+        setup + _NAMED_NOTEBOOK_CELLS + '\n\nif __name__ == "__main__":\n    app.run()\n',
         encoding="utf-8",
     )
     return notebook_path

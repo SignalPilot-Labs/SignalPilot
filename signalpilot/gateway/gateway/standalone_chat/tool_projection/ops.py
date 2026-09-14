@@ -232,15 +232,6 @@ def project_artifact(content: str, tool_input: dict[str, Any] | None, *, tool: s
                 result[key] = str(parsed[key])
         status = str(parsed.get("status") or "")
         summary = "Notebook already running" if status == "already_running" else "Notebook started"
-    elif tool.endswith("create_dashboard_preview"):
-        result["artifact_kind"] = "dashboard"
-        if parsed.get("authoring_session_id"):
-            result["dashboard_session_id"] = str(parsed["authoring_session_id"])
-        if parsed.get("status"):
-            result["status"] = str(parsed["status"])
-        charts = parsed.get("chart_count")
-        name = str(parsed.get("dashboard_name") or "Dashboard preview")
-        summary = f"{name} · {charts} chart{'s' if charts != 1 else ''}" if isinstance(charts, int) else name
     else:
         return text_result(text, summary=summary_text(text, "Artifact"))
     return build(result, summary=summary, text=text)

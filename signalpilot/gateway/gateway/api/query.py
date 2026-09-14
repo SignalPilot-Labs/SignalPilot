@@ -472,9 +472,9 @@ async def cancel_query_execution(execution_id: str, store: StoreD):
 @router.post("/query", dependencies=[RequireScope("query")])
 async def query_database(req: DirectQueryRequest, store: StoreD, request: Request):
     _client_ip, _user_agent = request_meta(request)
-    preliminary = validate_sql(req.sql)
-    if not preliminary.ok:
-        raise HTTPException(status_code=400, detail=f"Query blocked: {preliminary.blocked_reason}")
+    # No dialect-less pre-parse here: the governed executor validates the SQL
+    # with the connection's own dialect. A generic parse rejected valid T-SQL
+    # (for example `select top 1`) on this route while the MCP path accepted it.
     settings = await store.load_settings()
     timeout = req.timeout_seconds or settings.default_timeout_seconds
     requested_path = "sdk" if request.headers.get("x-sp-query-path") == "sdk" else "direct_api"

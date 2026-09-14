@@ -13,7 +13,8 @@ import { TierWordmark } from "~/components/branding/tier-wordmark";
 import { TierAccent } from "~/components/branding/tier-accent";
 import { TierSeal } from "~/components/branding/tier-seal";
 import { useTierBranding } from "~/lib/hooks/use-tier-branding";
-import { HIDDEN_SIDEBAR_PREFIXES, matchesRoutePrefix, nav, navGroups } from "./sidebar-nav";
+import { isChromelessRoute, matchesRoutePrefix } from "~/lib/route-chrome";
+import { nav, navGroups } from "~/components/layout/nav-groups";
 import {
   AccountSecurityNavLink,
   ApiKeysNavLink,
@@ -159,7 +160,7 @@ export default function Sidebar() {
 
   useEffect(() => setMobileOpen(false), [pathname]);
 
-  if (HIDDEN_SIDEBAR_PREFIXES.some((prefix) => matchesRoutePrefix(pathname, prefix))) {
+  if (isChromelessRoute(pathname)) {
     return null;
   }
 
@@ -240,7 +241,8 @@ export default function Sidebar() {
               )}
               <div className="space-y-0.5">
                 {items.map(({ href, label, icon: Icon, shortcut }) => {
-                  const active = href === "/evals" ? pathname === href : pathname.startsWith(href);
+                  // Exact-or-child match: "/dashboard" must not light up on "/dashboards".
+                  const active = href === "/evals" ? pathname === href : matchesRoutePrefix(pathname, href);
                   const showHealthDot =
                     href === "/connections" && connHealth.total > 0 && connHealth.healthy < connHealth.total;
                   return (

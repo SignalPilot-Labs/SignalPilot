@@ -2,7 +2,6 @@
 
 export {
   CardShell,
-  DashboardPreviewDetails,
   DiffBlock,
   ExecutingLine,
   GenericInput,
@@ -27,7 +26,6 @@ export {
 } from "./step-artifact-cards";
 export {
   ActivityGroup,
-  DashboardPreviewActivityCard,
   StandardActivityGroup,
   describeRunWork,
 } from "./activity-group";

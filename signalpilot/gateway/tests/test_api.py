@@ -131,8 +131,24 @@ class TestConnectionsEndpoint:
         assert response.status_code == 404
 
 
+def _pin_connection(monkeypatch, db_type: str) -> None:
+    """Make every connection lookup resolve to a stored connection of ``db_type``.
+
+    The governed executor validates SQL with the connection's own dialect, so
+    tests that exercise validation need a connection to exist first.
+    """
+    from gateway.models.connections import ConnectionInfo, DBType
+    from gateway.store import Store
+
+    async def _get_connection(self, name: str):
+        return ConnectionInfo(id="conn-1", name=name, db_type=DBType(db_type))
+
+    monkeypatch.setattr(Store, "get_connection", _get_connection)
+
+
 class TestQueryEndpoint:
-    def test_query_blocked_ddl(self, client):
+    def test_query_blocked_ddl(self, client, monkeypatch):
+        _pin_connection(monkeypatch, "postgres")
         response = client.post(
             "/api/query",
             json={
@@ -144,7 +160,8 @@ class TestQueryEndpoint:
         assert response.status_code == 400
         assert "blocked" in response.json()["detail"].lower()
 
-    def test_query_blocked_insert(self, client):
+    def test_query_blocked_insert(self, client, monkeypatch):
+        _pin_connection(monkeypatch, "postgres")
         response = client.post(
             "/api/query",
             json={
@@ -155,7 +172,8 @@ class TestQueryEndpoint:
         )
         assert response.status_code == 400
 
-    def test_query_blocked_stacking(self, client):
+    def test_query_blocked_stacking(self, client, monkeypatch):
+        _pin_connection(monkeypatch, "postgres")
         response = client.post(
             "/api/query",
             json={
@@ -200,6 +218,60 @@ class TestQueryEndpoint:
             },
         )
         assert response.status_code == 404
+
+    def test_sdk_query_accepts_tsql_top_for_mssql(self, client, monkeypatch):
+        """Regression: the route used to pre-parse with the postgres dialect and
+        reject valid T-SQL before the connection was known. The executor owns
+        validation now, so the request must reach it."""
+        from gateway.api import query as query_api
+        from gateway.governance.query_executor import GovernedQueryResult
+
+        _pin_connection(monkeypatch, "mssql")
+        calls: list[dict] = []
+
+        async def _fake_execute(store, **kwargs):
+            calls.append(kwargs)
+            return GovernedQueryResult(
+                execution_id="exec-1",
+                result_id="res-1",
+                rows=[{"x": 1}],
+                row_count=1,
+                tables=["b"],
+                execution_ms=1.0,
+                sql_hash="abc",
+                completeness="complete",
+                truncation_reason=None,
+                columns=[{"name": "x"}],
+                estimated_cost_usd=0.0,
+                estimate_warning=None,
+                pii_redacted=[],
+            )
+
+        monkeypatch.setattr(query_api.governed_query_executor, "execute", _fake_execute)
+        sql = "with b as (select 1 as x) select top 1 x from b where x <> 2"
+        response = client.post(
+            "/api/query",
+            headers={"X-SP-Query-Path": "sdk"},
+            json={"connection_name": "mssql-wh", "sql": sql, "row_limit": 10},
+        )
+        assert response.status_code == 200, response.text
+        assert len(calls) == 1
+        assert calls[0]["sql"] == sql
+        assert calls[0]["connection_name"] == "mssql-wh"
+        assert calls[0]["context"].path == "sdk"
+        assert response.json()["rows"] == [{"x": 1}]
+
+    def test_sdk_query_still_blocks_invalid_sql_for_mssql(self, client, monkeypatch):
+        """Removing the route pre-check must not lose validation: the executor
+        still rejects a statement that does not parse in the connection dialect."""
+        _pin_connection(monkeypatch, "mssql")
+        response = client.post(
+            "/api/query",
+            headers={"X-SP-Query-Path": "sdk"},
+            json={"connection_name": "mssql-wh", "sql": "select from", "row_limit": 10},
+        )
+        assert response.status_code == 400
+        assert "parse error" in response.json()["detail"].lower()
 
 
 class TestBudgetEndpoint:

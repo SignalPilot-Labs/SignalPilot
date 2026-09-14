@@ -2,6 +2,12 @@ import { asRecord, text } from "./payload";
 import type {
   ArtifactResult,
   ColumnProfileResult,
+  DashboardListResult,
+  DashboardLoadDataset,
+  DashboardLoadResult,
+  DashboardSampleChart,
+  DashboardSampleResult,
+  DashboardScreenshotResult,
   DbtRunResult,
   KnowledgeResult,
   ProfiledColumn,
@@ -244,7 +250,7 @@ export function parseKnowledge(r: Record<string, unknown>): Omit<KnowledgeResult
 export function parseArtifact(r: Record<string, unknown>): Omit<ArtifactResult, keyof ToolResultBase> {
   return {
     kind: "artifact",
-    artifactKind: oneOf(r.artifact_kind, ["dashboard", "notebook"], "notebook"),
+    artifactKind: oneOf(r.artifact_kind, ["notebook"], "notebook"),
     published: bool(r.published),
     filename: text(r.filename),
     artifactIndex: num(r.artifact_index),
@@ -253,6 +259,129 @@ export function parseArtifact(r: Record<string, unknown>): Omit<ArtifactResult, 
     sessionId: text(r.session_id),
     notebookPath: text(r.notebook_path),
     notebook: text(r.notebook),
-    dashboardSessionId: text(r.dashboard_session_id),
+  };
+}
+
+const issues = (value: unknown): { code: string; message: string }[] =>
+  records(value).map((issue) => ({ code: str(issue.code), message: str(issue.message) }));
+
+export function parseDashboardSample(
+  r: Record<string, unknown>,
+): Omit<DashboardSampleResult, keyof ToolResultBase> {
+  const charts: DashboardSampleChart[] = records(r.charts).map((chart) => {
+    const chartIssues = issues(chart.issues);
+    const rows = records(chart.rows).map((row) => {
+      const out: Record<string, ToolResultCell> = {};
+      for (const [key, value] of Object.entries(row)) out[key] = cell(value);
+      return out;
+    });
+    const columns = list(chart.columns)
+      .map((column) => {
+        if (typeof column === "string") return { name: column, inferredType: null };
+        const record = asRecord(column);
+        return record ? { name: str(record.name), inferredType: text(record.inferred_type) } : null;
+      })
+      .filter((column): column is { name: string; inferredType: string | null } => column !== null);
+    return {
+      id: str(chart.id),
+      type: text(chart.type),
+      dataset: text(chart.dataset),
+      rowCount: int(chart.row_count, rows.length),
+      issueCount: int(chart.issue_count, chartIssues.length),
+      columns,
+      rows,
+      issues: chartIssues,
+    };
+  });
+  return {
+    kind: "dashboard_sample",
+    dashboardValid: bool(r.dashboard_valid, true),
+    errors: strings(r.errors),
+    charts,
+  };
+}
+
+export function parseDashboardScreenshot(
+  r: Record<string, unknown>,
+): Omit<DashboardScreenshotResult, keyof ToolResultBase> {
+  return {
+    kind: "dashboard_screenshot",
+    dashboardValid: bool(r.dashboard_valid, true),
+    errors: strings(r.errors),
+    rendered: strings(r.rendered),
+    failed: records(r.failed).map((entry) => ({
+      id: str(entry.id),
+      code: str(entry.code),
+      message: str(entry.message),
+    })),
+    width: num(r.width),
+    height: num(r.height),
+    previewPath: text(r.preview_path),
+    error: text(r.error),
+  };
+}
+
+export function parseDashboardList(
+  r: Record<string, unknown>,
+): Omit<DashboardListResult, keyof ToolResultBase> {
+  const dashboards = records(r.dashboards).map((entry) => ({
+    id: str(entry.id),
+    slug: str(entry.slug),
+    name: str(entry.name),
+    description: text(entry.description),
+    chartCount: int(entry.chart_count),
+    visibility: text(entry.visibility),
+    updatedAt: text(entry.updated_at),
+    lastRefreshAt: text(entry.last_refresh_at),
+    canEdit: bool(entry.can_edit),
+  }));
+  return {
+    kind: "dashboard_list",
+    dashboards,
+    total: int(r.total, dashboards.length),
+    dashboardsTruncated: bool(r.dashboards_truncated),
+  };
+}
+
+/** `datasets` is a name-keyed map on the wire; a list of named entries is
+ * accepted too so an older or newer projector never blanks the card. */
+function loadDatasets(value: unknown): DashboardLoadDataset[] {
+  const entry = (name: string, raw: Record<string, unknown>): DashboardLoadDataset => ({
+    name,
+    rows: num(raw.rows) ?? num(raw.row_count),
+    snapshot: text(raw.snapshot) ?? text(raw.path),
+  });
+  if (Array.isArray(value)) {
+    return records(value).map((raw) => entry(str(raw.name), raw));
+  }
+  return Object.entries(asRecord(value) ?? {}).flatMap(([name, raw]) => {
+    const record = asRecord(raw);
+    return record ? [entry(name, record)] : [];
+  });
+}
+
+export function parseDashboardLoad(
+  r: Record<string, unknown>,
+): Omit<DashboardLoadResult, keyof ToolResultBase> {
+  const dashboard = asRecord(r.dashboard);
+  // The projector emits `{}` when the tool returned no dashboard.
+  const named = dashboard && (text(dashboard.id) || text(dashboard.slug) || text(dashboard.name));
+  return {
+    kind: "dashboard_load",
+    path: text(r.path),
+    dashboard: named
+      ? {
+          id: str(dashboard.id),
+          slug: str(dashboard.slug),
+          name: str(dashboard.name),
+          versionNo: num(dashboard.version_no),
+          chartCount: num(dashboard.chart_count),
+        }
+      : null,
+    datasets: loadDatasets(r.datasets),
+    datasetsTruncated: bool(r.datasets_truncated),
+    next: text(r.next),
+    error: text(r.error),
+    message: text(r.message),
   };
 }

@@ -98,8 +98,8 @@ knowledge-base-spec.md
 local-instructions.md
 marimo-ref.md
 security-audit.md
-dashboard_products.py
-dashboard.py
+/dashboard_products.py
+/dashboard.py
 Dockerfile.web.dockerignore
 signalpilot/web/e2e-*.png
 signalpilot/web/e2e-journey-*.png

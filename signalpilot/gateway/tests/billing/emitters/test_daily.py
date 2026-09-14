@@ -8,7 +8,7 @@ from datetime import UTC, date, datetime
 import httpx
 from sqlalchemy import select
 
-from gateway.background.loops import MAX_SLEEP_SECONDS, seconds_until_next_snapshot
+from gateway.background.credit_snapshot import MAX_SLEEP_SECONDS, seconds_until_next_snapshot
 from gateway.billing import GatewayCreditLedger, OrgEntitlement, daily_credit_share, local_entitlement
 from gateway.billing.emitters import clerk_members
 from gateway.billing.emitters.daily import (

@@ -104,6 +104,9 @@ def sniff_image_mime(data: bytes) -> str | None:
     return None
 
 
+DASHBOARD_MIME = "application/vnd.signalpilot.dashboard+json"
+
+
 def classify(filename: str, data: bytes) -> tuple[str, str]:
     """Return (kind, mime_type). Image kinds are verified by magic bytes."""
     extension = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
@@ -114,6 +117,8 @@ def classify(filename: str, data: bytes) -> tuple[str, str]:
         if sniffed is None:
             return "other", "application/octet-stream"
         return "image", sniffed
+    if kind == "dashboard":
+        return "dashboard", DASHBOARD_MIME
     return kind, guessed or "application/octet-stream"
 
 

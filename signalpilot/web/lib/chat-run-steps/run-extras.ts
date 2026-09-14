@@ -1,9 +1,7 @@
 import type { StandaloneChatEvent } from "~/lib/api";
-import { foldRunSteps } from "./fold-steps";
 import { asRecord, text } from "./payload";
 import { normalizeToolName } from "./tool-names";
 import type {
-  DashboardAuthoringProgress,
   PlanItem,
   RunPlan,
   RunStep,
@@ -26,44 +24,6 @@ export function formatErrorSupportBundle(step: RunStep): string {
   ]
     .filter(Boolean)
     .join("\n\n");
-}
-
-export function activeDashboardAuthoringProgress(
-  events: StandaloneChatEvent[],
-  runId: string | undefined,
-): DashboardAuthoringProgress | null {
-  if (!runId) return null;
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index];
-    if (event.run_id !== runId || event.type !== "tool_completed") {
-      continue;
-    }
-    const dashboard = asRecord(event.payload.dashboard_authoring);
-    if (!dashboard) continue;
-    const label = dashboard.label;
-    if (typeof label !== "string" || !label) return null;
-    const phase = dashboard.phase;
-    const sessionId = dashboard.authoring_session_id;
-    const draftRevision = dashboard.draft_revision;
-    return {
-      label,
-      phase: typeof phase === "string" ? phase : "",
-      sessionId: typeof sessionId === "string" && sessionId ? sessionId : null,
-      draftRevision: typeof draftRevision === "number" ? draftRevision : 0,
-    };
-  }
-  return null;
-}
-
-export function activeDashboardPreviewLabel(
-  events: StandaloneChatEvent[],
-  runId: string | undefined,
-): string | null {
-  if (!runId) return null;
-  const active = [...foldRunSteps(events, runId)]
-    .reverse()
-    .find((step) => step.category === "dashboard" && step.status === "running");
-  return active?.detail ?? active?.title ?? null;
 }
 
 /** Never leave an unresolved cold-boot card in a terminal transcript. */

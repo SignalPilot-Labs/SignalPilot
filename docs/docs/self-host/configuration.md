@@ -71,6 +71,15 @@ The gateway no longer reads ciphertext produced by retired pre-PBKDF2 key deriva
 | `SP_ANNOTATIONS_TTL` | `60` | Cache lifetime, in seconds, for schema annotation files. |
 | `SP_GIT_MAX_PUSH_BYTES` | `524288000` | Ceiling on a single push from a workspace (500 MiB). |
 
+## Database concurrency
+
+| Variable | Default | What it does |
+|---|---|---|
+| `SP_DB_POOL_MAX_CONNECTIONS` | `5` | Maximum independently leased connectors per gateway process, organization, database connection, and credential identity. Bounded to 1–20. SQLite and DuckDB retain one lease. |
+| `SP_DB_POOL_ACQUIRE_TIMEOUT_SECONDS` | `30` | Maximum connection acquisition wait in seconds. Bounded to 0.01–300. Requests fail when capacity is unavailable within this window. |
+
+Each lease keeps query state and cancellation isolated from other requests. These limits count connector instances; drivers with internal pools can open additional physical connections. They are separate from the two-agent account limit for MCP-launched SignalPilot agents.
+
 ## MCP
 
 | Variable | Default | What it does |
@@ -172,7 +181,7 @@ variables. See [What each plan includes](/docs/product/plans).
 | `NOTION_OAUTH_CLIENT_ID`, `NOTION_OAUTH_CLIENT_SECRET` | unset | Notion integration credentials. |
 | `NOTION_OAUTH_REDIRECT_URI` | unset | Redirect URI registered with the Notion integration. |
 | `NOTION_WEBHOOK_VERIFICATION_TOKEN` | unset | Verification token for Notion webhooks. |
-| `NOTION_DASHBOARD_MAX_BYTES` | unset | Ceiling on a dashboard payload written to Notion. |
+| `NOTION_DASHBOARD_MAX_BYTES` | unset | Ceiling on an HTML deliverable written to Notion. |
 | `SLACK_OAUTH_CLIENT_ID`, `SLACK_OAUTH_CLIENT_SECRET` | unset | Slack app credentials. |
 | `SLACK_OAUTH_REDIRECT_URI` | unset | Redirect URI registered with the Slack app. |
 | `SLACK_OAUTH_SCOPES` | see `.env.example` | Scopes requested at install. |

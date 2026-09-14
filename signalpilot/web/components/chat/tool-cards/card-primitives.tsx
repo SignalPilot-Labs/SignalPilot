@@ -17,6 +17,11 @@ import type { ToolCardAccent, ToolCardSummary } from "./registry";
  * `--color-success` is reserved for live and success accents.
  */
 
+/** "3 charts", "1 issue": a count with its noun. */
+export function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
 /** True when the viewer asked for reduced motion (false in jsdom). */
 export function prefersReducedMotion(): boolean {
   if (typeof window === "undefined" || typeof window.matchMedia !== "function") {

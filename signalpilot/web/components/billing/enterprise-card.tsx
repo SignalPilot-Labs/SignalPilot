@@ -4,7 +4,7 @@ import { Building2, CheckCircle2, Mail } from "lucide-react";
 import type { PlanInfo } from "~/lib/backend-client";
 import { PLAN_ALLOWANCES, formatCredits } from "~/lib/billing-rates";
 import type { Entitlement } from "~/lib/entitlement";
-import { AllowanceList } from "~/components/billing/plan-card";
+import { AllowanceList, formatPrice } from "~/components/billing/plan-card";
 
 const ENTERPRISE_CONTACT = "mailto:daniel@signalpilot.ai?subject=SignalPilot%20Enterprise";
 
@@ -31,12 +31,16 @@ export function EnterpriseCard({
   plan: PlanInfo | null;
   isCurrent: boolean;
 }) {
+  const fallback = PLAN_ALLOWANCES.enterprise;
   const allowances = plan ?? {
-    included_seats: PLAN_ALLOWANCES.enterprise.seats,
-    included_models: PLAN_ALLOWANCES.enterprise.models,
-    included_eval_runs: PLAN_ALLOWANCES.enterprise.evalRuns,
-    included_credits: PLAN_ALLOWANCES.enterprise.credits,
+    included_seats: fallback.seats,
+    included_models: fallback.models,
+    included_eval_runs: fallback.evalRuns,
+    included_credits: fallback.credits,
+    seat_month_credits: fallback.seatMonthCredits,
+    managed_from_cents: fallback.managedFromCents,
   };
+  const fromCents = plan?.monthly_fee_cents ?? fallback.monthlyFeeCents;
 
   return (
     <div
@@ -54,7 +58,7 @@ export function EnterpriseCard({
         <div className="text-right">
           <div className="flex items-baseline gap-0.5">
             <span className="text-xl font-bold font-mono tracking-tight tabular-nums text-[var(--color-text-muted)]">
-              from $1,500
+              from {formatPrice(fromCents, "usd")}
             </span>
             <span className="text-[12px] text-[var(--color-text-dim)]">/mo</span>
           </div>
@@ -70,7 +74,7 @@ export function EnterpriseCard({
       <AllowanceList plan={allowances} color={ACCENT} moreByAgreement />
 
       <ul className="space-y-2 mb-5">
-        {(plan?.features.length ? plan.features : ENTERPRISE_FEATURES).map((f) => (
+        {ENTERPRISE_FEATURES.map((f) => (
           <li key={f} className="flex items-center gap-2">
             <CheckCircle2 className="w-3 h-3 flex-shrink-0 text-[var(--color-text-muted)]" strokeWidth={1.5} />
             <span className="text-[12px] text-[var(--color-text-muted)]">{f}</span>

@@ -9,7 +9,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import type { AllowanceUse, DailyUsagePoint } from "~/lib/backend-client";
+import type { AllowanceUse, DailyUsagePoint, UnitConsumption } from "~/lib/backend-client";
 import { UNIT_LABELS, creditsToUsd, formatCredits, formatUsd } from "~/lib/billing-rates";
 
 // ---------------------------------------------------------------------------
@@ -123,9 +123,16 @@ export function StatTile({
 // Consumption by unit
 // ---------------------------------------------------------------------------
 
-export function ConsumptionByUnitTable({ byUnit }: { byUnit: Record<string, number> }) {
+function formatQuantity(quantity: number): string {
+  return Number.isInteger(quantity)
+    ? quantity.toLocaleString("en-US")
+    : quantity.toLocaleString("en-US", { maximumFractionDigits: 2 });
+}
+
+/** Credits consumed per unit this period, from `consumed_by_unit` on the usage summary. */
+export function ConsumptionByUnitTable({ byUnit }: { byUnit: Record<string, UnitConsumption> }) {
   const rows = Object.entries(byUnit)
-    .map(([unit, credits]) => ({ unit, credits: Math.abs(credits) }))
+    .map(([unit, c]) => ({ unit, credits: Math.abs(c.credits), quantity: c.quantity, rows: c.rows }))
     .filter((r) => r.credits > 0)
     .sort((a, b) => b.credits - a.credits);
 
@@ -145,6 +152,9 @@ export function ConsumptionByUnitTable({ byUnit }: { byUnit: Record<string, numb
             unit
           </th>
           <th className="text-right px-5 py-2 text-[11px] font-normal text-[var(--color-text-dim)] uppercase tracking-[0.08em]">
+            quantity
+          </th>
+          <th className="text-right px-5 py-2 text-[11px] font-normal text-[var(--color-text-dim)] uppercase tracking-[0.08em]">
             credits
           </th>
           <th className="text-right px-5 py-2 text-[11px] font-normal text-[var(--color-text-dim)] uppercase tracking-[0.08em]">
@@ -154,9 +164,12 @@ export function ConsumptionByUnitTable({ byUnit }: { byUnit: Record<string, numb
       </thead>
       <tbody>
         {rows.map((r) => (
-          <tr key={r.unit} className="border-b border-[var(--color-border)] last:border-b-0">
+          <tr key={r.unit} data-testid={`unit-${r.unit}`} className="border-b border-[var(--color-border)] last:border-b-0">
             <td className="px-5 py-2.5 text-[var(--color-text-muted)]">
               {UNIT_LABELS[r.unit] ?? r.unit}
+            </td>
+            <td className="px-5 py-2.5 text-right font-mono tabular-nums text-[var(--color-text-dim)]">
+              {formatQuantity(r.quantity)}
             </td>
             <td className="px-5 py-2.5 text-right font-mono tabular-nums text-[var(--color-text)]">
               {formatCredits(r.credits)}
@@ -233,7 +246,7 @@ function DailyTooltip({
 }) {
   if (!active || !payload || payload.length === 0) return null;
   const point = payload[0].payload;
-  const units = Object.entries(point.consumed_by_unit ?? {})
+  const units = Object.entries(point.by_unit ?? {})
     .filter(([, v]) => Math.abs(v) > 0)
     .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
   return (
@@ -254,10 +267,10 @@ function DailyTooltip({
 export function DailyConsumptionChart({ points }: { points: DailyUsagePoint[] }) {
   const data = points.map((p) => ({
     ...p,
-    consumed: Math.abs(p.consumed),
+    credits: Math.abs(p.credits),
     label: p.date.length >= 10 ? p.date.slice(5) : p.date,
   }));
-  const hasData = data.some((p) => p.consumed > 0);
+  const hasData = data.some((p) => p.credits > 0);
 
   if (!hasData) {
     return (
@@ -287,7 +300,7 @@ export function DailyConsumptionChart({ points }: { points: DailyUsagePoint[] })
           width={48}
         />
         <Tooltip content={<DailyTooltip />} cursor={{ fill: "var(--color-bg-hover)" }} />
-        <Bar dataKey="consumed" fill="var(--color-success)" radius={[2, 2, 0, 0]} maxBarSize={24} />
+        <Bar dataKey="credits" fill="var(--color-success)" radius={[2, 2, 0, 0]} maxBarSize={24} />
       </BarChart>
     </ResponsiveContainer>
   );

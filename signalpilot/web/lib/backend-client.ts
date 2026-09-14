@@ -36,53 +36,88 @@ export interface MeResponse {
 
 export type SubscriptionTier = "free" | "team" | "scale" | "enterprise";
 
+export type BillingInterval = "month" | "year";
+
 /** The full entitlement row from `GET /api/v1/billing/subscription`. */
 export interface SubscriptionResponse {
   plan_tier: SubscriptionTier;
   status: string;
+  /** The backend has already applied the billable rule (status, tier, grace). */
+  is_billable: boolean;
   stripe_subscription_id: string | null;
   current_period_end: string | null;
+  billing_interval: BillingInterval;
   included_seats: number;
   included_models: number;
   included_eval_runs: number;
   included_credits: number;
   managed: boolean;
-  billing_interval: "month" | "year";
   enterprise_flags: Record<string, unknown>;
   contract: Record<string, unknown> | null;
   grace_until: string | null;
-  /** Sent by the backend when it has already applied the billable rule. */
-  is_billable?: boolean;
   pending_downgrade_to: string | null;
   pending_downgrade_date: string | null;
   cancel_at_period_end: boolean;
   cancel_date: string | null;
 }
 
+export type PaidTier = "team" | "scale" | "enterprise";
+
 export interface PlanPrice {
   price_id: string;
+  lookup_key: string | null;
   amount: number; // cents
   currency: string;
-  interval: "month" | "year";
+  interval: BillingInterval;
 }
 
-/** One plan from `GET /api/v1/billing/plans`: Stripe product plus the static allowance table. */
+/** One plan from `GET /api/v1/billing/plans`: Stripe product joined with the static rate table. */
 export interface PlanInfo {
-  tier: "team" | "scale" | "enterprise";
+  tier: PaidTier;
   name: string;
   description: string;
-  features: string[];
-  highlight_color: string;
-  prices: PlanPrice[];
+  monthly_fee_cents: number;
   included_seats: number;
   included_models: number;
   included_eval_runs: number;
   included_credits: number;
+  seat_month_credits: number;
+  managed_from_cents: number;
+  prices: PlanPrice[];
+}
+
+/** The fixed credit rate card as the backend publishes it. */
+export interface RateCard {
+  credit_cents: number;
+  thread_credits: number;
+  query_credits: number;
+  model_month_credits: number;
+  eval_run_credits: number;
+  seat_month_credits: number;
+  enterprise_seat_month_credits: number;
+  token_credits_per_dollar: number;
+  overage_cents_per_credit: number;
 }
 
 export interface PlansResponse {
   plans: PlanInfo[];
+  rates: RateCard;
   publishable_key: string;
+}
+
+export interface CheckoutResponse {
+  checkout_url: string | null;
+  /** "checkout" redirects to Stripe; "updated" changed the plan in place. */
+  action: "checkout" | "updated";
+}
+
+export interface ProrationPreviewResponse {
+  amount_due: number; // cents; positive = charge, negative = credit
+  currency: string;
+  credit: number;
+  new_charge: number;
+  immediate: boolean;
+  effective_date: string | null;
 }
 
 export interface AllowanceUse {
@@ -90,18 +125,29 @@ export interface AllowanceUse {
   included: number;
 }
 
+/** Credits consumed for one unit this period, with the metered quantity behind them. */
+export interface UnitConsumption {
+  credits: number;
+  quantity: number;
+  rows: number;
+}
+
 /** `GET /api/v1/usage/summary`: the open period read from the credit ledger. */
 export interface UsageSummaryResponse {
   period_start: string;
   period_end: string;
+  plan_tier: SubscriptionTier;
+  is_billable: boolean;
+  included_credits: number;
   granted: number;
   purchased: number;
   consumed: number;
-  consumed_by_unit: Record<string, number>;
+  consumed_by_unit: Record<string, UnitConsumption>;
   returned: number;
   expired: number;
   available: number;
   overage: number;
+  overage_cents: number;
   allowances: {
     seats: AllowanceUse;
     models: AllowanceUse;
@@ -109,11 +155,11 @@ export interface UsageSummaryResponse {
   };
 }
 
-/** One day of consumption from `GET /api/v1/usage/daily`. */
+/** One UTC day of consumption from `GET /api/v1/usage/daily`. */
 export interface DailyUsagePoint {
-  date: string;
-  consumed: number;
-  consumed_by_unit: Record<string, number>;
+  date: string; // YYYY-MM-DD
+  credits: number;
+  by_unit: Record<string, number>;
 }
 
 export interface DailyUsageResponse {
@@ -236,20 +282,13 @@ export interface BackendClient {
   createApiKey(name: string, scopes: string[]): Promise<ApiKeyCreatedResponse>;
   deleteApiKey(keyId: string): Promise<void>;
   getPlans(): Promise<PlansResponse>;
-  previewProration(priceId: string): Promise<{
-    amount_due: number;
-    currency: string;
-    credit: number;
-    new_charge: number;
-    immediate: boolean;
-    effective_date: string | null;
-  }>;
+  previewProration(priceId: string): Promise<ProrationPreviewResponse>;
   getSubscription(): Promise<SubscriptionResponse>;
   createCheckoutSession(
     priceId: string,
     successUrl: string,
     cancelUrl: string,
-  ): Promise<{ checkout_url: string | null; action: "checkout" | "updated" }>;
+  ): Promise<CheckoutResponse>;
   createPortalSession(returnUrl: string): Promise<{ portal_url: string }>;
   cancelSubscription(): Promise<{ status: string; cancel_date: string | null }>;
   reactivateSubscription(): Promise<{ status: string }>;
@@ -284,18 +323,16 @@ export function useBackendClient(): BackendClient {
       backendFetch<PlansResponse>("/api/v1/billing/plans", getToken),
 
     previewProration: (priceId: string) =>
-      backendFetch<{ amount_due: number; currency: string; credit: number; new_charge: number; immediate: boolean; effective_date: string | null }>(
-        "/api/v1/billing/preview-proration", getToken, {
-          method: "POST",
-          body: JSON.stringify({ price_id: priceId }),
-        },
-      ),
+      backendFetch<ProrationPreviewResponse>("/api/v1/billing/preview-proration", getToken, {
+        method: "POST",
+        body: JSON.stringify({ price_id: priceId }),
+      }),
 
     getSubscription: () =>
       backendFetch<SubscriptionResponse>("/api/v1/billing/subscription", getToken),
 
     createCheckoutSession: (priceId: string, successUrl: string, cancelUrl: string) =>
-      backendFetch<{ checkout_url: string | null; action: "checkout" | "updated" }>("/api/v1/billing/checkout", getToken, {
+      backendFetch<CheckoutResponse>("/api/v1/billing/checkout", getToken, {
         method: "POST",
         body: JSON.stringify({
           price_id: priceId,

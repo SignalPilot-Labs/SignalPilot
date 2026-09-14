@@ -1,9 +1,19 @@
 "use client";
 
 import { AlertTriangle, ArrowRight, CheckCircle2, Loader2, Users, Zap } from "lucide-react";
-import type { PlanInfo, PlanPrice } from "~/lib/backend-client";
+import type { PaidTier, PlanInfo, PlanPrice } from "~/lib/backend-client";
 import { TIER_RANK, type EntitlementTier } from "~/lib/entitlement";
 import { formatCredits } from "~/lib/billing-rates";
+
+type AllowancePlan = Pick<
+  PlanInfo,
+  | "included_seats"
+  | "included_models"
+  | "included_eval_runs"
+  | "included_credits"
+  | "seat_month_credits"
+  | "managed_from_cents"
+>;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -25,14 +35,15 @@ export function getMonthlyEquivalent(price: PlanPrice): number {
   return price.amount;
 }
 
-const HIGHLIGHT_COLORS: Record<string, string> = {
-  success: "var(--color-success)",
-  warning: "var(--color-warning)",
-  default: "var(--color-text-muted)",
+/** Accent per tier; the backend publishes no presentation hints. */
+const TIER_ACCENT: Record<PaidTier, string> = {
+  team: "var(--color-success)",
+  scale: "var(--color-warning)",
+  enterprise: "var(--color-text-muted)",
 };
 
-export function highlightColor(plan: PlanInfo): string {
-  return HIGHLIGHT_COLORS[plan.highlight_color] ?? HIGHLIGHT_COLORS.default;
+export function tierAccent(tier: string): string {
+  return TIER_ACCENT[tier as PaidTier] ?? TIER_ACCENT.enterprise;
 }
 
 function rank(tier: string): number {
@@ -78,7 +89,7 @@ export function AllowanceList({
   color,
   moreByAgreement = false,
 }: {
-  plan: Pick<PlanInfo, "included_seats" | "included_models" | "included_eval_runs" | "included_credits">;
+  plan: AllowancePlan;
   color: string;
   moreByAgreement?: boolean;
 }) {
@@ -88,6 +99,8 @@ export function AllowanceList({
     `${plan.included_models.toLocaleString()} covered models${more}`,
     `${plan.included_eval_runs.toLocaleString()} eval runs per month`,
     `${formatCredits(plan.included_credits)} credits per month${more}`,
+    `added seats ${formatCredits(plan.seat_month_credits)} credits per seat-month`,
+    `managed from ${formatPrice(plan.managed_from_cents, "usd")}/mo`,
   ];
   return (
     <ul className="space-y-2 mb-4">
@@ -122,18 +135,19 @@ export function PlanCard({
   onUpgrade: (priceId: string) => void;
   upgrading: string | null;
 }) {
-  const color = highlightColor(plan);
-  const price = plan.prices.find((p) => p.interval === interval) ?? plan.prices[0];
+  const color = tierAccent(plan.tier);
+  const price = plan.prices.find((p) => p.interval === interval) ?? plan.prices[0] ?? null;
   const Icon = plan.tier === "scale" ? Zap : Users;
 
-  if (!price) return null;
-
-  const isUpgrading = upgrading === price.price_id;
+  const isUpgrading = price !== null && upgrading === price.price_id;
   const isCurrent = plan.tier === currentTier;
   const isHigher = rank(plan.tier) > rank(currentTier);
   const isLower = rank(plan.tier) < rank(currentTier);
   const isPendingDowngrade = pendingDowngradeTo === plan.tier;
-  const monthlyEquiv = getMonthlyEquivalent(price);
+  // The Stripe price for the chosen interval; the published flat fee when
+  // Stripe has not been configured with one yet.
+  const monthlyEquiv = price ? getMonthlyEquivalent(price) : plan.monthly_fee_cents;
+  const currency = price?.currency ?? "usd";
 
   return (
     <div
@@ -151,14 +165,16 @@ export function PlanCard({
         <div className="text-right">
           <div className="flex items-baseline gap-0.5">
             <span className="text-xl font-bold font-mono tracking-tight tabular-nums" style={{ color }}>
-              {formatPrice(monthlyEquiv, price.currency)}
+              {formatPrice(monthlyEquiv, currency)}
             </span>
             <span className="text-[12px] text-[var(--color-text-dim)]">/mo</span>
           </div>
           <span className="text-[11px] text-[var(--color-text-dim)] font-mono tabular-nums">
-            {price.interval === "year"
-              ? `${formatPrice(price.amount, price.currency)}/yr, billed annually`
-              : "billed monthly"}
+            {price === null
+              ? "flat fee"
+              : price.interval === "year"
+                ? `${formatPrice(price.amount, price.currency)}/yr, billed annually`
+                : "billed monthly"}
           </span>
         </div>
       </div>
@@ -168,17 +184,6 @@ export function PlanCard({
       </p>
 
       <AllowanceList plan={plan} color={color} />
-
-      {plan.features.length > 0 && (
-        <ul className="space-y-2 mb-5">
-          {plan.features.map((f) => (
-            <li key={f} className="flex items-center gap-2">
-              <CheckCircle2 className="w-3 h-3 flex-shrink-0" style={{ color }} strokeWidth={1.5} />
-              <span className="text-[12px] text-[var(--color-text-muted)]">{f}</span>
-            </li>
-          ))}
-        </ul>
-      )}
 
       {isCurrent ? (
         <div
@@ -202,8 +207,8 @@ export function PlanCard({
         </div>
       ) : (
         <button
-          onClick={() => onUpgrade(price.price_id)}
-          disabled={isUpgrading || upgrading !== null}
+          onClick={() => price && onUpgrade(price.price_id)}
+          disabled={price === null || isUpgrading || upgrading !== null}
           className="w-full flex items-center justify-center gap-2 px-4 py-2 text-[12px] border rounded-[10px] transition-colors duration-150 disabled:opacity-40 hover:bg-[var(--color-bg-hover)]"
           style={{ borderColor: color, color }}
         >

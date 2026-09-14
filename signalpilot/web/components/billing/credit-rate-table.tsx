@@ -1,12 +1,31 @@
 "use client";
 
-import { CREDIT_RATES, creditsToUsd, formatCredits, formatUsd } from "~/lib/billing-rates";
+import {
+  DEFAULT_RATE_CARD,
+  type RateCard,
+  creditRatesFrom,
+  creditsToUsd,
+  formatCredits,
+  formatUsd,
+} from "~/lib/billing-rates";
 
 /**
  * The fixed credit rate card. One credit is one cent, no volume brackets;
- * every plan pays the same rates beyond its allowances.
+ * every plan pays the same rates beyond its allowances. `rates` is the card
+ * published by `GET /api/v1/billing/plans`; the local fallback renders while
+ * it loads.
  */
-export function CreditRateTable({ enterprise = false }: { enterprise?: boolean }) {
+export function CreditRateTable({
+  enterprise = false,
+  rates,
+}: {
+  enterprise?: boolean;
+  rates?: RateCard | null;
+}) {
+  const card = rates ?? DEFAULT_RATE_CARD;
+  const rows = creditRatesFrom(card);
+  const creditUsd = formatUsd(creditsToUsd(1, card));
+  const overageUsd = formatUsd(card.overage_cents_per_credit / 100);
   return (
     <div
       data-testid="credit-rate-table"
@@ -30,7 +49,7 @@ export function CreditRateTable({ enterprise = false }: { enterprise?: boolean }
           </tr>
         </thead>
         <tbody>
-          {CREDIT_RATES.map((rate) => {
+          {rows.map((rate) => {
             const credits =
               enterprise && rate.enterpriseCredits !== undefined ? rate.enterpriseCredits : rate.credits;
             return (
@@ -40,10 +59,10 @@ export function CreditRateTable({ enterprise = false }: { enterprise?: boolean }
                   <span className="text-[var(--color-text-dim)]"> / {rate.per}</span>
                 </td>
                 <td className="px-5 py-2.5 text-right font-mono tabular-nums text-[var(--color-text)]">
-                  {credits === null ? "cost × 100" : formatCredits(credits)}
+                  {credits === null ? `cost × ${card.token_credits_per_dollar}` : formatCredits(credits)}
                 </td>
                 <td className="px-5 py-2.5 text-right font-mono tabular-nums text-[var(--color-text-dim)]">
-                  {credits === null ? "at cost" : formatUsd(creditsToUsd(credits))}
+                  {credits === null ? "at cost" : formatUsd(creditsToUsd(credits, card))}
                 </td>
                 <td className="hidden md:table-cell px-5 py-2.5 text-[var(--color-text-dim)] leading-relaxed">
                   {rate.note}
@@ -54,8 +73,8 @@ export function CreditRateTable({ enterprise = false }: { enterprise?: boolean }
         </tbody>
       </table>
       <p className="px-5 py-3 text-[11px] text-[var(--color-text-dim)] border-t border-[var(--color-border)]">
-        1 credit = $0.01. Credits beyond the monthly block are billed at $0.01 each on the next invoice; nothing is
-        blocked. Guarantees put credits back: failed, low-evidence and flagged-wrong threads are never charged.
+        1 credit = {creditUsd}. Credits beyond the monthly block are billed at {overageUsd} each on the next
+        invoice; nothing is blocked. Guarantees put credits back: failed, low-evidence and flagged-wrong threads are never charged.
       </p>
     </div>
   );

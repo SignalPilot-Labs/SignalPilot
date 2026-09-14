@@ -5,8 +5,13 @@ import { AlertTriangle, BarChart3, Coins, Gauge, RefreshCw } from "lucide-react"
 import { useAppAuth } from "~/lib/auth-context";
 import { useBackendClient } from "~/lib/backend-client";
 import type { DailyUsagePoint, UsageSummaryResponse } from "~/lib/backend-client";
-import { useSubscription } from "~/lib/subscription-context";
-import { creditsToUsd, formatCredits, formatUsd } from "~/lib/billing-rates";
+import {
+  DEFAULT_RATE_CARD,
+  centsToUsd,
+  creditsToUsd,
+  formatCredits,
+  formatUsd,
+} from "~/lib/billing-rates";
 import { PageHeader, TerminalBar } from "~/components/ui/page-header";
 import { SectionHeader } from "~/components/ui/section-header";
 import { StatusDot } from "~/components/ui/data-viz";
@@ -76,7 +81,6 @@ function UsageError({ message, onRetry }: { message: string; onRetry: () => void
 
 function UsageContent() {
   const client = useBackendClient();
-  const { tier, includedCredits } = useSubscription();
 
   const [summary, setSummary] = useState<UsageSummaryResponse | null>(null);
   const [daily, setDaily] = useState<DailyUsagePoint[] | null>(null);
@@ -123,7 +127,7 @@ function UsageContent() {
       >
         <div className="flex items-center gap-6 text-xs">
           <span className="text-[var(--color-text-dim)]">
-            plan: <code className="text-[12px] text-[var(--color-text)]">{tier}</code>
+            plan: <code className="text-[12px] text-[var(--color-text)]">{summary.plan_tier}</code>
           </span>
           <span className="text-[var(--color-text-dim)]">
             period:{" "}
@@ -134,7 +138,7 @@ function UsageContent() {
           <span className="text-[var(--color-text-dim)]">
             included:{" "}
             <code className="text-[12px] text-[var(--color-text)]">
-              {formatCredits(includedCredits)}
+              {formatCredits(summary.included_credits)}
             </code>
           </span>
         </div>
@@ -167,7 +171,7 @@ function UsageContent() {
           <StatTile
             label="overage"
             value={formatCredits(summary.overage)}
-            sub={summary.overage > 0 ? `${formatUsd(creditsToUsd(summary.overage))} on next invoice` : "none"}
+            sub={summary.overage > 0 ? `${formatUsd(centsToUsd(summary.overage_cents))} on next invoice` : "none"}
             tone={summary.overage > 0 ? "error" : "default"}
           />
         </div>
@@ -184,12 +188,12 @@ function UsageContent() {
           <AllowanceMeter
             label="covered models"
             use={summary.allowances.models}
-            beyondNote="600 credits per model-month"
+            beyondNote={`${formatCredits(DEFAULT_RATE_CARD.model_month_credits)} credits per model-month`}
           />
           <AllowanceMeter
             label="eval runs"
             use={summary.allowances.eval_runs}
-            beyondNote="50 credits per run"
+            beyondNote={`${formatCredits(DEFAULT_RATE_CARD.eval_run_credits)} credits per run`}
           />
         </div>
       </section>

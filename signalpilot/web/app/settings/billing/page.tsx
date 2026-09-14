@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import { useAppAuth } from "~/lib/auth-context";
 import { useBackendClient } from "~/lib/backend-client";
-import type { PlanInfo } from "~/lib/backend-client";
+import type { PlanInfo, RateCard } from "~/lib/backend-client";
 import { useSubscription } from "~/lib/subscription-context";
 import { TIER_RANK, tierLabel, type EntitlementTier } from "~/lib/entitlement";
 import { formatCredits } from "~/lib/billing-rates";
@@ -106,6 +106,8 @@ function BillingContent() {
     entitlement.billingInterval,
   );
   const [plans, setPlans] = useState<PlanInfo[] | null>(null);
+  /** The live rate card; the rate table falls back to the local constants until it arrives. */
+  const [rates, setRates] = useState<RateCard | null>(null);
   const [plansError, setPlansError] = useState(false);
   const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false);
   const [canceling, setCanceling] = useState(false);
@@ -122,6 +124,7 @@ function BillingContent() {
           (a, b) => (PLAN_ORDER[a.tier] ?? 99) - (PLAN_ORDER[b.tier] ?? 99),
         );
         setPlans(sorted);
+        setRates(res.rates);
       })
       .catch(() => {
         if (!cancelled) setPlansError(true);
@@ -409,7 +412,7 @@ function BillingContent() {
       {/* Credit rates */}
       <section className="mb-8">
         <SectionHeader icon={Coins} title="credit rates" />
-        <CreditRateTable enterprise={isEnterprise} />
+        <CreditRateTable enterprise={isEnterprise} rates={rates} />
       </section>
 
       {/* Cancel / reactivate */}

@@ -13,6 +13,7 @@ import { TierWordmark } from "~/components/branding/tier-wordmark";
 import { TierAccent } from "~/components/branding/tier-accent";
 import { TierSeal } from "~/components/branding/tier-seal";
 import { useTierBranding } from "~/lib/hooks/use-tier-branding";
+import { useSubscription } from "~/lib/subscription-context";
 
 /* Custom SVG nav icons — geometric, minimal, brutalism-lite */
 function NavIconDashboard({ active }: { active: boolean }) {
@@ -433,10 +434,10 @@ function NotionConnectNavLink({ pathname }: { pathname: string }) {
 }
 
 function ByokNavLink({ pathname }: { pathname: string }) {
-  const branding = useTierBranding();
-  // BYOK is team/enterprise only; hidden until tier branding is resolved (cloud + loaded)
-  if (!branding.enabled) return null;
-  if (branding.tier !== "team" && branding.tier !== "enterprise") return null;
+  const { isCloudMode } = useAppAuth();
+  const { isLoaded, isBillable } = useSubscription();
+  // BYOK is on for every billable plan; hidden until the entitlement row is loaded.
+  if (!isCloudMode || !isLoaded || !isBillable) return null;
 
   const active = pathname.startsWith("/settings/byok");
 
@@ -526,16 +527,6 @@ export default function Sidebar() {
   const router = useRouter();
   const { isCloudMode, isAuthenticated } = useAppAuth();
   const [projectCount, setProjectCount] = useState(0);
-  // Evals nav item only shows for workspaces evals are enabled for. The
-  // availability probe is readable by everyone, so this is a 200 either way.
-  const [evalsEnabled, setEvalsEnabled] = useState(false);
-  useEffect(() => {
-    if (!isAuthenticated) return;
-    import("~/lib/api")
-      .then(({ getEvalAvailability }) => getEvalAvailability())
-      .then((a) => setEvalsEnabled(a.enabled))
-      .catch(() => setEvalsEnabled(false));
-  }, [isAuthenticated]);
 
   // Connection health from shared SWR cache (auto-refreshes every 15s)
   // Only fetch when authenticated (prevents 401s on login page)
@@ -578,7 +569,7 @@ export default function Sidebar() {
 
   // Hide sidebar on auth pages — checked after all hooks are called
   const tierBranding = useTierBranding();
-  const showWordmark = tierBranding.enabled && tierBranding.tier !== "free";
+  const showWordmark = tierBranding.enabled;
 
   useEffect(() => setMobileOpen(false), [pathname]);
 
@@ -651,7 +642,7 @@ export default function Sidebar() {
         {navGroups.map((group, gi) => {
           const items = group.items.filter(
             ({ href }) =>
-              !(isCloudMode && href === "/settings") && !(href.startsWith("/evals") && !evalsEnabled)
+              !(isCloudMode && href === "/settings")
           );
           if (items.length === 0) return null;
           return (

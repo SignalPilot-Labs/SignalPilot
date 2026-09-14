@@ -25,11 +25,9 @@ import {
   NotebookProvider,
   type NotebookConfig,
 } from "~/components/notebook/notebook-context";
-import { NotebooksProjectsPaywall } from "~/components/billing/notebooks-projects-paywall";
+import { PlanRequired } from "~/components/billing/plan-required";
 import { buildProjectEditorHref } from "~/lib/project-editor-link";
 import { useSubscription } from "~/lib/subscription-context";
-
-const PAID_TIERS = ["pro", "team", "enterprise", "unlimited"];
 
 const NotebookBoot = dynamic(
   () => import("~/components/notebook/notebook-boot"),
@@ -141,14 +139,13 @@ export default function NotebooksPage() {
   const { toast } = useToast();
   const searchParams = useSearchParams();
   const pathname = usePathname();
-  const { planTier, isLoaded: subLoaded } = useSubscription();
+  const { isBillable, isLoaded: subLoaded } = useSubscription();
   const isExternalView = pathname?.startsWith("/notebook") ?? false;
   const [browserSearch, setBrowserSearch] = useState(() =>
     typeof window === "undefined" ? "" : window.location.search,
   );
 
-  const isPaid = PAID_TIERS.includes(planTier);
-  const gated = IS_CLOUD_MODE && subLoaded && !isPaid;
+  const gated = IS_CLOUD_MODE && subLoaded && !isBillable;
 
   const nextSearch = searchParams.toString();
   const effectiveSearchParams = useMemo(
@@ -796,7 +793,12 @@ export default function NotebooksPage() {
 
   // The following code displays the cloud paywall.
   if (gated) {
-    return <NotebooksProjectsPaywall />;
+    return (
+      <PlanRequired
+        feature="notebooks and projects"
+        description="Governed notebook workspaces backed by your connections and dbt projects."
+      />
+    );
   }
 
   // The following code displays the loading state.

@@ -16,6 +16,8 @@ import {
   type ChatReportMention,
 } from "~/lib/api";
 import { useToast } from "~/components/ui/toast";
+import { PlanRequired } from "~/components/billing/plan-required";
+import { useSubscription } from "~/lib/subscription-context";
 import {
   standaloneMessageKey,
   type OptimisticUserMessage,
@@ -89,6 +91,7 @@ export function StandaloneDataChat({
   const router = useRouter();
   const searchParams = useSearchParams();
   const { toast } = useToast();
+  const subscription = useSubscription();
   const {
     data: bootstrap,
     error: bootstrapError,
@@ -334,6 +337,14 @@ export function StandaloneDataChat({
     return <ChatBootstrapSpinner />;
   }
   if (bootstrapError || !bootstrap?.enabled) {
+    if (!subscription.isBillable && subscription.isLoaded) {
+      return (
+        <PlanRequired
+          feature="data chat"
+          description="Ask questions of your governed warehouse and get receipted answers with evidence."
+        />
+      );
+    }
     return <ChatUnavailableScreen />;
   }
   if (detailError) {

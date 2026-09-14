@@ -51,7 +51,6 @@ import {
   downloadEvalArtifact,
   downloadEvalRunExport,
   getEvalAccuracy,
-  getEvalAvailability,
   getEvalConfig,
   getEvalRun,
   getEvalRunProgress,
@@ -69,6 +68,7 @@ import {
   type EvalTask,
 } from "~/lib/api";
 import { PageHeader } from "~/components/ui/page-header";
+import { useEvalsGate } from "~/components/billing/evals-gate";
 import { useToast } from "~/components/ui/toast";
 import { Md, fmtNum } from "./_components/Markdown";
 import { RunProgressBar, SandboxPanel } from "./_components/SandboxPanel";
@@ -1357,61 +1357,6 @@ function RunsList({ runs, selectedRun, onSelect }: { runs: EvalRun[]; selectedRu
   );
 }
 
-/* The following code displays unavailable evaluation settings. */
-
-function SetupState() {
-  return (
-    <div className="ev-card p-8">
-      <div className="flex items-center gap-3">
-        <FlaskConical className="w-5 h-5 text-[var(--color-text-dim)]" strokeWidth={1.25} />
-        <h2 className="text-2xl font-semibold tracking-[-0.01em] text-[var(--color-text)]">
-          Evals aren’t set up for this workspace
-        </h2>
-      </div>
-      <p className="mt-3 text-sm text-[var(--color-text-muted)] max-w-2xl leading-relaxed">
-        Evals run your proposed knowledge entries against a graded task set, so you can see
-        whether an entry actually changes an agent’s answers before you approve it. It’s enabled
-        per workspace during onboarding.
-      </p>
-
-      <div className="mt-6 pt-5 border-t border-[var(--color-border)]">
-        <h3 className="text-[11px] uppercase tracking-[0.08em] text-[var(--color-text-dim)] mb-3">
-          How to get access
-        </h3>
-        <ol className="space-y-2.5 text-sm text-[var(--color-text-muted)] max-w-2xl">
-          <li className="flex gap-3">
-            <span className="ev-badge flex-shrink-0">1</span>
-            <span>
-              Email{" "}
-              <a
-                href="mailto:support@signalpilot.dev?subject=Enable%20evals%20for%20my%20workspace"
-                className="text-[var(--color-text)] underline underline-offset-2"
-              >
-                support@signalpilot.dev
-              </a>{" "}
-              from the workspace you want enabled.
-            </span>
-          </li>
-          <li className="flex gap-3">
-            <span className="ev-badge flex-shrink-0">2</span>
-            <span>We turn evals on for that workspace and connect your eval set.</span>
-          </li>
-          <li className="flex gap-3">
-            <span className="ev-badge flex-shrink-0">3</span>
-            <span>
-              “Evaluate Change” then appears on pending knowledge entries, and runs show up here.
-            </span>
-          </li>
-        </ol>
-        <p className="mt-5 text-xs text-[var(--color-text-dim)]">
-          Already enabled elsewhere? Evals follow the active organization — switch to it from the
-          workspace switcher.
-        </p>
-      </div>
-    </div>
-  );
-}
-
 /* The following code defines the evaluation page. */
 
 function EvalsPageInner() {
@@ -1420,10 +1365,9 @@ function EvalsPageInner() {
   const [detailTask, setDetailTask] = useState<EvalTask | null>(null);
   const [configOpen, setConfigOpen] = useState(false);
 
-  // An unentitled workspace can call only the availability route.
-  // Delay all other requests until the availability response confirms access.
-  const { data: availability, isLoading: availLoading } = useSWR("eval-availability", getEvalAvailability);
-  const enabled = availability?.enabled === true;
+  // A free org may call none of the eval routes. Every fetch waits for the
+  // plan gate so the plan prompt renders without a burst of 402s.
+  const { enabled, blocker } = useEvalsGate();
 
   const { data: cfg, isLoading: cfgLoading } = useSWR(enabled ? "eval-config" : null, getEvalConfig);
   const { data: evalSet, error: tasksError } = useSWR(
@@ -1450,13 +1394,11 @@ function EvalsPageInner() {
     return (
       <div className="min-h-screen p-8 animate-fade-in">
         {header}
-        <div className="max-w-5xl">
-          {availLoading || !availability ? (
+        <div className="max-w-md">
+          {blocker ?? (
             <div className="ev-card p-8 text-sm text-[var(--color-text-dim)] flex items-center gap-2">
               <Loader2 className="w-4 h-4 animate-spin" /> loading…
             </div>
-          ) : (
-            <SetupState />
           )}
         </div>
       </div>

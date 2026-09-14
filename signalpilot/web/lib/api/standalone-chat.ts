@@ -2,6 +2,7 @@
 
 import type { ConversationFileInfo } from "./chat-files";
 import { GATEWAY_URL, getAuthHeaders, request } from "./client";
+import type { DeploymentCapabilities, EntitlementPayload } from "~/lib/entitlement";
 
 // The following functions support chat traces on the /chats page.
 export type ChatTraceThread = {
@@ -96,6 +97,10 @@ export type StandaloneChatBootstrap = {
     /** Connectors (external MCP servers) for the chat agent. */
     mcp_connectors?: boolean;
   };
+  /** The org's plan entitlement as the gateway sees it. */
+  entitlement: EntitlementPayload;
+  /** What this deployment is wired to run. */
+  capabilities: DeploymentCapabilities;
 };
 
 export type StandaloneChatRun = {

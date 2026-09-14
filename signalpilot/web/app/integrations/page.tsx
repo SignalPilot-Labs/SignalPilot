@@ -36,13 +36,12 @@ import { StatusDot } from "~/components/ui/data-viz";
 import { SectionHeader } from "~/components/ui/section-header";
 import { useToast } from "~/components/ui/toast";
 import { ApiKeysSkeleton } from "~/components/ui/skeleton";
-import { NotebooksProjectsPaywall } from "~/components/billing/notebooks-projects-paywall";
+import { PlanRequired } from "~/components/billing/plan-required";
 import { NotionIcon } from "~/components/branding/notion-icon";
 import { ThemeEditor } from "~/components/integrations/theme-editor";
 import { useSubscription } from "~/lib/subscription-context";
 
 const IS_CLOUD_MODE = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "cloud";
-const PAID_TIERS = ["pro", "team", "enterprise", "unlimited"];
 
 function oauthStatus(installation: NotionOAuthInstallation): { label: string; tone: "healthy" | "warning" | "error" | "unknown" } {
   if (installation.status === "disconnected") return { label: "disconnected", tone: "error" };
@@ -83,13 +82,19 @@ function formatUpdatedAt(value: number | null): string {
 
 export default function IntegrationsPage() {
   const { isLoaded } = useAppAuth();
-  const { planTier, isLoaded: subLoaded } = useSubscription();
+  const { isBillable, isLoaded: subLoaded } = useSubscription();
 
-  const isPaid = PAID_TIERS.includes(planTier);
-  const gated = IS_CLOUD_MODE && subLoaded && !isPaid;
+  const gated = IS_CLOUD_MODE && subLoaded && !isBillable;
 
   if (!isLoaded || (IS_CLOUD_MODE && !subLoaded)) return <ApiKeysSkeleton />;
-  if (gated) return <NotebooksProjectsPaywall />;
+  if (gated) {
+    return (
+      <PlanRequired
+        feature="integrations"
+        description="Connect Notion and Slack to a governed project so the agent can publish and answer where your team works."
+      />
+    );
+  }
   return <IntegrationsContent />;
 }
 

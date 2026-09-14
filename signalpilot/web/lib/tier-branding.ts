@@ -1,27 +1,23 @@
-export type BrandTier = "free" | "pro" | "team" | "enterprise";
+/** Billable tiers that carry a visual brand. Free and local (unlimited) have none. */
+export type BrandTier = "team" | "scale" | "enterprise";
 
 export interface TierBrand {
   label: string;
   accentText: string;
-  /** CSS hex color used in SVGs and inline styles. null for Free (no accent). */
-  accentHex: string | null;
+  /** CSS hex color used in SVGs and inline styles. */
+  accentHex: string;
 }
 
 export const TIER_BRANDS: Record<BrandTier, TierBrand> = {
-  free: {
-    label: "Free",
-    accentText: "",
-    accentHex: null,
-  },
-  pro: {
-    label: "Pro",
-    accentText: "text-[var(--color-text-muted)]",
-    accentHex: "#d4d4d4",
-  },
   team: {
     label: "Team",
     accentText: "text-blue-400",
     accentHex: "#60a5fa",
+  },
+  scale: {
+    label: "Scale",
+    accentText: "text-violet-400",
+    accentHex: "#a78bfa",
   },
   enterprise: {
     label: "Enterprise",
@@ -29,3 +25,7 @@ export const TIER_BRANDS: Record<BrandTier, TierBrand> = {
     accentHex: "#00ff88",
   },
 };
+
+export function isBrandTier(value: string): value is BrandTier {
+  return value in TIER_BRANDS;
+}

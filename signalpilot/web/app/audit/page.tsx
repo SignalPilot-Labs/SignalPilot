@@ -16,7 +16,8 @@ import {
 } from "lucide-react";
 import { getAuditExportUrl } from "~/lib/api";
 import type { AuditEntry } from "~/lib/types";
-import { useAudit, useAuditStats, usePlan } from "~/lib/hooks/use-gateway-data";
+import { useAudit, useAuditStats } from "~/lib/hooks/use-gateway-data";
+import { useSubscription } from "~/lib/subscription-context";
 import { useToast } from "~/components/ui/toast";
 import { PageLoader } from "~/components/ui/page-loader";
 import { EmptyList, EmptyState } from "~/components/ui/empty-states";
@@ -47,11 +48,10 @@ export default function AuditPage() {
   const [filter, setFilter] = useState<string>("");
   const [typeFilter, setTypeFilter] = useState<string>("");
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
-  const { data: plan } = usePlan();
+  const { isBillable } = useSubscription();
   const { toast } = useToast();
-  const tier = plan?.tier ?? "free";
-  const isLocal = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE !== "cloud";
-  const canExport = isLocal || tier === "team" || tier === "enterprise" || tier === "unlimited";
+  // Audit export is on for every billable plan; local mode is always billable.
+  const canExport = isBillable;
 
   const { data, isLoading, mutate: refreshAudit } = useAudit({
     limit: 200,
@@ -149,7 +149,7 @@ export default function AuditPage() {
 
         <div className="flex items-center gap-2">
           <button
-            onClick={() => canExport ? exportFile("csv") : toast("upgrade to team plan to export audit logs", "error")}
+            onClick={() => canExport ? exportFile("csv") : toast("a paid plan is required to export audit logs", "error")}
             disabled={exporting === "csv"}
             className={`flex items-center gap-2 px-3 py-1.5 rounded-[10px] text-[12px] border transition-colors duration-150 ${
               canExport
@@ -161,7 +161,7 @@ export default function AuditPage() {
             {exporting === "csv" ? "preparing..." : "csv"}
           </button>
           <button
-            onClick={() => canExport ? exportFile("json") : toast("upgrade to team plan to export audit logs", "error")}
+            onClick={() => canExport ? exportFile("json") : toast("a paid plan is required to export audit logs", "error")}
             disabled={exporting === "json"}
             className={`flex items-center gap-2 px-3 py-1.5 rounded-[10px] text-[12px] border transition-colors duration-150 ${
               canExport

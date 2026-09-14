@@ -34,12 +34,25 @@ export interface MeResponse {
   image_url: string | null;
 }
 
+export type SubscriptionTier = "free" | "team" | "scale" | "enterprise";
+
+/** The full entitlement row from `GET /api/v1/billing/subscription`. */
 export interface SubscriptionResponse {
-  plan_tier: string;
+  plan_tier: SubscriptionTier;
   status: string;
   stripe_subscription_id: string | null;
   current_period_end: string | null;
-  max_api_keys: number;
+  included_seats: number;
+  included_models: number;
+  included_eval_runs: number;
+  included_credits: number;
+  managed: boolean;
+  billing_interval: "month" | "year";
+  enterprise_flags: Record<string, unknown>;
+  contract: Record<string, unknown> | null;
+  grace_until: string | null;
+  /** Sent by the backend when it has already applied the billable rule. */
+  is_billable?: boolean;
   pending_downgrade_to: string | null;
   pending_downgrade_date: string | null;
   cancel_at_period_end: boolean;
@@ -53,13 +66,18 @@ export interface PlanPrice {
   interval: "month" | "year";
 }
 
+/** One plan from `GET /api/v1/billing/plans`: Stripe product plus the static allowance table. */
 export interface PlanInfo {
-  tier: string;
+  tier: "team" | "scale" | "enterprise";
   name: string;
   description: string;
   features: string[];
   highlight_color: string;
   prices: PlanPrice[];
+  included_seats: number;
+  included_models: number;
+  included_eval_runs: number;
+  included_credits: number;
 }
 
 export interface PlansResponse {
@@ -67,37 +85,39 @@ export interface PlansResponse {
   publishable_key: string;
 }
 
-export interface UsageSummaryResponse {
-  total_requests: number;
-  total_requests_today: number;
-  total_requests_7d: number;
-  total_requests_30d: number;
-  daily_limit: number;
-  daily_used: number;
-  daily_reset_at: string;
-  active_keys: number;
-  last_activity_at: string | null;
+export interface AllowanceUse {
+  used: number;
+  included: number;
 }
 
+/** `GET /api/v1/usage/summary`: the open period read from the credit ledger. */
+export interface UsageSummaryResponse {
+  period_start: string;
+  period_end: string;
+  granted: number;
+  purchased: number;
+  consumed: number;
+  consumed_by_unit: Record<string, number>;
+  returned: number;
+  expired: number;
+  available: number;
+  overage: number;
+  allowances: {
+    seats: AllowanceUse;
+    models: AllowanceUse;
+    eval_runs: AllowanceUse;
+  };
+}
+
+/** One day of consumption from `GET /api/v1/usage/daily`. */
 export interface DailyUsagePoint {
   date: string;
-  requests: number;
+  consumed: number;
+  consumed_by_unit: Record<string, number>;
 }
 
 export interface DailyUsageResponse {
   points: DailyUsagePoint[];
-}
-
-export interface KeyUsageEntry {
-  key_id: string;
-  key_name: string;
-  total_requests: number;
-  last_7d: number;
-  last_used_at: string | null;
-}
-
-export interface KeyUsageByKeyResponse {
-  keys: KeyUsageEntry[];
 }
 
 // ---------------------------------------------------------------------------
@@ -235,7 +255,6 @@ export interface BackendClient {
   reactivateSubscription(): Promise<{ status: string }>;
   getUsageSummary(): Promise<UsageSummaryResponse>;
   getUsageDaily(days?: number): Promise<DailyUsageResponse>;
-  getUsageByKey(): Promise<KeyUsageByKeyResponse>;
 }
 
 /**
@@ -307,7 +326,5 @@ export function useBackendClient(): BackendClient {
     getUsageDaily: (days = 30) =>
       backendFetch<DailyUsageResponse>(`/api/v1/usage/daily?days=${days}`, getToken),
 
-    getUsageByKey: () =>
-      backendFetch<KeyUsageByKeyResponse>("/api/v1/usage/by-key", getToken),
   }), [getToken]);
 }

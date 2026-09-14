@@ -34,7 +34,6 @@ import {
 } from "recharts";
 import {
   getEvalAccuracy,
-  getEvalAvailability,
   getProjects,
   listStandaloneConversations,
   subscribeMetrics,
@@ -54,6 +53,7 @@ import {
 } from "~/lib/hooks/use-gateway-data";
 import type { AuditEntry, MetricsSnapshot } from "~/lib/types";
 import { useAppAuth } from "~/lib/auth-context";
+import { useSubscription } from "~/lib/subscription-context";
 import { DashboardSkeleton } from "~/components/ui/skeleton";
 import { TimeAgo } from "~/components/ui/time-ago";
 import { useOnboardingStatus } from "~/lib/onboarding";
@@ -252,9 +252,10 @@ function DashboardContent() {
     listStandaloneConversations,
     { refreshInterval: 30_000, shouldRetryOnError: false },
   );
-  const { data: evalAvailability } = useSWR("dashboard-eval-availability", getEvalAvailability, { dedupingInterval: 60_000 });
+  const { isBillable, capabilities } = useSubscription();
+  const evalsEnabled = isBillable && capabilities?.evals === true;
   const { data: evalAccuracy } = useSWR(
-    evalAvailability?.enabled ? "dashboard-eval-accuracy" : null,
+    evalsEnabled ? "dashboard-eval-accuracy" : null,
     getEvalAccuracy,
     { refreshInterval: 30_000 },
   );
@@ -362,7 +363,7 @@ function DashboardContent() {
         </div>
         <div className="dash-actions">
           <Link href="/chats" className="dash-action is-secondary"><MessageSquareText /> Ask data</Link>
-          {evalAvailability?.enabled && <Link href="/evals" className="dash-action is-primary"><Play /> Run eval</Link>}
+          {evalsEnabled && <Link href="/evals" className="dash-action is-primary"><Play /> Run eval</Link>}
         </div>
       </header>
 

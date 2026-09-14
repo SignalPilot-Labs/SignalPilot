@@ -21,7 +21,7 @@ import { useToast } from "~/components/ui/toast";
 import { ApiKeysSkeleton } from "~/components/ui/skeleton";
 import { CopyButton } from "~/components/ui/copy-button";
 import { ALL_SCOPES } from "~/lib/api-key-scopes";
-import { useApiKeys, invalidateApiKeys, usePlan } from "~/lib/hooks/use-gateway-data";
+import { useApiKeys, invalidateApiKeys } from "~/lib/hooks/use-gateway-data";
 import { PageLoader } from "~/components/ui/page-loader";
 import {
   createApiKey,
@@ -400,9 +400,7 @@ function ApiKeysContent() {
   const { toast } = useToast();
 
   const { data: keys = [], isLoading, error: swrError } = useApiKeys();
-  const { data: plan } = usePlan();
-  const maxApiKeys = plan?.limits.api_keys === "unlimited" ? 999 : (plan?.limits.api_keys ?? 1);
-  const canCreateKey = (count: number) => count < maxApiKeys;
+  const { tier } = useSubscription();
   const loadError = swrError ? String(swrError) : null;
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [newlyCreated, setNewlyCreated] = useState<ApiKeyCreatedResponse | null>(null);
@@ -472,16 +470,12 @@ function ApiKeysContent() {
         <div className="flex items-center gap-6 text-xs">
           <span className="text-[var(--color-text-dim)]">
             keys:{" "}
-            <code className={`text-[12px] ${keys.length >= maxApiKeys ? "text-[var(--color-error)]" : "text-[var(--color-text)]"}`}>
-              {keys.length}/{maxApiKeys === 999 ? "∞" : maxApiKeys}
-            </code>
+            <code className="text-[12px] text-[var(--color-text)]">{keys.length}</code>
           </span>
-          {plan && (
-            <span className="text-[var(--color-text-dim)]">
-              plan:{" "}
-              <code className="text-[12px] text-[var(--color-text)]">{plan.tier}</code>
-            </span>
-          )}
+          <span className="text-[var(--color-text-dim)]">
+            plan:{" "}
+            <code className="text-[12px] text-[var(--color-text)]">{tier}</code>
+          </span>
         </div>
       </TerminalBar>
 
@@ -502,12 +496,6 @@ function ApiKeysContent() {
           {!showCreateForm && (
             <button
               onClick={() => setShowCreateForm(true)}
-              disabled={!canCreateKey(keys.length)}
-              title={
-                !canCreateKey(keys.length)
-                  ? `key limit reached (${maxApiKeys}/${maxApiKeys}). upgrade your plan to create more keys.`
-                  : undefined
-              }
               className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] rounded-[10px] transition-colors duration-150 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <Plus className="w-3 h-3" />
@@ -600,8 +588,6 @@ function LocalApiKeysContent() {
   const { toast } = useToast();
 
   const { data: keys = [], isLoading, error: swrError } = useApiKeys();
-  const { data: plan } = usePlan();
-  const MAX_KEYS = plan?.limits.api_keys === "unlimited" ? 50 : (plan?.limits.api_keys ?? 50);
   const loadError = swrError ? String(swrError) : null;
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [newlyCreated, setNewlyCreated] = useState<ApiKeyCreatedResponse | null>(null);
@@ -649,16 +635,8 @@ function LocalApiKeysContent() {
         <div className="flex items-center gap-6 text-xs">
           <span className="text-[var(--color-text-dim)]">
             keys:{" "}
-            <code className={`text-[12px] ${keys.length >= MAX_KEYS ? "text-[var(--color-error)]" : "text-[var(--color-text)]"}`}>
-              {keys.length}/{MAX_KEYS === 50 && !plan ? "∞" : MAX_KEYS}
-            </code>
+            <code className="text-[12px] text-[var(--color-text)]">{keys.length}</code>
           </span>
-          {plan && (
-            <span className="text-[var(--color-text-dim)]">
-              plan:{" "}
-              <code className="text-[12px] text-[var(--color-text)]">{plan.tier}</code>
-            </span>
-          )}
         </div>
       </TerminalBar>
 
@@ -674,7 +652,6 @@ function LocalApiKeysContent() {
           {!showCreateForm && (
             <button
               onClick={() => setShowCreateForm(true)}
-              disabled={keys.length >= MAX_KEYS}
               className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] rounded-[10px] transition-colors duration-150 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <Plus className="w-3 h-3" />

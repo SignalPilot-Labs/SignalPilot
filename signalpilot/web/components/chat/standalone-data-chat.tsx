@@ -15,6 +15,7 @@ import {
 import { useToast } from "~/components/ui/toast";
 import { PlanRequired } from "~/components/billing/plan-required";
 import { useSubscription } from "~/lib/subscription-context";
+import { gatingError } from "~/lib/api/client";
 import {
   standaloneMessageKey,
   type OptimisticUserMessage,
@@ -310,7 +311,15 @@ export function StandaloneDataChat({
     return <ChatBootstrapSpinner />;
   }
   if (bootstrapError || !bootstrap?.enabled) {
-    if (!subscription.isBillable && subscription.isLoaded) {
+    // A free org gets 200 with `enabled: false` and its entitlement; a gated
+    // route answers 402 plan_required. Both are the plan prompt. Anything
+    // else (a kill switch, 503 not_available_in_deployment, an outage) is not
+    // something a plan change fixes.
+    const planRequired =
+      bootstrap?.entitlement?.is_billable === false ||
+      gatingError(bootstrapError)?.error === "plan_required" ||
+      (subscription.isLoaded && !subscription.isBillable);
+    if (planRequired) {
       return (
         <PlanRequired
           feature="data chat"

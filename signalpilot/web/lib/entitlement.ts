@@ -34,9 +34,14 @@ export interface DeploymentCapabilities {
   sandbox: boolean;
 }
 
-/** Snake-case entitlement object as carried by the gateway bootstrap payload. */
+/**
+ * Snake-case entitlement object as carried by the gateway bootstrap and
+ * `/api/plan` payloads (`OrgEntitlement.to_dict()`).
+ */
 export interface EntitlementPayload {
+  org_id?: string;
   tier: string;
+  status?: string;
   is_billable: boolean;
   included_seats: number;
   included_models: number;
@@ -45,6 +50,7 @@ export interface EntitlementPayload {
   managed: boolean;
   billing_interval?: string;
   enterprise_flags?: Record<string, unknown> | null;
+  grace_until?: string | null;
 }
 
 /** The fields of the backend subscription row that decide billability. */

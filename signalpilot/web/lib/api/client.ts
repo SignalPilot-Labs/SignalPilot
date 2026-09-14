@@ -156,6 +156,47 @@ export function userFacingErrorMessage(
   return raw || fallback;
 }
 
+/**
+ * A gateway plan or deployment refusal. The gateway answers 402
+ * `{"error":"plan_required","tier":...}` when the org is not on a billable
+ * plan and 503 `{"error":"not_available_in_deployment","capability":...}`
+ * when this deployment cannot run the feature; the keys sit at the top level
+ * and are repeated under `detail`.
+ */
+export type GatingError =
+  | { status: number; error: "plan_required"; tier: string }
+  | { status: number; error: "not_available_in_deployment"; capability: string };
+
+/** The gating refusal behind a thrown request error, or null for anything else. */
+export function gatingError(err: unknown): GatingError | null {
+  if (!(err instanceof ApiRequestError)) return null;
+  if (err.status !== 402 && err.status !== 503) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(err.body);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object") return null;
+  const top = parsed as Record<string, unknown>;
+  const detail =
+    top.detail && typeof top.detail === "object" ? (top.detail as Record<string, unknown>) : {};
+  const error = top.error ?? detail.error;
+  if (error === "plan_required") {
+    const tier = top.tier ?? detail.tier;
+    return { status: err.status, error, tier: typeof tier === "string" ? tier : "free" };
+  }
+  if (error === "not_available_in_deployment") {
+    const capability = top.capability ?? detail.capability;
+    return {
+      status: err.status,
+      error,
+      capability: typeof capability === "string" ? capability : "",
+    };
+  }
+  return null;
+}
+
 /** HTTP status of a thrown request error, or null when it is not one. */
 export function requestErrorStatus(err: unknown): number | null {
   if (err instanceof ApiRequestError) return err.status;

@@ -13,6 +13,7 @@ import useSWR from "swr";
 import { useAppAuth } from "~/lib/auth-context";
 import { useBackendClient } from "~/lib/backend-client";
 import { getStandaloneChatBootstrap } from "~/lib/api/standalone-chat";
+import { gatingError } from "~/lib/api/client";
 import {
   FREE_ENTITLEMENT,
   LOCAL_ENTITLEMENT,
@@ -88,6 +89,16 @@ interface BootstrapProbe {
   entitlement: Entitlement | null;
 }
 
+const FREE_PAYLOAD = {
+  tier: "free",
+  is_billable: false,
+  included_seats: 0,
+  included_models: 0,
+  included_eval_runs: 0,
+  included_credits: 0,
+  managed: false,
+} as const;
+
 function useBootstrapProbe(enabled: boolean): BootstrapProbe {
   const { data, error } = useSWR(
     enabled ? "standalone-chat-bootstrap" : null,
@@ -97,15 +108,26 @@ function useBootstrapProbe(enabled: boolean): BootstrapProbe {
   return useMemo(() => {
     if (!enabled) return { capabilities: null, loaded: false, entitlement: null };
     if (data) {
+      // The gateway answers 200 for every org: a free org gets `enabled: false`
+      // with its entitlement and the deployment capabilities.
       return {
         capabilities: data.capabilities ?? { evals: false, sandbox: false },
         loaded: true,
-        entitlement: data.entitlement ? entitlementFromPayload(data.entitlement) : null,
+        entitlement: data.entitlement?.tier ? entitlementFromPayload(data.entitlement) : null,
       };
     }
-    // A 402 means the org is not on a billable plan; the gateway still knows
-    // nothing about the deployment for this caller, so capabilities stay null.
-    if (error) return { capabilities: null, loaded: true, entitlement: null };
+    if (error) {
+      // A gated route answers 402 plan_required with the tier; that is still
+      // an entitlement. A 503 not_available_in_deployment says nothing about
+      // the plan, and neither says what the deployment can run, so
+      // capabilities stay null.
+      const gate = gatingError(error);
+      const entitlement =
+        gate?.error === "plan_required"
+          ? entitlementFromPayload({ ...FREE_PAYLOAD, tier: gate.tier })
+          : null;
+      return { capabilities: null, loaded: true, entitlement };
+    }
     return { capabilities: null, loaded: false, entitlement: null };
   }, [enabled, data, error]);
 }

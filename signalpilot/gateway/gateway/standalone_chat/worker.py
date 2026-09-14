@@ -381,6 +381,7 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                                         worker_id=worker_id,
                                         cost_usd=(raw_cost if isinstance(raw_cost, (int, float)) else None),
                                         usage=(raw_usage if isinstance(raw_usage, dict) else None),
+                                        key_source=execution.key_source,
                                     )
                         raw_report_proposal = event.get("report_proposal")
                         report_proposal = raw_report_proposal if isinstance(raw_report_proposal, dict) else None

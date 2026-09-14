@@ -9,6 +9,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from gateway.billing.emitters.threads import emit_thread_credit
 from gateway.db.models import (
     GatewayChatConversation,
     GatewayChatMessage,
@@ -67,6 +68,7 @@ async def complete_run(
                 payload={"status": RunStatus.completed.value},
             )
             await _retain_runtime_datasets_after_terminal_run(db, run=run)
+            await emit_thread_credit(db, run, final_message=existing)
             from gateway.store.chat_reports import finalize_refresh_for_run
 
             await finalize_refresh_for_run(db, run=run, succeeded=True)
@@ -92,6 +94,7 @@ async def complete_run(
             payload={"status": RunStatus.cancelled.value},
         )
         await _retain_runtime_datasets_after_terminal_run(db, run=run)
+        await emit_thread_credit(db, run)
         from gateway.store.chat_reports import finalize_refresh_for_run
 
         await finalize_refresh_for_run(db, run=run, succeeded=False)
@@ -178,6 +181,7 @@ async def complete_run(
         payload={"status": RunStatus.completed.value},
     )
     await _retain_runtime_datasets_after_terminal_run(db, run=run)
+    await emit_thread_credit(db, run, final_message=message)
     await db.flush()
     from gateway.store.chat_reports import finalize_refresh_for_run
 
@@ -293,6 +297,7 @@ async def fail_run(
         payload={"status": target},
     )
     await _retain_runtime_datasets_after_terminal_run(db, run=run)
+    await emit_thread_credit(db, run)
     from gateway.store.chat_reports import finalize_refresh_for_run
 
     await finalize_refresh_for_run(db, run=run, succeeded=False)

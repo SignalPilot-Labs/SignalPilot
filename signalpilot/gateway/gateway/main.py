@@ -490,6 +490,12 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning("Improvement schedule loop error: %s", e)
 
+    async def _credit_daily_snapshot_loop():
+        """Write the model_day / seat_day credit rows once per UTC day."""
+        from .background.loops import credit_daily_snapshot_loop
+
+        await credit_daily_snapshot_loop(get_session_factory())
+
     health_flush_task = asyncio.create_task(_health_flush_loop())
     health_cleanup_task = asyncio.create_task(_health_cleanup_loop())
     health_ping_task = asyncio.create_task(_health_ping_loop())
@@ -501,6 +507,7 @@ async def lifespan(app: FastAPI):
     eval_reaper_task = asyncio.create_task(_eval_reaper_loop())
     eval_retention_task = asyncio.create_task(_eval_retention_loop())
     improvement_schedule_task = asyncio.create_task(_improvement_schedule_loop())
+    credit_snapshot_task = asyncio.create_task(_credit_daily_snapshot_loop())
     dbt_map_reaper_task = asyncio.create_task(_dbt_map_reaper_loop())
 
     async def _repo_mirror_reconcile_startup() -> None:
@@ -573,6 +580,7 @@ async def lifespan(app: FastAPI):
         eval_reaper_task.cancel()
         eval_retention_task.cancel()
         improvement_schedule_task.cancel()
+        credit_snapshot_task.cancel()
         dbt_map_reaper_task.cancel()
         repo_reconcile_task.cancel()
         await pool_manager.close_all()

@@ -18,6 +18,7 @@ import sqlglot
 from sqlalchemy import select
 
 from gateway import __version__ as gateway_version
+from gateway.billing.emitters.queries import emit_query_credit
 from gateway.connectors.health_monitor import health_monitor
 from gateway.connectors.pool_manager import pool_manager
 from gateway.connectors.registry import get_dashboard_dialect
@@ -27,7 +28,6 @@ from gateway.governance.annotations import load_annotations
 from gateway.governance.bindings import BoundQuery, BoundQueryError
 from gateway.governance.cost_estimator import CostEstimate, CostEstimator
 from gateway.governance.pii import PIIRedactor
-from gateway.governance.plan_limits import check_query_limit, get_org_limits, record_query
 from gateway.standalone_chat.config import enterprise_chat_feature_flags
 from gateway.standalone_chat.object_storage import chat_object_storage, runtime_object_key
 from gateway.standalone_chat.query_approvals import (
@@ -147,8 +147,6 @@ class GovernedQueryExecutor:
         bound_query: BoundQuery | None = None,
     ) -> GovernedQueryResult:
         org_id = store._require_org_id()
-        plan = await get_org_limits(org_id)
-        check_query_limit(org_id, plan)
 
         info = await store.get_connection(connection_name)
         if info is None:
@@ -399,6 +397,7 @@ class GovernedQueryExecutor:
                 execution.status = "cancelled"
                 execution.public_error_code = "query_cancelled"
                 execution.terminal_at = datetime.now(UTC)
+                await emit_query_credit(store.session, execution)
                 await store.session.commit()
             raise
         except GovernedQueryError:
@@ -494,6 +493,7 @@ class GovernedQueryExecutor:
             execution.completeness = "truncated"
             execution.truncation_reason = f"actual output exceeded the {row_limit}-row route limit"
             execution.terminal_at = datetime.now(UTC)
+            await emit_query_credit(store.session, execution)
             await store.session.commit()
             if proposal_id:
                 await reconcile_reservation(
@@ -502,7 +502,6 @@ class GovernedQueryExecutor:
                     actual_cost_usd=actual_cost_usd,
                     completed=True,
                 )
-            record_query(org_id)
             await chat_store.append_event(
                 store.session,
                 run_id=context.run_id,
@@ -559,6 +558,7 @@ class GovernedQueryExecutor:
             execution.row_count = len(saved_rows)
             execution.completeness = completeness
             execution.terminal_at = datetime.now(UTC)
+            await emit_query_credit(store.session, execution)
             await store.session.commit()
             if proposal_id:
                 await reconcile_reservation(
@@ -567,7 +567,6 @@ class GovernedQueryExecutor:
                     actual_cost_usd=actual_cost_usd,
                     completed=True,
                 )
-            record_query(org_id)
             if context.run_id:
                 await chat_store.append_event(
                     store.session,
@@ -672,6 +671,7 @@ class GovernedQueryExecutor:
         execution.execution_ms = elapsed_ms
         execution.terminal_at = datetime.now(UTC)
         try:
+            await emit_query_credit(store.session, execution)
             await store.session.commit()
         except Exception as exc:
             await store.session.rollback()
@@ -690,6 +690,7 @@ class GovernedQueryExecutor:
                     persisted_execution.row_count = len(saved_rows)
                     persisted_execution.completeness = completeness
                     persisted_execution.terminal_at = datetime.now(UTC)
+                    await emit_query_credit(store.session, persisted_execution)
                     await store.session.commit()
             if proposal_id:
                 with suppress(Exception):
@@ -699,7 +700,6 @@ class GovernedQueryExecutor:
                         actual_cost_usd=actual_cost_usd,
                         completed=True,
                     )
-            record_query(org_id)
             raise GovernedQueryError(
                 "result_persistence_failed",
                 "The query completed but its governed result could not be persisted",
@@ -711,7 +711,6 @@ class GovernedQueryExecutor:
                 actual_cost_usd=actual_cost_usd,
                 completed=True,
             )
-        record_query(org_id)
         if context.run_id:
             await chat_store.append_event(
                 store.session,
@@ -759,6 +758,7 @@ class GovernedQueryExecutor:
         execution.status = "failed"
         execution.public_error_code = code
         execution.terminal_at = datetime.now(UTC)
+        await emit_query_credit(store.session, execution)
         await store.session.commit()
 
 

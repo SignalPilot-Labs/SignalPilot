@@ -207,6 +207,16 @@ async def update_run(session: AsyncSession, *, org_id: str, run_id: str, **field
         .where(GatewayEvalRun.org_id == org_id, GatewayEvalRun.id == run_id)
         .values(**fields)
     )
+    if fields.get("status") == "running":
+        # Billing: the run has started. One ledger row per run, in this transaction.
+        from gateway.billing.emitters.eval_runs import emit_eval_run_credit
+
+        trigger = (
+            await session.execute(
+                select(GatewayEvalRun.trigger).where(GatewayEvalRun.org_id == org_id, GatewayEvalRun.id == run_id)
+            )
+        ).scalar_one_or_none()
+        await emit_eval_run_credit(session, org_id=org_id, run_id=run_id, trigger=trigger)
     await session.commit()
 
 

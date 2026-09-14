@@ -11,6 +11,7 @@ from typing import Any
 
 from sqlalchemy import select
 
+from gateway.billing.emitters.queries import emit_query_credit
 from gateway.connectors.pool_manager import pool_manager
 from gateway.db.models import (
     GatewayGovernedQueryExecution,
@@ -19,7 +20,6 @@ from gateway.db.models import (
 from gateway.engine import sqlglot_dialect, validate_sql
 from gateway.governance.annotations import load_annotations
 from gateway.governance.pii import PIIRedactor
-from gateway.governance.plan_limits import check_query_limit, get_org_limits, record_query
 from gateway.governance.query_executor import GovernedQueryContext
 from gateway.governance.query_planner import QueryPlanError, require_execution_plan
 from gateway.standalone_chat.config import enterprise_chat_feature_flags
@@ -59,8 +59,6 @@ class RuntimeDatasetExecutor:
         if not context.run_id or not context.conversation_id or not context.project_id or not context.commit_sha:
             raise RuntimeDatasetError("scope_incomplete", "DatasetRef execution requires a complete chat scope")
         org_id = store._require_org_id()
-        limits = await get_org_limits(org_id)
-        check_query_limit(org_id, limits)
         try:
             plan = await require_execution_plan(
                 store,
@@ -184,6 +182,7 @@ class RuntimeDatasetExecutor:
             execution.status = "failed"
             execution.public_error_code = "credentials_missing"
             execution.terminal_at = datetime.now(UTC)
+            await emit_query_credit(store.session, execution)
             await store.session.commit()
             if proposal_id:
                 await reconcile_reservation(
@@ -260,6 +259,7 @@ class RuntimeDatasetExecutor:
                 "query_cancelled" if isinstance(exc, asyncio.CancelledError) else "dataset_stream_failed"
             )
             execution.terminal_at = datetime.now(UTC)
+            await emit_query_credit(store.session, execution)
             await store.session.commit()
             if proposal_id:
                 with suppress(Exception):
@@ -319,6 +319,7 @@ class RuntimeDatasetExecutor:
         execution.completeness = "complete"
         execution.terminal_at = datetime.now(UTC)
         try:
+            await emit_query_credit(store.session, execution)
             await store.session.commit()
         except Exception as exc:
             await store.session.rollback()
@@ -335,6 +336,7 @@ class RuntimeDatasetExecutor:
                     persisted_execution.row_count = row_count
                     persisted_execution.completeness = "complete"
                     persisted_execution.terminal_at = datetime.now(UTC)
+                    await emit_query_credit(store.session, persisted_execution)
                     await store.session.commit()
             if proposal_id:
                 with suppress(Exception):
@@ -344,7 +346,6 @@ class RuntimeDatasetExecutor:
                         actual_cost_usd=actual_cost_usd,
                         completed=True,
                     )
-            record_query(org_id)
             raise RuntimeDatasetError(
                 "dataset_persistence_failed",
                 "The warehouse query completed but DatasetRef metadata could not be persisted",
@@ -356,7 +357,6 @@ class RuntimeDatasetExecutor:
                 actual_cost_usd=execution.actual_cost_usd,
                 completed=True,
             )
-        record_query(org_id)
         await chat_store.append_event(
             store.session,
             run_id=context.run_id,

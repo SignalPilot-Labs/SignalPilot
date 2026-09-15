@@ -409,7 +409,7 @@ class ConnectionsStoreMixin:
                     if byok_state._dek_cache is not None:
                         byok_state._dek_cache.invalidate(cred_row.id)
             except Exception as e:
-                logger.error("Credential encryption failed for connection %s: %s", name, e)
+                logger.error("Encryption failed while saving connection %s (%s)", name, type(e).__name__)
                 raise CredentialEncryptionError(f"Failed to encrypt credentials for connection '{name}'") from e
 
         await self.session.commit()

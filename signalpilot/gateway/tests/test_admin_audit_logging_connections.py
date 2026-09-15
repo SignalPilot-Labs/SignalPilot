@@ -307,7 +307,7 @@ class TestConnectionCRUDAudit:
         store.get_connection_string = AsyncMock(return_value=None)
         store.update_connection = AsyncMock(return_value=existing)
 
-        update = ConnectionUpdate(connection_string="postgresql://user:pass@host/db")
+        update = ConnectionUpdate(connection_string="postgresql://user@host/db")
 
         with (
             patch("gateway.api.connections.crud._validate_connection_params", return_value=[]),

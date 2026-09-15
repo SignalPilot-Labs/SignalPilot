@@ -79,10 +79,20 @@ jobs:
         working-directory: docs
         # Docusaurus currently has no patched image-size release. These parsers
         # only process repository-owned docs assets during the trusted build.
+        # fast-uri (via ajv), svgo (via @svgr) and js-yaml (via gray-matter and
+        # cosmiconfig) are build-time tooling that only sees repository-owned
+        # content; accepted 2026-09-15 pending the Docusaurus 3.10 upgrade.
         run: >-
           node ../.github/scripts/npm-audit-gate.mjs
           --allow-advisory GHSA-w3rx-r6r6-pgpr
           --allow-advisory GHSA-5p2g-fcmc-qvqq
+          --allow-advisory GHSA-5jgf-p345-68v8
+          --allow-advisory GHSA-f65p-4m7j-42xc
+          --allow-advisory GHSA-fph4-wmhf-6fwf
+          --allow-advisory GHSA-jqff-g426-hqxp
+          --allow-advisory GHSA-w27v-7q3p-w38r
+          --allow-advisory GHSA-4vpr-x523-8j87
+          --allow-advisory GHSA-2883-xcg3-v3hh
 
   secrets:
     name: secrets

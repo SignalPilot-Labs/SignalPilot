@@ -81,6 +81,7 @@
 .schema-columns-table tbody tr:focus-visible { box-shadow: inset 2px 0 var(--color-text); }
 .schema-columns-table tbody tr.is-protected { background: color-mix(in srgb, var(--color-warning) 4%, transparent); }
 .schema-columns-table tbody tr.is-saving { opacity: 0.65; cursor: wait; }
+.schema-columns-table tbody tr.is-readonly { cursor: default; }
 .schema-columns-table small { display: block; margin-top: 0.18rem; overflow: hidden; color: var(--color-text-dim); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
 .schema-column-name { display: flex; min-width: 0; align-items: center; gap: 0.35rem; overflow: hidden; color: var(--color-text); font-family: var(--font-mono); font-size: 10px; text-overflow: ellipsis; }
 .schema-column-name svg { flex: 0 0 auto; width: 10px; height: 10px; color: var(--color-warning); }

@@ -9,9 +9,9 @@ import useSWR from "swr";
 import {
   getSavedChatReport,
   getStandaloneChatProjectReadiness,
-  setDefaultStandaloneChatProject,
   type ChatReportMention,
 } from "~/lib/api";
+import { usePermissions } from "~/lib/hooks/use-permissions";
 import { useToast } from "~/components/ui/toast";
 import { PlanRequired } from "~/components/billing/plan-required";
 import { useSubscription } from "~/lib/subscription-context";
@@ -71,6 +71,7 @@ import { useDockScrollCompensation } from "~/components/chat/use-dock-scroll-com
 import { ConnectorsProvider } from "~/components/connectors/connectors-context";
 import { useChatModelSettings } from "~/components/chat/use-chat-model-settings";
 import { useChatBudgetSettings } from "~/components/chat/use-chat-budget-settings";
+import { useDefaultChatProject } from "~/components/chat/use-default-chat-project";
 import { ChatTelemetryBoundary } from "~/components/chat/chat-telemetry-panel";
 
 export { ChatUiContext, useChatUi } from "~/components/chat/chat-ui-context";
@@ -118,6 +119,9 @@ export function StandaloneDataChat({
   );
   const { perQueryBudgetUsd, chatBudgetUsd, budgetSettings } =
     useChatBudgetSettings(bootstrap, conversationId);
+  const { defaultProjectId, setDefaultProject } =
+    useDefaultChatProject(bootstrap);
+  const { can } = usePermissions();
   const [draft, setDraft] = useChatDraft(conversationId);
   const promptInitialized = useRef(false);
   const [isConversationRailOpen, setIsConversationRailOpen] =
@@ -300,7 +304,7 @@ export function StandaloneDataChat({
     [];
   const empty = uiMessages.length === 0;
   const { message: unreadyMessage, showSetup: showSetupCta } =
-    readinessNotice(bootstrap, readiness);
+    readinessNotice(bootstrap, readiness, can("projects.write"));
 
   if (bootstrapLoading) {
     return <ChatBootstrapSpinner />;
@@ -348,10 +352,13 @@ export function StandaloneDataChat({
       bootstrap={bootstrap}
       selectedProjectId={selectedProjectId}
       onSelectProject={(projectId) => {
+        // A pick is for this chat only; the org default is a separate,
+        // admin-only action.
         setSelectedProjectId(projectId);
-        void setDefaultStandaloneChatProject(projectId);
         router.replace(`/chats?project=${encodeURIComponent(projectId)}`);
       }}
+      defaultProjectId={defaultProjectId}
+      onSetDefaultProject={(projectId) => void setDefaultProject(projectId)}
       onOpenSettings={settingsPanel.toggle}
       settingsOpen={settingsPanel.open}
     />

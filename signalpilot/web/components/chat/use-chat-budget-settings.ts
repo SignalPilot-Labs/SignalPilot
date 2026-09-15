@@ -33,6 +33,10 @@ export function useChatBudgetSettings(
             setPerQueryBudgetUsd,
             chatBudgetUsd,
             setChatBudgetUsd,
+            orgDefaults: {
+              perQueryBudgetUsd: bootstrap.default_per_query_budget_usd,
+              chatBudgetUsd: bootstrap.default_chat_budget_usd,
+            },
           }
         : null,
   };

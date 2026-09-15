@@ -33,6 +33,9 @@ import {
   setPIIConfig,
 } from "~/lib/api";
 import { useConnection } from "~/lib/connection-context";
+import { usePermissions } from "~/lib/hooks/use-permissions";
+import { AdminOnlyControl } from "~/components/access/admin-only-control";
+import { ReadOnlyNote } from "~/components/access/read-only-note";
 import {
   connectionDefaultDatabase,
   groupTablesByDatabase,
@@ -61,6 +64,10 @@ import "./schema.css";
 export default function SchemaExplorerPage() {
   const { connections, selectedConn, setSelectedConn } = useConnection();
   const { toast } = useToast();
+  // PII classification (scan, per-column hide rules, the enforcement switch)
+  // is org curation: members read the rules, admins change them.
+  const { can } = usePermissions();
+  const canCurate = can("schema.curate");
   const [schema, setSchema] = useState<SchemaData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -460,12 +467,13 @@ export default function SchemaExplorerPage() {
                           return (
                             <tr
                               key={column.name}
-                              className={`${currentRule === "hide" && piiConfig.enabled ? "is-protected" : ""}${saving ? " is-saving" : ""}`}
-                              onClick={() => void toggleColumnProtection(column)}
-                              onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void toggleColumnProtection(column); } }}
-                              tabIndex={0}
-                              role="button"
-                              aria-label={`${currentRule === "hide" ? "Remove protection from" : "Hide"} ${column.name}`}
+                              className={`${currentRule === "hide" && piiConfig.enabled ? "is-protected" : ""}${saving ? " is-saving" : ""}${canCurate ? "" : " is-readonly"}`}
+                              onClick={canCurate ? () => void toggleColumnProtection(column) : undefined}
+                              onKeyDown={canCurate ? (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void toggleColumnProtection(column); } } : undefined}
+                              tabIndex={canCurate ? 0 : undefined}
+                              role={canCurate ? "button" : undefined}
+                              aria-label={canCurate ? `${currentRule === "hide" ? "Remove protection from" : "Hide"} ${column.name}` : undefined}
+                              title={canCurate ? undefined : "Only org admins can change PII protection"}
                             >
                               <td><span className="schema-column-name">{column.primary_key && <KeyRound aria-label="Primary key" />}{column.name}</span>{column.comment && <small>{column.comment}</small>}</td>
                               <td><span className="schema-type" data-family={typeFamily(column.type)}><i />{column.type}</span>{column.encoding && column.encoding !== "none" && <small>{column.encoding}</small>}</td>
@@ -498,17 +506,22 @@ export default function SchemaExplorerPage() {
             <div className="schema-pane-heading"><div><span>Governance</span><strong>{protectedColumns}</strong></div></div>
             <section className="schema-protection-summary">
               <div className={piiConfig.enabled ? "is-enabled" : ""}><ShieldCheck aria-hidden="true" /><span><strong>Result protection</strong><small>{piiConfig.enabled ? "Active" : "Paused"}</small></span></div>
-              <button type="button" className={`schema-switch${piiConfig.enabled ? " is-on" : ""}`} onClick={() => void toggleProtectionEnabled()} disabled={savingEnabled} role="switch" aria-checked={piiConfig.enabled} aria-label="Toggle PII result protection"><i /></button>
+              <AdminOnlyControl permission="schema.curate" allowed={canCurate} position="left">
+                <button type="button" className={`schema-switch${piiConfig.enabled ? " is-on" : ""}`} onClick={() => void toggleProtectionEnabled()} disabled={savingEnabled} role="switch" aria-checked={piiConfig.enabled} aria-label="Toggle PII result protection"><i /></button>
+              </AdminOnlyControl>
             </section>
+            {!canCurate && <ReadOnlyNote>PII rules apply to your query results</ReadOnlyNote>}
             <dl className="schema-governance-stats">
               <div><dt>Hidden fields</dt><dd>{Object.values(piiConfig.rules).filter((rule) => rule === "hide").length}</dd></div>
               <div><dt>Other rules</dt><dd>{Object.values(piiConfig.rules).filter((rule) => rule !== "hide").length}</dd></div>
               <div><dt>Suggestions</dt><dd>{Object.values(piiDetections).reduce((sum, columns) => sum + Object.keys(columns).length, 0)}</dd></div>
             </dl>
-            <button type="button" className="schema-scan-button" onClick={() => void scanPii()} disabled={scanningPii}>
-              {scanningPii ? <Loader2 className="is-spinning" aria-hidden="true" /> : <ScanSearch aria-hidden="true" />}
-              Scan for sensitive fields
-            </button>
+            <AdminOnlyControl permission="schema.curate" allowed={canCurate} position="left">
+              <button type="button" className="schema-scan-button" onClick={() => void scanPii()} disabled={scanningPii}>
+                {scanningPii ? <Loader2 className="is-spinning" aria-hidden="true" /> : <ScanSearch aria-hidden="true" />}
+                Scan for sensitive fields
+              </button>
+            </AdminOnlyControl>
             <section className="schema-rule-list">
               <header><span>Saved rules</span><small>{piiConfig.enabled ? "Enforced" : "Not enforced"}</small></header>
               {Object.keys(piiConfig.rules).length === 0 ? (

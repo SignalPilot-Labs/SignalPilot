@@ -7,9 +7,8 @@ import type { BrandTier } from "~/lib/tier-branding";
 const STORAGE_KEY = "sp_tier_last_seen";
 
 const TIER_RANK: Record<BrandTier, number> = {
-  free: 0,
-  pro: 1,
-  team: 2,
+  team: 1,
+  scale: 2,
   enterprise: 3,
 };
 
@@ -50,15 +49,14 @@ export function useTierUpgrade(): TierUpgradeState {
   const comparedRef = useRef(false);
 
   // Capture primitives so dismiss is stable across new branding object identities.
-  const brandingEnabled = branding.enabled;
-  const brandingTier = branding.enabled ? branding.tier : ("free" as BrandTier);
+  const brandingTier: BrandTier | null = branding.enabled ? branding.tier : null;
 
   const dismiss = useCallback(() => {
-    if (brandingEnabled) {
+    if (brandingTier) {
       writeStorage(brandingTier);
     }
     setCelebratingTier(null);
-  }, [brandingEnabled, brandingTier]);
+  }, [brandingTier]);
 
   // comparedRef must NOT latch before enabled — if subscription loads after
   // first render (e.g. Stripe webhook), the effect must still fire once ready.

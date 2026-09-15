@@ -27,11 +27,16 @@ async def list_api_keys(
     *,
     org_id: str | None,
     allow_unscoped: bool,
+    user_id: str | None = None,
 ) -> list[ApiKeyRecord]:
+    """Keys of the org; with ``user_id``, only the keys that user minted."""
     if allow_unscoped:
         result = await session.execute(select(GatewayApiKey))
     else:
-        result = await session.execute(select(GatewayApiKey).where(GatewayApiKey.org_id == org_id))
+        query = select(GatewayApiKey).where(GatewayApiKey.org_id == org_id)
+        if user_id is not None:
+            query = query.where(GatewayApiKey.user_id == user_id)
+        result = await session.execute(query)
     return [
         ApiKeyRecord(
             id=r.id,
@@ -110,6 +115,31 @@ async def create_api_key(
         eval_doc_ids=db_key.eval_doc_ids,
     )
     return record, raw_key
+
+
+async def get_api_key(session: AsyncSession, *, org_id: str, key_id: str) -> ApiKeyRecord | None:
+    """One key of the org by id (hash included; callers strip it before responding)."""
+    row = (
+        await session.execute(select(GatewayApiKey).where(GatewayApiKey.org_id == org_id, GatewayApiKey.id == key_id))
+    ).scalar_one_or_none()
+    if row is None:
+        return None
+    return ApiKeyRecord(
+        id=row.id,
+        name=row.name,
+        prefix=row.prefix,
+        key_hash=row.key_hash,
+        scopes=row.scopes,
+        created_at=row.created_at,
+        last_used_at=row.last_used_at,
+        expires_at=row.expires_at,
+        user_id=row.user_id,
+        org_id=row.org_id,
+        eval_run_id=row.eval_run_id,
+        eval_task_id=row.eval_task_id,
+        eval_connection=row.eval_connection,
+        eval_doc_ids=row.eval_doc_ids,
+    )
 
 
 async def delete_api_key(

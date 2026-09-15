@@ -4,31 +4,31 @@ sidebar_position: 3
 
 import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
 
-# System Overview
+# System overview
 
 ## Architecture diagram
 
 <MiniCopyBlock
   label="architecture"
   plain
-  code={`┌─────────────────────────────────────────────────────────────┐\n│  Your AI Agent (Claude Code, Agent SDK, any MCP client)     │\n└────────────────────────────┬────────────────────────────────┘\n                             │ MCP Protocol (streamable-http)\n┌────────────────────────────▼────────────────────────────────┐\n│  SignalPilot Gateway                                         │\n│  ┌────────────┐ ┌──────────────┐ ┌───────────────────────┐ │\n│  │ Governance │ │ Schema       │ │ dbt Project           │ │\n│  │ • LIMIT    │ │ • DDL        │ │ • Map / Validate      │ │\n│  │ • DDL block│ │ • Explore    │ │ • Model verification  │ │\n│  │ • Audit    │ │ • Join paths │ │ • Date boundaries     │ │\n│  └────────────┘ └──────────────┘ └───────────────────────┘ │\n└────────────────────────────┬────────────────────────────────┘\n                             │\n        ┌────────────────────┼────────────────────┐\n        ▼                    ▼                    ▼\n   ┌─────────┐        ┌──────────┐        ┌──────────┐\n   │ DuckDB  │        │ Postgres │        │Snowflake │\n   └─────────┘        └──────────┘        └──────────┘`}
+  code={`┌─────────────────────────────────────────────────────────────┐\n│  Your AI Agent (Claude, ChatGPT, Claude Code, any MCP client)│\n└────────────────────────────┬────────────────────────────────┘\n                             │ MCP Protocol (streamable-http)\n┌────────────────────────────▼────────────────────────────────┐\n│  SignalPilot Gateway                                         │\n│  ┌────────────┐ ┌──────────────┐ ┌───────────────────────┐ │\n│  │ Governance │ │ Schema       │ │ dbt Project           │ │\n│  │ • LIMIT    │ │ • DDL        │ │ • Map / Validate      │ │\n│  │ • DDL block│ │ • Explore    │ │ • Model verification  │ │\n│  │ • Audit    │ │ • Join paths │ │ • Date boundaries     │ │\n│  └────────────┘ └──────────────┘ └───────────────────────┘ │\n└────────────────────────────┬────────────────────────────────┘\n                             │\n        ┌────────────────────┼────────────────────┐\n        ▼                    ▼                    ▼\n   ┌─────────┐        ┌──────────┐        ┌──────────┐\n   │ DuckDB  │        │ Postgres │        │Snowflake │\n   └─────────┘        └──────────┘        └──────────┘`}
 />
 
 ## In motion
 
 <figure>
   <img src={require('./images/ask.gif').default} width="480" alt="" />
-  <figcaption>A natural-language ask flowing through Claude Code → MCP → governed query.</figcaption>
+  <figcaption>A natural-language ask flowing through Claude Code, MCP, and a governed query.</figcaption>
 </figure>
 
 <figure>
   <img src={require('./images/scanning.gif').default} width="480" alt="" />
-  <figcaption>dbt project scan + schema discovery before a build.</figcaption>
+  <figcaption>dbt project scan and schema discovery before a build.</figcaption>
 </figure>
 
 <figure>
   <img src={require('./images/dag.gif').default} width="480" alt="" />
-  <figcaption>dbt DAG / model lineage as the workflow expands.</figcaption>
+  <figcaption>dbt DAG and model lineage as the workflow expands.</figcaption>
 </figure>
 
 <figure>
@@ -45,21 +45,23 @@ import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
 
 | Component | Responsibility |
 |-----------|---------------|
-| **Gateway** | FastAPI backend. Exposes 54 MCP tools over `streamable-http`. Handles auth, rate limiting, SQL governance, query execution, and audit logging. Port `3300`. |
-| **Web UI** | Next.js 16 frontend. Connection management, query history, latency dashboards, credential UI. Port `3200`. |
-| **Engine** | SQL governance: AST parsing, DDL/DML blocking, dangerous function denial, LIMIT injection, dialect normalization. Covers 7 dialects. |
-| **Connectors** | 12 database connectors with pooling and SSH tunneling. Supports DuckDB, PostgreSQL, MySQL, SQLite, SQL Server, Snowflake, Databricks, BigQuery. |
-| **Auth** | Clerk JWT (cloud) or API key (local + cloud). Org-scoped with brute-force protection. |
-| **Plugin** | Claude Code plugin: 9 skills + 1 verifier agent. Installed separately via `claude plugin`. |
-| **sp-sandbox** | gVisor sandboxed Python execution for code that needs local filesystem access. |
-| **Cloud** | [SignalPilot Cloud](https://app.signalpilot.ai) — hosted gateway with SSO, multi-tenant isolation, managed history. |
+| **Gateway** | FastAPI backend. Exposes 62 MCP tools over `streamable-http`. Handles auth, rate limiting, SQL governance, query execution, and audit logging. Port `3300`. |
+| **Chat worker** | Separate process from the same image. Claims and runs chat and agent jobs. |
+| **Web UI** | Next.js 16 frontend. Connections, chat, notebooks, query history, dashboards. Port `3200`. |
+| **Engine** | SQL governance: AST parsing, DDL/DML blocking, dangerous function denial, LIMIT injection, dialect normalization. |
+| **Connectors** | 12 database connectors with pooling and SSH tunneling: DuckDB, PostgreSQL, MySQL, SQLite, SQL Server, Snowflake, Databricks, BigQuery, Redshift, ClickHouse, Trino, and Xata. |
+| **Auth** | Clerk JWT (cloud) or API key (local and cloud). Org-scoped with brute-force protection. |
+| **Sandboxes** | Per-session isolated microVMs for notebooks and chat. Local mode uses one shared notebook container. |
+| **Plugin** | Claude Code plugin: 24 skills and 2 verifier agents. Installed separately with `claude plugin`. |
+| **sp-sandbox** | Sandbox manager for DuckDB and SQLite queries over local files. |
+| **Cloud** | [SignalPilot Cloud](https://app.signalpilot.ai): hosted gateway with SSO, multi-tenant isolation, managed history. |
 
 ## Project structure
 
 <MiniCopyBlock
   label="project structure"
   plain
-  code={`SignalPilot/\n├── signalpilot/\n│   ├── gateway/              # FastAPI backend — MCP server, REST API, governance\n│   │   └── gateway/\n│   │       ├── api/          # REST API modules\n│   │       ├── connectors/   # 11 database connectors + pooling + SSH tunneling\n│   │       ├── governance/   # Budget, cache, PII redaction, annotations\n│   │       ├── mcp/          # 32 MCP tool definitions (modular package)\n│   │       ├── engine/       # SQL validation, LIMIT injection, function denylist\n│   │       ├── dbt/          # Project scanning, validation, hazard detection\n│   │       ├── db/           # SQLAlchemy ORM models + async engine\n│   │       └── auth.py       # Clerk JWT (cloud) / local auth + org role enforcement\n│   └── web/                  # Next.js 16 frontend — 20 pages, Tailwind CSS\n│       ├── app/              # App router pages (dashboard, connections, query, etc.)\n│       ├── components/       # 20 UI components (sidebar, command palette, etc.)\n│       └── lib/              # API client, auth context, hooks\n├── signalpilot-plugin/       # Canonical agent plugin (23 skills, 2 verifier agents)\n│   ├── agents/               # Structure and value verifier agents\n│   └── skills/               # dbt workflow, SQL, domain, and reporting skills\n├── sp-sandbox/               # gVisor sandboxed Python execution\n├── benchmark/                # Spider 2.0-DBT benchmark suite (SOTA: 51.56%)\n└── docker-compose.yml        # Full stack: web, gateway, postgres, sandbox`}
+  code={`signalpilot/\n├── signalpilot/\n│   ├── gateway/              # FastAPI backend: MCP server, REST API, governance\n│   │   └── gateway/\n│   │       ├── api/          # REST API modules\n│   │       ├── connectors/   # 12 database connectors + pooling + SSH tunneling\n│   │       ├── governance/   # Budget, cache, PII redaction, annotations\n│   │       ├── mcp/          # 62 MCP tool definitions (modular package)\n│   │       ├── engine/       # SQL validation, LIMIT injection, function denylist\n│   │       ├── dbt/          # Project scanning, validation, hazard detection\n│   │       ├── db/           # SQLAlchemy models, async engine, Alembic migrations\n│   │       └── auth/         # Clerk JWT (cloud) / local auth + org role enforcement\n│   ├── notebook-server/      # Notebook runtime that runs inside each sandbox\n│   └── web/                  # Next.js 16 frontend\n│       ├── app/              # App router pages (chat, connections, notebooks, etc.)\n│       ├── components/       # UI components\n│       └── lib/              # API client, auth context, hooks\n├── signalpilot-plugin/       # Canonical agent plugin (24 skills, 2 verifier agents)\n│   ├── agents/               # Structure and value verifier agents\n│   └── skills/               # dbt workflow, SQL, domain, and reporting skills\n├── sp-sandbox/               # DuckDB/SQLite sandbox manager\n├── benchmark/                # Spider 2.0-DBT benchmark suite (SOTA: 51.56%)\n└── docker-compose.yml        # Full local stack`}
 />
 
 ## Deployment modes
@@ -71,22 +73,17 @@ import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
   code={`docker compose up -d\n# Web UI:   http://localhost:3200\n# Gateway:  http://localhost:3300`}
 />
 
-Single `docker-compose.yml` brings up the gateway, web UI, PostgreSQL backend, and sandbox. No external services required. Auth is API-key based by default.
+One `docker-compose.yml` brings up the web UI, gateway, chat worker, notebook container, Postgres, MinIO object storage, a mail catcher, the sandbox manager, and a read-only object proxy for evals. Every port binds to loopback. Auth is API-key based. See [Self-host with Docker Compose](/docs/self-host/install).
 
 ### SignalPilot Cloud
 
-<MiniCopyBlock
-  label="signalpilot cloud"
-  code={`# Point Claude Code at the cloud gateway\nclaude mcp add --transport http signalpilot https://gateway.signalpilot.ai/mcp \\\n  --header "Authorization: Bearer YOUR_API_KEY"`}
-/>
-
-Multi-tenant. Clerk JWT for SSO. Org-scoped API keys. Managed history, dashboards, and encrypted credential storage. See [Cloud setup](/docs/setup/cloud).
+Multi-tenant. Clerk JWT for SSO. Org-scoped API keys. Managed history, dashboards, and encrypted credential storage. Notebooks and chat run in per-session isolated microVMs. See [SignalPilot Cloud plans](/docs/cloud) and the client guides for [Claude](/docs/clients/claude), [ChatGPT](/docs/clients/chatgpt), and [Claude Code](/docs/clients/claude-code).
 
 ## MCP transport
 
-SignalPilot uses **streamable-http** — the modern MCP standard (supersedes SSE). The endpoint is mounted at:
+SignalPilot uses **streamable-http**, the current MCP standard. The endpoint is mounted at:
 
 - `/mcp` (canonical)
 - `/` (backward compatibility)
 
-The protocol is stateless per request. Claude Code maintains session context; the gateway is stateless between calls.
+MCP tool calls are stateless per request. Your client keeps the session context; the gateway holds no open stream between tool calls.

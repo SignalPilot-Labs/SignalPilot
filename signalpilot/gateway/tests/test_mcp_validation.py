@@ -9,7 +9,6 @@ from types import SimpleNamespace
 import pytest
 
 from gateway.governance import annotations as annotations_mod
-from gateway.governance import plan_limits
 from gateway.governance.annotations import SchemaAnnotations
 from gateway.governance.context import current_org_id_var
 from gateway.mcp.context import mcp_allowed_connection_var
@@ -91,12 +90,7 @@ async def test_query_database_uses_connection_dialect_for_governance(monkeypatch
         finally:
             current_org_id_var.reset(token)
 
-    async def fake_get_org_limits(org_id: str):
-        return plan_limits.PLAN_TIERS["unlimited"]
-
     monkeypatch.setattr(query_tools, "_store_session", fake_store_session)
-    monkeypatch.setattr(plan_limits, "get_org_limits", fake_get_org_limits)
-    monkeypatch.setattr(plan_limits, "check_query_limit", lambda org_id, plan: None)
     monkeypatch.setattr(annotations_mod, "load_annotations", lambda org_id, connection_name: SchemaAnnotations())
 
     result = await query_tools.query_database.__wrapped__(

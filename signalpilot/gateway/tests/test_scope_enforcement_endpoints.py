@@ -300,7 +300,11 @@ class TestSchemaRefreshWriteScope:
 
 
 class TestTestCredentialsWriteScope:
-    """test-credentials requires 'write' scope (primary SSRF vector)."""
+    """test-credentials requires 'write' scope AND the org-admin role (primary SSRF vector).
+
+    An API key is an admin only when it carries the admin scope, so a write-only
+    key is refused and a write+admin key reaches the handler.
+    """
 
     def test_test_credentials_returns_403_without_write_scope(self, client):
         _set_scopes([])
@@ -315,9 +319,18 @@ class TestTestCredentialsWriteScope:
         )
         assert response.status_code == 403
 
-    def test_test_credentials_passes_with_write_scope(self, client):
-        """With write scope, request reaches the handler (non-403 response expected)."""
+    def test_test_credentials_returns_403_with_write_scope_but_no_admin_role(self, client):
         _set_scopes(["write"])
+        response = client.post(
+            "/api/connections/test-credentials",
+            json={"name": "test", "db_type": "postgres", "host": "db.example.com", "port": 5432},
+        )
+        assert response.status_code == 403
+        assert response.json()["detail"] == "Organization admin role required"
+
+    def test_test_credentials_passes_with_write_and_admin_scope(self, client):
+        """With write and admin scope, request reaches the handler (non-403 response expected)."""
+        _set_scopes(["write", "admin"])
         response = client.post(
             "/api/connections/test-credentials",
             json={
@@ -699,7 +712,7 @@ class TestUrlUtilityReadScope:
 
 
 class TestAuditAdminScope:
-    """GET /api/audit and GET /api/audit/export require 'admin' scope."""
+    """GET /api/audit, /api/audit/stats and /api/audit/export are admin-only (decision 3)."""
 
     def test_get_audit_returns_403_without_admin_scope(self, client):
         _set_scopes([])
@@ -715,6 +728,11 @@ class TestAuditAdminScope:
         _set_scopes(["admin"])
         response = client.get("/api/audit")
         assert response.status_code != 403
+
+    def test_audit_stats_returns_403_with_only_read_scope(self, client):
+        _set_scopes(["read"])
+        response = client.get("/api/audit/stats")
+        assert response.status_code == 403
 
     def test_export_audit_returns_403_without_admin_scope(self, client):
         _set_scopes([])

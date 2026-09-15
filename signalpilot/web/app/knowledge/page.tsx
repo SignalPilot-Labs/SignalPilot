@@ -21,6 +21,8 @@ import type { KnowledgeDoc, KnowledgeEdit } from "~/lib/types";
 import { useToast } from "~/components/ui/toast";
 import { PageLoader } from "~/components/ui/page-loader";
 import { ConfirmDialog } from "~/components/ui/confirm-dialog";
+import { usePermissions } from "~/lib/hooks/use-permissions";
+import { ReadOnlyNote } from "~/components/access/read-only-note";
 
 import "./knowledge.css";
 import { CategoryNav, type NavState, type ScopeFilter } from "./_components/CategoryNav";
@@ -28,7 +30,7 @@ import { RetrievalHeatmap } from "./_components/RetrievalHeatmap";
 import { DocList, type SortKey } from "./_components/DocList";
 import { QuickPick } from "./_components/QuickPick";
 import { DocumentView, resolveWikilink } from "./_components/DocumentView";
-import { CreateDocForm } from "./_components/CreateDocForm";
+import { CreateDocForm, createActionLabel } from "./_components/CreateDocForm";
 import { HistoryModal } from "./_components/HistoryModal";
 import { CatBox, docPath } from "./_components/shared";
 import { KbIcon } from "./_components/icons";
@@ -40,6 +42,10 @@ function KnowledgePage() {
   const { toast } = useToast();
   const searchParams = useSearchParams();
   const router = useRouter();
+  const { can } = usePermissions();
+  // Members read and propose; only admins publish, edit, approve, or archive.
+  const canPublish = can("knowledge.publish");
+  const canRunEvals = can("evals.run");
   const [evaluating, setEvaluating] = useState(false);
 
   // ── UI state ──
@@ -106,14 +112,14 @@ function KnowledgePage() {
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      if ((e.metaKey || e.ctrlKey) && e.key === "e" && selectedId && !editMode) {
+      if ((e.metaKey || e.ctrlKey) && e.key === "e" && selectedId && !editMode && canPublish) {
         e.preventDefault();
         setEditMode(true);
       }
     }
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [selectedId, editMode]);
+  }, [selectedId, editMode, canPublish]);
 
   function syncEntry(id: string | null) {
     if (typeof window === "undefined") return;
@@ -274,9 +280,13 @@ function KnowledgePage() {
     baseSet = pendingDocs; listIcon = <KbIcon name="clock" size={17} style={{ color: "var(--color-warning)" }} />;
     listTitle = "Pending review"; listCount = `${baseSet.length} ${baseSet.length === 1 ? "doc" : "docs"}`;
     listControls = false;
-    listSubtitle = baseSet.length
-      ? "Agent-proposed documents awaiting your review. Open one to approve or deny it."
-      : "Nothing to review — agent proposals will appear here for approval.";
+    listSubtitle = !canPublish
+      ? (baseSet.length
+        ? "Proposed documents waiting for an org admin to approve or deny them."
+        : "Nothing pending — proposals appear here until an org admin reviews them.")
+      : baseSet.length
+        ? "Agent-proposed documents awaiting your review. Open one to approve or deny it."
+        : "Nothing to review — agent proposals will appear here for approval.";
   } else if (nav.kind === "archived") {
     baseSet = archived; listIcon = <KbIcon name="archive" size={17} style={{ color: "var(--color-text-dim)" }} />;
     listTitle = "Archived"; listCount = `${baseSet.length}`;
@@ -301,7 +311,7 @@ function KnowledgePage() {
         <div className="kb-crumb"><b>org conventions</b><span className="sl">·</span>project decisions<span className="sl">·</span>connection quirks</div>
         <div className="flex-1" />
         <button onClick={() => setCreating(true)} className="kb-btn kb-btn-primary">
-          <Plus className="w-3.5 h-3.5" strokeWidth={2} /> New document
+          <Plus className="w-3.5 h-3.5" strokeWidth={2} /> {canPublish ? "New document" : createActionLabel(false)}
         </button>
         <button onClick={() => { refreshList(); refreshPending(); invalidateKnowledge(); }} className="kb-btn kb-btn-ghost">
           <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? "animate-spin" : ""}`} strokeWidth={1.5} /> Refresh
@@ -313,7 +323,11 @@ function KnowledgePage() {
       {creating && (
         <CreateDocForm
           onCancel={() => setCreating(false)}
-          onCreated={(doc) => { setCreating(false); setSelectedId(doc.id); syncEntry(doc.id); refreshList(); invalidateKnowledge(); }}
+          onCreated={(doc) => {
+            setCreating(false); setSelectedId(doc.id); syncEntry(doc.id);
+            refreshList(); refreshPending(); invalidateKnowledge();
+            if (doc.status === "pending") setNav({ kind: "pending" });
+          }}
         />
       )}
 
@@ -393,18 +407,24 @@ function KnowledgePage() {
                 <span className="kb-reader-path"><KbIcon name="doc" size={13} />{docPath(selectedDoc)} /<span className="f"> {selectedDoc.title}.md</span></span>
                 <div className="act">
                   <button className="kb-btn" onClick={() => setHistoryOpen(true)}><KbIcon name="history" size={14} />History</button>
-                  {selectedDoc.status === "pending" ? (
+                  {!canPublish ? (
+                    <ReadOnlyNote>
+                      {selectedDoc.status === "pending" ? "an org admin approves or denies proposals" : "read-only"}
+                    </ReadOnlyNote>
+                  ) : selectedDoc.status === "pending" ? (
                     <>
                       <button className="kb-btn kb-btn-danger" onClick={() => setConfirmArchive(true)}><KbIcon name="slash" size={14} />Deny</button>
-                      <button
-                        className="kb-btn"
-                        onClick={() => selectedId && handleEvaluate(selectedId)}
-                        disabled={evaluating}
-                        title="Run the eval suite in docker with this proposed entry active"
-                      >
-                        {evaluating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FlaskConical className="w-3.5 h-3.5" strokeWidth={1.5} />}
-                        {evaluating ? "Starting…" : "Evaluate Change"}
-                      </button>
+                      {canRunEvals && (
+                        <button
+                          className="kb-btn"
+                          onClick={() => selectedId && handleEvaluate(selectedId)}
+                          disabled={evaluating}
+                          title="Run the eval suite in docker with this proposed entry active"
+                        >
+                          {evaluating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FlaskConical className="w-3.5 h-3.5" strokeWidth={1.5} />}
+                          {evaluating ? "Starting…" : "Evaluate Change"}
+                        </button>
+                      )}
                       <button className="kb-btn kb-btn-primary" onClick={() => setConfirmApprove(true)}><KbIcon name="check" size={14} />Approve</button>
                     </>
                   ) : (

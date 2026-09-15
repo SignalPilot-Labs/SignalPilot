@@ -19,7 +19,8 @@ pytestmark = pytest.mark.e2e_cloud
 # Routes guarded by OrgAdmin (role) and/or RequireScope("admin") (key scope).
 # Both halves must deny a write-only key.
 ADMIN_ROUTES_FOR_KEYS = [
-    ("GET", "/api/keys", None),                 # RequireScope("admin") only
+    ("GET", "/api/audit", None),                # OrgAdmin (decision 3)
+    ("POST", "/api/connections/test-credentials", {}),  # OrgAdmin (gap 2)
     ("GET", "/api/security/status", None),      # OrgAdmin only
     ("GET", "/api/settings", None),             # RequireScope("admin")
     ("PUT", "/api/settings", {}),               # OrgAdmin + RequireScope("admin")
@@ -29,9 +30,9 @@ ADMIN_ROUTES_FOR_KEYS = [
 ]
 ROUTE_IDS = [f"{m} {p}" for m, p, _ in ADMIN_ROUTES_FOR_KEYS]
 
-# /api/security/status layers a second, stricter check on top of OrgAdmin: the caller's
-# user_id must appear in SP_ADMIN_USER_IDS (platform-operator allowlist). No org admin
-# and no API key satisfies that in this harness, so it is asserted only on the deny side.
+# /api/security/status requires the org-admin ROLE (plus a billable plan). An API key
+# carries scopes, not an org role, so no key satisfies it in this harness; it is
+# asserted only on the deny side.
 ALLOW_ROUTES = [r for r in ADMIN_ROUTES_FOR_KEYS if r[1] != "/api/security/status"]
 ALLOW_IDS = [f"{m} {p}" for m, p, _ in ALLOW_ROUTES]
 

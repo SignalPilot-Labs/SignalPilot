@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from "react";
 import { useTierBranding } from "~/lib/hooks/use-tier-branding";
+import type { BrandTier } from "~/lib/tier-branding";
 
 export type ToastType = "success" | "error" | "info" | "warning";
 
@@ -30,10 +31,9 @@ export function useToast() {
 
 // Left-edge color literals for paid tiers. Full literal strings required to satisfy
 // Tailwind JIT — do not assemble from brand tokens. Color semantics mirror accentText.
-const TIER_LEFT_BORDER: Record<"pro" | "team" | "enterprise", string> = {
-  // Pro: use border-active (#444) — distinct from text (#999) so it reads as deliberate accent.
-  pro:        "border-l-2 border-l-[var(--color-border-active)]",
+const TIER_LEFT_BORDER: Record<BrandTier, string> = {
   team:       "border-l-2 border-l-blue-400/60",
+  scale:      "border-l-2 border-l-violet-400/60",
   enterprise: "border-l-2 border-l-[var(--color-success)]",
 };
 
@@ -87,10 +87,7 @@ function ToastItem({ toast, onRemove }: { toast: Toast; onRemove: (id: string) =
     info: "border-[var(--color-border)]",
   };
 
-  const tierLeftClass =
-    b.enabled && b.tier !== "free"
-      ? TIER_LEFT_BORDER[b.tier as "pro" | "team" | "enterprise"]
-      : "";
+  const tierLeftClass = b.enabled ? TIER_LEFT_BORDER[b.tier] : "";
 
   return (
     <div

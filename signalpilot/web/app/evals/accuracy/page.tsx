@@ -24,13 +24,13 @@ import {
 } from "recharts";
 import {
   getEvalAccuracy,
-  getEvalAvailability,
   listEvalRuns,
   listEvalTasks,
   type EvalRegression,
   type EvalTaskPerformance,
 } from "~/lib/api";
 import { PageHeader } from "~/components/ui/page-header";
+import { useEvalsGate } from "~/components/billing/evals-gate";
 import { MartCoverageTopology } from "./mart-coverage-topology";
 import "../evals.css";
 import "./accuracy.css";
@@ -165,8 +165,7 @@ function TaskReliability({ tasks }: { tasks: EvalTaskPerformance[] }) {
 }
 
 export default function AccuracyPage() {
-  const { data: availability, isLoading } = useSWR("eval-availability", getEvalAvailability);
-  const enabled = availability?.enabled === true;
+  const { enabled, blocker, loading } = useEvalsGate();
   const { data: accuracy } = useSWR(enabled ? "eval-accuracy" : null, getEvalAccuracy, { refreshInterval: 30000 });
   const { data: runs } = useSWR(enabled ? "eval-runs" : null, listEvalRuns);
   const { data: evalSet } = useSWR(enabled ? "eval-tasks-accuracy" : null, listEvalTasks);
@@ -196,8 +195,8 @@ export default function AccuracyPage() {
     }));
   }, [history, regressions]);
 
-  if (isLoading || !availability) return <div className="min-h-screen p-8 text-sm text-[var(--color-text-dim)]">Loading accuracy...</div>;
-  if (!enabled) return <div className="min-h-screen p-8"><PageHeader title="accuracy" subtitle="evals" description="agent performance and dbt mart coverage" /><p className="text-sm text-[var(--color-text-muted)]">Evals are not enabled for this workspace.</p></div>;
+  if (loading) return <div className="min-h-screen p-8 text-sm text-[var(--color-text-dim)]">Loading accuracy...</div>;
+  if (!enabled) return <div className="min-h-screen p-8"><PageHeader title="accuracy" subtitle="evals" description="agent performance and dbt mart coverage" /><div className="max-w-md">{blocker}</div></div>;
 
   return (
     <main className="min-h-screen p-8 animate-fade-in acc-page">

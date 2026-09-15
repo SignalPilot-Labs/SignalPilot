@@ -8,14 +8,14 @@ import { useEffect, useRef, useState } from "react";
 import useSWR from "swr";
 import {
   getSavedChatReport,
-  getStandaloneChatBootstrap,
   getStandaloneChatProjectReadiness,
-  getStandaloneConversation,
-  listStandaloneConversations,
-  setDefaultStandaloneChatProject,
   type ChatReportMention,
 } from "~/lib/api";
+import { usePermissions } from "~/lib/hooks/use-permissions";
 import { useToast } from "~/components/ui/toast";
+import { PlanRequired } from "~/components/billing/plan-required";
+import { useSubscription } from "~/lib/subscription-context";
+import { gatingError } from "~/lib/api/client";
 import {
   standaloneMessageKey,
   type OptimisticUserMessage,
@@ -30,10 +30,7 @@ import {
   ChatReplayView,
   useReplayMode,
 } from "~/components/chat/chat-replay-view";
-import {
-  isImprovementConversation,
-  isStreamingStatus,
-} from "~/components/chat/standalone-chat-helpers";
+import { isImprovementConversation } from "~/components/chat/standalone-chat-helpers";
 import {
   AttachedReportBanner,
   ChatBootstrapSpinner,
@@ -57,6 +54,7 @@ import {
   useStandaloneUiMessages,
 } from "~/components/chat/use-standalone-chat-run";
 import { useStandaloneChatActions } from "~/components/chat/use-standalone-chat-actions";
+import { useStandaloneChatData } from "~/components/chat/use-standalone-chat-data";
 import { ShareLinkDialog } from "~/components/chat/share-link-dialog";
 import { ChatEmptyHero } from "~/components/chat/chat-empty-hero";
 import {
@@ -73,6 +71,7 @@ import { useDockScrollCompensation } from "~/components/chat/use-dock-scroll-com
 import { ConnectorsProvider } from "~/components/connectors/connectors-context";
 import { useChatModelSettings } from "~/components/chat/use-chat-model-settings";
 import { useChatBudgetSettings } from "~/components/chat/use-chat-budget-settings";
+import { useDefaultChatProject } from "~/components/chat/use-default-chat-project";
 import { ChatTelemetryBoundary } from "~/components/chat/chat-telemetry-panel";
 
 export { ChatUiContext, useChatUi } from "~/components/chat/chat-ui-context";
@@ -89,40 +88,19 @@ export function StandaloneDataChat({
   const router = useRouter();
   const searchParams = useSearchParams();
   const { toast } = useToast();
+  const subscription = useSubscription();
   const {
-    data: bootstrap,
-    error: bootstrapError,
-    isLoading: bootstrapLoading,
-  } = useSWR("standalone-chat-bootstrap", getStandaloneChatBootstrap, {
-    revalidateOnFocus: false,
-  });
-  const {
-    data: historyData,
-    isLoading: historyLoading,
-    mutate: mutateHistory,
-  } = useSWR("standalone-chat-conversations", listStandaloneConversations, {
-    // Poll fast only while a run streams (the rail shows its status change).
-    // An idle page refreshes slowly; submit/stop paths mutate on demand.
-    refreshInterval: (latest) =>
-      latest?.conversations.some((conversation) =>
-        isStreamingStatus(conversation.run_status ?? undefined),
-      )
-        ? 4_000
-        : 30_000,
-  });
-  const {
-    data: detail,
-    error: detailError,
-    isLoading: detailLoading,
-    mutate: mutateDetail,
-  } = useSWR(
-    conversationId ? `standalone-chat-conversation:${conversationId}` : null,
-    () => getStandaloneConversation(conversationId!),
-    {
-      refreshInterval: (latestDetail) =>
-        isStreamingStatus(latestDetail?.current_run?.status) ? 1_000 : 0,
-    },
-  );
+    bootstrap,
+    bootstrapError,
+    bootstrapLoading,
+    historyData,
+    historyLoading,
+    mutateHistory,
+    detail,
+    detailError,
+    detailLoading,
+    mutateDetail,
+  } = useStandaloneChatData(conversationId);
   const requestedProject = searchParams.get("project");
   const requestedReportId = searchParams.get("report");
   const requestedPrompt = searchParams.get("prompt");
@@ -141,6 +119,9 @@ export function StandaloneDataChat({
   );
   const { perQueryBudgetUsd, chatBudgetUsd, budgetSettings } =
     useChatBudgetSettings(bootstrap, conversationId);
+  const { defaultProjectId, setDefaultProject } =
+    useDefaultChatProject(bootstrap);
+  const { can } = usePermissions();
   const [draft, setDraft] = useChatDraft(conversationId);
   const promptInitialized = useRef(false);
   const [isConversationRailOpen, setIsConversationRailOpen] =
@@ -323,12 +304,28 @@ export function StandaloneDataChat({
     [];
   const empty = uiMessages.length === 0;
   const { message: unreadyMessage, showSetup: showSetupCta } =
-    readinessNotice(bootstrap, readiness);
+    readinessNotice(bootstrap, readiness, can("projects.write"));
 
   if (bootstrapLoading) {
     return <ChatBootstrapSpinner />;
   }
   if (bootstrapError || !bootstrap?.enabled) {
+    // A free org gets 200 with `enabled: false` and its entitlement; a gated
+    // route answers 402 plan_required. Both are the plan prompt. Anything
+    // else (a kill switch, 503 not_available_in_deployment, an outage) is not
+    // something a plan change fixes.
+    const planRequired =
+      bootstrap?.entitlement?.is_billable === false ||
+      gatingError(bootstrapError)?.error === "plan_required" ||
+      (subscription.isLoaded && !subscription.isBillable);
+    if (planRequired) {
+      return (
+        <PlanRequired
+          feature="data chat"
+          description="Ask questions of your governed warehouse and get receipted answers with evidence."
+        />
+      );
+    }
     return <ChatUnavailableScreen />;
   }
   if (detailError) {
@@ -355,10 +352,13 @@ export function StandaloneDataChat({
       bootstrap={bootstrap}
       selectedProjectId={selectedProjectId}
       onSelectProject={(projectId) => {
+        // A pick is for this chat only; the org default is a separate,
+        // admin-only action.
         setSelectedProjectId(projectId);
-        void setDefaultStandaloneChatProject(projectId);
         router.replace(`/chats?project=${encodeURIComponent(projectId)}`);
       }}
+      defaultProjectId={defaultProjectId}
+      onSetDefaultProject={(projectId) => void setDefaultProject(projectId)}
       onOpenSettings={settingsPanel.toggle}
       settingsOpen={settingsPanel.open}
     />

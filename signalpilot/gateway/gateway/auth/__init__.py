@@ -5,6 +5,14 @@ Re-exports the full public surface of the auth submodules so that
 """
 
 from .mcp_api_key import MCPAuthMiddleware, validate_api_key
+from .permissions import (
+    ADMIN_PERMISSIONS,
+    MEMBER_PERMISSIONS,
+    PERMISSION_DESCRIPTIONS,
+    PERMISSIONS,
+    normalize_role,
+    permissions_for,
+)
 from .user import (
     EXPECTED_AUDIENCE,
     JWT_LEEWAY_SECONDS,
@@ -37,4 +45,10 @@ __all__ = [
     "JWT_LEEWAY_SECONDS",
     "MCPAuthMiddleware",
     "validate_api_key",
+    "ADMIN_PERMISSIONS",
+    "MEMBER_PERMISSIONS",
+    "PERMISSIONS",
+    "PERMISSION_DESCRIPTIONS",
+    "normalize_role",
+    "permissions_for",
 ]

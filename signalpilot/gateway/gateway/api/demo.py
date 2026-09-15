@@ -214,7 +214,7 @@ async def create_demo_connector(
             f"'{demo.connection_name}'). Remove it from the Connections page to start over.",
         )
 
-    from gateway.governance.plan_limits import check_connection_limit, get_org_limits
+    from gateway.governance.org_limits import check_connection_limit, get_org_limits
 
     plan = await get_org_limits(store.org_id)
     check_connection_limit(len(await store.list_connections()), plan)

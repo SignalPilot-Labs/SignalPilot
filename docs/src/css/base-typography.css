@@ -1,0 +1,176 @@
+/* SignalPilot docs — base + typography.
+   Holds: html/body base, selection/focus, reduced-motion, markdown heading
+   hierarchy, paragraphs/lists/links/hr/blockquote, editorial band. */
+
+/* ── Base ──────────────────────────────────────────────────────────────── */
+html {
+  scroll-behavior: smooth;
+  background: var(--sp-ink);
+}
+
+body {
+  background: var(--sp-ink);
+  color: var(--sp-text);
+  overflow-x: clip;
+  letter-spacing: -0.005em;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::selection {
+  background: var(--sp-selection);
+  color: var(--sp-text);
+}
+
+:focus-visible {
+  outline: 2px solid var(--sp-mint);
+  outline-offset: 3px;
+  border-radius: var(--sp-radius-xs);
+}
+
+a,
+button,
+[role="button"],
+summary {
+  cursor: pointer;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ── Typography hierarchy ──────────────────────────────────────────────── */
+.markdown h1,
+.markdown > header > h1 {
+  font-family: var(--sp-font-serif);
+  font-weight: 400;
+  font-size: var(--ifm-h1-font-size);
+  line-height: 1.08;
+  letter-spacing: var(--sp-track-tight);
+  color: var(--sp-heading);
+  text-wrap: balance;
+  margin-bottom: 1.25rem;
+}
+
+.markdown h2 {
+  font-family: var(--sp-font-serif);
+  font-weight: 400;
+  font-size: var(--ifm-h2-font-size);
+  line-height: 1.15;
+  letter-spacing: var(--sp-track-tight);
+  color: var(--sp-heading);
+  border-bottom: 1px solid var(--sp-line);
+  padding-bottom: 0.5rem;
+  margin-top: 3.25rem;
+  margin-bottom: 1.15rem;
+  text-wrap: balance;
+}
+
+.markdown h3 {
+  font-family: var(--sp-font-sans);
+  font-weight: 600;
+  font-size: var(--ifm-h3-font-size);
+  line-height: 1.35;
+  letter-spacing: var(--sp-track-tight);
+  color: var(--sp-heading);
+  margin-top: 2.25rem;
+  margin-bottom: 0.7rem;
+}
+
+.markdown h4 {
+  font-family: var(--sp-font-mono);
+  font-weight: 500;
+  font-size: var(--ifm-h4-font-size);
+  letter-spacing: var(--sp-track-eyebrow);
+  text-transform: uppercase;
+  color: var(--sp-mint);
+  margin-top: 2rem;
+  margin-bottom: 0.6rem;
+}
+
+.markdown h5,
+.markdown h6 {
+  font-family: var(--sp-font-mono);
+  font-weight: 500;
+  font-size: var(--ifm-h5-font-size);
+  letter-spacing: var(--sp-track-eyebrow);
+  text-transform: uppercase;
+  color: var(--sp-dim);
+  margin-top: 1.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.markdown p {
+  margin-bottom: 1.15rem;
+  color: var(--sp-text);
+}
+
+.markdown > p:first-of-type,
+.markdown header + p {
+  font-size: 1.05rem;
+  font-weight: 300;
+  line-height: 1.7;
+  color: var(--sp-muted);
+}
+
+.markdown li {
+  margin-bottom: 0.4rem;
+}
+
+.markdown li::marker {
+  color: var(--sp-dim);
+}
+
+.markdown strong {
+  font-weight: 600;
+  color: var(--sp-heading);
+}
+
+.markdown a {
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  transition: color var(--ifm-transition-fast) var(--sp-ease);
+}
+
+.markdown hr {
+  border: 0;
+  border-top: 1px solid var(--sp-line);
+  margin: 2.5rem 0;
+}
+
+blockquote {
+  border-left: 2px solid var(--sp-line-2);
+  border-radius: 0;
+  padding: 0.25rem 0 0.25rem 1.15rem;
+  margin: 1.5rem 0;
+  font-size: 1rem;
+  color: var(--sp-muted);
+}
+
+/* ── Editorial band behind the article header ──────────────────────────── */
+.theme-doc-markdown {
+  position: relative;
+}
+
+.theme-doc-markdown > header::before {
+  content: "";
+  position: absolute;
+  inset: -3rem -3rem auto -3rem;
+  height: 22rem;
+  background: radial-gradient(680px 340px at 30% 0%, var(--sp-glow), transparent 62%);
+  pointer-events: none;
+  z-index: -1;
+}
+
+/* The band's negative inset would otherwise add ~3rem of horizontal scroll
+   on phones (absolute boxes still count toward scrollWidth). */
+@media (max-width: 996px) {
+  .theme-doc-markdown > header::before {
+    inset: -2rem 0 auto 0;
+  }
+}

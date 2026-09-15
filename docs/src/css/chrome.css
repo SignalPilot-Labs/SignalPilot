@@ -1,0 +1,366 @@
+/* SignalPilot docs — chrome (top).
+   Holds: navbar, doc sidebar, sidebar category icons, table of contents,
+   buttons. */
+
+/* ── Navbar ────────────────────────────────────────────────────────────── */
+.navbar {
+  border-bottom: 1px solid var(--sp-line);
+  box-shadow: none;
+  backdrop-filter: saturate(160%) blur(14px);
+  -webkit-backdrop-filter: saturate(160%) blur(14px);
+}
+
+.navbar__title {
+  font-family: var(--sp-font-sans);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: var(--sp-track-tight);
+  color: var(--sp-heading);
+}
+
+.navbar__brand {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin-right: 1.75rem;
+}
+
+.navbar__logo {
+  display: flex;
+  align-items: center;
+}
+
+.navbar__logo img {
+  max-height: 26px;
+}
+
+.navbar__item,
+.navbar__link {
+  font-family: var(--sp-font-sans);
+  font-size: 13.5px;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  color: var(--sp-muted);
+  transition: color var(--ifm-transition-fast) var(--sp-ease);
+}
+
+.navbar__link:hover,
+.navbar__link--active {
+  color: var(--sp-text);
+}
+
+.navbar__link--active {
+  font-weight: 600;
+}
+
+/* Last right-aligned nav link reads as a pill CTA, like the landing header.
+   `:last-of-type` counts <a> siblings only, so the colour-mode toggle (a div
+   rendered after it by the theme) does not break the match. `.sp-nav-cta`
+   is the explicit hook set from docusaurus.config.ts. */
+.navbar__items--right > .navbar__item.navbar__link:last-of-type,
+.navbar__items--right > .navbar__link.sp-nav-cta {
+  border: 1px solid var(--sp-line-2);
+  border-radius: var(--sp-radius-pill);
+  padding: 0.4rem 1rem;
+  margin-left: 0.35rem;
+  color: var(--sp-text);
+  transition: border-color var(--ifm-transition-fast) var(--sp-ease),
+              transform var(--ifm-transition-fast) var(--sp-ease);
+}
+
+.navbar__items--right > .navbar__item.navbar__link:last-of-type:hover,
+.navbar__items--right > .navbar__link.sp-nav-cta:hover {
+  border-color: color-mix(in srgb, var(--sp-mint) 45%, var(--sp-line-2));
+  transform: translateY(-1px);
+}
+
+/* Room between the pill and the theme toggle. */
+.navbar__items--right > .navbar__link.sp-nav-cta + div {
+  margin-left: 0.5rem;
+}
+
+.navbar__items--right [class*="colorModeToggle"] button,
+.navbar__items--right button[class*="toggleButton"] {
+  color: var(--sp-muted);
+  border-radius: var(--sp-radius-pill);
+}
+
+.navbar-sidebar {
+  background: var(--sp-ink);
+}
+
+.navbar-sidebar__brand {
+  border-bottom: 1px solid var(--sp-line);
+  box-shadow: none;
+}
+
+.clean-btn:hover {
+  background: var(--sp-card);
+  border-radius: var(--sp-radius-sm);
+}
+
+/* ── Doc sidebar ───────────────────────────────────────────────────────── */
+.theme-doc-sidebar-container {
+  border-right: 1px solid var(--sp-line) !important;
+  background: var(--sp-ink);
+}
+
+.menu {
+  padding: 1.25rem 0.9rem 2rem;
+  font-family: var(--sp-font-sans);
+  scrollbar-width: thin;
+}
+
+.menu__list .menu__list {
+  margin-left: 0.55rem;
+  padding-left: 0.5rem;
+  border-left: 1px solid var(--sp-line);
+}
+
+.menu__link {
+  font-size: 13px;
+  font-weight: 400;
+  letter-spacing: -0.005em;
+  line-height: 1.45;
+  color: var(--sp-muted);
+  border-radius: var(--sp-radius-sm);
+  transition: color var(--ifm-transition-fast) var(--sp-ease),
+              background var(--ifm-transition-fast) var(--sp-ease);
+}
+
+.menu__list .menu__list .menu__link {
+  color: var(--sp-dim);
+}
+
+.menu__link:hover {
+  color: var(--sp-text);
+  background: var(--sp-card);
+}
+
+.menu__link--active,
+.menu__list .menu__list .menu__link--active {
+  color: var(--sp-text);
+  background: var(--sp-card);
+  font-weight: 500;
+  border-radius: var(--sp-radius-sm);
+  box-shadow: none;
+}
+
+.menu__link--active:not(.menu__list-item-collapsible > .menu__link) {
+  position: relative;
+  color: var(--sp-text);
+}
+
+.menu__link--active:not(.menu__list-item-collapsible > .menu__link)::before {
+  content: "";
+  position: absolute;
+  left: -0.5rem;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 2px;
+  height: 1.05rem;
+  border-radius: var(--sp-radius-pill);
+  background: var(--sp-green);
+}
+
+.menu__list-item-collapsible {
+  border-radius: var(--sp-radius-sm);
+}
+
+.menu__list-item-collapsible:hover,
+.menu__list-item-collapsible--active {
+  background: transparent;
+}
+
+.menu__list-item-collapsible > .menu__link {
+  font-family: var(--sp-font-sans);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  text-transform: none;
+  color: var(--sp-text);
+}
+
+/* Top-level categories: the primary way a non-technical reader scans. */
+.theme-doc-sidebar-menu > .menu__list-item > .menu__list-item-collapsible > .menu__link {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--sp-heading);
+  padding-top: 0.5rem;
+  padding-bottom: 0.5rem;
+}
+
+.theme-doc-sidebar-menu > .menu__list-item + .menu__list-item {
+  margin-top: 0.35rem;
+}
+
+.theme-doc-sidebar-menu > .menu__list-item > .menu__link:not(.menu__link--sublist) {
+  color: var(--sp-text);
+  font-weight: 500;
+}
+
+/* Nested categories stay quiet. */
+.menu__list .menu__list .menu__list-item-collapsible > .menu__link {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--sp-muted);
+}
+
+.menu__list-item-collapsible > .menu__link:hover {
+  color: var(--sp-heading);
+  background: transparent;
+}
+
+.menu__caret,
+.menu__link--sublist-caret::after {
+  background-size: 1rem 1rem;
+  width: 1rem;
+  height: 1rem;
+  min-width: 1rem;
+  opacity: 0.5;
+}
+
+/* ── Sidebar category icons ────────────────────────────────────────────── */
+/* Opt in per category from sidebars.ts:
+     { type: 'category', label: 'Start', className: 'sp-cat-start', ... }
+   Glyphs are 1.6px-stroke outlines masked with currentColor, so they follow
+   the label colour in both themes. */
+.theme-doc-sidebar-menu > .menu__list-item[class*="sp-cat-"] > .menu__list-item-collapsible > .menu__link::before {
+  content: "";
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  margin-right: 0.55rem;
+  margin-left: -0.05rem;
+  background-color: currentColor;
+  opacity: 0.85;
+  -webkit-mask: var(--sp-cat-icon) center / contain no-repeat;
+  mask: var(--sp-cat-icon) center / contain no-repeat;
+}
+
+.sp-cat-start {
+  --sp-cat-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='%23000' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='10' cy='10' r='7.5'/%3E%3Cpath d='M8.2 7 L13 10 L8.2 13 Z'/%3E%3C/svg%3E");
+}
+
+.sp-cat-connect {
+  --sp-cat-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='%23000' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M7 3 V7 M13 3 V7'/%3E%3Cpath d='M4.5 7 H15.5 V9.5 A5.5 5.5 0 0 1 4.5 9.5 Z'/%3E%3Cpath d='M10 15 V17.5'/%3E%3C/svg%3E");
+}
+
+.sp-cat-product {
+  --sp-cat-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='%23000' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='3' width='6' height='6' rx='1.5'/%3E%3Crect x='11' y='3' width='6' height='6' rx='1.5'/%3E%3Crect x='3' y='11' width='6' height='6' rx='1.5'/%3E%3Crect x='11' y='11' width='6' height='6' rx='1.5'/%3E%3C/svg%3E");
+}
+
+.sp-cat-data {
+  --sp-cat-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='%23000' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cellipse cx='10' cy='5' rx='6' ry='2.4'/%3E%3Cpath d='M4 5 V15 A6 2.4 0 0 0 16 15 V5'/%3E%3Cpath d='M4 10 A6 2.4 0 0 0 16 10'/%3E%3C/svg%3E");
+}
+
+.sp-cat-extend {
+  --sp-cat-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='%23000' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='10' cy='10' r='2.5'/%3E%3Ccircle cx='4' cy='5' r='1.8'/%3E%3Ccircle cx='16' cy='5' r='1.8'/%3E%3Ccircle cx='4' cy='15' r='1.8'/%3E%3Ccircle cx='16' cy='15' r='1.8'/%3E%3Cpath d='M5.5 6.2 L8.2 8.4 M14.5 6.2 L11.8 8.4 M5.5 13.8 L8.2 11.6 M14.5 13.8 L11.8 11.6'/%3E%3C/svg%3E");
+}
+
+.sp-cat-agents {
+  --sp-cat-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='%23000' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10 2.5 L11.8 8.2 L17.5 10 L11.8 11.8 L10 17.5 L8.2 11.8 L2.5 10 L8.2 8.2 Z'/%3E%3C/svg%3E");
+}
+
+.sp-cat-evals {
+  --sp-cat-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='%23000' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='3' width='14' height='14' rx='3'/%3E%3Cpath d='M6.5 10.2 L8.8 12.5 L13.5 7.5'/%3E%3C/svg%3E");
+}
+
+.sp-cat-selfhost {
+  --sp-cat-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='%23000' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='3' width='14' height='5.5' rx='1.8'/%3E%3Crect x='3' y='11.5' width='14' height='5.5' rx='1.8'/%3E%3Cpath d='M6 5.75 h0.2 M6 14.25 h0.2'/%3E%3C/svg%3E");
+}
+
+.sp-cat-reference {
+  --sp-cat-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='%23000' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 3.5 H15 A1.5 1.5 0 0 1 16.5 5 V16.5 H5.5 A1.5 1.5 0 0 1 4 15 Z'/%3E%3Cpath d='M4 15 A1.5 1.5 0 0 1 5.5 13.5 H16.5'/%3E%3Cpath d='M7.5 7 H13'/%3E%3C/svg%3E");
+}
+
+/* ── Table of contents ─────────────────────────────────────────────────── */
+.table-of-contents {
+  font-family: var(--sp-font-sans);
+  font-size: 12.5px;
+  border-left: 1px solid var(--sp-line);
+  padding-left: 1rem;
+}
+
+.table-of-contents__left-border {
+  border-left-color: var(--sp-line);
+}
+
+.table-of-contents__link {
+  font-size: 12.5px;
+  letter-spacing: -0.005em;
+  line-height: 1.5;
+  color: var(--sp-dim);
+  transition: color var(--ifm-transition-fast) var(--sp-ease);
+}
+
+.table-of-contents__link:hover,
+.table-of-contents__link--active {
+  color: var(--sp-text);
+}
+
+.table-of-contents__link--active {
+  font-weight: 500;
+}
+
+.tocCollapsibleButton,
+.theme-doc-toc-mobile > button {
+  font-family: var(--sp-font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: var(--sp-track-eyebrow);
+  border-radius: var(--sp-radius-panel);
+  border-color: var(--sp-line);
+}
+
+.theme-doc-toc-mobile {
+  border-radius: var(--sp-radius-panel);
+  border-color: var(--sp-line);
+  background: var(--sp-card);
+}
+
+/* ── Buttons ───────────────────────────────────────────────────────────── */
+.button {
+  font-family: var(--sp-font-sans);
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  text-transform: none;
+  border-radius: var(--sp-radius-pill);
+  padding: 0.75rem 1.5rem;
+  transition: transform 200ms var(--sp-ease),
+              background 200ms var(--sp-ease),
+              border-color 200ms var(--sp-ease);
+}
+
+.button:hover {
+  transform: translateY(-2px);
+}
+
+.button--primary {
+  background: var(--sp-text);
+  border-color: var(--sp-text);
+  color: var(--sp-ink);
+  font-weight: 600;
+}
+
+.button--primary:hover,
+.button--primary:active {
+  background: var(--sp-heading);
+  border-color: var(--sp-heading);
+  color: var(--sp-ink);
+}
+
+.button--secondary,
+.button--outline {
+  background: transparent;
+  border-color: var(--sp-line-2);
+  color: var(--sp-text);
+}
+
+.button--secondary:hover,
+.button--outline:hover {
+  background: var(--sp-card);
+  border-color: var(--sp-line-2);
+  color: var(--sp-text);
+}

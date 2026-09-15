@@ -119,11 +119,11 @@ Both are documented in `routes.py`:
   *successful* call reaches the network or spawns work (`POST /api/demo/connector`,
   `POST /api/github/bot/scan`, `POST /api/evals/runs`). The deny-side assertions
   still cover them.
-* **`GET /api/security/status`** — layers a second, stricter check on top of
-  `OrgAdmin`: `security.py::_require_admin` also requires the caller's user id to be
-  in `SP_ADMIN_USER_IDS` (a platform-operator allowlist, default `{"local"}`). An org
-  admin who is not a platform operator is *correctly* 403 there, so only the deny
-  side is asserted.
+* **Plan-gated routes** — routes carrying `RequireBillablePlan` (guard
+  `BillablePlan`) are additionally driven as an admin of `FREE_ORG_ID`, which has no
+  `subscriptions` row: they must answer 402 `plan_required`. The seeded org is on an
+  active Team plan so its admin is never refused there. There is no platform-staff
+  identity; `GET /api/security/status` is org-admin plus billable plan.
 
 ## Distinguishing authorization 403s from policy 403s
 

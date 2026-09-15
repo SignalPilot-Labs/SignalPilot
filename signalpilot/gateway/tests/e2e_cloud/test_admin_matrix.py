@@ -10,8 +10,9 @@ cannot drift out of sync with the code. For each route:
   admin JWT (dev claim form)             -> NOT 401/403
   admin JWT (Clerk prod o.rol="admin")   -> NOT 401/403
 
-Staff-only routes (see routes.is_staff_only) invert the last two: an org admin is a
-tenant identity and must be REFUSED there; only a platform-staff identity gets in.
+Plan-gated routes (guard "BillablePlan") add one more axis: an admin of a FREE org
+is refused with 402 ``plan_required``, and an admin of a billable org is never
+refused with 401, 402 or 403. There is no platform-staff identity any more.
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ from .routes import (
     MEMBER_ROUTES,
     NON_AUTHZ_403_MARKERS,
     discover,
-    is_staff_only,
+    plan_gated,
 )
 
 pytestmark = pytest.mark.e2e_cloud
@@ -41,12 +42,21 @@ def test_discovery_found_the_expected_surface():
     # Spot-check the concrete exploit routes are in the discovered set.
     for expected in ("/api/connections/export", "/api/connections/import",
                      "/api/connections/{name}/clone", "/api/audit/export",
-                     "/api/evals/config", "/api/settings", "/api/keys",
-                     "/api/byok/keys"):
+                     "/api/evals/config", "/api/settings", "/api/byok/keys",
+                     # Gaps closed by the admin/member gating brief.
+                     "/api/audit", "/api/audit/stats", "/api/org/secrets",
+                     "/api/connections/test-credentials", "/api/github/install-url",
+                     "/api/workspace-projects", "/api/chat/default-project",
+                     "/api/connections/{name}/schema/endorsements", "/api/budget",
+                     "/api/evals/upload/initiate"):
         assert expected in paths, f"{expected} missing from discovered admin routes"
-    # The staff classification must not go vacuous. that would silently drop the
-    # tenant-escalation assertions below.
-    assert len(STAFF_ROUTES) >= 7, f"only {len(STAFF_ROUTES)} staff-only routes discovered"
+    # The plan-gate classification must not go vacuous: that would silently drop the
+    # free-org assertions below.
+    assert len(PLAN_GATED_ROUTES) >= 20, f"only {len(PLAN_GATED_ROUTES)} plan-gated routes discovered"
+    gated_paths = {r.path for r in PLAN_GATED_ROUTES}
+    for expected in ("/api/evals/config", "/api/security/status", "/api/workspace-projects",
+                     "/api/chat/conversations", "/api/notebook-sessions"):
+        assert expected in gated_paths, f"{expected} lost its plan gate"
 
 
 @pytest.mark.parametrize("route", ADMIN_ROUTES, ids=IDS)
@@ -86,13 +96,10 @@ def test_unauthenticated_is_401(client, route):
     )
 
 
-STAFF_ROUTES = [r for r in ADMIN_ROUTES if is_staff_only(r.method, r.path)]
-_STAFF_IDS = [r.id for r in STAFF_ROUTES]
+PLAN_GATED_ROUTES = plan_gated()
+_PLAN_GATED_IDS = [r.id for r in PLAN_GATED_ROUTES]
 
-_PROBEABLE = [
-    r for r in ADMIN_ROUTES
-    if (r.method, r.path) not in ADMIN_PROBE_SKIP and not is_staff_only(r.method, r.path)
-]
+_PROBEABLE = [r for r in ADMIN_ROUTES if (r.method, r.path) not in ADMIN_PROBE_SKIP]
 _PROBE_IDS = [r.id for r in _PROBEABLE]
 
 
@@ -120,53 +127,61 @@ def test_admin_short_claim_is_not_locked_out(client, clerk_shaped_admin_token, r
     )
 
 
-# Verify that organization administrators cannot access staff routes.
-
-_STAFF_PROBEABLE = [r for r in STAFF_ROUTES if (r.method, r.path) not in ADMIN_PROBE_SKIP]
-_STAFF_PROBE_IDS = [r.id for r in _STAFF_PROBEABLE]
+# Verify the plan gate: a free org is refused with 402, a billable org never is.
 
 
-@pytest.mark.parametrize("route", STAFF_ROUTES, ids=_STAFF_IDS)
-def test_org_admin_is_forbidden_on_staff_routes(client, admin_token, route):
-    """An org admin is a tenant identity. it must not reach platform-staff routes."""
-    r = call(client, route.method, route.url, admin_token, default_body(route.method))
-    assert r.status_code == 403, (
-        f"TENANT ESCALATION: {route.id} returned {r.status_code} for an org-admin JWT; "
-        f"expected 403 (staff-only route). Body: {r.text[:400]}"
+@pytest.mark.parametrize("route", PLAN_GATED_ROUTES, ids=_PLAN_GATED_IDS)
+def test_free_org_admin_gets_402_on_plan_gated_routes(client, free_org_admin_token, route):
+    """An org admin of a free org is refused by the plan gate, with a machine-readable body."""
+    r = call(client, route.method, route.url, free_org_admin_token, default_body(route.method))
+    assert r.status_code == 402, (
+        f"PLAN GATE MISSING: {route.id} returned {r.status_code} for a free-org admin JWT; "
+        f"expected 402. Body: {r.text[:400]}"
     )
+    body = r.json()
+    assert body.get("error") == "plan_required", body
+    assert body.get("tier") == "free", body
 
 
-@pytest.mark.parametrize("route", STAFF_ROUTES, ids=_STAFF_IDS)
-def test_org_admin_short_claim_is_forbidden_on_staff_routes(client, clerk_shaped_admin_token, route):
-    r = call(client, route.method, route.url, clerk_shaped_admin_token, default_body(route.method))
-    assert r.status_code == 403, (
-        f"TENANT ESCALATION (prod claim form): {route.id} returned {r.status_code} for an "
-        f"org-admin JWT; expected 403 (staff-only route). Body: {r.text[:400]}"
-    )
+@pytest.mark.parametrize("route", PLAN_GATED_ROUTES, ids=_PLAN_GATED_IDS)
+def test_billable_org_admin_passes_the_plan_gate(client, admin_token, route):
+    """A billable org's admin is never refused by the plan gate.
 
-
-@pytest.mark.parametrize("route", _STAFF_PROBEABLE, ids=_STAFF_PROBE_IDS)
-def test_staff_identity_is_not_locked_out(client, staff_token, route):
-    """Verify that a user in SP_ADMIN_USER_IDS passes authorization.
-
-    Another policy can deny a staff-only route. The test accepts status 403
-    only when the response identifies that policy and contains no authorization denial.
+    Other errors are valid because the test uses placeholder identifiers and
+    empty request bodies; ``ADMIN_PROBE_SKIP`` routes are still asserted here
+    because a 402 is decided before any work is spawned.
     """
-    r = call(client, route.method, route.url, staff_token, default_body(route.method))
-    assert r.status_code != 401, (
-        f"STAFF LOCKED OUT: {route.id} returned 401 for a platform-staff JWT. "
-        f"Body: {r.text[:400]}"
+    r = call(client, route.method, route.url, admin_token, default_body(route.method))
+    assert r.status_code not in (401, 402, 403), (
+        f"BILLABLE ORG LOCKED OUT: {route.id} returned {r.status_code} for an org-admin JWT "
+        f"of a billable org. Body: {r.text[:400]}"
     )
-    if r.status_code == 403:
-        assert any(m in r.text for m in NON_AUTHZ_403_MARKERS), (
-            f"STAFF LOCKED OUT: {route.id} returned an authorization 403 for a "
-            f"platform-staff JWT. Body: {r.text[:400]}"
-        )
-    for denial in AUTHZ_DENIAL_DETAILS:
-        assert denial not in r.text, (
-            f"STAFF LOCKED OUT: {route.id} carries the authorization denial "
-            f"{denial!r} for a platform-staff JWT. Body: {r.text[:400]}"
-        )
+
+
+def test_evals_availability_is_readable_by_a_free_org(client, free_org_admin_token, admin_token):
+    """The probe is not plan-gated and reports billable and capable separately."""
+    free = call(client, "GET", "/api/evals/availability", free_org_admin_token)
+    assert free.status_code == 200, free.text
+    assert free.json()["billable"] is False
+    assert free.json()["enabled"] is False
+    assert set(free.json()) == {"billable", "capable", "enabled"}
+
+    billable = call(client, "GET", "/api/evals/availability", admin_token)
+    assert billable.status_code == 200, billable.text
+    assert billable.json()["billable"] is True
+    assert billable.json()["enabled"] is billable.json()["capable"]
+
+
+def test_chat_bootstrap_carries_the_entitlement_for_every_org(client, free_org_admin_token, admin_token):
+    for token, expected_billable in ((free_org_admin_token, False), (admin_token, True)):
+        r = call(client, "GET", "/api/chat/bootstrap", token)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["entitlement"]["is_billable"] is expected_billable
+        assert set(body["capabilities"]) == {"evals", "sandbox"}
+        if not expected_billable:
+            assert body["enabled"] is False
+            assert not any(body["enterprise_features"].values())
 
 
 def test_put_eval_config_requires_the_admin_scope():
@@ -184,7 +199,7 @@ def test_put_eval_config_requires_the_admin_scope():
 
 def test_prefixed_admin_role_spelling_also_passes(client, admin_token_short_claim_prefixed):
     """Clerk's memberships API reports "org:admin"; both spellings must be accepted."""
-    r = call(client, "GET", "/api/keys", admin_token_short_claim_prefixed)
+    r = call(client, "GET", "/api/audit", admin_token_short_claim_prefixed)
     assert r.status_code not in (401, 403), r.text
 
 

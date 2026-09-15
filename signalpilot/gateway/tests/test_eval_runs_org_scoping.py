@@ -15,7 +15,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from gateway.api import eval_runs as eval_runs_module
 from gateway.api.deps import get_store
 from gateway.api.eval_runs import router as eval_runs_router
-from gateway.config import get_governance_settings
 from gateway.config.evals import get_eval_run_settings
 from gateway.db.models import GatewayBase
 from gateway.store import Store
@@ -27,12 +26,11 @@ RUN_B = "run-20260101-020202-bbbbbb"
 
 @pytest.fixture(autouse=True)
 def _settings_cache(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("SP_ADMIN_USER_IDS", "u1")
-    monkeypatch.setenv("SP_EVAL_ALLOWED_ORGS", "org-a,org-b")
-    get_governance_settings.cache_clear()
+    """Local mode (unlimited tier, no plan gate) on a deployment that can run evals."""
+    monkeypatch.setenv("SP_EVAL_RUNNER_IMAGE", "example.com/eval-runner@sha256:" + "a" * 64)
+    monkeypatch.setenv("SP_EVAL_S3_BUCKET", "sp-eval-runs")
     get_eval_run_settings.cache_clear()
     yield
-    get_governance_settings.cache_clear()
     get_eval_run_settings.cache_clear()
 
 

@@ -49,6 +49,27 @@ const config: Config = {
     },
   ],
 
+  plugins: [
+    [
+      '@docusaurus/plugin-client-redirects',
+      {
+        redirects: [
+          {from: '/docs/mcp/auth', to: '/docs/clients/api-keys'},
+          {from: '/docs/mcp/connect-claude-code', to: '/docs/clients/claude-code'},
+          {from: '/docs/mcp/connect-other-clients', to: '/docs/clients/other-tools'},
+          {from: '/docs/mcp/multiple-mcps', to: '/docs/clients/multiple-mcps'},
+          {from: '/docs/setup/install', to: '/docs/self-host/install'},
+          {from: '/docs/setup/configuration', to: '/docs/self-host/configuration'},
+          {from: '/docs/setup/self-hosting-production', to: '/docs/self-host/production'},
+          {from: '/docs/setup/operations', to: '/docs/self-host/operations'},
+          {from: '/docs/setup/ssh-tunneling', to: '/docs/self-host/ssh-tunneling'},
+          {from: '/docs/setup/cloud', to: '/docs/cloud'},
+          {from: '/docs/setup/onboarding', to: '/docs/'},
+        ],
+      },
+    ],
+  ],
+
   presets: [
     [
       'classic',
@@ -60,7 +81,17 @@ const config: Config = {
         },
         blog: false,
         theme: {
-          customCss: './src/css/custom.css',
+          customCss: [
+            // Order matters: these are the original custom.css split by concern,
+            // listed in source order so the cascade is unchanged.
+            './src/css/fonts-and-tokens.css',
+            './src/css/base-typography.css',
+            './src/css/chrome.css',
+            './src/css/content.css',
+            './src/css/page-furniture.css',
+            './src/css/figures-and-utilities.css',
+            './src/css/review-fixes.css',
+          ],
         },
       } satisfies Preset.Options,
     ],
@@ -68,9 +99,9 @@ const config: Config = {
 
   themeConfig: {
     colorMode: {
-      defaultMode: 'dark',
+      defaultMode: 'light',
       disableSwitch: false,
-      respectPrefersColorScheme: false,
+      respectPrefersColorScheme: true,
     },
     docs: {
       sidebar: {
@@ -91,25 +122,22 @@ const config: Config = {
         height: 26,
       },
       items: [
-        {
-          to: '/docs/plugin',
-          position: 'left',
-          label: 'Plugin',
-        },
-        {
-          to: '/docs/reference/tools-overview',
-          position: 'left',
-          label: 'Tools',
-        },
-        {
-          href: 'https://app.signalpilot.ai',
-          label: 'Cloud',
-          position: 'right',
-        },
+        {to: '/docs/', position: 'left', label: 'Docs'},
+        {to: '/docs/clients/claude', position: 'left', label: 'Connect'},
+        {to: '/docs/product/knowledge-base', position: 'left', label: 'Product'},
+        {to: '/docs/self-host/install', position: 'left', label: 'Self-host'},
         {
           href: 'https://github.com/SignalPilot-Labs/signalpilot',
           label: 'GitHub',
           position: 'right',
+        },
+        // Last right-side link renders as the pill CTA (see src/css/chrome.css).
+        // The theme toggle is injected after it by the theme, not by this list.
+        {
+          href: 'https://app.signalpilot.ai',
+          label: 'Open SignalPilot',
+          position: 'right',
+          className: 'sp-nav-cta',
         },
       ],
     },
@@ -124,16 +152,16 @@ const config: Config = {
               to: '/docs/',
             },
             {
-              label: 'Concepts',
-              to: '/docs/concepts',
+              label: 'Connect Claude',
+              to: '/docs/clients/claude',
             },
             {
-              label: 'MCP Setup',
-              to: '/docs/mcp/connect-claude-code',
+              label: 'Knowledge base',
+              to: '/docs/product/knowledge-base',
             },
             {
-              label: 'Tools Reference',
-              to: '/docs/reference/tools-overview',
+              label: 'Self-host',
+              to: '/docs/self-host/install',
             },
           ],
         },

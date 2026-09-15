@@ -4,9 +4,10 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, useMemo } from "react";
 import dynamic from "next/dynamic";
-import { KeyRound, CreditCard, Plug, PlugZap, BarChart3, Shield, Lock, Users, GitBranch, BookOpen, Menu, X } from "lucide-react";
+import { KeyRound, Menu, X } from "lucide-react";
 import { Tooltip } from "~/components/ui/tooltip";
 import { useAppAuth } from "~/lib/auth-context";
+import { usePermissions } from "~/lib/hooks/use-permissions";
 import { getProjects, getWorkspaceProjects } from "~/lib/api";
 import { useConnectionsHealth, useKnowledgeDocs } from "~/lib/hooks/use-gateway-data";
 import { TierWordmark } from "~/components/branding/tier-wordmark";
@@ -15,6 +16,17 @@ import { TierSeal } from "~/components/branding/tier-seal";
 import { useTierBranding } from "~/lib/hooks/use-tier-branding";
 import { isChromelessRoute, matchesRoutePrefix } from "~/lib/route-chrome";
 import { nav, navGroups } from "~/components/layout/nav-groups";
+import {
+  AccountSecurityNavLink,
+  ApiKeysNavLink,
+  BillingNavLink,
+  ByokNavLink,
+  ConnectorsNavLink,
+  GitHubNavLink,
+  McpConnectNavLink,
+  TeamNavLink,
+  UsageNavLink,
+} from "./sidebar-settings-links";
 
 function SignalPilotLogo() {
   return (
@@ -97,233 +109,13 @@ const TeamSwitcher = dynamic(
   { ssr: false }
 );
 
-/** API Keys nav link — available in both local and cloud mode */
-function ApiKeysNavLink({ pathname }: { pathname: string }) {
-  const active = pathname.startsWith("/settings/api-keys");
-
-  return (
-    <Link
-      href="/settings/api-keys"
-      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 rounded-[10px] text-[12.5px] transition-colors duration-150 ${
-        active
-          ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
-          : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
-      }`}
-    >
-      <KeyRound size={11} className="flex-shrink-0 text-[var(--color-text-dim)]" />
-      <span className="flex-1 tracking-wide text-[12px]">api keys</span>
-    </Link>
-  );
-}
-
-/** Billing nav link — only rendered in cloud mode, nested under /settings */
-function BillingNavLink({ pathname }: { pathname: string }) {
-  const { isCloudMode } = useAppAuth();
-
-  if (!isCloudMode) return null;
-
-  const active = pathname.startsWith("/settings/billing");
-
-  return (
-    <Link
-      href="/settings/billing"
-      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 rounded-[10px] text-[12.5px] transition-colors duration-150 ${
-        active
-          ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
-          : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
-      }`}
-    >
-      <CreditCard size={11} className="flex-shrink-0 text-[var(--color-text-dim)]" />
-      <span className="flex-1 tracking-wide text-[12px]">plans</span>
-    </Link>
-  );
-}
-
-/** Usage nav link — only rendered in cloud mode, nested under /settings */
-function UsageNavLink({ pathname }: { pathname: string }) {
-  const { isCloudMode } = useAppAuth();
-
-  if (!isCloudMode) return null;
-
-  const active = pathname.startsWith("/settings/usage");
-
-  return (
-    <Link
-      href="/settings/usage"
-      aria-label="view usage analytics"
-      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 rounded-[10px] text-[12.5px] transition-colors duration-150 ${
-        active
-          ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
-          : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
-      }`}
-    >
-      <BarChart3 size={11} className="flex-shrink-0 text-[var(--color-text-dim)]" />
-      <span className="flex-1 tracking-wide text-[12px]">usage</span>
-    </Link>
-  );
-}
-
-/** Connectors nav link — external tool servers for the chat agent */
-function ConnectorsNavLink({ pathname }: { pathname: string }) {
-  const active = pathname.startsWith("/settings/connectors");
-
-  return (
-    <Link
-      href="/settings/connectors"
-      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 rounded-[10px] text-[12.5px] transition-colors duration-150 ${
-        active
-          ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
-          : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
-      }`}
-    >
-      <PlugZap size={11} className="flex-shrink-0 text-[var(--color-text-dim)]" />
-      <span className="flex-1 tracking-wide text-[12px]">Connectors</span>
-    </Link>
-  );
-}
-
-/** MCP Connect nav link — available in both local and cloud mode */
-function McpConnectNavLink({ pathname }: { pathname: string }) {
-  const active = pathname.startsWith("/settings/mcp-connect");
-
-  return (
-    <Link
-      href="/settings/mcp-connect"
-      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 rounded-[10px] text-[12.5px] transition-colors duration-150 ${
-        active
-          ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
-          : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
-      }`}
-    >
-      <Plug size={11} className="flex-shrink-0 text-[var(--color-text-dim)]" />
-      <span className="flex-1 tracking-wide text-[12px]">mcp connect</span>
-    </Link>
-  );
-}
-
-/** Notion Connect nav link — available in both local and cloud mode */
-function NotionConnectNavLink({ pathname }: { pathname: string }) {
-  const active = pathname.startsWith("/settings/notion-connect");
-
-  return (
-    <Link
-      href="/settings/notion-connect"
-      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 rounded-[10px] text-[12.5px] transition-colors duration-150 ${
-        active
-          ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
-          : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
-      }`}
-    >
-      <BookOpen size={11} className="flex-shrink-0 text-[var(--color-text-dim)]" />
-      <span className="flex-1 tracking-wide text-[12px]">notion connect</span>
-    </Link>
-  );
-}
-
-function ByokNavLink({ pathname }: { pathname: string }) {
-  const branding = useTierBranding();
-  // BYOK is team/enterprise only; hidden until tier branding is resolved (cloud + loaded)
-  if (!branding.enabled) return null;
-  if (branding.tier !== "team" && branding.tier !== "enterprise") return null;
-
-  const active = pathname.startsWith("/settings/byok");
-
-  return (
-    <Link
-      href="/settings/byok"
-      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 rounded-[10px] text-[12.5px] transition-colors duration-150 ${
-        active
-          ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
-          : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
-      }`}
-    >
-      <Shield size={11} className="flex-shrink-0 text-[var(--color-text-dim)]" />
-      <span className="flex-1 tracking-wide text-[12px]">security</span>
-    </Link>
-  );
-}
-
-/** Team nav link — cloud-mode only */
-function TeamNavLink({ pathname }: { pathname: string }) {
-  const { isCloudMode } = useAppAuth();
-
-  if (!isCloudMode) return null;
-
-  const active = pathname.startsWith("/settings/team");
-
-  return (
-    <Link
-      href="/settings/team"
-      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 rounded-[10px] text-[12.5px] transition-colors duration-150 ${
-        active
-          ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
-          : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
-      }`}
-    >
-      <Users size={11} className="flex-shrink-0 text-[var(--color-text-dim)]" />
-      <span className="flex-1 tracking-wide text-[12px]">team</span>
-    </Link>
-  );
-}
-
-/** Account Security nav link — cloud-mode only */
-function AccountSecurityNavLink({ pathname }: { pathname: string }) {
-  const { isCloudMode } = useAppAuth();
-
-  if (!isCloudMode) return null;
-
-  const active = pathname.startsWith("/settings/account-security");
-
-  return (
-    <Link
-      href="/settings/account-security"
-      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 rounded-[10px] text-[12.5px] transition-colors duration-150 ${
-        active
-          ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
-          : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
-      }`}
-    >
-      <Lock size={11} className="flex-shrink-0 text-[var(--color-text-dim)]" />
-      <span className="flex-1 tracking-wide text-[12px]">account security</span>
-    </Link>
-  );
-}
-
-/** GitHub nav link — nested under settings */
-function GitHubNavLink({ pathname }: { pathname: string }) {
-  const active = pathname.startsWith("/settings/github");
-
-  return (
-    <Link
-      href="/settings/github"
-      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 rounded-[10px] text-[12.5px] transition-colors duration-150 ${
-        active
-          ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
-          : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
-      }`}
-    >
-      <GitBranch size={11} className="flex-shrink-0 text-[var(--color-text-dim)]" />
-      <span className="flex-1 tracking-wide text-[12px]">github</span>
-    </Link>
-  );
-}
-
 export default function Sidebar() {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
   const router = useRouter();
   const { isCloudMode, isAuthenticated } = useAppAuth();
+  const { can } = usePermissions();
   const [projectCount, setProjectCount] = useState(0);
-  // Evals nav item only shows for workspaces evals are enabled for. The
-  // availability probe is readable by everyone, so this is a 200 either way.
-  const [evalsEnabled, setEvalsEnabled] = useState(false);
-  useEffect(() => {
-    if (!isAuthenticated) return;
-    import("~/lib/api")
-      .then(({ getEvalAvailability }) => getEvalAvailability())
-      .then((a) => setEvalsEnabled(a.enabled))
-      .catch(() => setEvalsEnabled(false));
-  }, [isAuthenticated]);
 
   // Connection health from shared SWR cache (auto-refreshes every 15s)
   // Only fetch when authenticated (prevents 401s on login page)
@@ -345,7 +137,15 @@ export default function Sidebar() {
     return () => clearInterval(i);
   }, [isCloudMode]);
 
-  const filteredNav = nav.filter(({ href }) => !(isCloudMode && href === "/settings"));
+  // Admin-only destinations: org settings (local mode's /settings) and the
+  // org-wide audit log. Members never see them in the nav.
+  const hiddenHrefs = useMemo(() => {
+    const hidden = new Set<string>();
+    if (isCloudMode || !can("settings.write")) hidden.add("/settings");
+    if (!can("audit.read")) hidden.add("/audit");
+    return hidden;
+  }, [isCloudMode, can]);
+  const filteredNav = useMemo(() => nav.filter(({ href }) => !hiddenHrefs.has(href)), [hiddenHrefs]);
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -366,7 +166,7 @@ export default function Sidebar() {
 
   // Hide sidebar on auth pages — checked after all hooks are called
   const tierBranding = useTierBranding();
-  const showWordmark = tierBranding.enabled && tierBranding.tier !== "free";
+  const showWordmark = tierBranding.enabled;
 
   useEffect(() => setMobileOpen(false), [pathname]);
 
@@ -437,10 +237,7 @@ export default function Sidebar() {
       {/* Navigation — grouped IA */}
       <nav className="flex-1 overflow-y-auto px-3 py-2">
         {navGroups.map((group, gi) => {
-          const items = group.items.filter(
-            ({ href }) =>
-              !(isCloudMode && href === "/settings") && !(href.startsWith("/evals") && !evalsEnabled)
-          );
+          const items = group.items.filter(({ href }) => !hiddenHrefs.has(href));
           if (items.length === 0) return null;
           return (
             <div key={group.label ?? `g${gi}`} className={gi > 0 ? "mt-4" : undefined}>

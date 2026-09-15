@@ -12,16 +12,22 @@ from .chat_routes.runs import router as runs_router
 from .chat_routes.runtime_archives import _sanitize_runtime_archive_html
 from .chat_routes.runtime_archives import router as runtime_archives_router
 from .chat_routes.runtime_files import router as runtime_files_router
+from .deps import RequireBillablePlan
 
+# The bootstrap route (projects_router) answers for every org so a free org can
+# see its plan prompt; every other chat route needs a billable plan.
 router = APIRouter(prefix="/api/chat")
 router.include_router(projects_router)
-router.include_router(conversations_router)
-router.include_router(runs_router)
-router.include_router(runtime_archives_router)
-router.include_router(files_router)
-router.include_router(publish_dashboard_router)
-router.include_router(runtime_files_router)
-router.include_router(legacy_artifacts_router)
-router.include_router(query_results_router)
+for _billable_router in (
+    conversations_router,
+    runs_router,
+    runtime_archives_router,
+    files_router,
+    publish_dashboard_router,
+    runtime_files_router,
+    legacy_artifacts_router,
+    query_results_router,
+):
+    router.include_router(_billable_router, dependencies=[RequireBillablePlan])
 
 __all__ = ["_sanitize_runtime_archive_html", "router"]

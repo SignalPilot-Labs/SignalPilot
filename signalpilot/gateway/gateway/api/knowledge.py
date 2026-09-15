@@ -1,7 +1,8 @@
 """Knowledge Base REST API endpoints.
 
-Admin scope (not write) on mutations is intentional — knowledge requires human
-review by design. Do not lower to write without product sign-off.
+Publish, edit, approve and archive are admin-only: knowledge requires human
+review by design. The one member write is a proposal (``POST /api/knowledge``
+by a non-admin), which always lands pending and waits for an admin.
 """
 
 from __future__ import annotations
@@ -10,6 +11,8 @@ import uuid
 
 from fastapi import APIRouter, HTTPException
 
+from ..auth import OrgRole
+from ..auth.user import is_org_admin_role
 from ..models.knowledge import (
     KnowledgeDoc,
     KnowledgeDocCreate,
@@ -19,7 +22,6 @@ from ..models.knowledge import (
     RetrievalStats,
 )
 from ..security.scope_guard import RequireScope
-from .eval_runs import maybe_autorun_after_knowledge_change
 from ..store.knowledge import (
     KnowledgeDuplicate,
     KnowledgeNotFound,
@@ -28,6 +30,7 @@ from ..store.knowledge import (
     KnowledgeStateConflict,
 )
 from .deps import StoreD
+from .eval_runs import maybe_autorun_after_knowledge_change
 
 router = APIRouter(prefix="/api")
 
@@ -120,12 +123,20 @@ async def get_knowledge_doc(doc_id: uuid.UUID, store: StoreD):
     "/knowledge",
     response_model=KnowledgeDoc,
     status_code=201,
-    dependencies=[RequireScope("admin")],
+    dependencies=[RequireScope("write")],
 )
-async def create_knowledge_doc(payload: KnowledgeDocCreate, store: StoreD):
-    """Create or update a knowledge doc (admin only). Upserts by unique key."""
+async def create_knowledge_doc(payload: KnowledgeDocCreate, store: StoreD, role: OrgRole):
+    """Admin: create or update a knowledge doc (upsert by unique key).
+
+    Member: propose one. The entry is inserted pending regardless of category
+    and an existing key is a 409, so a member can never edit or republish a
+    live entry through this route.
+    """
     try:
-        doc = await store.upsert_knowledge_doc(payload, user_id=store.user_id)
+        if is_org_admin_role(role):
+            doc = await store.upsert_knowledge_doc(payload, user_id=store.user_id)
+        else:
+            doc = await store.insert_knowledge_doc(payload, user_id=store.user_id, force_pending=True)
     except (KnowledgeSizeExceeded, KnowledgeOrgQuotaExceeded, KnowledgeDuplicate) as exc:
         raise _map_knowledge_exc(exc) from exc
     await maybe_autorun_after_knowledge_change(store, doc)

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type { KnowledgeDoc, KnowledgeEdit } from "~/lib/types";
 import { TimeAgo } from "~/components/ui/time-ago";
 import { ConfirmDialog } from "~/components/ui/confirm-dialog";
+import { AdminOnlyControl } from "~/components/access/admin-only-control";
 import { KbIcon } from "./icons";
 
 function renderDiff(before: string, after: string) {
@@ -101,9 +102,11 @@ export function HistoryModal({
                       <button onClick={() => setDiffEdit(isDiffOpen ? null : edit)} className="kb-btn kb-btn-sm">
                         {isDiffOpen ? "hide" : "diff"}
                       </button>
-                      <button onClick={() => setConfirmRevert(edit)} className="kb-btn kb-btn-sm kb-btn-warn">
-                        revert
-                      </button>
+                      <AdminOnlyControl permission="knowledge.publish">
+                        <button onClick={() => setConfirmRevert(edit)} className="kb-btn kb-btn-sm kb-btn-warn">
+                          revert
+                        </button>
+                      </AdminOnlyControl>
                     </div>
                   </div>
 

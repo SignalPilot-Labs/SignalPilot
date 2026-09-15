@@ -216,6 +216,7 @@ class TestDeleteBranchProtected:
                 await delete_xata_branch(
                     name="conn",
                     store=mock_store,
+                    role="admin",
                     project="prj_abc",
                     branch="main",
                 )
@@ -254,6 +255,7 @@ class TestDeleteBranchProtected:
             result = await delete_xata_branch(
                 name="conn",
                 store=mock_store,
+                role="admin",
                 project="prj_abc",
                 branch="agent-branch",
             )

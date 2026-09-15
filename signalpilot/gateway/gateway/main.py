@@ -6,7 +6,6 @@ This module defines lifespan, middleware, and router registration.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -90,6 +89,7 @@ async def lifespan(app: FastAPI):
 
     # Ensure git repos directory exists
     from .git.repos import ensure_repos_dir
+
     ensure_repos_dir()
 
     # Initialize gateway DB tables
@@ -118,6 +118,7 @@ async def lifespan(app: FastAPI):
 
     # Verify that cloud mode can resolve the OAuth state-signing key.
     from .api._oauth_state import get_state_hmac_key
+
     get_state_hmac_key()  # Raise at startup when the cloud encryption key is absent.
 
     # Configure the BYOK provider from startup environment variables.

@@ -60,16 +60,39 @@ jobs:
 
       - name: Audit web dependencies
         working-directory: signalpilot/web
-        run: node ../../.github/scripts/npm-audit-gate.mjs --allow form-data --allow request
+        # Accepted, transitive or major-upgrade-only (2026-09-15): browserslist and
+        # js-yaml (build-time tooling), sharp libheif (image optimizer, no user
+        # uploads pass through it), svgo (build-time), maplibre-gl via plotly.js
+        # (fix is plotly 4, a major upgrade tracked separately).
+        run: >-
+          node ../../.github/scripts/npm-audit-gate.mjs
+          --allow form-data --allow request
+          --allow-advisory GHSA-c83g-rgw3-j3cx
+          --allow-advisory GHSA-73wf-gq98-2v4g
+          --allow-advisory GHSA-2883-xcg3-v3hh
+          --allow-advisory GHSA-rgj7-g3m4-5g8c
+          --allow-advisory GHSA-w27v-7q3p-w38r
+          --allow-advisory GHSA-4vpr-x523-8j87
+          --allow-advisory GHSA-jrc7-96c5-q579
 
       - name: Audit docs dependencies
         working-directory: docs
         # Docusaurus currently has no patched image-size release. These parsers
         # only process repository-owned docs assets during the trusted build.
+        # fast-uri (via ajv), svgo (via @svgr) and js-yaml (via gray-matter and
+        # cosmiconfig) are build-time tooling that only sees repository-owned
+        # content; accepted 2026-09-15 pending the Docusaurus 3.10 upgrade.
         run: >-
           node ../.github/scripts/npm-audit-gate.mjs
           --allow-advisory GHSA-w3rx-r6r6-pgpr
           --allow-advisory GHSA-5p2g-fcmc-qvqq
+          --allow-advisory GHSA-5jgf-p345-68v8
+          --allow-advisory GHSA-f65p-4m7j-42xc
+          --allow-advisory GHSA-fph4-wmhf-6fwf
+          --allow-advisory GHSA-jqff-g426-hqxp
+          --allow-advisory GHSA-w27v-7q3p-w38r
+          --allow-advisory GHSA-4vpr-x523-8j87
+          --allow-advisory GHSA-2883-xcg3-v3hh
 
   secrets:
     name: secrets
@@ -85,7 +108,7 @@ jobs:
         with:
           path: ./
           version: 3.95.5
-          extra_args: --results=verified,unknown
+          extra_args: --results=verified,unknown --exclude-paths=.github/trufflehog-exclude-paths.txt
 
   sast-semgrep:
     name: sast-semgrep

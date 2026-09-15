@@ -10,6 +10,9 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock("~/lib/api", () => api);
 vi.mock("~/lib/auth-context", () => ({ useAppAuth: () => api.auth }));
+vi.mock("~/lib/hooks/use-permissions", () => ({
+  usePermissions: () => ({ role: "admin", isAdmin: true, loaded: true, can: () => true }),
+}));
 const empty: McpAgentDefaults = { mcp_agent_default_project_id: null, mcp_agent_default_connection_name: null, mcp_agent_default_branch: null };
 
 describe("MCP agent defaults", () => {

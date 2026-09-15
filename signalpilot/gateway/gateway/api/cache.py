@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
-from ..auth import UserID
+from ..auth import OrgAdmin, UserID
 from ..connectors.pool_manager import pool_manager
 from ..connectors.schema_cache import schema_cache
 from ..governance.cache import query_cache
@@ -80,7 +80,7 @@ async def get_pii_config(name: str, store: StoreD):
 
 
 @router.put("/connections/{name}/pii", dependencies=[RequireScope("write")])
-async def set_pii_config(name: str, store: StoreD, body: dict):
+async def set_pii_config(name: str, store: StoreD, body: dict, _role: OrgAdmin):
     """Set PII redaction config for a connection.
 
     Body: {"enabled": true/false, "rules": {"column_name": "hash|mask|hide", ...}}
@@ -103,7 +103,7 @@ async def set_pii_config(name: str, store: StoreD, body: dict):
 
 
 @router.post("/connections/{name}/detect-and-save-pii", dependencies=[RequireScope("write")])
-async def detect_and_save_pii(name: str, store: StoreD):
+async def detect_and_save_pii(name: str, store: StoreD, _role: OrgAdmin):
     """Auto-detect PII columns and save rules to the connection config.
 
     Detects PII by column naming patterns, saves the rules, and enables

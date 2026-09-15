@@ -14,6 +14,7 @@ from gateway.api.deps import (
 from gateway.api.schema._router import router
 from gateway.api.schema._scoring import _levenshtein
 from gateway.api.schema._semantic_store import _load_semantic_model, _save_semantic_model
+from gateway.auth import OrgAdmin
 from gateway.security.scope_guard import RequireScope
 
 logger = logging.getLogger(__name__)
@@ -30,7 +31,7 @@ async def get_semantic_model(name: str, store: StoreD):
 
 
 @router.put("/connections/{name}/semantic-model", dependencies=[RequireScope("write")])
-async def update_semantic_model(name: str, store: StoreD, body: dict):
+async def update_semantic_model(name: str, store: StoreD, body: dict, _role: OrgAdmin):
     """Update the semantic model for a connection.
 
     Body: {
@@ -65,7 +66,7 @@ async def update_semantic_model(name: str, store: StoreD, body: dict):
 
 
 @router.post("/connections/{name}/semantic-model/generate", dependencies=[RequireScope("write")])
-async def generate_semantic_model(name: str, store: StoreD):
+async def generate_semantic_model(name: str, store: StoreD, _role: OrgAdmin):
     """Auto-generate a semantic model skeleton from the database schema."""
     info = await require_connection(store, name)
     cached = await get_or_fetch_schema(store, name, info)
@@ -141,7 +142,7 @@ async def generate_semantic_model(name: str, store: StoreD):
 
 
 @router.post("/connections/{name}/schema/correct-columns", dependencies=[RequireScope("write")])
-async def correct_columns(name: str, store: StoreD, body: dict):
+async def correct_columns(name: str, store: StoreD, body: dict, _role: OrgAdmin):
     """Suggest corrections for hallucinated column names.
 
     Body: {"table": "public.customers", "columns": ["customer_name", "email_addr"]}

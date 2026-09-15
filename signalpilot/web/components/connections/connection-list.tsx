@@ -5,11 +5,14 @@ import { Activity, AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Clock
 import { DbTypeIcon } from "./db-type-icon";
 import type { ConnectionsController } from "./hooks/use-connections-controller";
 import { ConnectionSchemaBrowser, type ConnectionSchemaTable } from "./schema/connection-schema-browser";
+import { AdminOnlyControl } from "~/components/access/admin-only-control";
+import { ReadOnlyNote } from "~/components/access/read-only-note";
 import { ConfirmDialog } from "~/components/ui/confirm-dialog";
 import { EmptyDatabase, EmptyState } from "~/components/ui/empty-states";
 import { MiniBar, Sparkline, StatusDot } from "~/components/ui/data-viz";
 import { Tooltip } from "~/components/ui/tooltip";
 import { CATEGORY_LABELS, CONNECTOR_TIERS, DB_CONFIGS, DB_TYPE_LABELS as dbTypeLabels } from "~/lib/connections/connector-catalog";
+import { usePermissions } from "~/lib/hooks/use-permissions";
 import type { DBType } from "~/lib/types";
 
 interface ConnectionListProps {
@@ -66,6 +69,9 @@ export function ConnectionList({ controller }: ConnectionListProps) {
     handleTogglePII,
     handleSchemaSearch,
   } = controller;
+  const { can } = usePermissions();
+  // Members read the list; only admins create, edit, clone, delete, or change PII rules.
+  const canWrite = can("connections.write");
 
   return (
     <>
@@ -75,12 +81,16 @@ export function ConnectionList({ controller }: ConnectionListProps) {
           title="no connections configured"
           description="add a database connection to enable governed sql queries and sandbox access"
           action={
-            <button
-              onClick={() => setShowForm(true)}
-              className="flex items-center gap-2 px-4 py-2 text-xs text-[var(--color-text-dim)] border border-[var(--color-border)] rounded-[10px] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-colors duration-150"
-            >
-              <Plus className="w-3.5 h-3.5" /> add first connection
-            </button>
+            canWrite ? (
+              <button
+                onClick={() => setShowForm(true)}
+                className="flex items-center gap-2 px-4 py-2 text-xs text-[var(--color-text-dim)] border border-[var(--color-border)] rounded-[10px] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] transition-colors duration-150"
+              >
+                <Plus className="w-3.5 h-3.5" /> add first connection
+              </button>
+            ) : (
+              <ReadOnlyNote block>ask an org admin to add a connection</ReadOnlyNote>
+            )
           }
         />
       ) : (
@@ -332,9 +342,9 @@ export function ConnectionList({ controller }: ConnectionListProps) {
                       {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
                       <Table2 className="w-3 h-3" strokeWidth={1.5} /> schema
                     </button>
-                    <button onClick={(e) => { e.stopPropagation(); const opening = expandedPiiConn !== conn.name; setExpandedPiiConn(opening ? conn.name : null); if (opening) void handleScanPII(conn.name); }} disabled={piiLoading === conn.name}
+                    <button onClick={(e) => { e.stopPropagation(); const opening = expandedPiiConn !== conn.name; setExpandedPiiConn(opening ? conn.name : null); if (opening && canWrite) void handleScanPII(conn.name); }} disabled={piiLoading === conn.name}
                       className=""
-                      title={piiConfig[conn.name]?.enabled ? "PII redaction active — click to re-scan" : "Scan for PII columns"}
+                      title={!canWrite ? "View PII redaction rules" : piiConfig[conn.name]?.enabled ? "PII redaction active — click to re-scan" : "Scan for PII columns"}
                     >
                       {piiLoading === conn.name ? <Loader2 className="w-3 h-3 animate-spin" /> : <Shield className={`w-3 h-3 ${piiConfig[conn.name]?.enabled ? "text-emerald-400" : ""}`} strokeWidth={1.5} />}
                       pii
@@ -357,18 +367,29 @@ export function ConnectionList({ controller }: ConnectionListProps) {
                       {diagnosing === conn.name ? <Loader2 className="w-3 h-3 animate-spin" /> : <Activity className="w-3 h-3" strokeWidth={1.5} />}
                       diagnose
                     </button>
-                    <button onClick={(e) => { e.stopPropagation(); handleEditConnection(conn); }}
-                      className="" title="Edit connection" aria-label={`Edit ${conn.name}`}>
-                      <Pencil className="w-3 h-3" strokeWidth={1.5} />
-                    </button>
-                    <button onClick={(e) => { e.stopPropagation(); handleClone(conn.name); }}
-                      className="" title="Clone connection" aria-label={`Clone ${conn.name}`}>
-                      <Copy className="w-3 h-3" strokeWidth={1.5} />
-                    </button>
-                    <button onClick={() => handleDelete(conn.name)}
-                      className="is-danger" title="Delete connection" aria-label={`Delete ${conn.name}`}>
-                      <Trash2 className="w-3 h-3" />
-                    </button>
+                    {canWrite ? (
+                      <button onClick={(e) => { e.stopPropagation(); handleEditConnection(conn); }}
+                        className="" title="Edit connection" aria-label={`Edit ${conn.name}`}>
+                        <Pencil className="w-3 h-3" strokeWidth={1.5} />
+                      </button>
+                    ) : (
+                      <button onClick={(e) => { e.stopPropagation(); handleEditConnection(conn); }}
+                        className="" title="View connection" aria-label={`View ${conn.name}`}>
+                        <Eye className="w-3 h-3" strokeWidth={1.5} />
+                      </button>
+                    )}
+                    {canWrite && (
+                      <>
+                        <button onClick={(e) => { e.stopPropagation(); handleClone(conn.name); }}
+                          className="" title="Clone connection" aria-label={`Clone ${conn.name}`}>
+                          <Copy className="w-3 h-3" strokeWidth={1.5} />
+                        </button>
+                        <button onClick={() => handleDelete(conn.name)}
+                          className="is-danger" title="Delete connection" aria-label={`Delete ${conn.name}`}>
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      </>
+                    )}
                   </div>
                 </div>
 
@@ -412,16 +433,18 @@ export function ConnectionList({ controller }: ConnectionListProps) {
                           pii redaction — {Object.keys(piiConfig[conn.name]?.rules || {}).length} columns
                         </span>
                       </div>
-                      <button
-                        onClick={() => handleTogglePII(conn.name)}
-                        className={`px-2.5 py-1 text-[11px] border rounded-[6px] transition-colors duration-150 ${
-                          piiConfig[conn.name]?.enabled
-                            ? "border-emerald-500/40 text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20"
-                            : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-text)] hover:text-[var(--color-text)]"
-                        }`}
-                      >
-                        {piiConfig[conn.name]?.enabled ? "redaction on" : "redaction off"}
-                      </button>
+                      <AdminOnlyControl permission="connections.write">
+                        <button
+                          onClick={() => handleTogglePII(conn.name)}
+                          className={`px-2.5 py-1 text-[11px] border rounded-[6px] transition-colors duration-150 ${
+                            piiConfig[conn.name]?.enabled
+                              ? "border-emerald-500/40 text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20"
+                              : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-text)] hover:text-[var(--color-text)]"
+                          }`}
+                        >
+                          {piiConfig[conn.name]?.enabled ? "redaction on" : "redaction off"}
+                        </button>
+                      </AdminOnlyControl>
                     </div>
                     {piiConfig[conn.name]?.rules && Object.keys(piiConfig[conn.name].rules).length > 0 && (
                       <div className="flex flex-wrap gap-2 mb-2">
@@ -459,7 +482,7 @@ export function ConnectionList({ controller }: ConnectionListProps) {
                     <p className="text-[11px] text-[var(--color-text-dim)] mt-2">
                       {piiConfig[conn.name]?.enabled
                         ? "queries will automatically redact flagged columns (hash, mask, or hide)."
-                        : "click the toggle to activate automatic pii redaction on query results."}
+                        : canWrite ? "click the toggle to activate automatic pii redaction on query results." : "an org admin can activate automatic pii redaction on query results."}
                     </p>
                   </div>
                 )}

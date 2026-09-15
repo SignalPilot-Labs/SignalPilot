@@ -83,7 +83,7 @@ class TestSchemaRefreshLoopInnerStore:
     @pytest.mark.asyncio
     async def test_inner_store_is_org_scoped_not_allow_unscoped(self):
         """Inner Store is constructed with org_id, outer Store with allow_unscoped=True."""
-        from gateway.main import Store
+        from gateway.store import Store
 
         constructed_stores: list[dict] = []
 

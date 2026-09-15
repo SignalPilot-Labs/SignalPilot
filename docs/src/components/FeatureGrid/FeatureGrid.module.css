@@ -1,0 +1,113 @@
+.grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+  margin: 1.5rem 0 2rem;
+}
+
+@media (min-width: 640px) {
+  .cols2,
+  .cols3 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1100px) {
+  .cols3 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-radius-card);
+  background: var(--sp-card);
+  color: var(--sp-text);
+  text-decoration: none;
+  overflow: hidden;
+  transition: border-color 200ms var(--sp-ease),
+              background 200ms var(--sp-ease),
+              transform 200ms var(--sp-ease);
+}
+
+.card:hover,
+.card:focus-visible {
+  color: var(--sp-text);
+  text-decoration: none;
+  border-color: var(--sp-line-2);
+  background: var(--sp-card-hover);
+  transform: translateY(-2px);
+}
+
+.card:focus-visible {
+  outline: 2px solid var(--sp-mint);
+  outline-offset: 3px;
+}
+
+.art {
+  display: block;
+  padding: 1.1rem 1.25rem 0.5rem;
+  background: linear-gradient(180deg, var(--sp-card) 0%, transparent 100%);
+  border-bottom: 1px solid var(--sp-line);
+}
+
+.art > * {
+  width: 100%;
+  max-width: 100%;
+  display: block;
+}
+
+.text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 1.1rem 1.35rem 1.25rem;
+  flex: 1;
+}
+
+.title {
+  font-family: var(--sp-font-sans);
+  font-size: 1.05rem;
+  font-weight: 600;
+  letter-spacing: var(--sp-track-tight);
+  color: var(--sp-heading);
+  line-height: 1.3;
+}
+
+.description {
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--sp-muted);
+  flex: 1;
+}
+
+.more {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.5rem;
+  font-family: var(--sp-font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--sp-dim);
+  transition: color 200ms var(--sp-ease);
+}
+
+.card:hover .more,
+.card:focus-visible .more {
+  color: var(--sp-mint);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card,
+  .more {
+    transition: none;
+  }
+
+  .card:hover,
+  .card:focus-visible {
+    transform: none;
+  }
+}

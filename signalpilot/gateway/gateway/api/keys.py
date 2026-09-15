@@ -83,16 +83,17 @@ async def delete_key(key_id: str, store: StoreD, _role: OrgAdmin, request: Reque
 
 
 @router.get("/plan", dependencies=[RequireScope("read")])
-async def get_plan_usage(_user: UserID, org_id: OrgID, store: StoreD):
+async def get_plan_usage(_user: UserID, org_id: OrgID, store: StoreD, refresh: bool = False):
     """Return the org's entitlement, its abuse ceilings, and current usage against them.
 
     Usage of metered units (threads, queries, models, seats, eval runs) is the
     credit ledger's business; this route covers only the hard ceilings.
+    ``?refresh=1`` bypasses the entitlement cache.
     """
     from ..billing.entitlements import get_entitlement
     from ..governance.org_limits import limits_for
 
-    entitlement = await get_entitlement(org_id)
+    entitlement = await get_entitlement(org_id, refresh=refresh)
     limits = limits_for(entitlement)
     connections = await store.list_connections()
     keys = await store.list_api_keys()

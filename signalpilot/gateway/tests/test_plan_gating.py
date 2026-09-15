@@ -429,6 +429,43 @@ class TestBootstrapPayload:
         assert body["enabled"] is False
         assert body["entitlement"]["is_billable"] is True
 
+    def test_refresh_query_bypasses_the_entitlement_cache(self, billable_app, monkeypatch):
+        """The web calls bootstrap with ``?refresh=1`` once after Stripe Checkout."""
+        paid = ENTITLEMENTS[TEAM_ORG]
+        monkeypatch.setitem(ENTITLEMENTS, TEAM_ORG, ENTITLEMENTS[FREE_ORG])
+        with TestClient(billable_app) as client:
+            assert client.get("/api/chat/bootstrap").json()["entitlement"]["tier"] == "free"
+            monkeypatch.setitem(ENTITLEMENTS, TEAM_ORG, paid)
+            body = client.get("/api/chat/bootstrap").json()
+            assert body["entitlement"]["tier"] == "free" and body["enabled"] is False
+            body = client.get("/api/chat/bootstrap?refresh=1").json()
+            assert body["entitlement"]["tier"] == "team" and body["enabled"] is True
+
+    def test_plan_route_accepts_refresh(self, cloud, monkeypatch):
+        from gateway.api.keys import router
+
+        app = FastAPI()
+        app.include_router(router)
+        store = SimpleNamespace(list_connections=AsyncMock(return_value=[]), list_api_keys=AsyncMock(return_value=[]))
+        app.dependency_overrides[deps.get_store] = lambda: store
+
+        async def _user() -> str:
+            return "user-1"
+
+        async def _org() -> str:
+            return FREE_ORG
+
+        app.dependency_overrides[resolve_user_id] = _user
+        app.dependency_overrides[resolve_org_id] = _org
+        with TestClient(app) as client:
+            resp = client.get("/api/plan")
+            assert resp.status_code == 200, resp.text
+            assert resp.json()["tier"] == "free"
+            monkeypatch.setitem(ENTITLEMENTS, FREE_ORG, ENTITLEMENTS[TEAM_ORG])
+            assert client.get("/api/plan").json()["tier"] == "free"
+            body = client.get("/api/plan?refresh=1").json()
+            assert body["tier"] == "team" and body["is_billable"] is True
+
     def test_bootstrap_itself_is_not_plan_gated(self, cloud, chat_switches_on):
         """A free org must be able to read the payload that tells it to pick a plan."""
         from fastapi.routing import APIRoute

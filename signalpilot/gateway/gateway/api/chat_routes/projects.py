@@ -52,14 +52,15 @@ def exposed_enterprise_features(entitlement: OrgEntitlement) -> dict[str, bool]:
 
 
 @router.get("/bootstrap", response_model=ChatBootstrapResponse, dependencies=[RequireScope("read")])
-async def bootstrap_chat(store: StoreD, role: OrgRole, org_id: OrgID):
+async def bootstrap_chat(store: StoreD, role: OrgRole, org_id: OrgID, refresh: bool = False):
     """Chat bootstrap for every org.
 
     A free org gets ``enabled=False`` with its entitlement, so the web app can
     show a plan prompt; a billable org gets its projects. ``capabilities``
-    reports what this deployment can run regardless of plan.
+    reports what this deployment can run regardless of plan. ``?refresh=1``
+    bypasses the entitlement cache (used once after Stripe Checkout).
     """
-    entitlement = await get_entitlement(org_id)
+    entitlement = await get_entitlement(org_id, refresh=refresh)
     exposed_flags = exposed_enterprise_features(entitlement)
     capabilities = deployment_capabilities()
     model_options = [{"id": model_id, "label": label} for model_id, label in CHAT_MODEL_OPTIONS]

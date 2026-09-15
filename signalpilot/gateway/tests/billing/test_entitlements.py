@@ -177,6 +177,36 @@ class TestGetEntitlement:
         await get_entitlement("o")
         assert loader.await_count == 2
 
+    async def test_non_billable_results_expire_after_fifteen_seconds(self, cloud, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A free org that just paid must flip within NON_BILLABLE_CACHE_TTL_SECONDS."""
+        loader = AsyncMock(side_effect=[free_entitlement("o"), OrgEntitlement(org_id="o", tier="team", status="active")])
+        monkeypatch.setattr(ent, "_load_entitlement", loader)
+        clock = [1000.0]
+        monkeypatch.setattr(ent.time, "monotonic", lambda: clock[0])
+        assert not (await get_entitlement("o")).is_billable
+        clock[0] += ent.NON_BILLABLE_CACHE_TTL_SECONDS - 1
+        assert not (await get_entitlement("o")).is_billable
+        clock[0] += 2
+        assert (await get_entitlement("o")).is_billable
+        assert loader.await_count == 2
+
+    def test_ttl_split(self) -> None:
+        assert ent.NON_BILLABLE_CACHE_TTL_SECONDS == 15
+        assert ent.CACHE_TTL_SECONDS == 5 * 60
+        assert ent.cache_ttl_seconds(free_entitlement("o")) == 15
+        assert ent.cache_ttl_seconds(OrgEntitlement(org_id="o", tier="team", status="active")) == 300
+        assert ent.cache_ttl_seconds(OrgEntitlement(org_id="o", tier="team", status="canceled")) == 15
+
+    async def test_refresh_bypasses_and_replaces_the_cached_value(self, cloud, monkeypatch: pytest.MonkeyPatch) -> None:
+        paid = OrgEntitlement(org_id="o", tier="team", status="active")
+        loader = AsyncMock(side_effect=[free_entitlement("o"), paid, AssertionError("cache must serve the third read")])
+        monkeypatch.setattr(ent, "_load_entitlement", loader)
+        assert not (await get_entitlement("o")).is_billable
+        assert not (await get_entitlement("o")).is_billable
+        assert (await get_entitlement("o", refresh=True)) is paid
+        assert (await get_entitlement("o")) is paid
+        assert loader.await_count == 2
+
     async def test_lookup_failure_is_free_and_not_cached(self, cloud, monkeypatch: pytest.MonkeyPatch) -> None:
         loader = AsyncMock(
             side_effect=[RuntimeError("db down"), OrgEntitlement(org_id="o", tier="team", status="active")]

@@ -2,8 +2,11 @@
 
 Cloud mode (``SP_BACKEND_URL`` set) reads the backend-owned ``subscriptions``
 row on the shared database. Local mode returns the ``unlimited`` tier.
-Results are cached in-process for five minutes; ``invalidate(org_id)``
-drops one org after a subscription change.
+Results are cached in-process: a billable entitlement for five minutes, a
+non-billable one for fifteen seconds, so an org that has just paid flips
+quickly while a paying org keeps the cheap path. ``get_entitlement(org_id,
+refresh=True)`` bypasses the cache (the web asks for that once when it returns
+from Stripe Checkout); ``invalidate(org_id)`` drops one org.
 
 The gateway has no staff concept and no per-feature flag map: callers use
 ``is_billable`` and the allowance counters, nothing else.
@@ -34,6 +37,7 @@ DEFAULT_TIER = "free"
 _LEGACY_TIER_MAP = {"pro": "team", "team": "team"}
 
 CACHE_TTL_SECONDS = 5 * 60
+NON_BILLABLE_CACHE_TTL_SECONDS = 15
 _MAX_CACHE_ENTRIES = 10_000
 _cache: dict[str, tuple[OrgEntitlement, float]] = {}
 _legacy_schema_logged = False
@@ -191,17 +195,23 @@ async def _load_entitlement(org_id: str) -> OrgEntitlement:
     return entitlement_from_row(org_id, row)
 
 
-async def get_entitlement(org_id: str) -> OrgEntitlement:
-    """Return the org's entitlement, cached for CACHE_TTL_SECONDS.
+def cache_ttl_seconds(entitlement: OrgEntitlement) -> int:
+    """Billable results live for CACHE_TTL_SECONDS; non-billable ones for NON_BILLABLE_CACHE_TTL_SECONDS."""
+    return CACHE_TTL_SECONDS if entitlement.is_billable else NON_BILLABLE_CACHE_TTL_SECONDS
 
-    A transient lookup failure returns a free entitlement for this call only
+
+async def get_entitlement(org_id: str, *, refresh: bool = False) -> OrgEntitlement:
+    """Return the org's entitlement, cached per ``cache_ttl_seconds``.
+
+    ``refresh=True`` skips the cached value and stores the fresh read. A
+    transient lookup failure returns a free entitlement for this call only
     and is never cached, so a paying org is not paywalled for the TTL.
     """
     if not is_cloud_mode():
         return local_entitlement(org_id)
     if not org_id or org_id == "local":
         return free_entitlement(org_id)
-    cached = _cache.get(org_id)
+    cached = None if refresh else _cache.get(org_id)
     if cached is not None and cached[1] > time.monotonic():
         return cached[0]
     try:
@@ -209,7 +219,7 @@ async def get_entitlement(org_id: str) -> OrgEntitlement:
     except Exception:
         logger.warning("failed to resolve entitlement for org %s; treating as free for this request", org_id)
         return free_entitlement(org_id)
-    _cache[org_id] = (entitlement, time.monotonic() + CACHE_TTL_SECONDS)
+    _cache[org_id] = (entitlement, time.monotonic() + cache_ttl_seconds(entitlement))
     while len(_cache) > _MAX_CACHE_ENTRIES:
         _cache.pop(next(iter(_cache)))
     return entitlement
@@ -227,8 +237,10 @@ __all__ = [
     "CACHE_TTL_SECONDS",
     "DEFAULT_TIER",
     "LOCAL_TIER",
+    "NON_BILLABLE_CACHE_TTL_SECONDS",
     "TIERS",
     "OrgEntitlement",
+    "cache_ttl_seconds",
     "entitlement_from_row",
     "free_entitlement",
     "get_entitlement",

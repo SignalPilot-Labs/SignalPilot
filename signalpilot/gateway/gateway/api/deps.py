@@ -21,6 +21,7 @@ from typing import Annotated, Any
 from fastapi import Depends, HTTPException, Request
 
 from ..auth import DBSession, OrgID, UserID
+from ..billing.entitlements import OrgEntitlement, get_entitlement
 from ..connectors.pool_manager import pool_manager
 from ..connectors.schema_cache import schema_cache
 from ..network import SandboxClient
@@ -57,34 +58,91 @@ async def get_store(
 StoreD = Annotated[Store, Depends(get_store)]
 
 
-async def require_platform_staff(store: StoreD) -> None:
-    """Restrict platform-operated surfaces to the deployment staff allowlist."""
-    from ..config import get_governance_settings
-
-    if not store.user_id or store.user_id not in get_governance_settings().admin_user_ids:
-        raise HTTPException(status_code=403, detail="Platform staff access required")
-
-
-RequirePlatformStaff = Depends(require_platform_staff)
+# Gating dependencies.
+#
+# Two questions, two dependencies, nothing else:
+#   RequireBillablePlan             may this org use the feature?   402 plan_required
+#   RequireDeploymentCapability(n)  can this deployment run it?     503 not_available_in_deployment
+# Org role (OrgAdmin) and key scope (RequireScope) are separate concerns and stay as they are.
 
 
-# Plan-gate dependency.
+class GatingError(HTTPException):
+    """A plan or deployment refusal with a machine-readable body.
 
-
-async def require_projects_feature(org_id: OrgID) -> None:
-    """FastAPI dependency: gate the projects/notebooks feature to paid plans.
-
-    Resolves the org's plan tier and raises 403 if the projects feature is not
-    available (free tier). In local mode the tier resolves to "unlimited", so
-    this is a no-op: local deployments are never gated.
+    ``detail`` is the dict body; ``register_routers`` installs a handler that
+    also lifts its keys to the top level (``{"error": ..., "tier": ...}``).
     """
-    from ..governance.plan_limits import check_feature, get_org_limits
-
-    limits = await get_org_limits(org_id)
-    check_feature("projects", limits)
 
 
-ProjectsGate = Depends(require_projects_feature)
+def plan_required_error(tier: str) -> GatingError:
+    return GatingError(status_code=402, detail={"error": "plan_required", "tier": tier})
+
+
+def not_available_error(capability: str) -> GatingError:
+    return GatingError(status_code=503, detail={"error": "not_available_in_deployment", "capability": capability})
+
+
+async def require_billable_plan(org_id: OrgID) -> OrgEntitlement:
+    """FastAPI dependency: the one gating rule.
+
+    Resolves the org's entitlement and raises 402 ``plan_required`` unless the
+    org is on a billable plan. Local mode resolves to ``unlimited`` and passes.
+    Returns the entitlement so a route can read allowances from it.
+    """
+    from ..store.orgs import ensure_gateway_org
+
+    entitlement = await get_entitlement(org_id)
+    await ensure_gateway_org(org_id)
+    if not entitlement.is_billable:
+        raise plan_required_error(entitlement.tier)
+    return entitlement
+
+
+RequireBillablePlan = Depends(require_billable_plan)
+BillableEntitlement = Annotated[OrgEntitlement, Depends(require_billable_plan)]
+
+DEPLOYMENT_CAPABILITIES: tuple[str, ...] = ("evals", "sandbox")
+
+
+def deployment_capabilities() -> dict[str, bool]:
+    """What this deployment is wired to run, independent of any org's plan.
+
+    ``evals``: an eval runner image plus its execution backend and evidence
+    store are configured. ``sandbox``: the ephemeral sandbox runtime has
+    credentials. Read at call time so tests and reloads see current settings.
+    """
+    from ..config.evals import get_eval_run_settings
+    from ..config.sandbox_runtime import get_sandbox_runtime_settings
+
+    return {
+        "evals": get_eval_run_settings().capable,
+        "sandbox": get_sandbox_runtime_settings().enabled,
+    }
+
+
+_capability_dependencies: dict[str, Any] = {}
+
+
+def RequireDeploymentCapability(name: str):  # capitalised on purpose: it reads like the other gate names
+    """Dependency factory: 503 ``not_available_in_deployment`` unless ``name`` is wired up."""
+    if name not in DEPLOYMENT_CAPABILITIES:
+        raise ValueError(f"unknown deployment capability {name!r}")
+    if name not in _capability_dependencies:
+
+        async def _require_capability() -> None:
+            if not deployment_capabilities()[name]:
+                raise not_available_error(name)
+
+        _require_capability.__name__ = f"require_deployment_capability_{name}"
+        _require_capability.__qualname__ = _require_capability.__name__
+        _capability_dependencies[name] = Depends(_require_capability)
+    return _capability_dependencies[name]
+
+
+def require_deployment_capability_call(name: str):
+    """The underlying callable for ``RequireDeploymentCapability(name)`` (for dependency overrides)."""
+    return RequireDeploymentCapability(name).dependency
+
 
 # Error sanitization.
 

@@ -41,11 +41,11 @@ from .dbt_map_responses import (
     json_response,
     not_modified,
 )
-from .deps import ProjectsGate, StoreD
+from .deps import RequireBillablePlan, StoreD
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api", dependencies=[ProjectsGate])
+router = APIRouter(prefix="/api", dependencies=[RequireBillablePlan])
 
 
 def _to_info(row: GatewayDbtManifest | RowSnapshot) -> DbtMapInfo:

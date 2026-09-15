@@ -78,6 +78,9 @@ class ChatBootstrapResponse(BaseModel):
     projects: list[StandaloneChatProject]
     selected_project_id: str | None
     is_admin: bool
+    # The caller's org role ("admin" | "member") and permission set (gateway.auth.permissions).
+    role: str
+    permissions: list[str]
     starter_questions: list[str] = Field(default_factory=list, min_length=0, max_length=4)
     default_per_query_budget_usd: float = 0.25
     default_chat_budget_usd: float = 1.0
@@ -85,7 +88,11 @@ class ChatBootstrapResponse(BaseModel):
     default_model: str
     available_efforts: list[dict[str, str]] = Field(default_factory=list)
     default_effort: str = "medium"
+    # Each flag is ``is_billable and not kill_switch_off``; the UI keeps its shape.
     enterprise_features: dict[str, bool] = Field(default_factory=dict)
+    # The org's entitlement (OrgEntitlement.to_dict()) and what this deployment can run.
+    entitlement: dict[str, Any] = Field(default_factory=dict)
+    capabilities: dict[str, bool] = Field(default_factory=dict)
 
 
 class StandaloneConversationCreate(StrictChatRequest):

@@ -6,6 +6,8 @@ import { useAppAuth } from "~/lib/auth-context";
 import { getConnections, getMcpAgentDefaults, getWorkspaceProjects, updateMcpAgentDefaults } from "~/lib/api";
 import type { ConnectionInfo, McpAgentDefaults, WorkspaceProjectInfo } from "~/lib/types";
 import { SectionHeader } from "~/components/ui/section-header";
+import { ReadOnlyNote } from "~/components/access/read-only-note";
+import { usePermissions } from "~/lib/hooks/use-permissions";
 
 const EMPTY: McpAgentDefaults = {
   mcp_agent_default_project_id: null,
@@ -16,10 +18,13 @@ const inputClass = "w-full mt-1 rounded-[10px] border border-[var(--color-border
 
 export function McpAgentDefaultsSettings() {
   const { activeOrgId, activeOrgName } = useAppAuth();
+  const { can } = usePermissions();
+  const canWrite = can("settings.write");
   return <section className="mb-8">
     <SectionHeader icon={Bot} title="agent defaults" />
     <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] rounded-[14px] p-5">
-      {activeOrgId ? <DefaultsForm key={activeOrgId} orgName={activeOrgName} /> :
+      {!canWrite ? <ReadOnlyNote block>the project, connection and branch MCP agents use by default in {activeOrgName || "this organization"}</ReadOnlyNote> :
+        activeOrgId ? <DefaultsForm key={activeOrgId} orgName={activeOrgName} /> :
         <p className="text-sm text-[var(--color-text-dim)]">Select an organization to configure its agent defaults.</p>}
     </div>
   </section>;

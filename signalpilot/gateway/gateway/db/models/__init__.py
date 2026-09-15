@@ -10,8 +10,6 @@ single-module definition order.
 
 from __future__ import annotations
 
-from .downloads import GatewayArtifactDownload as GatewayArtifactDownload
-
 from .base import (
     SSL_SECRET_FIELDS,
     GatewayBase,
@@ -52,6 +50,7 @@ from .dashboards import (
     GatewayPublishedDashboard,
     GatewayPublishedDashboardVersion,
 )
+from .downloads import GatewayArtifactDownload as GatewayArtifactDownload
 from .evals import (
     GatewayEvalAccuracyHistory,
     GatewayEvalConfig,
@@ -118,6 +117,7 @@ from .workspace import (
     GatewayWorkspaceProject,
     GatewayWorkspaceRevision,
 )
+from .xata import GatewayXataBranchOwner
 
 __all__ = [
     "GatewayAgentRun",
@@ -191,6 +191,7 @@ __all__ = [
     "GatewayWorkspaceLease",
     "GatewayWorkspaceProject",
     "GatewayWorkspaceRevision",
+    "GatewayXataBranchOwner",
     "NotionDeliverable",
     "NotionDeliverableContextSnapshot",
     "NotionDeliverableUpdate",
@@ -205,3 +206,8 @@ __all__ = [
     "TZDateTime",
     "strip_ssl_secrets",
 ]
+
+# The credit ledger model lives in gateway.billing but registers on the shared
+# metadata so create_all and Alembic autogenerate both see it. A module
+# import (not a name import) keeps this safe in either import order.
+import gateway.billing.models  # noqa: F401

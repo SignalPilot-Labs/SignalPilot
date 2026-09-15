@@ -5,12 +5,14 @@ import { Activity, AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Clock
 
 import { DbTypeIcon } from "~/components/connections/db-type-icon";
 import { ConnectionFieldsForm } from "./connection-fields-form";
+import { ConnectionReadOnlyView } from "./connection-read-only-view";
 import { FormInput, fieldProps } from "./form-controls";
 import { SslSection as SSLSection, SshSection as SSHSection } from "./security-sections";
 import type { ConnectionsController } from "~/components/connections/hooks/use-connections-controller";
 import { CONNECTOR_TIERS, DB_CONFIGS, DB_TYPE_ORDER, DB_VARIANTS, DEFAULT_VARIANT } from "~/lib/connections/connector-catalog";
 import { DEFAULT_CONNECTION_FORM as defaultForm } from "~/lib/connections/defaults";
 import { buildConnectionPreview, parseConnectionUrl } from "~/lib/connections/connection-url";
+import { usePermissions } from "~/lib/hooks/use-permissions";
 
 const IS_CLOUD_MODE = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "cloud";
 
@@ -28,6 +30,21 @@ export function ConnectionEditor({ controller }: ConnectionEditorProps) {
     handleDbTypeChange, handleVariantChange, handlePreTest, handleCreate,
     handleSaveAndTest, config,
   } = controller;
+  const { can } = usePermissions();
+
+  // A member gets the saved connection as values: no inputs, no save, no
+  // test-before-save of arbitrary credentials. The list never offers "new"
+  // to a member, so an open form without a name simply stays closed.
+  if (showForm && !can("connections.write")) {
+    if (!editingConnection) return null;
+    return (
+      <ConnectionReadOnlyView
+        name={editingConnection}
+        form={form}
+        onClose={() => { setShowForm(false); setEditingConnection(null); setForm({ ...defaultForm }); }}
+      />
+    );
+  }
 
   return (
     <>

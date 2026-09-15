@@ -53,19 +53,17 @@ class TestByokProviderConfigInvalidJSON:
                         with patch("gateway.main.configure_byok"):
                             with patch("gateway.main.pool_manager") as mock_pm:
                                 mock_pm.cleanup_idle = AsyncMock()
-                                with patch("gateway.main.schema_cache") as mock_sc:
-                                    mock_sc.refresh_all = AsyncMock()
-                                    with patch("gateway.main.get_session_factory"):
-                                        ctx = lifespan(app)
-                                        # Enter should not raise
-                                        try:
-                                            await ctx.__aenter__()
-                                        except Exception:
-                                            pass  # Background tasks may fail in test env — that's fine
-                                        mock_make.assert_called_once()
-                                        call_args = mock_make.call_args
-                                        # Config dict was parsed correctly from the valid JSON
-                                        assert call_args[0][1] == {"provider": "local"}
+                                with patch("gateway.main.get_session_factory"):
+                                    ctx = lifespan(app)
+                                    # Enter should not raise
+                                    try:
+                                        await ctx.__aenter__()
+                                    except Exception:
+                                        pass  # Background tasks may fail in test env — that's fine
+                                    mock_make.assert_called_once()
+                                    call_args = mock_make.call_args
+                                    # Config dict was parsed correctly from the valid JSON
+                                    assert call_args[0][1] == {"provider": "local"}
 
     def test_invalid_json_error_does_not_log_raw_value(self, caplog):
         """The error log for invalid JSON must NOT include the raw config value."""

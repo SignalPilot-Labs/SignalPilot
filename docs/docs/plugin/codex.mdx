@@ -6,7 +6,7 @@ import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
 
 # Use with Codex
 
-SignalPilot ships a Codex plugin that mirrors the Claude Code plugin: the same 54 MCP tools, 23 skills, and 2 agents. The plugin marketplace repo is `SignalPilot-Labs/codex-signalpilot-plugin` (distinct from the Claude Code `signalpilot-plugin`).
+SignalPilot ships a Codex plugin that mirrors the Claude Code plugin: the same 62 MCP tools, 24 skills, and 2 agents. The plugin marketplace repo is `SignalPilot-Labs/codex-signalpilot-plugin` (distinct from the Claude Code `signalpilot-plugin`).
 
 ## Prerequisites
 
@@ -33,33 +33,27 @@ If a broken marketplace snapshot was added, upgrade it before adding the plugin:
 
 ## What it adds
 
-- **54 MCP tools** — `query_database`, `list_tables`, `dbt_error_parser`, schema discovery, governance, and more.
-- **23 skills** — the full dbt and SQL skill set (`dbt-workflow`, `dbt-write`, `sql-workflow`, dialect skills, domain skills).
+- **62 MCP tools** — `query_database`, `list_tables`, `dbt_error_parser`, schema discovery, governance, and more.
+- **24 skills** — the full dbt and SQL skill set (`dbt-workflow`, `dbt-write`, `sql-workflow`, dialect skills, domain skills).
 - **2 agents** — `verifier` (post-build 7-check protocol) and `value-verifier` (aggregate value checks).
 
 Skills and agents behave the same as on Claude Code — same loading conditions, same orchestration.
 
 ## Connect the MCP server
 
-Connecting the MCP server is identical to Claude Code: `streamable-http` to the gateway.
-
-Local gateway:
+Add SignalPilot to `~/.codex/config.toml`. Create the key first under **Settings → API Keys** in [SignalPilot](https://app.signalpilot.ai); it starts with `sp_` and is shown once.
 
 <MiniCopyBlock
-  label="local mcp endpoint"
+  label="~/.codex/config.toml"
   plain
-  code="http://localhost:3300/mcp"
+  code={`[mcp_servers.signalpilot]\nurl = "https://gateway.signalpilot.ai/mcp"\nhttp_headers = { "x-api-key" = "sp_your_key_here" }`}
 />
 
-SignalPilot Cloud (bearer auth):
+Restart Codex, then ask it to list the SignalPilot tools to confirm the connection.
 
-<MiniCopyBlock
-  label="cloud mcp endpoint"
-  plain
-  code={`https://gateway.signalpilot.ai/mcp\nAuthorization: Bearer YOUR_API_KEY`}
-/>
-
-For local self-hosted deployments without API key enforcement, no auth header is required.
+:::note Self-hosted gateway
+If you run SignalPilot yourself, use your own endpoint instead, typically `http://localhost:3300/mcp`. A fresh self-hosted gateway needs no header until the first API key is created; after that, add the same `http_headers` line.
+:::
 
 ## Update
 
@@ -71,4 +65,4 @@ For local self-hosted deployments without API key enforcement, no auth header is
 ## See also
 
 - [Plugin overview](/docs/plugin) — skills and agents in detail
-- [Connect Other MCP Clients](/docs/mcp/connect-other-clients) — raw MCP configs
+- [Cursor, Claude Desktop, and other tools](/docs/clients/other-tools) — raw MCP configs

@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import func as sa_func
 from sqlalchemy import select
 
+from ..auth import OrgAdmin
 from ..config import get_governance_settings
 from ..db.models import GatewayAuditLog
 from ..security.scope_guard import RequireScope
@@ -44,6 +45,7 @@ router = APIRouter(prefix="/api")
 @router.get("/audit", dependencies=[RequireScope("read")])
 async def get_audit(
     store: StoreD,
+    _role: OrgAdmin,
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     connection_name: str | None = Query(default=None, max_length=64),
@@ -60,7 +62,7 @@ async def get_audit(
 
 
 @router.get("/audit/stats", dependencies=[RequireScope("read")])
-async def get_audit_stats(store: StoreD):
+async def get_audit_stats(store: StoreD, _role: OrgAdmin):
     """Lightweight aggregate stats — single query, no row scanning."""
     from sqlalchemy import case
 

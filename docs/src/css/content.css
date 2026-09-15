@@ -1,0 +1,329 @@
+/* SignalPilot docs — content.
+   Holds: inline/block code + syntax palette, tables, admonitions, tabs,
+   cards. */
+
+/* ── Code ──────────────────────────────────────────────────────────────── */
+code {
+  font-family: var(--sp-font-mono);
+  font-variant-ligatures: none;
+  border: 1px solid var(--sp-line);
+  background: var(--ifm-code-background);
+  padding: 0.14em 0.38em;
+  border-radius: var(--sp-radius-xs);
+  letter-spacing: 0;
+}
+
+a code {
+  color: inherit;
+}
+
+/* Inline code inside display headings must not outweigh the serif type. */
+.markdown h1 code,
+.markdown h2 code,
+.markdown h3 code {
+  font-size: 0.68em;
+  font-weight: 400;
+  vertical-align: 0.08em;
+  padding: 0.18em 0.42em;
+}
+
+.markdown h4 code,
+.markdown h5 code,
+.markdown h6 code {
+  font-size: 1em;
+  border: none;
+  background: transparent;
+  padding: 0;
+  text-transform: none;
+}
+
+.table-of-contents code,
+.menu__link code,
+.breadcrumbs__link code {
+  font-size: 0.9em;
+  border: none;
+  background: transparent;
+  padding: 0;
+}
+
+.theme-code-block {
+  border: 1px solid var(--sp-line-2);
+  border-radius: var(--sp-radius-panel);
+  overflow: hidden;
+  box-shadow: none;
+  margin-bottom: 1.5rem;
+}
+
+.theme-code-block pre,
+.theme-code-block .prism-code {
+  background: var(--ifm-pre-background) !important;
+  border: none;
+  border-radius: 0;
+  font-size: 13px;
+  line-height: 1.65;
+  letter-spacing: 0;
+  padding: 1rem 1.1rem;
+}
+
+/* Code block title bar → CodePanel header */
+.theme-code-block > div:first-child:not(.codeBlockContent):not([class*="codeBlockContent"]),
+div[class^="codeBlockTitle"] {
+  font-family: var(--sp-font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: var(--sp-track-wider);
+  color: var(--sp-dim);
+  background: transparent;
+  border-bottom: 1px solid var(--sp-line);
+  min-height: 2.75rem;
+  line-height: 1.5;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 1.1rem;
+}
+
+button[class^="copyButton"],
+.theme-code-block button {
+  font-family: var(--sp-font-mono);
+  font-size: 10px;
+  letter-spacing: var(--sp-track-wider);
+  border-radius: var(--sp-radius-sm);
+  border-color: var(--sp-line);
+  background: var(--sp-card);
+  color: var(--sp-muted);
+}
+
+.theme-code-block button:hover {
+  background: var(--sp-card-hover);
+  color: var(--sp-text);
+}
+
+pre,
+.prism-code {
+  font-family: var(--sp-font-mono);
+  border-radius: var(--sp-radius-panel);
+  font-size: 13px;
+  letter-spacing: 0;
+}
+
+kbd {
+  font-family: var(--sp-font-mono);
+  font-size: 11px;
+  padding: 2px 5px;
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  border-bottom-width: 2px;
+  border-radius: var(--sp-radius-xs);
+  color: var(--sp-muted);
+  box-shadow: none;
+}
+
+/* Syntax palette — mirrors the landing --syntax-* tokens */
+.prism-code .token.comment,
+.prism-code .token.prolog,
+.prism-code .token.cdata { color: var(--sp-syntax-comment); font-style: italic; }
+.prism-code .token.punctuation { color: var(--sp-syntax-punctuation); }
+.prism-code .token.keyword,
+.prism-code .token.atrule,
+.prism-code .token.rule,
+.prism-code .token.important,
+.prism-code .token.selector { color: var(--sp-syntax-keyword); }
+.prism-code .token.string,
+.prism-code .token.char,
+.prism-code .token.attr-value,
+.prism-code .token.inserted { color: var(--sp-syntax-string); }
+.prism-code .token.function,
+.prism-code .token.class-name,
+.prism-code .token.builtin { color: var(--sp-syntax-function); }
+.prism-code .token.number,
+.prism-code .token.boolean,
+.prism-code .token.constant,
+.prism-code .token.symbol { color: var(--sp-syntax-number); }
+.prism-code .token.operator,
+.prism-code .token.entity,
+.prism-code .token.url { color: var(--sp-syntax-operator); background: transparent; }
+.prism-code .token.variable,
+.prism-code .token.property,
+.prism-code .token.tag,
+.prism-code .token.attr-name { color: var(--sp-syntax-variable); }
+.prism-code .token.deleted { color: var(--sp-red); }
+
+/* ── Tables ────────────────────────────────────────────────────────────── */
+.markdown table {
+  display: table;
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-radius-panel);
+  overflow: hidden;
+  font-size: 13.5px;
+  margin: 1.5rem 0;
+}
+
+.markdown table thead {
+  background: var(--sp-card);
+  border-bottom: 1px solid var(--sp-line);
+}
+
+.markdown table thead tr {
+  border-bottom: 1px solid var(--sp-line);
+}
+
+.markdown table th {
+  font-family: var(--sp-font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: var(--sp-track-wider);
+  color: var(--sp-muted);
+  border: none;
+  border-bottom: 1px solid var(--sp-line);
+  padding: 0.7rem 0.95rem;
+  text-align: left;
+}
+
+.markdown table td {
+  border: none;
+  border-bottom: 1px solid var(--sp-line);
+  padding: 0.65rem 0.95rem;
+  color: var(--sp-text);
+  vertical-align: top;
+}
+
+.markdown table tr:last-child td {
+  border-bottom: none;
+}
+
+.markdown table tr:nth-child(2n) {
+  background: transparent;
+}
+
+.markdown table tbody tr {
+  transition: background var(--ifm-transition-fast) var(--sp-ease);
+}
+
+.markdown table tbody tr:hover {
+  background: var(--sp-card);
+}
+
+/* ── Admonitions ───────────────────────────────────────────────────────── */
+.theme-admonition,
+.alert {
+  border-radius: var(--sp-radius-card);
+  border: 1px solid var(--sp-line);
+  border-left-width: 1px;
+  background: var(--sp-card);
+  box-shadow: none;
+  padding: 1.15rem 1.35rem;
+  --ifm-alert-background-color: var(--sp-card);
+  --ifm-alert-foreground-color: var(--sp-text);
+}
+
+.theme-admonition .admonitionHeading_node_modules-\@docusaurus-theme-classic-lib-theme-Admonition-Layout-styles-module,
+.theme-admonition > div:first-child {
+  font-family: var(--sp-font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: var(--sp-track-eyebrow);
+  margin-bottom: 0.6rem;
+}
+
+.theme-admonition p:last-child {
+  margin-bottom: 0;
+}
+
+.theme-admonition-note { border-color: var(--sp-line); }
+.theme-admonition-tip,
+.alert--success {
+  border-color: color-mix(in srgb, var(--sp-green) 28%, transparent);
+  background: color-mix(in srgb, var(--sp-green) 6%, transparent);
+}
+.theme-admonition-info,
+.alert--info {
+  border-color: color-mix(in srgb, var(--sp-blue) 28%, transparent);
+  background: color-mix(in srgb, var(--sp-blue) 6%, transparent);
+}
+.theme-admonition-warning,
+.alert--warning {
+  border-color: color-mix(in srgb, var(--sp-amber) 28%, transparent);
+  background: color-mix(in srgb, var(--sp-amber) 6%, transparent);
+}
+.theme-admonition-danger,
+.alert--danger {
+  border-color: color-mix(in srgb, var(--sp-red) 28%, transparent);
+  background: color-mix(in srgb, var(--sp-red) 6%, transparent);
+}
+
+.alert a {
+  color: var(--sp-mint);
+  text-decoration-color: color-mix(in srgb, var(--sp-mint) 45%, transparent);
+}
+
+/* ── Tabs ──────────────────────────────────────────────────────────────── */
+.tabs {
+  font-family: var(--sp-font-sans);
+  border-bottom: 1px solid var(--sp-line);
+  gap: 0.25rem;
+}
+
+.tabs__item {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--sp-muted);
+  border-radius: var(--sp-radius-sm) var(--sp-radius-sm) 0 0;
+  border-bottom: 2px solid transparent;
+  padding: 0.5rem 0.9rem;
+  transition: color var(--ifm-transition-fast) var(--sp-ease),
+              background var(--ifm-transition-fast) var(--sp-ease);
+}
+
+.tabs__item:hover {
+  background: var(--sp-card);
+  color: var(--sp-text);
+}
+
+.tabs__item--active {
+  color: var(--sp-text);
+  border-bottom-color: var(--sp-green);
+  background: transparent;
+}
+
+/* ── Cards (generated index pages) ─────────────────────────────────────── */
+article .card,
+.card {
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-radius-card);
+  background: var(--sp-card);
+  box-shadow: none;
+  padding: 1.35rem 1.5rem;
+  transition: border-color 200ms var(--sp-ease),
+              background 200ms var(--sp-ease),
+              transform 200ms var(--sp-ease);
+}
+
+article .card:hover,
+.card:hover {
+  border-color: var(--sp-line-2);
+  background: var(--sp-card-hover);
+  transform: translateY(-2px);
+}
+
+.card h2 {
+  font-family: var(--sp-font-sans);
+  font-size: 1.05rem;
+  font-weight: 600;
+  letter-spacing: var(--sp-track-tight);
+  border: none;
+  padding: 0;
+  margin: 0 0 0.4rem;
+}
+
+.card p {
+  font-size: 13.5px;
+  color: var(--sp-muted);
+  margin: 0;
+}
+

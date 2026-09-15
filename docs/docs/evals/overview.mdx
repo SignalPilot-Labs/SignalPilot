@@ -1,12 +1,18 @@
 ---
 sidebar_position: 1
+title: Evals
+hide_title: true
 ---
 
-# Evals
+import PageHero from '@site/src/components/PageHero';
+import { Evals } from '@site/src/components/illustrations';
 
-An **eval** is a graded question you already know the answer to. SignalPilot runs
-each one as a real agent against your real warehouse, in a sandbox, and scores
-what comes back.
+<PageHero
+  eyebrow="Evals · Overview"
+  title="Evals"
+  lede="An eval is a graded question you already know the answer to. SignalPilot runs each one as a real agent against your real warehouse, in a sandbox, and scores what comes back."
+  illustration={<Evals />}
+/>
 
 That gives you a number for something that is otherwise a matter of opinion: *is
 the agent getting our data right, and did that change last week make it better or
@@ -56,8 +62,8 @@ eval repo (git)            your warehouse
    clones that dbt project, strips `.git`, and hands each sandbox a short-lived
    presigned tarball. The sandbox never gets a git credential.
 3. **Fan out.** Tasks run concurrently, up to the configured parallelism.
-   Each one is a short-lived container (Docker locally, a Kubernetes pod in
-   cloud) running the Claude CLI against the SignalPilot MCP server.
+   Each one is a short-lived, isolated sandbox (Docker locally, a hosted
+   sandbox on Cloud) running the Claude CLI against the SignalPilot MCP server.
 4. **Isolate.** Read tasks share one read-only view of the warehouse through the
    pinned connection. Write tasks each fork their own disposable branch.
 5. **Grade.** Numeric answers are matched against the manifest's checks; rebuilt

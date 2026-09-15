@@ -284,13 +284,14 @@ async def test_unknown_result_gets_404(db_session, enabled):
 
 
 @pytest.mark.asyncio
-async def test_disabled_chat_feature_gets_404(db_session, monkeypatch):
+async def test_chat_kill_switch_off_gets_503(db_session, monkeypatch):
     monkeypatch.setenv("SP_FEATURE_STANDALONE_CHAT", "0")
     conversation, run = await _conversation(db_session)
     await _result(db_session, conversation, run, _rows(3))
     with pytest.raises(HTTPException) as exc:
         await _get(db_session, conversation.id, "res-1")
-    assert exc.value.status_code == 404
+    assert exc.value.status_code == 503
+    assert exc.value.detail == {"error": "not_available_in_deployment", "capability": "chat"}
 
 
 # ── Route: object storage + flag independence ────────────────────────────────

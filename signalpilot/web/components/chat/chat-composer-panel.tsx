@@ -22,6 +22,7 @@ import {
   ProjectChip,
   ProjectPicker,
 } from "~/components/chat/project-picker";
+import { DefaultProjectControl } from "~/components/chat/default-project-control";
 
 const EMPTY_EVENTS: StandaloneChatEvent[] = [];
 
@@ -38,6 +39,8 @@ export function ChatComposerPanel({
   bootstrap,
   selectedProjectId,
   onSelectProject,
+  defaultProjectId = null,
+  onSetDefaultProject,
   onOpenSettings,
   settingsOpen,
 }: {
@@ -53,6 +56,9 @@ export function ChatComposerPanel({
   bootstrap: StandaloneChatBootstrap;
   selectedProjectId: string | null;
   onSelectProject: (projectId: string) => void;
+  /** The org-wide default project; the setter is admin-only. */
+  defaultProjectId?: string | null;
+  onSetDefaultProject?: (projectId: string) => void;
   /** Present whenever the chat has settings to show (connectors, budgets). */
   onOpenSettings?: () => void;
   settingsOpen?: boolean;
@@ -94,11 +100,20 @@ export function ChatComposerPanel({
       }
       projectPicker={
         !conversationId ? (
-          <ProjectPicker
-            projects={bootstrap.projects}
-            selectedId={selectedProjectId}
-            onSelect={onSelectProject}
-          />
+          <div className="flex min-w-0 items-center gap-2">
+            <ProjectPicker
+              projects={bootstrap.projects}
+              selectedId={selectedProjectId}
+              onSelect={onSelectProject}
+            />
+            {onSetDefaultProject && (
+              <DefaultProjectControl
+                selectedProjectId={selectedProjectId}
+                defaultProjectId={defaultProjectId}
+                onSetDefault={onSetDefaultProject}
+              />
+            )}
+          </div>
         ) : (
           <ProjectChip project={selectedProject} />
         )

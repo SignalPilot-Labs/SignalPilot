@@ -15,6 +15,7 @@ import {
 } from "react";
 import type { Connector, OrgPolicy } from "~/lib/api/mcp-connectors";
 import { sortConnectors } from "~/lib/mcp-connectors-state";
+import { usePermissions } from "~/lib/hooks/use-permissions";
 import { liveConnectorsApi, type ConnectorsApi } from "./connectors-api";
 
 type ConnectorsStore = {
@@ -54,7 +55,11 @@ export function ConnectorsProvider({
 }) {
   const [connectors, setConnectors] = useState<Connector[]>([]);
   const [policy, setPolicyState] = useState<OrgPolicy | null>(null);
-  const [isAdmin, setIsAdmin] = useState(false);
+  const [serverIsAdmin, setServerIsAdmin] = useState(false);
+  const { can } = usePermissions();
+  // The org permission set gates the UI; the fixture has no gateway, so its
+  // list answer is the only source there.
+  const isAdmin = fixture ? serverIsAdmin : can("mcp.org_connectors");
   const [orgName, setOrgName] = useState<string | null>(null);
   const [loading, setLoading] = useState(enabled);
   const [error, setError] = useState<string | null>(null);
@@ -71,7 +76,7 @@ export function ConnectorsProvider({
       if (id !== requestId.current) return;
       setConnectors(sortConnectors(response.connectors));
       setPolicyState(response.policy);
-      setIsAdmin(response.is_admin);
+      setServerIsAdmin(response.is_admin);
       setOrgName(response.org_name ?? null);
       setError(null);
     } catch (caught) {

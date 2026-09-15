@@ -1,5 +1,6 @@
 ---
 sidebar_position: 2
+sidebar_label: Projects and the IDE
 ---
 
 # Projects and the IDE
@@ -15,10 +16,11 @@ Two kinds:
 | `managed` | **Create new dbt project** | A repo SignalPilot creates and hosts for you |
 | `github` | **Import from GitHub** | Your own repository, through the GitHub App |
 
-:::info Pro feature
-Projects and notebooks require a Pro, Team, or Enterprise plan on Cloud. On Free
-the page shows an upgrade prompt instead. Self-hosted deployments enforce no plan
-gating.
+:::info Paid plans
+Projects and notebooks are included in every paid plan (Team, Scale, Enterprise)
+on Cloud. On Free the page shows a plan prompt instead. Self-hosted deployments
+without a backend enforce no plan gating. See
+[What each plan includes](/docs/product/plans).
 :::
 
 ## Creating a project
@@ -73,13 +75,13 @@ other query path.
 
 ## Sessions and lifetimes
 
-A session is a pod. It starts when you open a project or when an agent calls
-`run_notebook`, and it is reaped after an idle period (2 hours by default,
-`SP_NOTEBOOK_IDLE_TIMEOUT`). Files are committed to the workspace git repo as you
+A session is an isolated sandbox. It starts when you open a project or when an
+agent calls `run_notebook`. After 15 minutes idle it is snapshotted and shut
+down, and the snapshot can resume for up to 7 days. Files are committed to the workspace git repo as you
 go, so a reaped session costs you a cold start, not your work.
 
-The same pod is reused across `run_notebook` calls for one org and user, which is
-why pod-local state persists inside a working session.
+The same sandbox is reused across `run_notebook` calls for one org and user,
+which is why sandbox-local state persists inside a working session.
 
 ## Deleting a project
 

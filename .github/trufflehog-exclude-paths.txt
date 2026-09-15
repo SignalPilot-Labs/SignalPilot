@@ -1,0 +1,4 @@
+# Paths excluded from the secrets scan. Keep this list tiny and explain each entry.
+# Test fixture that once held a placeholder Postgres DSN (user:password@host); the
+# literal was removed, but commit-range scans still see the historical diff.
+^signalpilot/gateway/tests/test_admin_audit_logging_connections\.py$

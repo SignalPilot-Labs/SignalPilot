@@ -1,0 +1,12 @@
+.svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  overflow: visible;
+  color: var(--sp-text);
+}
+
+.svg text {
+  user-select: none;
+  font-variant-ligatures: none;
+}

@@ -1,0 +1,184 @@
+.hero {
+  position: relative;
+  margin: 0 0 2.5rem;
+  padding: 3rem 0 2.75rem;
+}
+
+/* Full-bleed band behind the hero, regardless of the container the hero is in. */
+.band::before {
+  content: "";
+  position: absolute;
+  inset: 0 50% 0 50%;
+  margin-left: -50vw;
+  margin-right: -50vw;
+  width: 100vw;
+  background: var(--sp-band);
+  border-bottom: 1px solid var(--sp-line);
+  z-index: -1;
+  pointer-events: none;
+}
+
+.inner {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2rem;
+  align-items: center;
+}
+
+@media (min-width: 997px) {
+  .withArt .inner {
+    grid-template-columns: minmax(0, 7fr) minmax(280px, 5fr);
+    gap: 3rem;
+  }
+}
+
+.copy {
+  max-width: 62ch;
+  min-width: 0;
+}
+
+.eyebrow {
+  font-family: var(--sp-font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: var(--sp-track-eyebrow);
+  text-transform: uppercase;
+  color: var(--sp-mint);
+  margin: 0 0 1rem;
+}
+
+.title {
+  font-family: var(--sp-font-serif);
+  font-weight: 400;
+  font-size: clamp(2.2rem, 4.6vw, 3.4rem);
+  line-height: 1.06;
+  letter-spacing: var(--sp-track-tight);
+  color: var(--sp-heading);
+  margin: 0 0 1.1rem;
+  text-wrap: balance;
+}
+
+.title em {
+  font-style: italic;
+  color: var(--sp-mint);
+}
+
+.lede {
+  font-family: var(--sp-font-sans);
+  font-size: 1.12rem;
+  font-weight: 300;
+  line-height: 1.65;
+  color: var(--sp-muted);
+  margin: 0;
+  max-width: 58ch;
+  text-wrap: pretty;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-top: 1.75rem;
+}
+
+.action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-family: var(--sp-font-sans);
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  border-radius: var(--sp-radius-pill);
+  padding: 0.7rem 1.3rem;
+  border: 1px solid transparent;
+  text-decoration: none;
+  transition: transform 200ms var(--sp-ease),
+              background 200ms var(--sp-ease),
+              border-color 200ms var(--sp-ease),
+              color 200ms var(--sp-ease);
+}
+
+.action:hover,
+.action:focus-visible {
+  text-decoration: none;
+  transform: translateY(-2px);
+}
+
+.primary {
+  background: var(--sp-text);
+  border-color: var(--sp-text);
+  color: var(--sp-ink);
+  font-weight: 600;
+}
+
+.primary:hover,
+.primary:focus-visible {
+  background: var(--sp-heading);
+  border-color: var(--sp-heading);
+  color: var(--sp-ink);
+}
+
+.secondary {
+  background: transparent;
+  border-color: var(--sp-line-2);
+  color: var(--sp-text);
+}
+
+.secondary:hover,
+.secondary:focus-visible {
+  background: var(--sp-card);
+  color: var(--sp-text);
+}
+
+.art {
+  min-width: 0;
+  display: flex;
+  justify-content: center;
+}
+
+.art > * {
+  width: 100%;
+  max-width: 440px;
+}
+
+@media (max-width: 996px) {
+  .hero {
+    padding: 2.25rem 0 2.25rem;
+    margin-bottom: 2rem;
+  }
+
+  .art > * {
+    max-width: 380px;
+  }
+}
+
+@media (max-width: 480px) {
+  .hero {
+    padding: 1.75rem 0 2rem;
+  }
+
+  .lede {
+    font-size: 1.02rem;
+  }
+
+  .actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .action {
+    justify-content: center;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .action {
+    transition: none;
+  }
+
+  .action:hover,
+  .action:focus-visible {
+    transform: none;
+  }
+}

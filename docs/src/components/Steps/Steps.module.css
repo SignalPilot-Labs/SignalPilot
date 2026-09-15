@@ -1,0 +1,151 @@
+.steps {
+  --sp-step-marker: 30px;
+  --sp-step-gap: 1.1rem;
+  list-style: none;
+  margin: 1.75rem 0 2.25rem;
+  padding: 0;
+  counter-reset: none;
+}
+
+.step {
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--sp-step-marker) minmax(0, 68ch);
+  column-gap: var(--sp-step-gap);
+  row-gap: 0.85rem;
+  align-items: start;
+  padding-bottom: 2.25rem;
+  margin: 0;
+}
+
+.hasAside {
+  grid-template-columns: var(--sp-step-marker) minmax(0, 1fr);
+}
+
+.step:last-child {
+  padding-bottom: 0.5rem;
+}
+
+/* rail */
+.step::before {
+  content: "";
+  position: absolute;
+  left: calc(var(--sp-step-marker) / 2 - 0.5px);
+  top: calc(var(--sp-step-marker) + 6px);
+  bottom: 6px;
+  width: 1px;
+  background: var(--sp-line);
+}
+
+.step:last-child::before {
+  display: none;
+}
+
+.marker {
+  grid-column: 1;
+  grid-row: 1;
+  width: var(--sp-step-marker);
+  height: var(--sp-step-marker);
+  border-radius: var(--sp-radius-pill);
+  border: 1px solid var(--sp-line-2);
+  background: var(--sp-card-solid);
+  display: grid;
+  place-items: center;
+  margin-top: 0.05rem;
+}
+
+.number {
+  font-family: var(--sp-font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--sp-text);
+  line-height: 1;
+}
+
+.body {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+}
+
+.title {
+  font-family: var(--sp-font-sans);
+  font-weight: 600;
+  font-size: 1.05rem;
+  line-height: 1.4;
+  letter-spacing: var(--sp-track-tight);
+  color: var(--sp-heading);
+  margin: 0.2rem 0 0.35rem;
+}
+
+.content {
+  max-width: 68ch;
+  color: var(--sp-text);
+}
+
+.content > :last-child {
+  margin-bottom: 0;
+}
+
+.content :global(p) {
+  margin-bottom: 0.85rem;
+}
+
+.aside {
+  grid-column: 2;
+  grid-row: 2;
+  min-width: 0;
+}
+
+.figure {
+  margin: 0;
+}
+
+.figure img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: var(--sp-radius-panel);
+  border: 1px solid var(--sp-line);
+  background: var(--sp-card-solid);
+}
+
+.illustration {
+  border-radius: var(--sp-radius-panel);
+  border: 1px solid var(--sp-line);
+  background: var(--sp-card);
+  padding: 0.75rem 1rem;
+}
+
+.illustration > * {
+  width: 100%;
+  max-width: 100%;
+}
+
+@media (min-width: 997px) {
+  .hasAside {
+    grid-template-columns: var(--sp-step-marker) minmax(0, 68ch) minmax(220px, 300px);
+    column-gap: var(--sp-step-gap);
+  }
+
+  .hasAside .aside {
+    grid-column: 3;
+    grid-row: 1;
+    margin-left: 1rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .steps {
+    --sp-step-marker: 26px;
+    --sp-step-gap: 0.85rem;
+  }
+
+  .number {
+    font-size: 11px;
+  }
+
+  .title {
+    font-size: 1rem;
+  }
+}

@@ -1,79 +1,74 @@
 ---
 sidebar_position: 1
+title: Settings
+description: Where each SignalPilot setting lives and which ones matter for your workspace.
+sidebar_label: Settings overview
+hide_title: true
 ---
 
-# Settings
+import PageHero from '@site/src/components/PageHero';
+import { ApiKey } from '@site/src/components/illustrations';
 
-Where each setting lives, and which ones matter.
+<PageHero
+  eyebrow="Administer · Settings"
+  title="Settings"
+  lede="Where each setting lives, and which ones matter for your workspace."
+  illustration={<ApiKey />}
+/>
 
-:::note Finding Settings on Cloud
-In local mode the sidebar has a **Settings** section. In cloud mode `/settings`
-is not in the sidebar — reach it from your user menu in the bottom-left instead.
-:::
+Open **Settings** from your user menu in the bottom-left of the app. Most pages apply to the whole workspace; a few, marked below, are personal to you.
 
-## Gateway and governance defaults
+## Connectors
 
-*Local / self-hosted deployments.* Sets the gateway the web app talks to and the
-default guardrails applied when a caller does not specify their own:
+Give the chat agent tools from other services. Add an MCP server once and it is available in every new chat, with each tool switched on or off individually. See [Add MCP servers to chat](/docs/settings/connectors).
+
+## API Keys
+
+Create, view, and delete the keys that let AI tools such as Claude, Claude Code, and Cursor reach your data. A key is shown once, at creation, and its permissions default to **read** and **query**. See [API keys and permissions](/docs/clients/api-keys) for the scope table, header formats, rotation, and rate limits.
+
+## MCP Connect
+
+Generates ready-to-paste configuration for the tool you use, with the right endpoint and an `X-API-Key` header already filled in. Faster and less error-prone than typing it by hand. The same setup, explained step by step, is on the [Claude](/docs/clients/claude), [Claude Code](/docs/clients/claude-code), and [other tools](/docs/clients/other-tools) pages.
+
+## GitHub
+
+Install the SignalPilot GitHub App, see which installations and repositories the workspace can reach, and link a repository to a project. Needed for private dbt project repositories and private eval sets. See [GitHub](/docs/settings/github).
+
+## Team
+
+Members, roles, and invitations, plus:
+
+- **Email domains**: verify a domain you own, then choose how people from it join: automatic invitation, automatic suggestion, or neither.
+- **SSO (SAML/OIDC)**: Team and Enterprise plans. The ACS URL and metadata your identity provider needs are shown here.
+- **Danger zone**: delete a domain, or delete the team.
+
+## Billing and usage
+
+**Billing** manages the plan. **Usage** shows request volume against your rate limits, a per-key breakdown, and trends over time. Plan quotas are listed under [plan limits](/docs/cloud#plan-limits).
+
+## Account security
+
+Personal to you, not the workspace:
+
+- **Authenticator app (TOTP)**: enable or disable, with QR enrollment.
+- **Backup codes**: generate and regenerate.
+- **Active sessions**: see them, and sign out the ones you do not recognise.
+
+## BYOK
+
+Bring your own encryption key for credentials at rest. See [BYOK](/docs/settings/byok).
+
+## Local / self-hosted gateway defaults
+
+*Self-hosted deployments only.* In local mode the sidebar has its own **Settings** section. It sets the gateway the web app talks to and the default guardrails applied when a caller does not specify their own:
 
 | Setting | Meaning |
 |---------|---------|
 | **Gateway API key** | The key the browser uses against the gateway. |
-| **Default row limit** | LIMIT injected into `SELECT` when the caller sets none. |
+| **Default row limit** | `LIMIT` injected into `SELECT` when the caller sets none. |
 | **Max rows per query** | Hard ceiling; a caller asking for more is capped. |
 | **Default timeout** | Seconds before a query is abandoned. |
 | **Default budget (USD)** | Starting spend cap for a session. |
 | **Sandbox manager token** | Bearer token for a remote sandbox manager. |
 
-Blocked tables and PII column rules are per connection rather than global — see
-[Schema explorer](/docs/product/schema-explorer#annotations-blocking-tables-and-marking-columns).
-
-## API keys
-
-Create, view and delete workspace API keys. A key is shown once, at creation —
-the gateway stores only a SHA-256 hash. Scopes are chosen at creation time and
-default to `read` + `query`.
-
-See [Authentication](/docs/mcp/auth) for the scope table and header formats.
-
-## MCP connect
-
-Generates ready-to-paste MCP client configuration for the gateway you are signed
-in to, with the right URL and an `X-API-Key` header. Faster and less error-prone
-than typing the config by hand; the equivalent CLI one-liners are in
-[Connect Claude Code](/docs/mcp/connect-claude-code).
-
-## GitHub
-
-Install the SignalPilot GitHub App, see which installations and repositories the
-workspace can reach, and link a repository to a project. Required for private
-dbt-project repos and private eval sets — see [GitHub](/docs/settings/github).
-
-## Team
-
-*Cloud.* Members, roles and invitations, plus:
-
-- **Email domains** — verify a domain you own, then choose how people from it
-  join: automatic invitation, automatic suggestion, or neither.
-- **SSO (SAML/OIDC)** — Team and Enterprise plans. The ACS URL and metadata your
-  IdP needs are shown here.
-- **Danger zone** — delete a domain, or delete the team.
-
-## Billing and usage
-
-**Billing** manages the plan; **Usage** shows API request volume against your
-rate limits, a per-key breakdown, and analytics over time. Plan quotas are listed
-under [plan limits](/docs/setup/cloud#plan-limits).
-
-## Account security
-
-Per-user, not per-workspace:
-
-- **Authenticator app (TOTP)** — enable, disable, with QR enrollment.
-- **Backup codes** — generate and regenerate.
-- **Active sessions** — see them, and revoke the ones you do not recognise.
-
-## BYOK encryption
-
-Bring your own key for credential encryption at rest — see
-[BYOK](/docs/settings/byok).
+Blocked tables and PII column rules are per connection rather than global. See [Schema explorer](/docs/product/schema-explorer#annotations-blocking-tables-and-marking-columns).

@@ -1,0 +1,93 @@
+.callout {
+  --sp-callout-accent: var(--sp-muted);
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.45rem;
+  margin: 1.5rem 0;
+  padding: 1rem 1.25rem 1.05rem 1.35rem;
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-radius-panel);
+  background: var(--sp-card);
+  color: var(--sp-text);
+  max-width: 100%;
+}
+
+/* accent bar — the one thing that distinguishes it from an admonition */
+.callout::before {
+  content: "";
+  position: absolute;
+  left: 0.6rem;
+  top: 1rem;
+  bottom: 1rem;
+  width: 2px;
+  border-radius: var(--sp-radius-pill);
+  background: var(--sp-callout-accent);
+}
+
+.tip {
+  --sp-callout-accent: var(--sp-mint);
+}
+
+.note {
+  --sp-callout-accent: var(--sp-blue);
+}
+
+.warning {
+  --sp-callout-accent: var(--sp-amber);
+  border-color: color-mix(in srgb, var(--sp-amber) 30%, var(--sp-line));
+  background: color-mix(in srgb, var(--sp-amber) 5%, var(--sp-card));
+}
+
+.security {
+  --sp-callout-accent: var(--sp-mint);
+  border-color: color-mix(in srgb, var(--sp-mint) 30%, var(--sp-line));
+  background: color-mix(in srgb, var(--sp-mint) 5%, var(--sp-card));
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.glyph {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--sp-radius-xs);
+  color: var(--sp-callout-accent);
+}
+
+.title {
+  font-family: var(--sp-font-sans);
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: var(--sp-track-tight);
+  color: var(--sp-heading);
+}
+
+.body {
+  font-size: 14.5px;
+  line-height: 1.65;
+  color: var(--sp-text);
+}
+
+.body > :last-child {
+  margin-bottom: 0;
+}
+
+.body :global(p) {
+  margin-bottom: 0.65rem;
+}
+
+.body :global(a) {
+  color: var(--ifm-link-color);
+}
+
+@media (max-width: 480px) {
+  .callout {
+    padding: 0.9rem 1rem 0.95rem 1.15rem;
+  }
+}

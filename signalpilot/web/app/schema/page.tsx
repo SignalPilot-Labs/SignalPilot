@@ -33,6 +33,9 @@ import {
   setPIIConfig,
 } from "~/lib/api";
 import { useConnection } from "~/lib/connection-context";
+import { usePermissions } from "~/lib/hooks/use-permissions";
+import { AdminOnlyControl } from "~/components/access/admin-only-control";
+import { ReadOnlyNote } from "~/components/access/read-only-note";
 import {
   connectionDefaultDatabase,
   groupTablesByDatabase,
@@ -42,118 +45,29 @@ import {
 import { EmptyDatabase, EmptyState } from "~/components/ui/empty-states";
 import { useToast } from "~/components/ui/toast";
 import "./schema.css";
-
-interface ColumnStats {
-  distinct_count?: number;
-  distinct_fraction?: number;
-  data_bytes?: number;
-  compressed_bytes?: number;
-}
-
-interface Column {
-  name: string;
-  type: string;
-  nullable: boolean;
-  primary_key?: boolean;
-  comment?: string;
-  stats?: ColumnStats;
-  encoding?: string;
-  dist_key?: boolean;
-  sort_key_position?: number;
-  low_cardinality?: boolean;
-}
-
-interface ForeignKey {
-  column: string;
-  references_table: string;
-  references_column: string;
-  references_schema?: string;
-}
-
-interface TableSchema {
-  schema: string;
-  name: string;
-  database?: string;
-  columns: Column[];
-  foreign_keys?: ForeignKey[];
-  row_count?: number;
-  description?: string;
-  engine?: string;
-  sorting_key?: string;
-  diststyle?: string;
-  sortkey?: string;
-  clustering_key?: string;
-  size_mb?: number;
-  total_bytes?: number;
-}
-
-interface SchemaData {
-  connection_name: string;
-  db_type: string;
-  table_count: number;
-  total_tables?: number;
-  tables: Record<string, TableSchema>;
-}
-
-interface PIIConfig {
-  enabled: boolean;
-  rules: Record<string, string>;
-}
-
-type ViewMode = "columns" | "ddl";
-
-const EMPTY_PII_CONFIG: PIIConfig = { enabled: false, rules: {} };
-
-function formatCount(value: number | undefined): string {
-  if (value == null) return "--";
-  if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(1)}B`;
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
-  return value.toLocaleString();
-}
-
-function formatBytes(table: TableSchema): string {
-  const bytes = table.total_bytes ?? (table.size_mb == null ? undefined : table.size_mb * 1_048_576);
-  if (bytes == null) return "--";
-  if (bytes >= 1_073_741_824) return `${(bytes / 1_073_741_824).toFixed(1)} GB`;
-  if (bytes >= 1_048_576) return `${(bytes / 1_048_576).toFixed(1)} MB`;
-  if (bytes >= 1_024) return `${(bytes / 1_024).toFixed(1)} KB`;
-  return `${bytes.toFixed(0)} B`;
-}
-
-function formatCardinality(stats: ColumnStats | undefined): string {
-  if (!stats) return "--";
-  if (stats.distinct_count != null) return formatCount(stats.distinct_count);
-  if (stats.distinct_fraction != null) return `${(stats.distinct_fraction * 100).toFixed(1)}%`;
-  return "--";
-}
-
-function typeFamily(type: string): string {
-  const normalized = type.toLowerCase();
-  if (/int|serial/.test(normalized)) return "integer";
-  if (/numeric|decimal|real|double|float/.test(normalized)) return "number";
-  if (/char|text|string/.test(normalized)) return "text";
-  if (/date|time/.test(normalized)) return "time";
-  if (/bool/.test(normalized)) return "boolean";
-  if (/json|variant|struct|array|map/.test(normalized)) return "structured";
-  return "other";
-}
-
-function findRule(rules: Record<string, string>, column: string): [string, string] | null {
-  const normalized = column.toLowerCase();
-  for (const [key, rule] of Object.entries(rules)) {
-    if (key.toLowerCase() === normalized) return [key, rule];
-  }
-  return null;
-}
-
-function tableIdentity(key: string, table: TableSchema): string {
-  return table.schema ? `${table.schema}.${table.name}` : key;
-}
+import {
+  EMPTY_PII_CONFIG,
+  findRule,
+  formatBytes,
+  formatCardinality,
+  formatCount,
+  tableIdentity,
+  typeFamily,
+  type Column,
+  type PIIConfig,
+  type SchemaData,
+  type TableSchema,
+  type ViewMode,
+} from "./_lib/schema-model";
+import "./schema.css";
 
 export default function SchemaExplorerPage() {
   const { connections, selectedConn, setSelectedConn } = useConnection();
   const { toast } = useToast();
+  // PII classification (scan, per-column hide rules, the enforcement switch)
+  // is org curation: members read the rules, admins change them.
+  const { can } = usePermissions();
+  const canCurate = can("schema.curate");
   const [schema, setSchema] = useState<SchemaData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -553,12 +467,13 @@ export default function SchemaExplorerPage() {
                           return (
                             <tr
                               key={column.name}
-                              className={`${currentRule === "hide" && piiConfig.enabled ? "is-protected" : ""}${saving ? " is-saving" : ""}`}
-                              onClick={() => void toggleColumnProtection(column)}
-                              onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void toggleColumnProtection(column); } }}
-                              tabIndex={0}
-                              role="button"
-                              aria-label={`${currentRule === "hide" ? "Remove protection from" : "Hide"} ${column.name}`}
+                              className={`${currentRule === "hide" && piiConfig.enabled ? "is-protected" : ""}${saving ? " is-saving" : ""}${canCurate ? "" : " is-readonly"}`}
+                              onClick={canCurate ? () => void toggleColumnProtection(column) : undefined}
+                              onKeyDown={canCurate ? (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void toggleColumnProtection(column); } } : undefined}
+                              tabIndex={canCurate ? 0 : undefined}
+                              role={canCurate ? "button" : undefined}
+                              aria-label={canCurate ? `${currentRule === "hide" ? "Remove protection from" : "Hide"} ${column.name}` : undefined}
+                              title={canCurate ? undefined : "Only org admins can change PII protection"}
                             >
                               <td><span className="schema-column-name">{column.primary_key && <KeyRound aria-label="Primary key" />}{column.name}</span>{column.comment && <small>{column.comment}</small>}</td>
                               <td><span className="schema-type" data-family={typeFamily(column.type)}><i />{column.type}</span>{column.encoding && column.encoding !== "none" && <small>{column.encoding}</small>}</td>
@@ -591,17 +506,22 @@ export default function SchemaExplorerPage() {
             <div className="schema-pane-heading"><div><span>Governance</span><strong>{protectedColumns}</strong></div></div>
             <section className="schema-protection-summary">
               <div className={piiConfig.enabled ? "is-enabled" : ""}><ShieldCheck aria-hidden="true" /><span><strong>Result protection</strong><small>{piiConfig.enabled ? "Active" : "Paused"}</small></span></div>
-              <button type="button" className={`schema-switch${piiConfig.enabled ? " is-on" : ""}`} onClick={() => void toggleProtectionEnabled()} disabled={savingEnabled} role="switch" aria-checked={piiConfig.enabled} aria-label="Toggle PII result protection"><i /></button>
+              <AdminOnlyControl permission="schema.curate" allowed={canCurate} position="left">
+                <button type="button" className={`schema-switch${piiConfig.enabled ? " is-on" : ""}`} onClick={() => void toggleProtectionEnabled()} disabled={savingEnabled} role="switch" aria-checked={piiConfig.enabled} aria-label="Toggle PII result protection"><i /></button>
+              </AdminOnlyControl>
             </section>
+            {!canCurate && <ReadOnlyNote>PII rules apply to your query results</ReadOnlyNote>}
             <dl className="schema-governance-stats">
               <div><dt>Hidden fields</dt><dd>{Object.values(piiConfig.rules).filter((rule) => rule === "hide").length}</dd></div>
               <div><dt>Other rules</dt><dd>{Object.values(piiConfig.rules).filter((rule) => rule !== "hide").length}</dd></div>
               <div><dt>Suggestions</dt><dd>{Object.values(piiDetections).reduce((sum, columns) => sum + Object.keys(columns).length, 0)}</dd></div>
             </dl>
-            <button type="button" className="schema-scan-button" onClick={() => void scanPii()} disabled={scanningPii}>
-              {scanningPii ? <Loader2 className="is-spinning" aria-hidden="true" /> : <ScanSearch aria-hidden="true" />}
-              Scan for sensitive fields
-            </button>
+            <AdminOnlyControl permission="schema.curate" allowed={canCurate} position="left">
+              <button type="button" className="schema-scan-button" onClick={() => void scanPii()} disabled={scanningPii}>
+                {scanningPii ? <Loader2 className="is-spinning" aria-hidden="true" /> : <ScanSearch aria-hidden="true" />}
+                Scan for sensitive fields
+              </button>
+            </AdminOnlyControl>
             <section className="schema-rule-list">
               <header><span>Saved rules</span><small>{piiConfig.enabled ? "Enforced" : "Not enforced"}</small></header>
               {Object.keys(piiConfig.rules).length === 0 ? (

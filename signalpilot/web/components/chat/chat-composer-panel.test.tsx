@@ -14,6 +14,17 @@ import type {
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
+// The composer's org-default-project control reads permissions; the plan
+// dock under test does not care which role answers.
+vi.mock("~/lib/hooks/use-permissions", () => ({
+  usePermissions: () => ({
+    role: "member",
+    isAdmin: false,
+    loaded: true,
+    can: () => false,
+  }),
+}));
+
 const bootstrap = {
   enabled: true,
   projects: [],

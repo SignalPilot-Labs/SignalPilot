@@ -148,9 +148,7 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
     starts_new_text_block = False
     tool_names_by_id: dict[str, str] = {}
     tool_inputs_by_id: dict[str, dict[str, Any]] = {}
-    _delta_batchers[run_id] = DeltaBatcher(
-        lambda event_type, payload: _write_event(run_id, event_type, payload)
-    )
+    _delta_batchers[run_id] = DeltaBatcher(lambda event_type, payload: _write_event(run_id, event_type, payload))
     try:
         factory = get_session_factory()
         async with factory() as db:
@@ -421,6 +419,7 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                                         worker_id=worker_id,
                                         cost_usd=(raw_cost if isinstance(raw_cost, (int, float)) else None),
                                         usage=(raw_usage if isinstance(raw_usage, dict) else None),
+                                        key_source=execution.key_source,
                                     )
                         raw_report_proposal = event.get("report_proposal")
                         report_proposal = raw_report_proposal if isinstance(raw_report_proposal, dict) else None

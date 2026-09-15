@@ -6,9 +6,8 @@ import { TIER_BRANDS, type BrandTier, type TierBrand } from "~/lib/tier-branding
 
 // Per-tier dismiss delays — Enterprise copy is longest, gets the most time.
 const DISMISS_DELAY_MS: Record<BrandTier, number> = {
-  free: 8000,
-  pro: 6000,
   team: 8000,
+  scale: 8000,
   enterprise: 12000,
 };
 const EXIT_DURATION_MS = 160;
@@ -16,10 +15,9 @@ const EXIT_DURATION_MS = 160;
 const HEADLINE_ID = "tier-celebration-headline";
 
 const BODY_COPY: Record<BrandTier, string> = {
-  free: "",
-  pro: "Higher rate limits (10k req/day) and additional API keys are now available.",
-  team: "Shared pipelines and team membership are active. Up to 100k requests/day.",
-  enterprise: "SSO, audit log export, and org-level access controls are active.",
+  team: "10 seats, 30 covered models, 30 eval runs and 5,000 credits each month are active.",
+  scale: "25 seats, 50 covered models, 30 eval runs and 12,500 credits each month are active.",
+  enterprise: "Your contracted seats, models, eval runs and credit block are active.",
 };
 
 /**
@@ -163,13 +161,11 @@ export default function TierUpgradeCelebration() {
         }`}
       >
         {/* 1px top accent strip — the only tier signal on the card */}
-        {brand.accentHex && (
-          <div
-            className="h-px w-full"
-            style={{ backgroundColor: brand.accentHex }}
-            aria-hidden="true"
-          />
-        )}
+        <div
+          className="h-px w-full"
+          style={{ backgroundColor: brand.accentHex }}
+          aria-hidden="true"
+        />
 
         {/* Close button — top-4 right-4 aligns with content p-4 */}
         <button
@@ -214,13 +210,11 @@ function CelebrationContent({ tier, brand }: CelebrationContentProps) {
     <div className="space-y-3">
       {/* Tier label row */}
       <div className="flex items-center gap-1.5">
-        {brand.accentHex && (
-          <span
-            className="inline-block w-[5px] h-[5px] flex-shrink-0 translate-y-[0.5px]"
-            style={{ backgroundColor: brand.accentHex }}
-            aria-hidden="true"
-          />
-        )}
+        <span
+          className="inline-block w-[5px] h-[5px] flex-shrink-0 translate-y-[0.5px]"
+          style={{ backgroundColor: brand.accentHex }}
+          aria-hidden="true"
+        />
         <span className="text-[10px] leading-none tracking-[0.2em] uppercase text-[var(--color-text-muted)]">
           {brand.label}
         </span>

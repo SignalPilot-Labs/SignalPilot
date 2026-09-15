@@ -19,6 +19,7 @@ from ..connectors.schema_cache import schema_cache
 from ..governance.context import current_org_id_var
 from ..models import ConnectionUpdate
 from ..store import Store
+from .credit_snapshot import credit_daily_snapshot_loop
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -406,6 +407,7 @@ BACKGROUND_TASK_NAMES: tuple[str, ...] = (
     "eval_reaper",
     "eval_retention",
     "improvement_schedule",
+    "credit_daily_snapshot",
     "dbt_map_reaper",
     "dashboard_refresh",
     "repo_mirror_reconcile",
@@ -430,6 +432,7 @@ def start_background_tasks(
         eval_reaper_loop(),
         eval_retention_loop(),
         improvement_schedule_loop(session_factory),
+        credit_daily_snapshot_loop(session_factory),
         dbt_map_reaper_loop(),
         dashboard_refresh_loop(session_factory),
         repo_mirror_reconcile_startup(),

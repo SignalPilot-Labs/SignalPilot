@@ -1,0 +1,91 @@
+---
+sidebar_position: 11
+sidebar_label: What each plan includes
+---
+
+# What each plan includes
+
+SignalPilot Cloud has three plans. Each is one flat fee, billed monthly, that includes
+a set of **allowances** and a block of **credits**. Everything you use beyond
+what is included is paid in credits at fixed rates. There are no feature
+tiers: every paid plan has every feature.
+
+## The one rule
+
+**If your organization is on a paid plan, every feature is on.** Team, Scale
+and Enterprise all qualify, as does a plan in its first 14 days past due.
+
+There are no per-feature flags, no allowlists and no hidden features. Inside a
+paid organization, org admins manage org-wide things (connections, connectors,
+settings, API keys) and members use them; that is the only other distinction.
+
+## Plans
+
+| | Team | Scale | Enterprise |
+|---|---|---|---|
+| Flat fee | $100 / month | $250 / month | from $1,500 / month |
+| Included seats | 10 | 25 | 100 |
+| Included covered models | 30 | 50 | 100 |
+| Included eval runs per month | 30 | 30 | 30 |
+| Included credits per month | 5,000 | 12,500 | 75,000 |
+| Managed (optional) | flat add-on | flat add-on | flat add-on |
+
+Enterprise allowances above are the starting point; larger allowances, custom
+credit grants, SSO, SCIM, PrivateLink and customer-managed keys are agreed in
+the contract and set on your entitlement by the SignalPilot team.
+
+Every plan is billed monthly: the flat fee is charged each month at the
+published rate, and credit overage is added to the same monthly invoice.
+
+Included credits and allowances reset each calendar month and do not roll
+over. Allowances are separate counters; they are never pooled with credits.
+
+## Credits and rates
+
+1 credit = $0.01. Credits pay for per-use work and for anything beyond an
+allowance. Rates are fixed; there are no brackets.
+
+| Item | Credits |
+|---|---|
+| Successful chat thread | 50 |
+| Governed query | 1 |
+| Covered model beyond the allowance | 600 per model-month, metered daily |
+| Eval run beyond 30 in a month | 50 (queries inside the run bill as queries) |
+| Added seat beyond the allowance | 1,000 per seat-month (1,500 on Enterprise), metered daily |
+| Model tokens on the SignalPilot key | cost times 100, per run |
+
+Bring your own model key (BYOK) and the token line is 0.
+
+A thread that fails, runs no queries, or cites no evidence is not charged.
+Repeated questions in the same thread and threads flagged wrong by a reviewer
+are returned. Work SignalPilot starts on its own behalf (readiness checks,
+schema refreshes, dbt map compiles) never consumes credits.
+
+When you have used your included credits, usage continues and the overage is
+billed at $0.01 per credit on your next invoice. You are alerted at 80% and
+100% of your included block. Nothing is ever blocked for running out of
+credits.
+
+## What a free organization sees
+
+A free organization sees every page in the navigation. Where a paid
+organization would see the working surface, a free organization sees a plan
+prompt instead. Nothing is hidden, and nothing runs, so nothing is metered.
+
+Requests from a free organization to a gated route answer `402` with the body
+`{"error": "plan_required", "tier": "free"}`.
+
+## What "not available in this deployment" means
+
+Some features depend on infrastructure the deployment must be wired for:
+evals need a runner image and an evidence store, and sandbox runtimes need
+credentials for the sandbox provider. When that wiring is missing, the page
+says so and the route answers `503` with
+`{"error": "not_available_in_deployment", "capability": "evals"}`. This is
+about the deployment, not your plan; on SignalPilot Cloud everything is
+wired.
+
+## Self-hosted deployments
+
+A self-hosted gateway without a backend (`SP_BACKEND_URL` unset) treats its
+single organization as unlimited: every feature is on and nothing is metered.

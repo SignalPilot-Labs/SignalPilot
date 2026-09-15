@@ -1,39 +1,21 @@
 "use client";
 
-import { AlertTriangle, ArrowRight, CheckCircle2, Loader2, Users, Zap } from "lucide-react";
-import type { PaidTier, PlanInfo, PlanPrice } from "~/lib/backend-client";
+import { AlertTriangle, ArrowDownRight, ArrowUpRight, CheckCircle2, Users, Zap } from "lucide-react";
+import type { PaidTier, PlanInfo } from "~/lib/backend-client";
 import { TIER_RANK, type EntitlementTier } from "~/lib/entitlement";
 import { formatCredits } from "~/lib/billing-rates";
+import { formatPrice, monthlyFeeCents, monthlyPrice } from "~/lib/billing-plan-review";
+
+export { formatPrice } from "~/lib/billing-plan-review";
 
 type AllowancePlan = Pick<
   PlanInfo,
-  | "included_seats"
-  | "included_models"
-  | "included_eval_runs"
-  | "included_credits"
-  | "seat_month_credits"
-  | "managed_from_cents"
+  "included_seats" | "included_models" | "included_eval_runs" | "included_credits"
 >;
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-export function formatPrice(amount: number, currency: string): string {
-  const dollars = amount / 100;
-  const hasCents = dollars % 1 !== 0;
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency,
-    minimumFractionDigits: hasCents ? 2 : 0,
-    maximumFractionDigits: hasCents ? 2 : 0,
-  }).format(dollars);
-}
-
-export function getMonthlyEquivalent(price: PlanPrice): number {
-  if (price.interval === "year") return Math.round(price.amount / 12);
-  return price.amount;
-}
 
 /** Accent per tier; the backend publishes no presentation hints. */
 const TIER_ACCENT: Record<PaidTier, string> = {
@@ -51,36 +33,6 @@ function rank(tier: string): number {
 }
 
 // ---------------------------------------------------------------------------
-// Billing interval toggle
-// ---------------------------------------------------------------------------
-
-export function IntervalToggle({
-  interval,
-  onChange,
-}: {
-  interval: "month" | "year";
-  onChange: (v: "month" | "year") => void;
-}) {
-  const cls = (active: boolean) =>
-    `px-3 py-1.5 text-[11px] border rounded-[10px] transition-colors duration-150 ${
-      active
-        ? "border-[var(--color-text-muted)] text-[var(--color-text)]"
-        : "border-[var(--color-border)] text-[var(--color-text-dim)] hover:border-[var(--color-border-hover)]"
-    }`;
-  return (
-    <div className="flex items-center gap-2 mb-5">
-      <button onClick={() => onChange("year")} className={cls(interval === "year")}>
-        annual
-      </button>
-      <button onClick={() => onChange("month")} className={cls(interval === "month")}>
-        month-to-month
-        <span className="ml-1.5 text-[var(--color-text-dim)]">+25%</span>
-      </button>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Allowance list shared by the plan and enterprise cards
 // ---------------------------------------------------------------------------
 
@@ -95,12 +47,10 @@ export function AllowanceList({
 }) {
   const more = moreByAgreement ? ", more by agreement" : "";
   const items = [
-    `${plan.included_seats.toLocaleString()} seats included`,
-    `${plan.included_models.toLocaleString()} covered models${more}`,
-    `${plan.included_eval_runs.toLocaleString()} eval runs per month`,
+    `${plan.included_seats.toLocaleString("en-US")} seats`,
+    `${plan.included_models.toLocaleString("en-US")} covered models${more}`,
+    `${plan.included_eval_runs.toLocaleString("en-US")} eval runs per month`,
     `${formatCredits(plan.included_credits)} credits per month${more}`,
-    `added seats ${formatCredits(plan.seat_month_credits)} credits per seat-month`,
-    `managed from ${formatPrice(plan.managed_from_cents, "usd")}/mo`,
   ];
   return (
     <ul className="space-y-2 mb-4">
@@ -115,39 +65,34 @@ export function AllowanceList({
 }
 
 // ---------------------------------------------------------------------------
-// Plan card — Team and Scale, fully dynamic from the backend
+// Plan card — Team and Scale. One published monthly price for everyone;
+// seats and credits are reviewed in the dialog on click.
 // ---------------------------------------------------------------------------
 
 export function PlanCard({
   plan,
-  interval,
   currentTier,
   pendingDowngradeTo,
   pendingDowngradeDate,
-  onUpgrade,
-  upgrading,
+  onSelect,
+  disabled = false,
 }: {
   plan: PlanInfo;
-  interval: "month" | "year";
   currentTier: string;
   pendingDowngradeTo?: string | null;
   pendingDowngradeDate?: string | null;
-  onUpgrade: (priceId: string) => void;
-  upgrading: string | null;
+  onSelect: (plan: PlanInfo) => void;
+  disabled?: boolean;
 }) {
   const color = tierAccent(plan.tier);
-  const price = plan.prices.find((p) => p.interval === interval) ?? plan.prices[0] ?? null;
   const Icon = plan.tier === "scale" ? Zap : Users;
 
-  const isUpgrading = price !== null && upgrading === price.price_id;
   const isCurrent = plan.tier === currentTier;
   const isHigher = rank(plan.tier) > rank(currentTier);
-  const isLower = rank(plan.tier) < rank(currentTier);
   const isPendingDowngrade = pendingDowngradeTo === plan.tier;
-  // The Stripe price for the chosen interval; the published flat fee when
-  // Stripe has not been configured with one yet.
-  const monthlyEquiv = price ? getMonthlyEquivalent(price) : plan.monthly_fee_cents;
-  const currency = price?.currency ?? "usd";
+  const monthly = monthlyPrice(plan);
+  const hasPrice = monthly !== null;
+  const currency = monthly?.currency ?? "usd";
 
   return (
     <div
@@ -164,34 +109,33 @@ export function PlanCard({
         </div>
         <div className="text-right">
           <div className="flex items-baseline gap-0.5">
-            <span className="text-xl font-bold font-mono tracking-tight tabular-nums" style={{ color }}>
-              {formatPrice(monthlyEquiv, currency)}
+            <span
+              data-testid="plan-price"
+              className="text-xl font-bold font-mono tracking-tight tabular-nums"
+              style={{ color }}
+            >
+              {formatPrice(monthlyFeeCents(plan), currency)}
             </span>
             <span className="text-[12px] text-[var(--color-text-dim)]">/mo</span>
           </div>
           <span className="text-[11px] text-[var(--color-text-dim)] font-mono tabular-nums">
-            {price === null
-              ? "flat fee"
-              : price.interval === "year"
-                ? `${formatPrice(price.amount, price.currency)}/yr, billed annually`
-                : "month-to-month, 25% above the annual rate"}
+            billed monthly
           </span>
         </div>
       </div>
 
-      <p className="text-[12px] text-[var(--color-text-dim)] leading-relaxed mb-4">
-        {plan.description}
-      </p>
+      <p className="text-[12px] text-[var(--color-text-dim)] leading-relaxed mb-4">{plan.description}</p>
 
       <AllowanceList plan={plan} color={color} />
 
       {isCurrent ? (
         <div
+          data-testid="plan-current"
           className="w-full flex items-center justify-center gap-2 px-4 py-2 text-[12px] border rounded-[10px]"
           style={{ borderColor: color, color, opacity: 0.7 }}
         >
           <CheckCircle2 className="w-3 h-3" />
-          current plan
+          Current plan
         </div>
       ) : isPendingDowngrade && pendingDowngradeDate ? (
         <div
@@ -199,7 +143,7 @@ export function PlanCard({
           style={{ opacity: 0.8 }}
         >
           <AlertTriangle className="w-3 h-3" />
-          active{" "}
+          Active{" "}
           {new Date(pendingDowngradeDate + "T00:00:00").toLocaleDateString("en-US", {
             month: "short",
             day: "numeric",
@@ -207,19 +151,14 @@ export function PlanCard({
         </div>
       ) : (
         <button
-          onClick={() => price && onUpgrade(price.price_id)}
-          disabled={price === null || isUpgrading || upgrading !== null}
+          data-testid="plan-select"
+          onClick={() => onSelect(plan)}
+          disabled={!hasPrice || disabled}
           className="w-full flex items-center justify-center gap-2 px-4 py-2 text-[12px] border rounded-[10px] transition-colors duration-150 disabled:opacity-40 hover:bg-[var(--color-bg-hover)]"
           style={{ borderColor: color, color }}
         >
-          {isUpgrading ? <Loader2 className="w-3 h-3 animate-spin" /> : <ArrowRight className="w-3 h-3" />}
-          {isUpgrading
-            ? "redirecting..."
-            : isHigher
-              ? `upgrade to ${plan.tier}`
-              : isLower
-                ? `downgrade to ${plan.tier}`
-                : `switch to ${plan.tier}`}
+          {isHigher ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownRight className="w-3 h-3" />}
+          {isHigher ? "Upgrade" : "Downgrade"}
         </button>
       )}
     </div>

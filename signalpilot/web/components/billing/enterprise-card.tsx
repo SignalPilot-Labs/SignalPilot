@@ -6,7 +6,8 @@ import { PLAN_ALLOWANCES, formatCredits } from "~/lib/billing-rates";
 import type { Entitlement } from "~/lib/entitlement";
 import { AllowanceList, formatPrice } from "~/components/billing/plan-card";
 
-const ENTERPRISE_CONTACT = "mailto:daniel@signalpilot.ai?subject=SignalPilot%20Enterprise";
+/** The one contact route for Enterprise; there is no self-serve path. */
+export const ENTERPRISE_CONTACT = "mailto:daniel@signalpilot.ai?subject=SignalPilot%20Enterprise";
 
 const ENTERPRISE_FEATURES = [
   "sso (saml/oidc) and scim",
@@ -19,9 +20,9 @@ const ENTERPRISE_FEATURES = [
 const ACCENT = "var(--color-text-muted)";
 
 /**
- * Enterprise is priced to the estate and never self-served. The card shows
- * the published starting point and a contact action; when the org is already
- * enterprise it shows the contracted allowances from the entitlement row.
+ * Enterprise is priced to the estate and never self-served: the card has no
+ * buy button, only "Contact us". When the org is already on Enterprise the
+ * card is marked current and the contact link is the route for changes.
  */
 export function EnterpriseCard({
   plan,
@@ -37,8 +38,6 @@ export function EnterpriseCard({
     included_models: fallback.models,
     included_eval_runs: fallback.evalRuns,
     included_credits: fallback.credits,
-    seat_month_credits: fallback.seatMonthCredits,
-    managed_from_cents: fallback.managedFromCents,
   };
   const fromCents = plan?.monthly_fee_cents ?? fallback.monthlyFeeCents;
 
@@ -57,18 +56,20 @@ export function EnterpriseCard({
         </div>
         <div className="text-right">
           <div className="flex items-baseline gap-0.5">
-            <span className="text-xl font-bold font-mono tracking-tight tabular-nums text-[var(--color-text-muted)]">
+            <span
+              data-testid="plan-price"
+              className="text-xl font-bold font-mono tracking-tight tabular-nums text-[var(--color-text-muted)]"
+            >
               from {formatPrice(fromCents, "usd")}
             </span>
             <span className="text-[12px] text-[var(--color-text-dim)]">/mo</span>
           </div>
-          <span className="text-[11px] text-[var(--color-text-dim)] italic">contact us</span>
+          <span className="text-[11px] text-[var(--color-text-dim)] font-mono">billed monthly</span>
         </div>
       </div>
 
       <p className="text-[12px] text-[var(--color-text-dim)] leading-relaxed mb-4">
-        {plan?.description ??
-          "priced to the estate: negotiated fee, allowances, credit block, managed and integration weeks"}
+        Priced to your estate, one purchase order
       </p>
 
       <AllowanceList plan={allowances} color={ACCENT} moreByAgreement />
@@ -82,23 +83,24 @@ export function EnterpriseCard({
         ))}
       </ul>
 
-      {isCurrent ? (
+      {isCurrent && (
         <div
-          className="w-full flex items-center justify-center gap-2 px-4 py-2 text-[12px] border rounded-[10px]"
+          data-testid="plan-current"
+          className="w-full flex items-center justify-center gap-2 px-4 py-2 mb-2 text-[12px] border rounded-[10px]"
           style={{ borderColor: ACCENT, color: ACCENT, opacity: 0.7 }}
         >
           <CheckCircle2 className="w-3 h-3" />
-          current plan
+          Current plan
         </div>
-      ) : (
-        <a
-          href={ENTERPRISE_CONTACT}
-          className="w-full flex items-center justify-center gap-2 px-4 py-2 text-[12px] border rounded-[10px] border-[var(--color-text-muted)] text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] transition-colors duration-150"
-        >
-          <Mail className="w-3 h-3" />
-          contact us
-        </a>
       )}
+      <a
+        data-testid="enterprise-contact"
+        href={ENTERPRISE_CONTACT}
+        className="w-full flex items-center justify-center gap-2 px-4 py-2 text-[12px] border rounded-[10px] border-[var(--color-text-muted)] text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] transition-colors duration-150"
+      >
+        <Mail className="w-3 h-3" />
+        {isCurrent ? "Contact us for changes" : "Contact us"}
+      </a>
     </div>
   );
 }
@@ -124,12 +126,11 @@ export function EnterpriseContractSummary({
 }) {
   const flags = Object.entries(entitlement.enterpriseFlags).filter(([, v]) => v === true);
   const rows: Array<[string, string]> = [
-    ["seats included", entitlement.includedSeats.toLocaleString()],
-    ["covered models included", entitlement.includedModels.toLocaleString()],
-    ["eval runs per month", entitlement.includedEvalRuns.toLocaleString()],
+    ["seats included", entitlement.includedSeats.toLocaleString("en-US")],
+    ["covered models included", entitlement.includedModels.toLocaleString("en-US")],
+    ["eval runs per month", entitlement.includedEvalRuns.toLocaleString("en-US")],
     ["credits per month", formatCredits(entitlement.includedCredits)],
     ["managed", entitlement.managed ? "yes" : "no"],
-    ["billing interval", entitlement.billingInterval === "year" ? "annual" : "monthly"],
   ];
   const legalName = contractField(contract, "legal_name");
   const po = contractField(contract, "po_number");
@@ -140,7 +141,7 @@ export function EnterpriseContractSummary({
   if (terms) rows.push(["payment terms", terms]);
   if (termEnd) {
     rows.push([
-      "term ends",
+      "renews",
       new Date(termEnd).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }),
     ]);
   }
@@ -171,7 +172,11 @@ export function EnterpriseContractSummary({
         </div>
       )}
       <p className="mt-4 text-[11px] text-[var(--color-text-dim)]">
-        changes to the contract go through your account team; usage is metered at the standard credit rates.
+        changes to the contract go through your account team ·{" "}
+        <a href={ENTERPRISE_CONTACT} className="underline hover:text-[var(--color-text)]">
+          contact us
+        </a>
+        . usage beyond the contract is metered at the standard credit rates.
       </p>
     </div>
   );

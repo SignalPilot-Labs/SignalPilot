@@ -6,6 +6,7 @@ import {
   AlertTriangle,
   Building2,
   CheckCircle2,
+  ChevronRight,
   Coins,
   CreditCard,
   ExternalLink,
@@ -28,10 +29,11 @@ import { ConfirmDialog } from "~/components/ui/confirm-dialog";
 import { BillingSkeleton } from "~/components/ui/skeleton";
 import { TierBadge } from "~/components/branding/tier-badge";
 import { TierAccent } from "~/components/branding/tier-accent";
-import { IntervalToggle, PlanCard } from "~/components/billing/plan-card";
-import { EnterpriseCard, EnterpriseContractSummary } from "~/components/billing/enterprise-card";
+import { useOrgMemberCount } from "~/lib/hooks/use-org-member-count";
+import { PlanGrid } from "~/components/billing/plan-grid";
+import { EnterpriseContractSummary } from "~/components/billing/enterprise-card";
 import { CreditRateTable } from "~/components/billing/credit-rate-table";
-import { PlanChangeDialog, type PendingPlanChange } from "~/components/billing/plan-change-dialog";
+import { PlanReviewDialog, type PlanReview } from "~/components/billing/plan-review-dialog";
 
 const PLAN_ORDER: Record<string, number> = { team: 0, scale: 1, enterprise: 2 };
 
@@ -98,22 +100,18 @@ function BillingContent() {
   } = subscription;
   const searchParams = useSearchParams();
   const { toast } = useToast();
+  const memberCount = useOrgMemberCount();
 
   const [upgrading, setUpgrading] = useState<string | null>(null);
   const [managingPortal, setManagingPortal] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
-  // Annual is the published rate; only an org already paying month-to-month
-  // opens on the monthly (+25%) prices.
-  const [billingInterval, setBillingInterval] = useState<"month" | "year">(
-    entitlement.isBillable && entitlement.billingInterval === "month" ? "month" : "year",
-  );
   const [plans, setPlans] = useState<PlanInfo[] | null>(null);
   /** The live rate card; the rate table falls back to the local constants until it arrives. */
   const [rates, setRates] = useState<RateCard | null>(null);
   const [plansError, setPlansError] = useState(false);
   const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false);
   const [canceling, setCanceling] = useState(false);
-  const [pendingChange, setPendingChange] = useState<PendingPlanChange | null>(null);
+  const [review, setReview] = useState<PlanReview | null>(null);
 
   // Fetch plans from the backend (Stripe products plus the static allowance table)
   useEffect(() => {
@@ -171,29 +169,18 @@ function BillingContent() {
     [client, toast, refetch],
   );
 
-  const handleUpgrade = useCallback(
-    async (priceId: string) => {
-      const targetPlan = plans?.find((p) => p.prices.some((pr) => pr.price_id === priceId));
-      const targetPrice = targetPlan?.prices.find((pr) => pr.price_id === priceId);
-
-      // Paid to paid: fetch the proration preview, then confirm
-      if (isBillable && tier !== "free" && targetPlan && targetPrice) {
-        const isUpgrade = rank(targetPlan.tier) > rank(tier);
-        setPendingChange({ priceId, plan: targetPlan, price: targetPrice, isUpgrade, proration: null, loadingPreview: true });
-        try {
-          const preview = await client.previewProration(priceId);
-          setPendingChange((prev) => (prev ? { ...prev, proration: preview, loadingPreview: false } : null));
-        } catch {
-          setPendingChange((prev) => (prev ? { ...prev, loadingPreview: false } : null));
-        }
-        return;
-      }
-
-      // Free to paid: straight to Stripe checkout
-      executeCheckout(priceId);
+  // Every plan choice opens the review dialog; nothing is charged or
+  // redirected until the customer has seen the fee, seats and due today.
+  const handleSelect = useCallback(
+    (plan: PlanInfo) => {
+      const paidToPaid = isBillable && tier !== "free";
+      const mode = !paidToPaid ? "checkout" : rank(plan.tier) > rank(tier) ? "upgrade" : "downgrade";
+      setReview({ plan, mode });
     },
-    [plans, tier, isBillable, executeCheckout, client],
+    [tier, isBillable],
   );
+
+  const previewProration = useCallback((priceId: string) => client.previewProration(priceId), [client]);
 
   const handleManagePortal = useCallback(async () => {
     setActionError(null);
@@ -250,8 +237,6 @@ function BillingContent() {
       : statusTone === "warning"
         ? "text-[var(--color-warning)]"
         : "text-[var(--color-error)]";
-  const selfServePlans = plans?.filter((p) => p.tier !== "enterprise") ?? [];
-  const enterprisePlan = plans?.find((p) => p.tier === "enterprise") ?? null;
 
   return (
     <div className="p-8 max-w-5xl animate-fade-in">
@@ -271,7 +256,7 @@ function BillingContent() {
             <code className="text-[12px] text-[var(--color-text)]">{formatCredits(entitlement.includedCredits)}</code>
           </span>
           <span className="text-[var(--color-text-dim)]">
-            billed: <code className="text-[12px] text-[var(--color-text)]">{entitlement.billingInterval === "year" ? "annually" : "monthly"}</code>
+            billed: <code className="text-[12px] text-[var(--color-text)]">monthly</code>
           </span>
         </div>
       </TerminalBar>
@@ -389,25 +374,18 @@ function BillingContent() {
 
         {plans && (
           <>
-            <IntervalToggle interval={billingInterval} onChange={setBillingInterval} />
-            <div className="flex flex-col md:flex-row gap-4">
-              {selfServePlans.map((p) => (
-                <PlanCard
-                  key={p.tier}
-                  plan={p}
-                  interval={billingInterval}
-                  currentTier={tier}
-                  pendingDowngradeTo={pendingDowngradeTo}
-                  pendingDowngradeDate={pendingDowngradeDate}
-                  onUpgrade={handleUpgrade}
-                  upgrading={upgrading}
-                />
-              ))}
-              <EnterpriseCard plan={enterprisePlan} isCurrent={isEnterprise} />
-            </div>
+            <PlanGrid
+              plans={plans}
+              currentTier={tier}
+              pendingDowngradeTo={pendingDowngradeTo}
+              pendingDowngradeDate={pendingDowngradeDate}
+              onSelect={handleSelect}
+              disabled={upgrading !== null}
+            />
             <p className="mt-3 text-[11px] text-[var(--color-text-dim)]">
-              annual plans bill the flat fee yearly; credits are granted and settled monthly. month-to-month is 25% more.
-              cancel anytime. prices in usd. self-hosted is always free.
+              {isEnterprise
+                ? "your contract sets the fee, allowances and credit block; changes go through your account team."
+                : "one flat fee per month; credits are granted and settled monthly. cancel anytime. prices in usd. self-hosted is always free."}
             </p>
           </>
         )}
@@ -416,7 +394,13 @@ function BillingContent() {
       {/* Credit rates */}
       <section className="mb-8">
         <SectionHeader icon={Coins} title="credit rates" />
-        <CreditRateTable enterprise={isEnterprise} rates={rates} />
+        <details data-testid="credit-rates-details" className="group">
+          <summary className="cursor-pointer list-none flex items-center gap-2 text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] mb-3">
+            <ChevronRight className="w-3 h-3 transition-transform duration-150 group-open:rotate-90" />
+            what usage beyond the allowances costs
+          </summary>
+          <CreditRateTable enterprise={isEnterprise} rates={rates} />
+        </details>
       </section>
 
       {/* Cancel / reactivate */}
@@ -483,13 +467,18 @@ function BillingContent() {
         onCancel={() => setCancelConfirmOpen(false)}
       />
 
-      <PlanChangeDialog
-        change={pendingChange}
+      <PlanReviewDialog
+        review={review}
+        members={memberCount}
+        rates={rates}
+        currentPeriodEnd={currentPeriodEnd}
+        previewProration={previewProration}
+        busy={upgrading !== null}
         onConfirm={(priceId) => {
+          setReview(null);
           executeCheckout(priceId);
-          setPendingChange(null);
         }}
-        onCancel={() => setPendingChange(null)}
+        onCancel={() => setReview(null)}
       />
     </div>
   );

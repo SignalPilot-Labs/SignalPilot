@@ -13,7 +13,16 @@ import useSWR from "swr";
 import { useAppAuth } from "~/lib/auth-context";
 import { useBackendClient } from "~/lib/backend-client";
 import { getStandaloneChatBootstrap } from "~/lib/api/standalone-chat";
+import { getMe } from "~/lib/api/me";
 import { gatingError } from "~/lib/api/client";
+import {
+  LOCAL_PERMISSIONS,
+  UNLOADED_MEMBER_PERMISSIONS,
+  payloadHasRole,
+  permissionsFromPayload,
+  type PermissionSet,
+  type RolePayload,
+} from "~/lib/permissions";
 import {
   FREE_ENTITLEMENT,
   LOCAL_ENTITLEMENT,
@@ -47,6 +56,11 @@ export interface SubscriptionState extends Entitlement {
   pendingDowngradeDate: string | null;
   cancelAtPeriodEnd: boolean;
   cancelDate: string | null;
+  /**
+   * The caller's org role and permission set (`GET /api/me`, or the chat
+   * bootstrap when it answers first). Local mode is admin with everything.
+   */
+  permissions: PermissionSet;
   /** Re-read the row; `refresh` also makes the gateway bypass its entitlement cache. */
   refetch: (options?: RefetchOptions) => void;
 }
@@ -92,6 +106,8 @@ interface BootstrapProbe {
   loaded: boolean;
   /** Entitlement as the gateway reports it; used when the backend row is unavailable. */
   entitlement: Entitlement | null;
+  /** Role fields from the bootstrap, when it carried any. */
+  role: RolePayload | null;
   /** Re-read the bootstrap with the gateway's entitlement cache bypassed. */
   refresh: () => Promise<void>;
 }
@@ -116,7 +132,7 @@ function useBootstrapProbe(enabled: boolean): BootstrapProbe {
     await mutate(getStandaloneChatBootstrap({ refresh: true }), { revalidate: false });
   }, [mutate]);
   return useMemo(() => {
-    if (!enabled) return { capabilities: null, loaded: false, entitlement: null, refresh };
+    if (!enabled) return { capabilities: null, loaded: false, entitlement: null, role: null, refresh };
     if (data) {
       // The gateway answers 200 for every org: a free org gets `enabled: false`
       // with its entitlement and the deployment capabilities.
@@ -124,6 +140,7 @@ function useBootstrapProbe(enabled: boolean): BootstrapProbe {
         capabilities: data.capabilities ?? { evals: false, sandbox: false },
         loaded: true,
         entitlement: data.entitlement?.tier ? entitlementFromPayload(data.entitlement) : null,
+        role: payloadHasRole(data) ? data : null,
         refresh,
       };
     }
@@ -137,10 +154,35 @@ function useBootstrapProbe(enabled: boolean): BootstrapProbe {
         gate?.error === "plan_required"
           ? entitlementFromPayload({ ...FREE_PAYLOAD, tier: gate.tier })
           : null;
-      return { capabilities: null, loaded: true, entitlement, refresh };
+      return { capabilities: null, loaded: true, entitlement, role: null, refresh };
     }
-    return { capabilities: null, loaded: false, entitlement: null, refresh };
+    return { capabilities: null, loaded: false, entitlement: null, role: null, refresh };
   }, [enabled, data, error, refresh]);
+}
+
+// ---------------------------------------------------------------------------
+// Permissions — `GET /api/me`, cached five minutes; the bootstrap fills in first
+// ---------------------------------------------------------------------------
+
+const ME_CACHE_MS = 5 * 60_000;
+
+function usePermissionsProbe(enabled: boolean, bootstrapRole: RolePayload | null): PermissionSet {
+  const { data, error } = useSWR(enabled ? "gateway-me" : null, () => getMe(), {
+    revalidateOnFocus: false,
+    shouldRetryOnError: false,
+    dedupingInterval: ME_CACHE_MS,
+    focusThrottleInterval: ME_CACHE_MS,
+  });
+  return useMemo(() => {
+    if (!enabled) return UNLOADED_MEMBER_PERMISSIONS;
+    if (data && payloadHasRole(data)) return permissionsFromPayload(data);
+    // The bootstrap carries the same fields on a current gateway; an older
+    // gateway still says `is_admin`, which maps to the role's default set.
+    if (bootstrapRole) return permissionsFromPayload(bootstrapRole);
+    // /api/me failed and the bootstrap said nothing: a member until proven otherwise.
+    if (error) return { ...UNLOADED_MEMBER_PERMISSIONS, loaded: true };
+    return UNLOADED_MEMBER_PERMISSIONS;
+  }, [enabled, data, error, bootstrapRole]);
 }
 
 function buildState(
@@ -149,6 +191,7 @@ function buildState(
   isLoaded: boolean,
   loadError: string | null,
   refetch: (options?: RefetchOptions) => void,
+  permissions: PermissionSet,
 ): SubscriptionState {
   return {
     ...row.entitlement,
@@ -165,6 +208,7 @@ function buildState(
     pendingDowngradeDate: row.pendingDowngradeDate,
     cancelAtPeriodEnd: row.cancelAtPeriodEnd,
     cancelDate: row.cancelDate,
+    permissions,
     refetch,
   };
 }
@@ -177,6 +221,7 @@ function CloudSubscriptionInner({ children }: { children: ReactNode }) {
   const { isAuthenticated, isLoaded: authLoaded } = useAppAuth();
   const client = useBackendClient();
   const probe = useBootstrapProbe(authLoaded && isAuthenticated);
+  const permissions = usePermissionsProbe(authLoaded && isAuthenticated, probe.role);
 
   const [row, setRow] = useState<RowState>(FREE_ROW);
   // Starts false: consumers must wait for the real row before rendering,
@@ -223,8 +268,8 @@ function CloudSubscriptionInner({ children }: { children: ReactNode }) {
   const value = useMemo(() => {
     const effectiveRow =
       loadError && probe.entitlement ? { ...row, entitlement: probe.entitlement } : row;
-    return buildState(effectiveRow, probe, isLoaded, loadError, fetchSubscription);
-  }, [row, probe, isLoaded, loadError, fetchSubscription]);
+    return buildState(effectiveRow, probe, isLoaded, loadError, fetchSubscription, permissions);
+  }, [row, probe, isLoaded, loadError, fetchSubscription, permissions]);
 
   return (
     <SubscriptionContext.Provider value={value}>
@@ -241,7 +286,7 @@ function LocalSubscriptionInner({ children }: { children: ReactNode }) {
   const { isAuthenticated, isLoaded: authLoaded } = useAppAuth();
   const probe = useBootstrapProbe(authLoaded && isAuthenticated);
   const value = useMemo(
-    () => buildState(LOCAL_ROW, probe, true, null, () => {}),
+    () => buildState(LOCAL_ROW, probe, true, null, () => {}, LOCAL_PERMISSIONS),
     [probe],
   );
   return (
@@ -269,10 +314,11 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
 
 const FALLBACK_SUBSCRIPTION: SubscriptionState = buildState(
   FREE_ROW,
-  { capabilities: null, loaded: false, entitlement: null, refresh: async () => {} },
+  { capabilities: null, loaded: false, entitlement: null, role: null, refresh: async () => {} },
   false,
   null,
   () => {},
+  UNLOADED_MEMBER_PERMISSIONS,
 );
 
 export function useSubscription(): SubscriptionState {

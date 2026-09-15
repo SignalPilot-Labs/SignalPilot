@@ -6,6 +6,7 @@ import Link from "next/link";
 import { KeyRound, CreditCard, Plug, PlugZap, BarChart3, Shield, Lock, Users, GitBranch, BookOpen } from "lucide-react";
 import { useAppAuth } from "~/lib/auth-context";
 import { useSubscription } from "~/lib/subscription-context";
+import { usePermissions } from "~/lib/hooks/use-permissions";
 
 /** API Keys nav link — available in both local and cloud mode */
 export function ApiKeysNavLink({ pathname }: { pathname: string }) {
@@ -26,11 +27,12 @@ export function ApiKeysNavLink({ pathname }: { pathname: string }) {
   );
 }
 
-/** Billing nav link — only rendered in cloud mode, nested under /settings */
+/** Billing nav link — cloud mode, org admins only */
 export function BillingNavLink({ pathname }: { pathname: string }) {
   const { isCloudMode } = useAppAuth();
+  const { can } = usePermissions();
 
-  if (!isCloudMode) return null;
+  if (!isCloudMode || !can("billing.manage")) return null;
 
   const active = pathname.startsWith("/settings/billing");
 
@@ -49,13 +51,15 @@ export function BillingNavLink({ pathname }: { pathname: string }) {
   );
 }
 
-/** Usage nav link — only rendered in cloud mode, nested under /settings */
+/** Usage nav link — cloud mode; members land on "my usage" at the same route */
 export function UsageNavLink({ pathname }: { pathname: string }) {
   const { isCloudMode } = useAppAuth();
+  const { can } = usePermissions();
 
   if (!isCloudMode) return null;
 
   const active = pathname.startsWith("/settings/usage");
+  const label = can("usage.org") ? "usage" : "my usage";
 
   return (
     <Link
@@ -68,7 +72,7 @@ export function UsageNavLink({ pathname }: { pathname: string }) {
       }`}
     >
       <BarChart3 size={11} className="flex-shrink-0 text-[var(--color-text-dim)]" />
-      <span className="flex-1 tracking-wide text-[12px]">usage</span>
+      <span className="flex-1 tracking-wide text-[12px]">{label}</span>
     </Link>
   );
 }
@@ -92,9 +96,11 @@ export function ConnectorsNavLink({ pathname }: { pathname: string }) {
   );
 }
 
-/** MCP Connect nav link — available in both local and cloud mode */
+/** MCP Connect nav link — org admins only (MCP-agent and chat defaults) */
 export function McpConnectNavLink({ pathname }: { pathname: string }) {
+  const { can } = usePermissions();
   const active = pathname.startsWith("/settings/mcp-connect");
+  if (!can("settings.write")) return null;
 
   return (
     <Link
@@ -133,8 +139,10 @@ export function NotionConnectNavLink({ pathname }: { pathname: string }) {
 export function ByokNavLink({ pathname }: { pathname: string }) {
   const { isCloudMode } = useAppAuth();
   const { isLoaded, isBillable } = useSubscription();
-  // BYOK is on for every billable plan; hidden until the entitlement row is loaded.
-  if (!isCloudMode || !isLoaded || !isBillable) return null;
+  const { can } = usePermissions();
+  // BYOK is on for every billable plan; hidden until the entitlement row is
+  // loaded, and hidden from members (org admins manage keys).
+  if (!isCloudMode || !isLoaded || !isBillable || !can("byok.manage")) return null;
 
   const active = pathname.startsWith("/settings/byok");
 
@@ -153,11 +161,12 @@ export function ByokNavLink({ pathname }: { pathname: string }) {
   );
 }
 
-/** Team nav link — cloud-mode only */
+/** Team nav link — cloud mode, org admins only */
 export function TeamNavLink({ pathname }: { pathname: string }) {
   const { isCloudMode } = useAppAuth();
+  const { can } = usePermissions();
 
-  if (!isCloudMode) return null;
+  if (!isCloudMode || !can("team.manage")) return null;
 
   const active = pathname.startsWith("/settings/team");
 

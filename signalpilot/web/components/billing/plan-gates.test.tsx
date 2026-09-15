@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SubscriptionState } from "~/lib/subscription-context";
 import { FREE_ENTITLEMENT, LOCAL_ENTITLEMENT, type Entitlement } from "~/lib/entitlement";
+import { LOCAL_PERMISSIONS } from "~/lib/permissions";
 
 (
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
@@ -50,6 +51,7 @@ function state(overrides: Partial<SubscriptionState>): SubscriptionState {
     pendingDowngradeDate: null,
     cancelAtPeriodEnd: false,
     cancelDate: null,
+    permissions: LOCAL_PERMISSIONS,
     refetch: () => {},
     ...overrides,
   };

@@ -82,6 +82,9 @@ export type StandaloneChatBootstrap = {
   projects: StandaloneChatProject[];
   selected_project_id: string | null;
   is_admin: boolean;
+  /** Org role and permission vocabulary (gateway/auth/permissions.py); absent on older gateways. */
+  role?: "admin" | "member";
+  permissions?: string[];
   starter_questions: string[];
   default_per_query_budget_usd: number;
   default_chat_budget_usd: number;

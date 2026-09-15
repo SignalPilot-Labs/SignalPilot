@@ -7,6 +7,7 @@ import dynamic from "next/dynamic";
 import { KeyRound, Menu, X } from "lucide-react";
 import { Tooltip } from "~/components/ui/tooltip";
 import { useAppAuth } from "~/lib/auth-context";
+import { usePermissions } from "~/lib/hooks/use-permissions";
 import { getProjects, getWorkspaceProjects } from "~/lib/api";
 import { useConnectionsHealth, useKnowledgeDocs } from "~/lib/hooks/use-gateway-data";
 import { TierWordmark } from "~/components/branding/tier-wordmark";
@@ -113,6 +114,7 @@ export default function Sidebar() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const router = useRouter();
   const { isCloudMode, isAuthenticated } = useAppAuth();
+  const { can } = usePermissions();
   const [projectCount, setProjectCount] = useState(0);
 
   // Connection health from shared SWR cache (auto-refreshes every 15s)
@@ -135,7 +137,15 @@ export default function Sidebar() {
     return () => clearInterval(i);
   }, [isCloudMode]);
 
-  const filteredNav = nav.filter(({ href }) => !(isCloudMode && href === "/settings"));
+  // Admin-only destinations: org settings (local mode's /settings) and the
+  // org-wide audit log. Members never see them in the nav.
+  const hiddenHrefs = useMemo(() => {
+    const hidden = new Set<string>();
+    if (isCloudMode || !can("settings.write")) hidden.add("/settings");
+    if (!can("audit.read")) hidden.add("/audit");
+    return hidden;
+  }, [isCloudMode, can]);
+  const filteredNav = useMemo(() => nav.filter(({ href }) => !hiddenHrefs.has(href)), [hiddenHrefs]);
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -227,10 +237,7 @@ export default function Sidebar() {
       {/* Navigation — grouped IA */}
       <nav className="flex-1 overflow-y-auto px-3 py-2">
         {navGroups.map((group, gi) => {
-          const items = group.items.filter(
-            ({ href }) =>
-              !(isCloudMode && href === "/settings")
-          );
+          const items = group.items.filter(({ href }) => !hiddenHrefs.has(href));
           if (items.length === 0) return null;
           return (
             <div key={group.label ?? `g${gi}`} className={gi > 0 ? "mt-4" : undefined}>

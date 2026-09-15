@@ -102,8 +102,10 @@ function BillingContent() {
   const [upgrading, setUpgrading] = useState<string | null>(null);
   const [managingPortal, setManagingPortal] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  // Annual is the published rate; only an org already paying month-to-month
+  // opens on the monthly (+25%) prices.
   const [billingInterval, setBillingInterval] = useState<"month" | "year">(
-    entitlement.billingInterval,
+    entitlement.isBillable && entitlement.billingInterval === "month" ? "month" : "year",
   );
   const [plans, setPlans] = useState<PlanInfo[] | null>(null);
   /** The live rate card; the rate table falls back to the local constants until it arrives. */

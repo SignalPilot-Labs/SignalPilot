@@ -174,7 +174,7 @@ export function PlanCard({
               ? "flat fee"
               : price.interval === "year"
                 ? `${formatPrice(price.amount, price.currency)}/yr, billed annually`
-                : "billed monthly"}
+                : "month-to-month, 25% above the annual rate"}
           </span>
         </div>
       </div>

@@ -26,6 +26,7 @@ import {
   type EvalRunTask,
 } from "~/lib/api";
 import { useToast } from "~/components/ui/toast";
+import { AdminOnlyControl } from "~/components/access/admin-only-control";
 import { Md } from "./Markdown";
 import { RunProgressBar } from "./SandboxPanel";
 import { TranscriptSlideOver } from "./TranscriptView";
@@ -311,14 +312,16 @@ export function RunDetail({ runId }: { runId: string }) {
         </div>
         <div className="flex items-center gap-3 flex-wrap">
           {live && (
-            <button
-              onClick={stopRun}
-              disabled={stopping || run.status === "cancelling"}
-              className="ev-stop-command"
-            >
-              {stopping || run.status === "cancelling" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Square className="w-3 h-3" fill="currentColor" />}
-              {run.status === "cancelling" ? "Stopping" : "Stop run"}
-            </button>
+            <AdminOnlyControl permission="evals.run">
+              <button
+                onClick={stopRun}
+                disabled={stopping || run.status === "cancelling"}
+                className="ev-stop-command"
+              >
+                {stopping || run.status === "cancelling" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Square className="w-3 h-3" fill="currentColor" />}
+                {run.status === "cancelling" ? "Stopping" : "Stop run"}
+              </button>
+            </AdminOnlyControl>
           )}
           {run.status === "completed" && (
             <div className="flex items-center gap-3 text-sm">

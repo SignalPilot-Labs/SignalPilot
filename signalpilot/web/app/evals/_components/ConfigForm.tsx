@@ -5,10 +5,49 @@
 import { useEffect, useState } from "react";
 import useSWR from "swr";
 import { Loader2, Save } from "lucide-react";
-import { getEvalConfig, putEvalConfig } from "~/lib/api";
+import { getEvalConfig, putEvalConfig, type EvalConfig } from "~/lib/api";
 import { useToast } from "~/components/ui/toast";
+import { usePermissions } from "~/lib/hooks/use-permissions";
+import { ReadOnlyNote } from "~/components/access/read-only-note";
+
+/** The config as values only: what a member sees where the admin form is. */
+function ConfigValues({ config }: { config?: EvalConfig }) {
+  const rows: [string, string][] = [
+    ["Repo", config?.repo_url || "—"],
+    ["Model", config?.model || "sonnet"],
+    ["Max tasks per run", String(config?.max_tasks ?? 0) + ((config?.max_tasks ?? 0) === 0 ? " (all)" : "")],
+    ["Connection", config?.connection || "—"],
+    ["Notify emails", (config?.notify_emails ?? []).join(", ") || "—"],
+    ["Prompt preamble", config?.prompt_preamble || "—"],
+    ["Autorun on knowledge add", config?.autorun_on_knowledge_add ? "on" : "off"],
+  ];
+  return (
+    <div className="mt-4 pt-4 border-t border-[var(--color-border)] space-y-3" data-testid="eval-config-values">
+      <ReadOnlyNote block>eval repo, model, connection, and run policy</ReadOnlyNote>
+      <dl className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2 text-sm">
+        {rows.map(([label, value]) => (
+          <div key={label} className="min-w-0">
+            <dt className="text-xs text-[var(--color-text-muted)] mb-0.5">{label}</dt>
+            <dd className="text-[var(--color-text)] break-words">{value}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+}
 
 export function ConfigForm({ onSaved }: { onSaved: () => void }) {
+  const { can } = usePermissions();
+  if (!can("evals.run")) return <ConfigValuesLoader />;
+  return <ConfigEditor onSaved={onSaved} />;
+}
+
+function ConfigValuesLoader() {
+  const { data } = useSWR("eval-config", getEvalConfig);
+  return <ConfigValues config={data} />;
+}
+
+function ConfigEditor({ onSaved }: { onSaved: () => void }) {
   const { toast } = useToast();
   const { data, mutate } = useSWR("eval-config", getEvalConfig);
   const [form, setForm] = useState({

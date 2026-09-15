@@ -26,6 +26,8 @@ import {
   type EvalConfig,
 } from "~/lib/api";
 import { useToast } from "~/components/ui/toast";
+import { usePermissions } from "~/lib/hooks/use-permissions";
+import { ReadOnlyNote } from "~/components/access/read-only-note";
 
 type Draft = {
   repo_url: string;
@@ -100,7 +102,34 @@ function draftError(draft: Draft, sourceKind: SourceKind): string | null {
     || emailError(draft.notify_emails);
 }
 
-export function EvalOnboarding({
+/**
+ * With no eval set configured, an admin gets the setup wizard and a member
+ * gets a short note: the org admins set evals up.
+ */
+export function EvalOnboarding(props: { config: EvalConfig; onComplete: () => void }) {
+  const { can } = usePermissions();
+  if (!can("evals.run")) return <EvalOnboardingMemberNote />;
+  return <EvalOnboardingWizard {...props} />;
+}
+
+function EvalOnboardingMemberNote() {
+  return (
+    <section className="ev-onboarding" aria-labelledby="eval-onboarding-title" data-testid="eval-onboarding-member">
+      <header className="ev-onboarding-header">
+        <div>
+          <p className="ev-onboarding-kicker">Evaluation workspace</p>
+          <h1 id="eval-onboarding-title">No eval set yet</h1>
+          <p>Your org admins connect the eval repository, warehouse, and run policy. Results, runs, and accuracy appear here once a set is configured.</p>
+        </div>
+      </header>
+      <div className="ev-onboarding-body">
+        <ReadOnlyNote block>eval setup is an org admin task</ReadOnlyNote>
+      </div>
+    </section>
+  );
+}
+
+function EvalOnboardingWizard({
   config,
   onComplete,
 }: {

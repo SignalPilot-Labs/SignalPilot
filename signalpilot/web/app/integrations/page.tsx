@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Link, Loader2, MessageSquare, Palette } from "lucide-react";
+import { KeyRound, Link, MessageSquare, Palette } from "lucide-react";
 import { useAppAuth } from "~/lib/auth-context";
 import {
   deleteNotionOAuthInstallation,
@@ -25,6 +25,9 @@ import { ApiKeysSkeleton } from "~/components/ui/skeleton";
 import { PlanRequired } from "~/components/billing/plan-required";
 import { NotionIcon } from "~/components/branding/notion-icon";
 import { ThemeEditor } from "~/components/integrations/theme-editor";
+import { IntegrationConnectButton } from "~/components/integrations/integration-connect-button";
+import { ReadOnlyNote } from "~/components/access/read-only-note";
+import { usePermissions } from "~/lib/hooks/use-permissions";
 import { useSubscription } from "~/lib/subscription-context";
 import { AnthropicKeySection } from "./_components/anthropic-key-section";
 import { NotionInstallationCard } from "./_components/notion-installation-card";
@@ -67,7 +70,10 @@ function IntegrationsContent() {
   const [provisioningSlackId, setProvisioningSlackId] = useState<string | null>(null);
   const [deletingOauthId, setDeletingOauthId] = useState<string | null>(null);
   const [deletingSlackId, setDeletingSlackId] = useState<string | null>(null);
-  const orgSecretsState = useOrgSecrets();
+  const { can } = usePermissions();
+  const canWriteIntegrations = can("integrations.write");
+  const canManageSecrets = can("secrets.org.write");
+  const orgSecretsState = useOrgSecrets(canManageSecrets);
 
   const fetchIntegrations = useCallback(async () => {
     try {
@@ -349,14 +355,7 @@ function IntegrationsContent() {
         <div className="flex items-center justify-between mb-4">
           <SectionHeader icon={Link} title="notion oauth" />
           {!hasConnectedInstall && (
-            <button
-              onClick={handleConnectNotion}
-              disabled={connecting}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] text-[var(--color-bg)] bg-[var(--color-text)] rounded-[10px] hover:opacity-90 transition-opacity duration-150 disabled:opacity-30"
-            >
-              {connecting ? <Loader2 className="w-3 h-3 animate-spin" /> : <NotionIcon className="w-3 h-3" />}
-              connect notion
-            </button>
+            <IntegrationConnectButton label="connect notion" icon={<NotionIcon className="w-3 h-3" />} onConnect={handleConnectNotion} connecting={connecting} />
           )}
         </div>
 
@@ -381,14 +380,7 @@ function IntegrationsContent() {
             <p className="text-[12px] text-[var(--color-text-dim)] mb-3">
               no oauth installs connected
             </p>
-            <button
-              onClick={handleConnectNotion}
-              disabled={connecting}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-[12px] rounded-[10px] transition-opacity duration-150 hover:opacity-90 disabled:opacity-30"
-            >
-              {connecting ? <Loader2 className="w-3 h-3 animate-spin" /> : <NotionIcon className="w-3 h-3" />}
-              connect notion
-            </button>
+            <IntegrationConnectButton variant="empty" label="connect notion" icon={<NotionIcon className="w-3 h-3" />} onConnect={handleConnectNotion} connecting={connecting} />
           </div>
         )}
 
@@ -396,6 +388,7 @@ function IntegrationsContent() {
           <NotionInstallationCard
             key={installation.id}
             installation={installation}
+            readOnly={!canWriteIntegrations}
             workspaceProjects={workspaceProjects}
             projectsById={projectsById}
             selection={projectSelections[installation.id]}
@@ -414,14 +407,7 @@ function IntegrationsContent() {
         <div className="flex items-center justify-between mb-4">
           <SectionHeader icon={MessageSquare} title="slack oauth" />
           {!hasConnectedSlackInstall && (
-            <button
-              onClick={handleConnectSlack}
-              disabled={connectingSlack}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] text-[var(--color-bg)] bg-[var(--color-text)] rounded-[10px] hover:opacity-90 transition-opacity duration-150 disabled:opacity-30"
-            >
-              {connectingSlack ? <Loader2 className="w-3 h-3 animate-spin" /> : <MessageSquare className="w-3 h-3" />}
-              connect slack
-            </button>
+            <IntegrationConnectButton label="connect slack" icon={<MessageSquare className="w-3 h-3" />} onConnect={handleConnectSlack} connecting={connectingSlack} />
           )}
         </div>
 
@@ -431,14 +417,7 @@ function IntegrationsContent() {
             <p className="text-[12px] text-[var(--color-text-dim)] mb-3">
               no slack workspaces connected
             </p>
-            <button
-              onClick={handleConnectSlack}
-              disabled={connectingSlack}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-[12px] rounded-[10px] transition-opacity duration-150 hover:opacity-90 disabled:opacity-30"
-            >
-              {connectingSlack ? <Loader2 className="w-3 h-3 animate-spin" /> : <MessageSquare className="w-3 h-3" />}
-              connect slack
-            </button>
+            <IntegrationConnectButton variant="empty" label="connect slack" icon={<MessageSquare className="w-3 h-3" />} onConnect={handleConnectSlack} connecting={connectingSlack} />
           </div>
         )}
 
@@ -446,6 +425,7 @@ function IntegrationsContent() {
           <SlackInstallationCard
             key={installation.id}
             installation={installation}
+            readOnly={!canWriteIntegrations}
             workspaceProjects={workspaceProjects}
             projectsById={projectsById}
             selection={slackProjectSelections[installation.id]}
@@ -460,7 +440,16 @@ function IntegrationsContent() {
         ))}
       </section>
 
-      <AnthropicKeySection {...orgSecretsState} />
+      {canManageSecrets ? (
+        <AnthropicKeySection {...orgSecretsState} />
+      ) : (
+        <section className="mb-8">
+          <div className="flex items-center justify-between mb-4">
+            <SectionHeader icon={KeyRound} title="anthropic api key" />
+          </div>
+          <ReadOnlyNote block>the org Anthropic key that powers SignalPilot agents</ReadOnlyNote>
+        </section>
+      )}
 
       <section className="mb-8">
         <div className="flex items-center justify-between mb-4">

@@ -25,6 +25,7 @@ import { PageHeader, TerminalBar } from "~/components/ui/page-header";
 import { ActivityDots, StatusDot, Sparkline } from "~/components/ui/data-viz";
 import { SqlHighlight } from "~/components/ui/sql-highlight";
 import { TimeAgo } from "~/components/ui/time-ago";
+import { AdminGate } from "~/components/settings/admin-gate";
 
 const typeIcons: Record<string, React.ElementType> = {
   query: DbIcon,
@@ -45,6 +46,14 @@ const typeColors: Record<string, string> = {
 };
 
 export default function AuditPage() {
+  return (
+    <AdminGate permission="audit.read" title="audit" subtitle="log" what="the audit log">
+      <AuditContent />
+    </AdminGate>
+  );
+}
+
+function AuditContent() {
   const [filter, setFilter] = useState<string>("");
   const [typeFilter, setTypeFilter] = useState<string>("");
   const [expandedRow, setExpandedRow] = useState<string | null>(null);

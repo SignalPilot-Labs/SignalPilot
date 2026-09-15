@@ -5,7 +5,7 @@ import { getOrgSecrets, updateOrgSecrets, type OrgSecretsResponse } from "~/lib/
 import { useToast } from "~/components/ui/toast";
 
 /** Org-level Anthropic key state and actions for the integrations page. */
-export function useOrgSecrets() {
+export function useOrgSecrets(enabled = true) {
   const { toast } = useToast();
   const [orgSecrets, setOrgSecrets] = useState<OrgSecretsResponse | null>(null);
   const [orgSecretsLoading, setOrgSecretsLoading] = useState(true);
@@ -29,7 +29,10 @@ export function useOrgSecrets() {
     }
   }, []);
 
-  useEffect(() => { fetchOrgSecrets(); }, [fetchOrgSecrets]);
+  useEffect(() => {
+    if (enabled) fetchOrgSecrets();
+    else setOrgSecretsLoading(false);
+  }, [enabled, fetchOrgSecrets]);
 
   async function handleSaveAnthropicKey() {
     const key = anthropicKey.trim();

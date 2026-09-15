@@ -8,6 +8,8 @@ import { notionPageUrl, oauthStatus, projectLabel, shortenedId } from "../_lib/h
 
 interface NotionInstallationCardProps {
   installation: NotionOAuthInstallation;
+  /** Member view: values only, no disconnect or provisioning controls. */
+  readOnly?: boolean;
   workspaceProjects: WorkspaceProjectInfo[];
   projectsById: Map<string, WorkspaceProjectInfo>;
   selection: string | undefined;
@@ -22,6 +24,7 @@ interface NotionInstallationCardProps {
 
 export function NotionInstallationCard({
   installation,
+  readOnly = false,
   workspaceProjects,
   projectsById,
   selection,
@@ -103,7 +106,7 @@ export function NotionInstallationCard({
           </div>
         </div>
 
-        {deleting ? (
+        {readOnly ? null : deleting ? (
           <div className="flex items-center gap-1.5">
             <button onClick={() => onDelete()} className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] text-[var(--color-error)] border border-[var(--color-error)]/30 rounded-[10px] hover:border-[var(--color-error)] transition-colors duration-150">confirm</button>
             <button onClick={() => onCancelDelete()} className="p-1.5 text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors"><X className="w-3 h-3" /></button>
@@ -119,7 +122,7 @@ export function NotionInstallationCard({
         )}
       </div>
 
-      {(() => {
+      {readOnly ? null : (() => {
         const configuredProjectId = installation.config?.default_project_id || "";
         const selectedProjectId = selection ?? configuredProjectId;
         const selectedProject = selectedProjectId ? projectsById.get(selectedProjectId) : null;

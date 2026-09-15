@@ -34,6 +34,7 @@ import { PlanGrid } from "~/components/billing/plan-grid";
 import { EnterpriseContractSummary } from "~/components/billing/enterprise-card";
 import { CreditRateTable } from "~/components/billing/credit-rate-table";
 import { PlanReviewDialog, type PlanReview } from "~/components/billing/plan-review-dialog";
+import { AdminGate } from "~/components/settings/admin-gate";
 
 const PLAN_ORDER: Record<string, number> = { team: 0, scale: 1, enterprise: 2 };
 
@@ -74,7 +75,11 @@ export default function BillingPage() {
     );
   }
 
-  return <BillingContent />;
+  return (
+    <AdminGate permission="billing.manage" title="plans" subtitle="subscription" what="plans and invoices">
+      <BillingContent />
+    </AdminGate>
+  );
 }
 
 // ---------------------------------------------------------------------------

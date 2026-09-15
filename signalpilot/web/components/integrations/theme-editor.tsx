@@ -6,6 +6,8 @@ import { getSettings, updateSettings } from "~/lib/api";
 import { cloneTheme, DEFAULT_DELIVERABLE_THEME, themeToCssVars, themeWithGeneratedChartSeries } from "~/lib/deliverable-theme";
 import type { DeliverableTheme } from "~/lib/types";
 import { useToast } from "~/components/ui/toast";
+import { ReadOnlyNote } from "~/components/access/read-only-note";
+import { usePermissions } from "~/lib/hooks/use-permissions";
 
 const HEX_RE = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
 
@@ -41,6 +43,8 @@ export function ThemeEditor() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [adminLocked, setAdminLocked] = useState(false);
+  const { can } = usePermissions();
+  const canWrite = can("settings.write");
 
   const dirty = useMemo(() => JSON.stringify(draft) !== JSON.stringify(saved), [draft, saved]);
   const hasErrors = invalidTheme(draft);
@@ -115,6 +119,18 @@ export function ThemeEditor() {
   async function handleReset() {
     if (!window.confirm("Reset deliverable theme to SignalPilot defaults?")) return;
     await saveTheme(null);
+  }
+
+  if (!canWrite) {
+    return (
+      <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] p-5" data-testid="theme-editor-readonly">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-5">
+          <p className="text-[13px] text-[var(--color-text)] tracking-wider">AI generations theme</p>
+          <ReadOnlyNote>main color {saved.colors.positive} · {saved.font_size_base_px}px font · {saved.radius_px}px radius</ReadOnlyNote>
+        </div>
+        <Preview theme={saved} />
+      </div>
+    );
   }
 
   return (

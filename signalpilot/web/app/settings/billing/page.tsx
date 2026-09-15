@@ -137,7 +137,9 @@ function BillingContent() {
   const checkoutOutcome = searchParams.get("checkout");
 
   useEffect(() => {
-    if (checkoutOutcome === "success") refetch();
+    // Back from Stripe Checkout: re-read the row and make the gateway drop
+    // its cached (free) entitlement so gated pages open right away.
+    if (checkoutOutcome === "success") refetch({ refresh: true });
   }, [checkoutOutcome, refetch]);
 
   const executeCheckout = useCallback(

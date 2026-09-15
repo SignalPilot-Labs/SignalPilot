@@ -47,7 +47,12 @@ export interface SubscriptionState extends Entitlement {
   pendingDowngradeDate: string | null;
   cancelAtPeriodEnd: boolean;
   cancelDate: string | null;
-  refetch: () => void;
+  /** Re-read the row; `refresh` also makes the gateway bypass its entitlement cache. */
+  refetch: (options?: RefetchOptions) => void;
+}
+
+export interface RefetchOptions {
+  refresh?: boolean;
 }
 
 interface RowState {
@@ -87,6 +92,8 @@ interface BootstrapProbe {
   loaded: boolean;
   /** Entitlement as the gateway reports it; used when the backend row is unavailable. */
   entitlement: Entitlement | null;
+  /** Re-read the bootstrap with the gateway's entitlement cache bypassed. */
+  refresh: () => Promise<void>;
 }
 
 const FREE_PAYLOAD = {
@@ -100,13 +107,16 @@ const FREE_PAYLOAD = {
 } as const;
 
 function useBootstrapProbe(enabled: boolean): BootstrapProbe {
-  const { data, error } = useSWR(
+  const { data, error, mutate } = useSWR(
     enabled ? "standalone-chat-bootstrap" : null,
-    getStandaloneChatBootstrap,
+    () => getStandaloneChatBootstrap(),
     { revalidateOnFocus: false, shouldRetryOnError: false },
   );
+  const refresh = useCallback(async () => {
+    await mutate(getStandaloneChatBootstrap({ refresh: true }), { revalidate: false });
+  }, [mutate]);
   return useMemo(() => {
-    if (!enabled) return { capabilities: null, loaded: false, entitlement: null };
+    if (!enabled) return { capabilities: null, loaded: false, entitlement: null, refresh };
     if (data) {
       // The gateway answers 200 for every org: a free org gets `enabled: false`
       // with its entitlement and the deployment capabilities.
@@ -114,6 +124,7 @@ function useBootstrapProbe(enabled: boolean): BootstrapProbe {
         capabilities: data.capabilities ?? { evals: false, sandbox: false },
         loaded: true,
         entitlement: data.entitlement?.tier ? entitlementFromPayload(data.entitlement) : null,
+        refresh,
       };
     }
     if (error) {
@@ -126,10 +137,10 @@ function useBootstrapProbe(enabled: boolean): BootstrapProbe {
         gate?.error === "plan_required"
           ? entitlementFromPayload({ ...FREE_PAYLOAD, tier: gate.tier })
           : null;
-      return { capabilities: null, loaded: true, entitlement };
+      return { capabilities: null, loaded: true, entitlement, refresh };
     }
-    return { capabilities: null, loaded: false, entitlement: null };
-  }, [enabled, data, error]);
+    return { capabilities: null, loaded: false, entitlement: null, refresh };
+  }, [enabled, data, error, refresh]);
 }
 
 function buildState(
@@ -137,7 +148,7 @@ function buildState(
   probe: BootstrapProbe,
   isLoaded: boolean,
   loadError: string | null,
-  refetch: () => void,
+  refetch: (options?: RefetchOptions) => void,
 ): SubscriptionState {
   return {
     ...row.entitlement,
@@ -173,13 +184,16 @@ function CloudSubscriptionInner({ children }: { children: ReactNode }) {
   const [isLoaded, setIsLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  const fetchSubscription = useCallback(async () => {
+  const fetchSubscription = useCallback(async (options?: RefetchOptions) => {
     if (!authLoaded) return;
     if (!isAuthenticated) {
       setIsLoaded(true);
       return;
     }
     try {
+      // After Stripe Checkout the gateway's cached entitlement may still say
+      // free; a refreshed bootstrap makes it re-read the row now.
+      if (options?.refresh) probe.refresh().catch(() => {});
       const data = await client.getSubscription();
       setRow({
         entitlement: entitlementFromSubscription(data),
@@ -200,7 +214,7 @@ function CloudSubscriptionInner({ children }: { children: ReactNode }) {
     } finally {
       setIsLoaded(true);
     }
-  }, [authLoaded, isAuthenticated, client]);
+  }, [authLoaded, isAuthenticated, client, probe]);
 
   useEffect(() => {
     fetchSubscription();
@@ -255,7 +269,7 @@ export function SubscriptionProvider({ children }: { children: ReactNode }) {
 
 const FALLBACK_SUBSCRIPTION: SubscriptionState = buildState(
   FREE_ROW,
-  { capabilities: null, loaded: false, entitlement: null },
+  { capabilities: null, loaded: false, entitlement: null, refresh: async () => {} },
   false,
   null,
   () => {},

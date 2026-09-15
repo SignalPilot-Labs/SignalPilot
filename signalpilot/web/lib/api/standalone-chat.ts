@@ -233,8 +233,11 @@ export type SharedConversationDetail = {
   shared_at: string;
 };
 
-export const getStandaloneChatBootstrap = () =>
-  request<StandaloneChatBootstrap>("/api/chat/bootstrap");
+/** `refresh` makes the gateway bypass its entitlement cache (once, after Stripe Checkout). */
+export const getStandaloneChatBootstrap = (options?: { refresh?: boolean }) =>
+  request<StandaloneChatBootstrap>(
+    options?.refresh ? "/api/chat/bootstrap?refresh=1" : "/api/chat/bootstrap",
+  );
 export const getStandaloneChatProjectReadiness = (projectId: string) =>
   request<{
     project_id: string;

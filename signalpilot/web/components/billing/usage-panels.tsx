@@ -32,9 +32,11 @@ export function CreditBalanceCard({
   const percentage = granted > 0 ? Math.round((consumed / granted) * 100) : consumed > 0 ? 100 : 0;
   const tone = overage > 0 ? "error" : percentage >= 80 ? "warning" : "success";
   const barColor = `var(--color-${tone})`;
+  // The period end is a UTC calendar boundary; render it as a UTC date.
   const resetStr = new Date(periodEnd).toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
+    timeZone: "UTC",
   });
 
   return (

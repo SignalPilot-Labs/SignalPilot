@@ -32,9 +32,15 @@ const HEADER = (
   />
 );
 
+// Billing periods are UTC calendar boundaries (midnight UTC). Format them as
+// UTC dates so a viewer west of Greenwich does not see "Aug 31" for Sep 1.
 function formatPeriod(start: string, end: string): string {
   const fmt = (v: string) =>
-    new Date(v).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    new Date(v).toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      timeZone: "UTC",
+    });
   return `${fmt(start)} – ${fmt(end)}`;
 }
 

@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Key, Loader2 } from "lucide-react";
 import type { ApiKeyCreatedResponse } from "~/lib/backend-client";
 import { ALL_SCOPES } from "~/lib/api-key-scopes";
+import { ReadOnlyNote } from "~/components/access/read-only-note";
 
 // ---------------------------------------------------------------------------
 // Create key form (inline)
@@ -13,13 +14,22 @@ export function CreateKeyForm({
   onCreated,
   onCancel,
   createFn,
+  scopeOptions = ALL_SCOPES,
+  personal = false,
 }: {
   onCreated: (key: ApiKeyCreatedResponse) => void;
   onCancel: () => void;
   createFn: (name: string, scopes: string[]) => Promise<ApiKeyCreatedResponse>;
+  /** The scopes on offer; members get the personal subset (read, query, execute). */
+  scopeOptions?: typeof ALL_SCOPES;
+  /** True when the key is a member's personal key: shows the scope note. */
+  personal?: boolean;
 }) {
+  const allowed = scopeOptions.map((s) => s.value);
   const [name, setName] = useState("");
-  const [scopes, setScopes] = useState<string[]>(["read", "query"]);
+  const [scopes, setScopes] = useState<string[]>(
+    ["read", "query"].filter((s) => allowed.includes(s)),
+  );
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -77,8 +87,13 @@ export function CreateKeyForm({
           <label className="block text-[12px] text-[var(--color-text-dim)] mb-2">
             scopes
           </label>
-          <div className="grid grid-cols-2 gap-2">
-            {ALL_SCOPES.map((s) => {
+          {personal && (
+            <ReadOnlyNote className="mb-2">
+              personal keys carry read, query and execute; write, admin, dbt_proxy and agent:run scopes are minted by org admins
+            </ReadOnlyNote>
+          )}
+          <div className="grid grid-cols-2 gap-2" data-testid="scope-options">
+            {scopeOptions.map((s) => {
               const checked = scopes.includes(s.value);
               return (
                 <label

@@ -20,6 +20,8 @@ import {
   Table2,
 } from "lucide-react";
 import { setSchemaEndorsements } from "~/lib/api";
+import { AdminOnlyControl } from "~/components/access/admin-only-control";
+import { usePermissions } from "~/lib/hooks/use-permissions";
 import { useConnection } from "~/lib/connection-context";
 import { groupTablesByDatabase, localSchema, tableDatabaseKey } from "~/lib/schema-databases";
 import { useToast } from "~/components/ui/toast";
@@ -132,6 +134,10 @@ export function ConnectionSchemaBrowser({
 }: Props) {
   const { setSelectedConn } = useConnection();
   const { toast } = useToast();
+  // Endorsements, visibility, the endorsed-only mode and semantic metadata
+  // are org curation: members browse, admins change.
+  const { can } = usePermissions();
+  const canCurate = can("schema.curate");
   const [selectedDb, setSelectedDb] = useState<string | null>(null);
   const [selectedKey, setSelectedKey] = useState("");
   const [savingTable, setSavingTable] = useState(false);
@@ -270,9 +276,13 @@ export function ConnectionSchemaBrowser({
           {schemaChanged && <em>Schema changed</em>}
         </div>
         <div className="connection-schema-actions">
-          <button type="button" className={endorsements.mode === "endorsed_only" ? "is-active" : ""} onClick={() => void toggleMode()} disabled={savingTable} title="Change the tables available to agents"><Star />{endorsements.mode === "endorsed_only" ? "Endorsed only" : "All tables"}</button>
+          <AdminOnlyControl permission="schema.curate" allowed={canCurate} position="bottom">
+            <button type="button" data-testid="schema-mode-toggle" className={endorsements.mode === "endorsed_only" ? "is-active" : ""} onClick={() => void toggleMode()} disabled={savingTable} title="Change the tables available to agents"><Star />{endorsements.mode === "endorsed_only" ? "Endorsed only" : "All tables"}</button>
+          </AdminOnlyControl>
           <button type="button" onClick={() => void onRefresh()} disabled={refreshing} title="Refresh schema metadata"><RefreshCw className={refreshing ? "is-spinning" : ""} /><span>Refresh</span></button>
-          <button type="button" onClick={() => void generateSemantic()} disabled={semanticLoading} title="Generate semantic metadata">{semanticLoading ? <Loader2 className="is-spinning" /> : <Sparkles />}<span>Semantic</span></button>
+          <AdminOnlyControl permission="schema.curate" allowed={canCurate} position="bottom">
+            <button type="button" data-testid="schema-generate-semantic" onClick={() => void generateSemantic()} disabled={semanticLoading} title="Generate semantic metadata">{semanticLoading ? <Loader2 className="is-spinning" /> : <Sparkles />}<span>Semantic</span></button>
+          </AdminOnlyControl>
           <Link href="/schema" onClick={() => setSelectedConn(connectionName)}>Full explorer <ArrowUpRight /></Link>
         </div>
       </header>
@@ -300,10 +310,12 @@ export function ConnectionSchemaBrowser({
               <header>
                 <div><span>{selectedDb} / {localSchema(selectedTable)}</span><h3>{selectedTable.name}</h3><p>{selectedTable.description || `${selectedTable.type === "view" ? "View" : "Table"} with ${selectedTable.columns?.length ?? 0} columns`}</p></div>
                 <dl><div><dt>Rows</dt><dd>{formatRows(selectedTable.row_count)}</dd></div><div><dt>Columns</dt><dd>{selectedTable.columns?.length ?? 0}</dd></div><div><dt>Relations</dt><dd>{selectedTable.foreign_keys?.length ?? 0}</dd></div></dl>
+                <AdminOnlyControl permission="schema.curate" allowed={canCurate} position="left">
                 <div className="connection-schema-table-actions">
-                  <button type="button" className={selectedEndorsed ? "is-endorsed" : ""} onClick={() => void toggleSelectedEndorsement()} disabled={savingTable} title={selectedEndorsed ? "Remove endorsement" : "Endorse for agents"}>{savingTable ? <Loader2 className="is-spinning" /> : selectedEndorsed ? <Check /> : <Star />}<span>{selectedEndorsed ? "Endorsed" : "Endorse"}</span></button>
-                  <button type="button" className={selectedHidden ? "is-hidden" : ""} onClick={() => void toggleSelectedVisibility()} disabled={savingTable} title={selectedHidden ? "Make visible to agents" : "Hide from agents"}>{selectedHidden ? <Eye /> : <EyeOff />}<span>{selectedHidden ? "Show" : "Hide"}</span></button>
+                  <button type="button" data-testid="schema-endorse-toggle" className={selectedEndorsed ? "is-endorsed" : ""} onClick={() => void toggleSelectedEndorsement()} disabled={savingTable} title={selectedEndorsed ? "Remove endorsement" : "Endorse for agents"}>{savingTable ? <Loader2 className="is-spinning" /> : selectedEndorsed ? <Check /> : <Star />}<span>{selectedEndorsed ? "Endorsed" : "Endorse"}</span></button>
+                  <button type="button" data-testid="schema-visibility-toggle" className={selectedHidden ? "is-hidden" : ""} onClick={() => void toggleSelectedVisibility()} disabled={savingTable} title={selectedHidden ? "Make visible to agents" : "Hide from agents"}>{selectedHidden ? <Eye /> : <EyeOff />}<span>{selectedHidden ? "Show" : "Hide"}</span></button>
                 </div>
+                </AdminOnlyControl>
               </header>
               <div className="connection-schema-columns">
                 <table>

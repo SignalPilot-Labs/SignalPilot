@@ -5,6 +5,8 @@ import { Key, Plus, AlertTriangle } from "lucide-react";
 import { useAppAuth } from "~/lib/auth-context";
 import type { ApiKeyCreatedResponse } from "~/lib/backend-client";
 import { useSubscription } from "~/lib/subscription-context";
+import { usePermissions } from "~/lib/hooks/use-permissions";
+import { scopesForCaller } from "~/lib/api-key-scopes";
 import { PageHeader, TerminalBar } from "~/components/ui/page-header";
 import { EmptyState, EmptyList } from "~/components/ui/empty-states";
 import { ConfirmDialog } from "~/components/ui/confirm-dialog";
@@ -51,6 +53,11 @@ function ApiKeysContent() {
 
   const { data: keys = [], isLoading, error: swrError } = useApiKeys();
   const { tier } = useSubscription();
+  // Members mint personal keys (read, query, execute) and see only their own;
+  // admins see every key in the org and every scope. The gateway filters the list.
+  const { can } = usePermissions();
+  const canAdminKeys = can("keys.admin");
+  const scopeOptions = scopesForCaller(canAdminKeys);
   const loadError = swrError ? String(swrError) : null;
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [newlyCreated, setNewlyCreated] = useState<ApiKeyCreatedResponse | null>(null);
@@ -108,7 +115,11 @@ function ApiKeysContent() {
       <PageHeader
         title="api keys"
         subtitle="auth"
-        description="manage programmatic access keys for the signalpilot backend"
+        description={
+          canAdminKeys
+            ? "manage programmatic access keys for the signalpilot backend"
+            : "your personal keys for programmatic access; org admins see every key"
+        }
       />
 
       <TerminalBar
@@ -126,6 +137,10 @@ function ApiKeysContent() {
             plan:{" "}
             <code className="text-[12px] text-[var(--color-text)]">{tier}</code>
           </span>
+          <span className="text-[var(--color-text-dim)]">
+            scope:{" "}
+            <code className="text-[12px] text-[var(--color-text)]">{canAdminKeys ? "org" : "personal"}</code>
+          </span>
         </div>
       </TerminalBar>
 
@@ -142,14 +157,14 @@ function ApiKeysContent() {
       {/* Keys section */}
       <section className="mb-8">
         <div className="flex items-center justify-between mb-4">
-          <SectionHeader icon={Key} title="active keys" />
+          <SectionHeader icon={Key} title={canAdminKeys ? "active keys" : "my keys"} />
           {!showCreateForm && (
             <button
               onClick={() => setShowCreateForm(true)}
               className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] text-[var(--color-text-dim)] border border-[var(--color-border)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text)] rounded-[10px] transition-colors duration-150 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <Plus className="w-3 h-3" />
-              create new key
+              {canAdminKeys ? "create new key" : "create personal key"}
             </button>
           )}
         </div>
@@ -161,6 +176,8 @@ function ApiKeysContent() {
               createFn={(name, scopes) => createApiKey(name, scopes)}
               onCreated={handleCreated}
               onCancel={() => setShowCreateForm(false)}
+              scopeOptions={scopeOptions}
+              personal={!canAdminKeys}
             />
           </div>
         )}

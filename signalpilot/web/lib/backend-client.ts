@@ -166,6 +166,53 @@ export interface DailyUsageResponse {
   points: DailyUsagePoint[];
 }
 
+/**
+ * One user's consumption in a period, from `GET /api/v1/usage/by-user` and
+ * `GET /api/v1/usage/me`. `user_id` is null for unattributed rows, which the
+ * backend labels "System / scheduled".
+ */
+export interface UsageByUserRow {
+  user_id: string | null;
+  name: string | null;
+  email: string | null;
+  credits_consumed: number;
+  threads: number;
+  queries: number;
+  tokens_in: number;
+  tokens_out: number;
+  tokens_cache_read: number;
+  token_credits: number;
+}
+
+/** `GET /api/v1/usage/by-user?period=YYYY-MM-01` (admin only). */
+export interface UsageByUserResponse {
+  period_start: string;
+  period_end: string;
+  rows: UsageByUserRow[];
+}
+
+/**
+ * `GET /api/v1/usage/me?period=`: the caller's own row in the same shape,
+ * with no org totals. Some backends return the row inline, others under
+ * `rows`; `usageMeRow()` reads both.
+ */
+export interface UsageMeResponse {
+  period_start: string;
+  period_end: string;
+  rows?: UsageByUserRow[];
+  row?: UsageByUserRow | null;
+}
+
+/** The caller's row out of a `usage/me` answer, or null when nothing was consumed. */
+export function usageMeRow(data: UsageMeResponse | null | undefined): UsageByUserRow | null {
+  if (!data) return null;
+  if (data.row) return data.row;
+  if (Array.isArray(data.rows) && data.rows.length > 0) return data.rows[0];
+  const inline = data as Partial<UsageByUserRow>;
+  if (typeof inline.credits_consumed === "number") return inline as UsageByUserRow;
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Core fetch
 // ---------------------------------------------------------------------------
@@ -294,6 +341,14 @@ export interface BackendClient {
   reactivateSubscription(): Promise<{ status: string }>;
   getUsageSummary(): Promise<UsageSummaryResponse>;
   getUsageDaily(days?: number): Promise<DailyUsageResponse>;
+  /** Admin only. `period` is the first day of the month, YYYY-MM-01; omitted = open period. */
+  getUsageByUser(period?: string): Promise<UsageByUserResponse>;
+  /** Any member: their own consumption for the period. */
+  getUsageMe(period?: string): Promise<UsageMeResponse>;
+}
+
+function periodQuery(period?: string): string {
+  return period ? `?period=${encodeURIComponent(period)}` : "";
 }
 
 /**
@@ -362,6 +417,12 @@ export function useBackendClient(): BackendClient {
 
     getUsageDaily: (days = 30) =>
       backendFetch<DailyUsageResponse>(`/api/v1/usage/daily?days=${days}`, getToken),
+
+    getUsageByUser: (period?: string) =>
+      backendFetch<UsageByUserResponse>(`/api/v1/usage/by-user${periodQuery(period)}`, getToken),
+
+    getUsageMe: (period?: string) =>
+      backendFetch<UsageMeResponse>(`/api/v1/usage/me${periodQuery(period)}`, getToken),
 
   }), [getToken]);
 }

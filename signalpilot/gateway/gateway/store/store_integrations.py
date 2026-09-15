@@ -206,8 +206,14 @@ class IntegrationsStoreMixin:
         )
 
     # API Keys.
-    async def list_api_keys(self) -> list[ApiKeyRecord]:
-        return await api_keys.list_api_keys(self.session, org_id=self.org_id, allow_unscoped=self._allow_unscoped)
+    async def list_api_keys(self, *, user_id: str | None = None) -> list[ApiKeyRecord]:
+        return await api_keys.list_api_keys(
+            self.session, org_id=self.org_id, allow_unscoped=self._allow_unscoped, user_id=user_id
+        )
+
+    async def get_api_key(self, key_id: str) -> ApiKeyRecord | None:
+        oid = self._require_org_id()
+        return await api_keys.get_api_key(self.session, org_id=oid, key_id=key_id)
 
     async def create_api_key(
         self,

@@ -9,6 +9,7 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import RedirectResponse
 
+from ..auth import OrgAdmin
 from ..config.github import get_github_settings
 from ..models.github import (
     GitCredentialsResponse,
@@ -43,7 +44,7 @@ def _github_settings_redirect(web_url: str, **params: str) -> RedirectResponse:
 
 
 @router.get("/api/github/install-url", dependencies=[RequireScope("write")])
-async def github_install_url(store: StoreD):
+async def github_install_url(store: StoreD, _role: OrgAdmin):
     """Return the GitHub App installation URL with HMAC-signed state.
 
     Authenticated endpoint: org_id comes from the Clerk JWT / API key,
@@ -206,7 +207,7 @@ async def list_installations(store: StoreD):
     response_model=None,
     dependencies=[RequireScope("write")],
 )
-async def delete_installation(installation_id: str, store: StoreD):
+async def delete_installation(installation_id: str, store: StoreD, _role: OrgAdmin):
     from ..store import github as gh_store
 
     ok = await gh_store.delete_installation(
@@ -275,7 +276,7 @@ async def list_repo_links(store: StoreD, project_id: str | None = Query(None)):
     response_model=None,
     dependencies=[RequireScope("write")],
 )
-async def delete_repo_link(link_id: str, store: StoreD):
+async def delete_repo_link(link_id: str, store: StoreD, _role: OrgAdmin):
     from ..store import github as gh_store
 
     ok = await gh_store.delete_repo_link(store.session, org_id=store.org_id or "local", link_id=link_id)
@@ -318,7 +319,7 @@ async def get_git_credentials(project_id: str, store: StoreD):
 
 
 @router.post("/api/github/sync/{project_id}", dependencies=[RequireScope("write")])
-async def sync_with_github(project_id: str, store: StoreD):
+async def sync_with_github(project_id: str, store: StoreD, _role: OrgAdmin):
     """Bidirectional sync: fetch from GitHub, push local changes back.
 
     GitHub wins on conflicts: local branches are force-updated to match.

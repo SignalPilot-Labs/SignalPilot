@@ -19,7 +19,8 @@ pytestmark = pytest.mark.e2e_cloud
 # Routes guarded by OrgAdmin (role) and/or RequireScope("admin") (key scope).
 # Both halves must deny a write-only key.
 ADMIN_ROUTES_FOR_KEYS = [
-    ("GET", "/api/keys", None),                 # RequireScope("admin") only
+    ("GET", "/api/audit", None),                # OrgAdmin (decision 3)
+    ("POST", "/api/connections/test-credentials", {}),  # OrgAdmin (gap 2)
     ("GET", "/api/security/status", None),      # OrgAdmin only
     ("GET", "/api/settings", None),             # RequireScope("admin")
     ("PUT", "/api/settings", {}),               # OrgAdmin + RequireScope("admin")

@@ -117,6 +117,7 @@ from .workspace import (
     GatewayWorkspaceProject,
     GatewayWorkspaceRevision,
 )
+from .xata import GatewayXataBranchOwner
 
 __all__ = [
     "GatewayAgentRun",
@@ -190,6 +191,7 @@ __all__ = [
     "GatewayWorkspaceLease",
     "GatewayWorkspaceProject",
     "GatewayWorkspaceRevision",
+    "GatewayXataBranchOwner",
     "NotionDeliverable",
     "NotionDeliverableContextSnapshot",
     "NotionDeliverableUpdate",

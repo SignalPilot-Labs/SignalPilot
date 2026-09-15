@@ -6,6 +6,7 @@ import logging
 
 import gateway.store.knowledge as knowledge_mod
 import gateway.store.knowledge_search as knowledge_search_mod
+import gateway.store.knowledge_usage as knowledge_usage_mod
 from gateway.models.knowledge import KnowledgeDoc, KnowledgeDocCreate, KnowledgeEdit, KnowledgeUsage
 from gateway.util.tasks import fire_and_forget
 
@@ -89,7 +90,12 @@ class KnowledgeStoreMixin:
         return doc
 
     async def insert_knowledge_doc(
-        self, payload: KnowledgeDocCreate, *, user_id: str | None, agent: str | None = None
+        self,
+        payload: KnowledgeDocCreate,
+        *,
+        user_id: str | None,
+        agent: str | None = None,
+        force_pending: bool = False,
     ) -> KnowledgeDoc:
         oid = self._require_org_id()
         limits = await self._knowledge_limits()
@@ -102,6 +108,7 @@ class KnowledgeStoreMixin:
             agent=agent,
             limits=limits,
             settings=settings,
+            force_pending=force_pending,
         )
 
     async def upsert_knowledge_doc(
@@ -167,7 +174,7 @@ class KnowledgeStoreMixin:
         import asyncio
 
         oid = self._require_org_id()
-        docs = await knowledge_mod.search_knowledge(
+        docs = await knowledge_usage_mod.search_knowledge(
             self.session,
             org_id=oid,
             query=query,
@@ -211,7 +218,7 @@ class KnowledgeStoreMixin:
             )
         except Exception as exc:
             logger.warning("Hybrid knowledge search failed, falling back to ILIKE: %r", exc)
-            docs = await knowledge_mod.search_knowledge(
+            docs = await knowledge_usage_mod.search_knowledge(
                 self.session,
                 org_id=oid,
                 query=query,
@@ -259,7 +266,7 @@ class KnowledgeStoreMixin:
     async def get_knowledge_usage(self) -> KnowledgeUsage:
         oid = self._require_org_id()
         limits = await self._knowledge_limits()
-        return await knowledge_mod.get_knowledge_usage(self.session, org_id=oid, limits=limits)
+        return await knowledge_usage_mod.get_knowledge_usage(self.session, org_id=oid, limits=limits)
 
     async def increment_knowledge_view(self, doc_id: str) -> None:
         """Best-effort fire-and-forget view counter increment."""
@@ -268,4 +275,4 @@ class KnowledgeStoreMixin:
 
         factory = get_session_factory()
         async with factory() as session:
-            await knowledge_mod.increment_knowledge_view(session, org_id=oid, doc_id=doc_id)
+            await knowledge_usage_mod.increment_knowledge_view(session, org_id=oid, doc_id=doc_id)

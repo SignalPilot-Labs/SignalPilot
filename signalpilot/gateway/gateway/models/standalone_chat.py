@@ -78,6 +78,9 @@ class ChatBootstrapResponse(BaseModel):
     projects: list[StandaloneChatProject]
     selected_project_id: str | None
     is_admin: bool
+    # The caller's org role ("admin" | "member") and permission set (gateway.auth.permissions).
+    role: str
+    permissions: list[str]
     starter_questions: list[str] = Field(default_factory=list, min_length=0, max_length=4)
     default_per_query_budget_usd: float = 0.25
     default_chat_budget_usd: float = 1.0

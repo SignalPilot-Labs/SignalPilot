@@ -374,8 +374,8 @@ class TestKnowledgeScopeRefValidation:
 
 
 class TestKnowledgeAdminScopeEnforcement:
-    def test_post_knowledge_admin_only(self, auth_client, monkeypatch):
-        """POST /api/knowledge is admin-only — verified via local key which grants all scopes."""
+    def test_post_knowledge_as_admin_publishes(self, auth_client, monkeypatch):
+        """POST /api/knowledge by an admin upserts — the local key resolves to the admin role."""
         doc = _make_doc()
         from gateway.store import Store
 
@@ -394,12 +394,20 @@ class TestKnowledgeAdminScopeEnforcement:
         )
         assert resp.status_code == 201
 
-    def test_post_knowledge_scope_enforcement_via_scope_guard(self):
-        """Verify that the admin scope is declared on the POST endpoint."""
+    def test_knowledge_mutations_keep_the_admin_scope(self):
+        """Publish, edit, approve and archive stay admin; the POST is the member proposal path."""
         from gateway.api.knowledge import router
 
-        post_routes = [r for r in router.routes if hasattr(r, "methods") and "POST" in r.methods and r.path == "/api/knowledge"]
-        assert len(post_routes) == 1
-        # The route has dependencies (RequireScope("admin")) — we can't easily introspect
-        # the scope name, but the route must have at least one dependency
-        assert len(post_routes[0].dependencies) > 0
+        def scopes(route):
+            found = set()
+            for dep in route.dependencies:
+                for cell in getattr(dep.dependency, "__closure__", None) or ():
+                    if isinstance(cell.cell_contents, tuple):
+                        found |= set(cell.cell_contents)
+            return found
+
+        by_key = {(m, r.path): scopes(r) for r in router.routes if hasattr(r, "methods") for m in r.methods}
+        assert by_key[("POST", "/api/knowledge")] == {"write"}
+        assert by_key[("PUT", "/api/knowledge/{doc_id}")] == {"admin"}
+        assert by_key[("DELETE", "/api/knowledge/{doc_id}")] == {"admin"}
+        assert by_key[("POST", "/api/knowledge/{doc_id}/approve")] == {"admin"}

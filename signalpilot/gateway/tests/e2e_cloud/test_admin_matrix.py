@@ -42,8 +42,13 @@ def test_discovery_found_the_expected_surface():
     # Spot-check the concrete exploit routes are in the discovered set.
     for expected in ("/api/connections/export", "/api/connections/import",
                      "/api/connections/{name}/clone", "/api/audit/export",
-                     "/api/evals/config", "/api/settings", "/api/keys",
-                     "/api/byok/keys"):
+                     "/api/evals/config", "/api/settings", "/api/byok/keys",
+                     # Gaps closed by the admin/member gating brief.
+                     "/api/audit", "/api/audit/stats", "/api/org/secrets",
+                     "/api/connections/test-credentials", "/api/github/install-url",
+                     "/api/workspace-projects", "/api/chat/default-project",
+                     "/api/connections/{name}/schema/endorsements", "/api/budget",
+                     "/api/evals/upload/initiate"):
         assert expected in paths, f"{expected} missing from discovered admin routes"
     # The plan-gate classification must not go vacuous: that would silently drop the
     # free-org assertions below.
@@ -194,7 +199,7 @@ def test_put_eval_config_requires_the_admin_scope():
 
 def test_prefixed_admin_role_spelling_also_passes(client, admin_token_short_claim_prefixed):
     """Clerk's memberships API reports "org:admin"; both spellings must be accepted."""
-    r = call(client, "GET", "/api/keys", admin_token_short_claim_prefixed)
+    r = call(client, "GET", "/api/audit", admin_token_short_claim_prefixed)
     assert r.status_code not in (401, 403), r.text
 
 

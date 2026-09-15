@@ -220,4 +220,8 @@ MEMBER_ROUTES: tuple[tuple[str, str], ...] = (
     ("POST", "/api/connections/parse-url"),
     ("POST", "/api/cache/invalidate"),
     ("POST", "/api/schema-cache/invalidate"),
+    # Admin/member gating brief: personal keys, the permission probe and knowledge proposals.
+    ("GET", "/api/keys"),
+    ("GET", "/api/me"),
+    ("POST", "/api/knowledge"),
 )

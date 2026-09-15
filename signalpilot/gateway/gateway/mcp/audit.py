@@ -42,7 +42,7 @@ MCP_TOOL_SCOPES: dict[str, str] = {
     "get_knowledge": "read",
     "search_knowledge": "read",
     "read_knowledge": "read",
-    "propose_knowledge": "admin",
+    "propose_knowledge": "write",
     "archive_knowledge": "admin",
     "map_columns": "query",
     "find_column_producers": "query",

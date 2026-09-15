@@ -32,11 +32,10 @@ from gateway.store.knowledge import (
     _row_to_doc,
     approve_knowledge_doc,
     archive_knowledge_doc,
-    get_knowledge_usage,
-    increment_knowledge_view,
     insert_knowledge_doc,
     upsert_knowledge_doc,
 )
+from gateway.store.knowledge_usage import get_knowledge_usage, increment_knowledge_view
 
 from ._knowledge_store_helpers import _make_doc_row, _make_limits, _make_settings
 

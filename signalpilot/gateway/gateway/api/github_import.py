@@ -12,6 +12,7 @@ import logging
 
 from fastapi import APIRouter, HTTPException, Query
 
+from ..auth import OrgAdmin
 from ..models.github import (
     GitHubRepoImportRequest,
     GitHubRepoImportResult,
@@ -185,7 +186,7 @@ async def _establish_repo_link(store, body: GitHubRepoLinkCreate) -> GitHubRepoL
     response_model=GitHubRepoLinkInfo,
     dependencies=[RequireScope("write")],
 )
-async def create_repo_link(body: GitHubRepoLinkCreate, store: StoreD):
+async def create_repo_link(body: GitHubRepoLinkCreate, store: StoreD, _role: OrgAdmin):
     return await _establish_repo_link(store, body)
 
 
@@ -203,7 +204,7 @@ def _project_slug_for_repo(repo_full_name: str) -> str:
     response_model=GitHubRepoImportResult,
     dependencies=[RequireScope("write"), RequireBillablePlan],
 )
-async def import_github_repo(body: GitHubRepoImportRequest, store: StoreD):
+async def import_github_repo(body: GitHubRepoImportRequest, store: StoreD, _role: OrgAdmin):
     """One-click import: auto-create a workspace project for a repo and link it.
 
     Idempotent — if the repo is already linked to a live project in this org,

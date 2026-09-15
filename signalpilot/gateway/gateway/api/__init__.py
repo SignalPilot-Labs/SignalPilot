@@ -33,6 +33,7 @@ from .improvements import router as improvements_router
 from .keys import router as keys_router
 from .knowledge import router as knowledge_router
 from .mcp import router as mcp_connectors_router
+from .me import router as me_router
 from .metrics import router as metrics_router
 from .notebook_files import router as notebook_files_router
 from .notebook_sessions import router as notebook_sessions_router
@@ -92,6 +93,7 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(cache_router)
     app.include_router(metrics_router)
     app.include_router(keys_router)
+    app.include_router(me_router)
     app.include_router(security_router)
     app.include_router(byok_router)
     app.include_router(knowledge_router)

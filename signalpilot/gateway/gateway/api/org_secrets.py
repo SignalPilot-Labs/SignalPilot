@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import logging
-import os
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import select
 
+from ..auth import OrgAdmin
 from ..db.models import GatewayOrgSecrets
 from ..security.scope_guard import RequireScope
 from ..store import notebook_sessions as ns
@@ -116,7 +116,7 @@ async def get_org_anthropic_key_for_runtime(request: Request, store: StoreD) -> 
 
 
 @router.put("/secrets", response_model=OrgSecretsResponse, dependencies=[RequireScope("write")])
-async def update_org_secrets(body: OrgSecretsUpdate, store: StoreD) -> OrgSecretsResponse:
+async def update_org_secrets(body: OrgSecretsUpdate, store: StoreD, _role: OrgAdmin) -> OrgSecretsResponse:
     """Store, rotate, or clear org-scoped secrets. Values are encrypted at rest."""
     org_id = store.org_id or "local"
     key = body.anthropic_api_key.strip() if body.anthropic_api_key is not None else ""

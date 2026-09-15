@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
-from ..auth import DBSession, OrgID, UserID
+from ..auth import DBSession, OrgAdmin, OrgID, UserID
 from ..config.gateway import _LOCAL_GATEWAY_URL_DEFAULT, get_gateway_settings
 from ..models.workspace import (
     WorkspaceProjectCreate,
@@ -47,7 +47,7 @@ async def _get_project_or_404(store, project_id: str) -> WorkspaceProjectInfo:
 
 
 @router.post("/workspace-projects", status_code=201, response_model=WorkspaceProjectInfo, dependencies=[RequireScope("write")])
-async def create_project(body: WorkspaceProjectCreate, store: StoreD):
+async def create_project(body: WorkspaceProjectCreate, store: StoreD, _role: OrgAdmin):
     try:
         return await store.create_workspace_project(
             name=body.name,
@@ -172,7 +172,7 @@ async def get_dbt_project_dir(
 
 
 @router.put("/workspace-projects/{project_id}", response_model=WorkspaceProjectInfo, dependencies=[RequireScope("write")])
-async def update_project(project_id: str, body: WorkspaceProjectUpdate, store: StoreD):
+async def update_project(project_id: str, body: WorkspaceProjectUpdate, store: StoreD, _role: OrgAdmin):
     updates = body.model_dump(exclude_none=True)
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
@@ -183,7 +183,7 @@ async def update_project(project_id: str, body: WorkspaceProjectUpdate, store: S
 
 
 @router.delete("/workspace-projects/{project_id}", status_code=204, response_model=None, dependencies=[RequireScope("write")])
-async def delete_project(project_id: str, store: StoreD):
+async def delete_project(project_id: str, store: StoreD, _role: OrgAdmin):
     """Delete a project and everything it owns: repo links, dbt maps, S3
     objects, and the bare git repo. The linked GitHub repo is never touched.
     Cascades are best-effort — a storage hiccup must not leave the project row

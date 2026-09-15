@@ -35,7 +35,12 @@ def test_real_migration_chain_is_the_tracked_head() -> None:
     config = build_alembic_config("postgresql://unused:unused@localhost/unused")
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_current_head() == "0032"
+    assert scripts.get_current_head() == "0033"
+
+    # 0033 records who created each Xata branch (creator-or-admin delete rule).
+    revision_0033 = scripts.get_revision("0033")
+    assert revision_0033 is not None
+    assert revision_0033.down_revision == "0032"
 
     # 0032 adds the append-only credit ledger for credit billing.
     revision_0032 = scripts.get_revision("0032")

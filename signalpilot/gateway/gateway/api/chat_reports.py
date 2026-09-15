@@ -8,6 +8,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from sqlalchemy import select
 
+from gateway.auth import OrgRole
 from gateway.db.models import GatewayChatArtifact, GatewayChatRun
 from gateway.models.chat_reports import (
     ChatLibraryResponse,
@@ -28,6 +29,7 @@ from gateway.security.scope_guard import RequireScope
 from gateway.standalone_chat.config import enterprise_chat_feature_flags, standalone_chat_enabled
 from gateway.store import chat_reports as report_store
 
+from .chat_report_access import report_actor, version_actor
 from .deps import RequireBillablePlan, StoreD, not_available_error
 
 # Reports are a chat surface: every route needs a billable plan (402 otherwise).
@@ -317,16 +319,18 @@ async def publish_version(
     report_id: str,
     body: PublishReportVersionRequest,
     store: StoreD,
+    role: OrgRole,
     request: Request,
     response: Response,
 ):
     _require_enabled()
     _require_browser_principal(request)
+    actor = await report_actor(store, role, report_id=report_id)
     try:
         status, report, version = await report_store.publish_version(
             store.session,
             org_id=store._require_org_id(),
-            user_id=store.user_id or "local",
+            user_id=actor,
             report_id=report_id,
             artifact_id=body.artifact_id,
             expected_current_version_id=body.expected_current_version_id,
@@ -409,15 +413,16 @@ async def create_refresh(report_id: str, store: StoreD, request: Request):
     status_code=201,
     dependencies=[RequireScope("write")],
 )
-async def share_version(version_id: str, store: StoreD, request: Request, response: Response):
+async def share_version(version_id: str, store: StoreD, role: OrgRole, request: Request, response: Response):
     _require_enabled()
     _require_sharing()
     _require_browser_principal(request)
+    actor = await version_actor(store, role, version_id=version_id)
     try:
         grant, token = await report_store.create_share_grant(
             store.session,
             org_id=store._require_org_id(),
-            user_id=store.user_id or "local",
+            user_id=actor,
             version_id=version_id,
         )
     except report_store.ReportNotFoundError as exc:
@@ -433,14 +438,15 @@ async def share_version(version_id: str, store: StoreD, request: Request, respon
     status_code=204,
     dependencies=[RequireScope("write")],
 )
-async def revoke_version_share(version_id: str, store: StoreD, request: Request):
+async def revoke_version_share(version_id: str, store: StoreD, role: OrgRole, request: Request):
     _require_enabled()
     _require_sharing()
     _require_browser_principal(request)
+    actor = await version_actor(store, role, version_id=version_id)
     found = await report_store.revoke_share_grant(
         store.session,
         org_id=store._require_org_id(),
-        user_id=store.user_id or "local",
+        user_id=actor,
         version_id=version_id,
     )
     if not found:

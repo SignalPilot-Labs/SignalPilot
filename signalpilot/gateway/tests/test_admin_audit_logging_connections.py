@@ -48,7 +48,7 @@ class TestAPIKeyAudit:
             mock_limits.return_value = MagicMock(api_keys=0)
             with patch("gateway.governance.org_limits.check_api_key_limit"):
                 try:
-                    await create_key(body=body, store=store, _role=None, request=request)
+                    await create_key(body=body, store=store, role="admin", request=request)
                 except Exception:
                     pass  # Response construction on mock may fail; audit is what matters
 
@@ -73,7 +73,7 @@ class TestAPIKeyAudit:
         request = _make_request()
 
         key_id = str(uuid.uuid4())
-        await delete_key(key_id=key_id, store=store, _role=None, request=request)
+        await delete_key(key_id=key_id, store=store, role="admin", request=request)
 
         store.append_audit.assert_called_once()
         entry: AuditEntry = store.append_audit.call_args[0][0]
@@ -93,7 +93,7 @@ class TestAPIKeyAudit:
         request = _make_request()
 
         with pytest.raises(HTTPException) as exc_info:
-            await delete_key(key_id="missing-id", store=store, _role=None, request=request)
+            await delete_key(key_id="missing-id", store=store, role="admin", request=request)
 
         assert exc_info.value.status_code == 404
         store.append_audit.assert_not_called()
@@ -109,7 +109,7 @@ class TestAPIKeyAudit:
         request = _make_request()
 
         # Should not raise even though append_audit fails
-        response = await delete_key(key_id=str(uuid.uuid4()), store=store, _role=None, request=request)
+        response = await delete_key(key_id=str(uuid.uuid4()), store=store, role="admin", request=request)
         assert response.status_code == 204
 
 

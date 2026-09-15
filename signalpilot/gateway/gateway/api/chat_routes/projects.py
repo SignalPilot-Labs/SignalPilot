@@ -4,7 +4,8 @@ from fastapi import APIRouter, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
-from gateway.auth import OrgID, OrgRole
+from gateway.auth import OrgAdmin, OrgID, OrgRole
+from gateway.auth.permissions import normalize_role, permissions_for
 from gateway.billing.entitlements import OrgEntitlement, get_entitlement
 from gateway.db.models import GatewayChatUserPreference, GatewayWorkspaceProject
 from gateway.models.standalone_chat import ChatBootstrapResponse
@@ -73,6 +74,8 @@ async def bootstrap_chat(store: StoreD, role: OrgRole, org_id: OrgID, refresh: b
             projects=[],
             selected_project_id=None,
             is_admin=_is_admin(role),
+            role=normalize_role(role),
+            permissions=sorted(permissions_for(role)),
             starter_questions=[],
             available_models=model_options,
             default_model=selected_model,
@@ -161,6 +164,8 @@ async def bootstrap_chat(store: StoreD, role: OrgRole, org_id: OrgID, refresh: b
         ],
         selected_project_id=selected_id,
         is_admin=_is_admin(role),
+        role=normalize_role(role),
+        permissions=sorted(permissions_for(role)),
         starter_questions=starters,
         default_per_query_budget_usd=per_query_budget_usd,
         default_chat_budget_usd=chat_budget_usd,
@@ -206,7 +211,7 @@ async def project_readiness(project_id: str, store: StoreD, role: OrgRole):
 
 
 @router.put("/default-project", status_code=204, dependencies=[RequireScope("write"), RequireBillablePlan])
-async def update_default_project(body: DefaultProjectUpdate, store: StoreD):
+async def update_default_project(body: DefaultProjectUpdate, store: StoreD, _role: OrgAdmin):
     _require_enabled()
     project, _ = await _readiness_or_error(store, body.project_id)
     org_id = store._require_org_id()

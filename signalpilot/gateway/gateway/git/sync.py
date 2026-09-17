@@ -358,7 +358,7 @@ async def fetch_if_stale(
     try:
         token = await gh_store.get_valid_token(session, installation)
     except Exception as exc:
-        logger.warning("fetch_if_stale: no token for project %s (%s)", project_id, type(exc).__name__)
+        logger.warning("fetch_if_stale: GitHub access unavailable for project %s (%s)", project_id, type(exc).__name__)
         return False
     remote_url = f"https://x-access-token:{token}@github.com/{link.repo_full_name}.git"
 

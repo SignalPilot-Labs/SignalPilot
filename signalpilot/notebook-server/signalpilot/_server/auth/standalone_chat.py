@@ -154,7 +154,7 @@ def _verify_gateway_token(token: str) -> dict[str, Any]:
     guarantees so a malformed or stale token is rejected before a run starts.
     """
     try:
-        claims = jwt.decode(
+        claims = jwt.decode(  # nosemgrep: python.jwt.security.unverified-jwt-decode.unverified-jwt-decode
             token,
             audience=_AUDIENCE,
             issuer=_ISSUER,

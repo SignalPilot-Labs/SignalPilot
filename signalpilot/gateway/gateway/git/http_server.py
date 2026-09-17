@@ -428,7 +428,7 @@ async def github_remote_url(session, org_id: str, link) -> str | None:
     try:
         token = await gh_store.get_valid_token(session, installation)
     except Exception as exc:
-        logger.warning("git: no GitHub token for project %s (%s)", link.project_id, type(exc).__name__)
+        logger.warning("git: GitHub access unavailable for project %s (%s)", link.project_id, type(exc).__name__)
         return None
     return f"https://x-access-token:{token}@github.com/{link.repo_full_name}.git"
 

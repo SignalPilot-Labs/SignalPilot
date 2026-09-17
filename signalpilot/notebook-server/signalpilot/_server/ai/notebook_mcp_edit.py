@@ -51,7 +51,7 @@ def _local_server_url(context: ToolContext, path: str = "") -> str:
     """Build an HTTP URL for the currently running notebook server."""
     state = context.get_app().state
     host = getattr(state, "host", "127.0.0.1") or "127.0.0.1"
-    if host in {"0.0.0.0", "::", "[::]"}:
+    if host in {"0.0.0.0", "::", "[::]"}:  # nosec B104: wildcard check, not a bind
         host = "127.0.0.1"
     if ":" in host and not host.startswith("["):
         host = f"[{host}]"

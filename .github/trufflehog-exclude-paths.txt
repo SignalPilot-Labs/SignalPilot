@@ -10,3 +10,7 @@
 ^signalpilot/gateway/tests/test_query_executor_events\.py$
 ^signalpilot/gateway/tests/test_secfix_git_token_persistence\.py$
 ^signalpilot/gateway/tests/test_worker_public_error_message\.py$
+# git/repos.py once had a docstring example of the form scheme://user:token@host. The
+# example is reworded at HEAD, but the commit that introduced it stays in this branch's
+# range. Remove this entry after the branch merges.
+^signalpilot/gateway/gateway/git/repos\.py$

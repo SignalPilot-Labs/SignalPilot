@@ -53,7 +53,7 @@ def github_token_remote_url(token: str, repo_full_name: str) -> str:
 
 
 def split_remote_credentials(url: str) -> tuple[str, dict[str, str]]:
-    """Split ``https://user:token@host/...`` into a plain URL and a git env.
+    """Split a remote URL whose authority carries a credential into a plain URL and a git env.
 
     The credential must never be persisted in the bare repo's config (it is a
     live GitHub App installation token). It is handed to git per invocation

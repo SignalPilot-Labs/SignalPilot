@@ -361,10 +361,33 @@ async def delete_repo_link(session: AsyncSession, *, org_id: str, link_id: str) 
     return True
 
 
-async def _resolve_repo_link(session: AsyncSession, repo_full_name: str) -> GatewayGitHubRepoLink | None:
+async def _resolve_repo_link(
+    session: AsyncSession, repo_full_name: str, installation_id: int | None = None
+) -> GatewayGitHubRepoLink | None:
     """Oldest active link for a repo. repo_full_name is not unique across
     orgs/projects: the oldest-link tie-break keeps webhook attribution
-    deterministic and lives only here."""
+    deterministic and lives only here.
+
+    When the webhook delivery's GitHub ``installation.id`` is known, links
+    whose installation row carries that id win (SP-26): a repo linked in two
+    orgs is attributed to the org that owns the delivering installation. Links
+    sharing that installation keep the oldest-first tie-break; with no match
+    (or no id) the deployment-wide oldest link is used as before.
+    """
+    if installation_id is not None:
+        scoped = await session.execute(
+            select(GatewayGitHubRepoLink)
+            .join(GatewayGitHubInstallation, GatewayGitHubInstallation.id == GatewayGitHubRepoLink.installation_id)
+            .where(
+                GatewayGitHubRepoLink.repo_full_name == repo_full_name,
+                GatewayGitHubRepoLink.status == "active",
+                GatewayGitHubInstallation.github_installation_id == installation_id,
+            )
+            .order_by(GatewayGitHubRepoLink.created_at)
+        )
+        link = scoped.scalars().first()
+        if link is not None:
+            return link
     result = await session.execute(
         select(GatewayGitHubRepoLink)
         .where(
@@ -376,14 +399,17 @@ async def _resolve_repo_link(session: AsyncSession, repo_full_name: str) -> Gate
     return result.scalars().first()
 
 
-async def get_token_for_repo(session: AsyncSession, *, repo_full_name: str) -> str | None:
+async def get_token_for_repo(
+    session: AsyncSession, *, repo_full_name: str, installation_id: int | None = None
+) -> str | None:
     """Installation token for a repo linked anywhere in the deployment.
 
     Used by the PR bot webhook path, where the org is derived from the repo
-    link rather than from request auth. Returns None when no active link or
-    installation covers the repo.
+    link rather than from request auth. ``installation_id`` (the delivery's
+    GitHub installation id) picks the owning org when the repo is linked in
+    several. Returns None when no active link or installation covers the repo.
     """
-    link = await _resolve_repo_link(session, repo_full_name)
+    link = await _resolve_repo_link(session, repo_full_name, installation_id)
     if link is None:
         return None
     inst_result = await session.execute(
@@ -437,7 +463,13 @@ async def get_org_token_for_repo(session: AsyncSession, *, org_id: str, repo_ful
     return await get_valid_token(session, inst)
 
 
-async def get_org_for_repo(session: AsyncSession, *, repo_full_name: str) -> str | None:
-    """Org that owns the active link for a repo (webhook org resolution)."""
-    link = await _resolve_repo_link(session, repo_full_name)
+async def get_org_for_repo(
+    session: AsyncSession, *, repo_full_name: str, installation_id: int | None = None
+) -> str | None:
+    """Org that owns the active link for a repo (webhook org resolution).
+
+    ``installation_id`` is the delivery's GitHub installation id; see
+    ``_resolve_repo_link`` for how it disambiguates multi-org links.
+    """
+    link = await _resolve_repo_link(session, repo_full_name, installation_id)
     return link.org_id if link else None

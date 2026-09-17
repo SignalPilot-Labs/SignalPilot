@@ -12,6 +12,20 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 _MAX_BODY_BYTES_DEFAULT = 2_097_152  # 2MB
 
 
+def _git_wire_limit(scope: Scope) -> int:
+    """Bytes on the wire for a git smart-HTTP request (pushes are large by nature).
+
+    The git handler applies the same ceilings to the inflated body; this stops a
+    request before the handler buffers it.
+    """
+    from ...git.http_server import _MAX_PUSH_BYTES, _MAX_UPLOAD_PACK_BYTES, _is_write_operation
+
+    query = scope.get("query_string", b"").decode("latin-1")
+    if _is_write_operation(scope.get("method", ""), scope.get("path", ""), query):
+        return _MAX_PUSH_BYTES
+    return _MAX_UPLOAD_PACK_BYTES
+
+
 class RequestBodySizeLimitMiddleware:
     """Reject requests whose body exceeds max_body_bytes with HTTP 413.
 
@@ -58,11 +72,7 @@ class RequestBodySizeLimitMiddleware:
             return
 
         path = scope.get("path", "")
-        if path.startswith("/git/"):
-            await self.app(scope, receive, send)
-            return
-
-        limit = self._limit_for(path)
+        limit = _git_wire_limit(scope) if path.startswith("/git/") else self._limit_for(path)
 
         # Check Content-Length header for early rejection
         headers: dict[bytes, bytes] = dict(scope.get("headers", []))

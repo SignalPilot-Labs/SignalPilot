@@ -7,7 +7,7 @@
 import type { EChartsOption } from "echarts";
 
 import type { DatasetRows } from "../datasets";
-import { formatValue, toNumber } from "../format";
+import { escapeHtml, formatValue, toNumber } from "../format";
 import type { HeatmapChart } from "../schema";
 import type { DashboardTheme, ThemeTokens } from "../theme";
 import { buildXAxisModel, categoryLabels, tooltipBase } from "./axes";
@@ -96,9 +96,9 @@ export function buildHeatmapOption(
         const row = cell ? rows[cell.rowIndex] : undefined;
         if (!cell || !row) return "";
         return [
-          `${chart.x.label ?? chart.x.column}: ${xLabels[cell.value[0]] ?? "–"}`,
-          `${chart.y.label ?? chart.y.column}: ${yModel.categories[cell.value[1]] ?? "–"}`,
-          `${chart.value.label ?? chart.value.column}: ${formatValue(cell.value[2], format)}`,
+          `${escapeHtml(chart.x.label ?? chart.x.column)}: ${escapeHtml(xLabels[cell.value[0]] ?? "–")}`,
+          `${escapeHtml(chart.y.label ?? chart.y.column)}: ${escapeHtml(yModel.categories[cell.value[1]] ?? "–")}`,
+          `${escapeHtml(chart.value.label ?? chart.value.column)}: ${escapeHtml(formatValue(cell.value[2], format))}`,
         ].join("<br/>");
       },
     },

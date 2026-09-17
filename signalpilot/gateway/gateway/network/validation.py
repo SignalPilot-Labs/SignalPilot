@@ -59,6 +59,13 @@ _dns_timeout_lock = threading.Lock()
 # Snowflake accounts: alphanumeric, dots (org-account format), hyphens, underscores.
 _SNOWFLAKE_ACCOUNT_RE = re.compile(r"^[a-zA-Z0-9._-]{1,255}$")
 
+# Snowflake host overrides (PrivateLink / China / gov / VPS) must still land on a
+# Snowflake-operated domain; anything else is an SSRF pivot for the driver.
+_SNOWFLAKE_HOST_RE = re.compile(
+    r"^[a-zA-Z0-9.-]+\.(snowflakecomputing\.com|snowflakecomputing\.cn)$",
+    re.IGNORECASE,
+)
+
 # Databricks hosts: must end with a known Databricks domain.
 _DATABRICKS_HOST_RE = re.compile(
     r"^[a-zA-Z0-9.-]+"
@@ -86,9 +93,14 @@ def validate_cloud_warehouse_params(
         ValueError: if the parameter format is invalid.
     """
     if db_type == "snowflake":
-        val = account or host or ""
+        val = account or ""
         if val and not _SNOWFLAKE_ACCOUNT_RE.match(val):
             raise ValueError("Invalid Snowflake account identifier: contains disallowed characters")
+        if host and not _SNOWFLAKE_HOST_RE.match(host.strip()):
+            raise ValueError(
+                "Invalid Snowflake host override: must be a *.snowflakecomputing.com "
+                "or *.snowflakecomputing.cn hostname"
+            )
     elif db_type == "databricks":
         val = host or ""
         if val and not _DATABRICKS_HOST_RE.match(val):
@@ -389,7 +401,9 @@ def validate_connection_params(
         if db_type in ("snowflake", "bigquery", "databricks"):
             validate_cloud_warehouse_params(
                 db_type,
-                host=host,
+                # Snowflake passes its account via the host param; the real host
+                # override is checked separately by the connections validator.
+                host=None if db_type == "snowflake" else host,
                 account=host,  # Snowflake passes account via host param
                 project_id=host,  # BigQuery passes project via host param
             )

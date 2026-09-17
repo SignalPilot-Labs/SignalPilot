@@ -25,7 +25,7 @@ from mcp.client import Client
 from mcp.client.sse import sse_client
 from mcp.client.streamable_http import streamable_http_client
 
-from gateway.mcp_connectors.ssrf import safe_async_client
+from gateway.mcp_connectors.ssrf import MAX_RESPONSE_BYTES, safe_async_client
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,11 @@ CLIENT_INFO = types.Implementation(name="signalpilot-gateway", version="1.0")
 OPEN_TIMEOUT_SECONDS = 30.0
 CALL_TIMEOUT_SECONDS = 120.0
 IDLE_SECONDS = 300.0
+# One upstream reply (a JSON body, or a single SSE event) may not exceed the
+# ceiling the probe path already applies to declared lengths (SP-20).
+MAX_MESSAGE_BYTES = MAX_RESPONSE_BYTES
+_TOO_LARGE = "The server's reply is larger than 1 MB"
+_SSE_DELIMITERS = (b"\n\n", b"\r\n\r\n", b"\r\r")
 
 ClientFactory = Callable[[dict[str, str]], httpx.AsyncClient]
 
@@ -44,6 +49,41 @@ class UpstreamError(RuntimeError):
         super().__init__(message)
         self.status = status
         self.www_authenticate = www_authenticate
+
+
+class UpstreamBodyTooLarge(RuntimeError):
+    """An upstream body (or one SSE event) exceeded MAX_MESSAGE_BYTES."""
+
+
+class _CappedStream(httpx.AsyncByteStream):
+    """Wrap a response stream and stop it once one message exceeds the cap.
+
+    For ``text/event-stream`` the counter restarts at every event boundary, so
+    a long-lived session stream is not cut off by its cumulative size; only a
+    single oversized event is. Any other body is capped as a whole.
+    """
+
+    def __init__(self, inner: httpx.AsyncByteStream, *, sse: bool, on_overflow: Callable[[], None]) -> None:
+        self._inner = inner
+        self._sse = sse
+        self._on_overflow = on_overflow
+        self._pending = 0
+
+    async def __aiter__(self):
+        async for chunk in self._inner:
+            if self._sse:
+                cut = max(chunk.rfind(delimiter) for delimiter in _SSE_DELIMITERS)
+                self._pending = len(chunk) - cut if cut >= 0 else self._pending + len(chunk)
+            else:
+                self._pending += len(chunk)
+            if self._pending > MAX_MESSAGE_BYTES:
+                self._on_overflow()
+                await self.aclose()
+                raise UpstreamBodyTooLarge(_TOO_LARGE)
+            yield chunk
+
+    async def aclose(self) -> None:
+        await self._inner.aclose()
 
 
 @dataclass(frozen=True)
@@ -93,13 +133,34 @@ class UpstreamSession:
         self.server_name: str | None = None
         self.last_used = time.monotonic()
         self.failure: BaseException | None = None
+        self.body_too_large = False
         self._stop = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
         self._client: httpx.AsyncClient | None = None
 
+    def _note_overflow(self) -> None:
+        self.body_too_large = True
+
+    async def _cap_body(self, response: httpx.Response) -> None:
+        """httpx response hook: bound every upstream body before the SDK reads it."""
+        length = response.headers.get("content-length")
+        if length and length.isdigit() and int(length) > MAX_MESSAGE_BYTES:
+            self._note_overflow()
+            await response.aclose()
+            raise UpstreamBodyTooLarge(_TOO_LARGE)
+        stream = getattr(response, "stream", None)
+        if isinstance(stream, httpx.AsyncByteStream) and not isinstance(stream, _CappedStream):
+            sse = response.headers.get("content-type", "").lower().startswith("text/event-stream")
+            response.stream = _CappedStream(stream, sse=sse, on_overflow=self._note_overflow)
+
     @asynccontextmanager
     async def _transport(self):
         self._client = self._client_factory(dict(self.spec.headers))
+        # Residual TOCTOU (SP-20): ssrf validates the resolved IP up front, but
+        # httpx resolves again at connect time over the pooled session, so a
+        # rebinding host is not pinned here. Cloud mode forces https, which
+        # limits that window to TLS-authenticated origins.
+        self._client.event_hooks.setdefault("response", []).append(self._cap_body)
 
         # v2 maps non-2xx responses to generic MCP errors. Preserve HTTP auth
         # and rate-limit status for OAuth refresh and user-facing errors, while
@@ -154,8 +215,9 @@ class UpstreamSession:
                 except Exception:
                     pass
 
-    @staticmethod
-    def _as_upstream_error(exc: BaseException) -> UpstreamError:
+    def _as_upstream_error(self, exc: BaseException) -> UpstreamError:
+        if self.body_too_large:
+            return UpstreamError(_TOO_LARGE)
         http_error = unwrap_http_error(exc)
         if http_error is not None:
             response = http_error.response

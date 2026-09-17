@@ -112,21 +112,77 @@ def validate_sql(
     if into_reason:
         return ValidationResult(ok=False, blocked_reason=into_reason)
 
-    tables = [t.name.lower() for t in stmt.find_all(exp.Table) if t.name]
+    # ── Data-modifying CTE / subquery check (SP-09) ──
+    # `WITH x AS (DELETE FROM t RETURNING *) SELECT * FROM x` parses as a
+    # top-level Select, so the statement-type check above does not see the DML.
+    modifying_reason = _check_nested_modifications(stmt)
+    if modifying_reason:
+        return ValidationResult(ok=False, blocked_reason=modifying_reason)
+
+    table_nodes = [t for t in stmt.find_all(exp.Table) if t.name]
+    tables = [t.name.lower() for t in table_nodes]
     columns = [c.name.lower() for c in stmt.find_all(exp.Column) if c.name]
 
     if blocked_tables:
-        blocked_lower = {t.lower() for t in blocked_tables}
-        for table in tables:
-            if table in blocked_lower:
+        blocked_lower = {t.lower().strip() for t in blocked_tables if t and t.strip()}
+        for node in table_nodes:
+            hit = _blocked_policy_match(node, blocked_lower)
+            if hit:
                 return ValidationResult(
                     ok=False,
-                    blocked_reason=f"Table '{table}' is blocked by policy",
+                    blocked_reason=f"Table '{hit}' is blocked by policy",
                     tables=tables,
                     columns=columns,
                 )
 
     return ValidationResult(ok=True, tables=tables, columns=columns)
+
+
+_MODIFYING_NODE_TYPES: tuple[type, ...] = (exp.Insert, exp.Update, exp.Delete, exp.Merge) if HAS_SQLGLOT else ()
+
+
+def _check_nested_modifications(stmt: exp.Expression) -> str | None:
+    """Reject INSERT/UPDATE/DELETE/MERGE nodes nested inside a SELECT statement.
+
+    Data-modifying CTEs (Postgres ``WITH x AS (DELETE ... RETURNING *)``) and
+    similar constructs are DML wearing a SELECT wrapper.
+    """
+    for node in stmt.walk():
+        if isinstance(node, _MODIFYING_NODE_TYPES):
+            kind = type(node).__name__.upper()
+            return f"Blocked: {kind} inside a SELECT (data-modifying CTE or subquery) is not allowed in read-only mode"
+    return None
+
+
+def _table_qualified_forms(table: exp.Table) -> list[str]:
+    """Return the lowercased name forms a policy entry can match for a table.
+
+    ``cat.private.my_secrets`` yields ``my_secrets``, ``private.my_secrets`` and
+    ``cat.private.my_secrets``; an unqualified table yields only its basename.
+    """
+    name = (table.name or "").lower()
+    db = (getattr(table, "db", "") or "").lower()
+    catalog = (getattr(table, "catalog", "") or "").lower()
+    forms = [name]
+    if db:
+        forms.append(f"{db}.{name}")
+        if catalog:
+            forms.append(f"{catalog}.{db}.{name}")
+    return forms
+
+
+def _blocked_policy_match(table: exp.Table, blocked_lower: set[str]) -> str | None:
+    """Return the matching policy entry if ``table`` is blocked, else None.
+
+    An unqualified policy entry (``my_secrets``) blocks that basename in any
+    schema. A qualified entry (``private.my_secrets`` / ``cat.private.my_secrets``)
+    blocks only when the table's schema (and catalog) parts match. Comparison is
+    lowercased and unquoted on both sides.
+    """
+    for form in _table_qualified_forms(table):
+        if form in blocked_lower:
+            return form
+    return None
 
 
 __all__ = ["ValidationResult", "validate_sql"]

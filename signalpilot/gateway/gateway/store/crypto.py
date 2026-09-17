@@ -19,6 +19,9 @@ logger = logging.getLogger(__name__)
 
 _MAX_OLD_KEYS = 8
 
+# The public dev key shipped in docker-compose.yml. Never valid in cloud mode.
+_WELL_KNOWN_DEV_KEY = "5d1aa5ETRcln8vkPWrzDkdfSEuqAua5xcZCWMLMDXmc="
+
 
 class CredentialEncryptionError(Exception):
     """Raised when credential encryption or decryption fails in a non-recoverable way."""
@@ -109,6 +112,12 @@ def _get_encryption_key() -> bytes:
 
     key_str = os.getenv("SP_ENCRYPTION_KEY")
     if key_str:
+        if is_cloud_mode() and key_str.strip() == _WELL_KNOWN_DEV_KEY:
+            raise RuntimeError(
+                "SP_ENCRYPTION_KEY is the public docker-compose dev key and cannot be "
+                "used in cloud mode. Generate a private key with: python -c "
+                '"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"'
+            )
         return _resolve_key_bytes(key_str)
     if is_cloud_mode():
         raise RuntimeError(

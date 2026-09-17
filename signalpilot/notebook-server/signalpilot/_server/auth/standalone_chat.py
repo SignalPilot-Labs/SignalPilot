@@ -142,21 +142,31 @@ def gateway_mcp_config(
 
 
 def _verify_gateway_token(token: str) -> dict[str, Any]:
-    secret = os.getenv("SP_SESSION_JWT_SECRET", "").strip()
-    if not secret:
-        raise HTTPException(
-            status_code=503,
-            detail="Scoped gateway identity verification is unavailable",
-        )
+    """Structurally decode the per-run gateway session token.
+
+    The signature is deliberately not verified here. The runtime does not hold
+    the gateway signing secret (shipping it to every sandbox let any tenant
+    mint session tokens for any org), and it does not need it: the execute
+    request is already authenticated by the per-session access token that only
+    the gateway holds (``@requires("edit")``), and the token itself is only
+    ever presented back to the gateway, which verifies the signature on every
+    use. This check keeps the issuer, audience, expiry and required-claim
+    guarantees so a malformed or stale token is rejected before a run starts.
+    """
     try:
         claims = jwt.decode(
             token,
-            secret,
-            algorithms=["HS256"],
             audience=_AUDIENCE,
             issuer=_ISSUER,
             leeway=_JWT_CLOCK_SKEW_SECONDS,
-            options={"require": list(_REQUIRED_CLAIMS)},
+            options={
+                "verify_signature": False,
+                "verify_exp": True,
+                "verify_iat": True,
+                "verify_aud": True,
+                "verify_iss": True,
+                "require": list(_REQUIRED_CLAIMS),
+            },
         )
     except jwt.PyJWTError as exc:
         raise HTTPException(

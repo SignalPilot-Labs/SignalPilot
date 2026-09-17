@@ -165,15 +165,27 @@ class GitHubBotClient:
             raise
 
 
-async def resolve_bot_token(repo_full_name: str) -> str | None:
-    """Best token for a repo: App installation token (linked repo) → PAT env."""
+async def resolve_bot_token(repo_full_name: str, *, org_id: str | None = None) -> str | None:
+    """Best token for a repo: App installation token (linked repo) → PAT env.
+
+    With ``org_id`` (the org the scan is attributed to) that org's own link and
+    installation are tried first, so a repo linked in two orgs is never scanned
+    with another org's token (SP-26). The deployment-wide lookup remains the
+    fallback so unlinked/local scans behave as before.
+    """
     try:
         from gateway.db.engine import get_session_factory
         from gateway.store import github as github_store
 
         factory = get_session_factory()
         async with factory() as session:
-            token = await github_store.get_token_for_repo(session, repo_full_name=repo_full_name)
+            token = None
+            if org_id:
+                token = await github_store.get_org_token_for_repo(
+                    session, org_id=org_id, repo_full_name=repo_full_name
+                )
+            if not token:
+                token = await github_store.get_token_for_repo(session, repo_full_name=repo_full_name)
             if token:
                 return token
     except Exception as exc:

@@ -111,12 +111,20 @@ class SnowflakeConnector(BaseConnector):
         # Host override + port/protocol: required for PrivateLink, China (.cn),
         # SnowGov, and VPS accounts where the account identifier alone is insufficient.
         # account is still passed (the connector requires it even with an explicit host).
+        # Re-validated here so a stored connection edited outside the API
+        # validator cannot point the driver at a non-Snowflake host (SSRF).
         if params.get("snowflake_host"):
+            from gateway.network import validate_cloud_warehouse_params
+
+            validate_cloud_warehouse_params("snowflake", host=str(params["snowflake_host"]))
             connect_args["host"] = params["snowflake_host"]
         if params.get("port"):
             connect_args["port"] = int(params["port"])
         if params.get("snowflake_protocol"):
-            connect_args["protocol"] = params["snowflake_protocol"]
+            protocol = str(params["snowflake_protocol"]).strip().lower()
+            if protocol not in ("http", "https"):
+                raise ValueError("Invalid Snowflake protocol override: must be http or https")
+            connect_args["protocol"] = protocol
 
         # Auth dispatch. `authenticator` selects the method:
         #   oauth | key_pair | pat | mfa | password | <Okta URL https://...>.
@@ -352,14 +360,12 @@ class SnowflakeConnector(BaseConnector):
         # All work runs in one background thread (the connection is not thread-safe),
         # but the 5 metadata queries are submitted with execute_async so Snowflake runs
         # them CONCURRENTLY server-side: wall time ≈ the slowest query, not the sum.
-        import time as _t
-
         def _collect(cur):
             """Block until an async query finishes, then return its rows. Raises on query error."""
             qid = cur.sfqid
             status = self._conn.get_query_status_throw_if_error(qid)
             while self._conn.is_still_running(status):
-                _t.sleep(0.1)
+                _time.sleep(0.1)
                 status = self._conn.get_query_status_throw_if_error(qid)
             cur.get_results_from_sfqid(qid)
             return cur.fetchall()

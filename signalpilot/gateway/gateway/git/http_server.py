@@ -7,7 +7,9 @@ Security:
 - Path traversal blocked: project_id validated as UUID
 - CGI env vars sanitized: no user-controlled data in shell-sensitive vars
 - Generic error messages: no internal paths or repo structure leaked
-- Push size limited to SP_GIT_MAX_PUSH_BYTES (default 500MB)
+- Push size limited to SP_GIT_MAX_PUSH_BYTES (default 500MB); fetch requests to
+  SP_GIT_MAX_UPLOAD_PACK_BYTES (default 8MB). Both apply to the inflated body.
+- Eval credentials (connection-pinned keys) never reach git
 """
 
 import base64
@@ -15,6 +17,7 @@ import logging
 import os
 import re
 import subprocess
+import zlib
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
@@ -28,6 +31,10 @@ router = APIRouter()
 _UUID_RE = re.compile(r"^[a-f0-9\-]{36}$")
 _PATH_RE = re.compile(r"^[a-zA-Z0-9/_\-\.]+$")
 _MAX_PUSH_BYTES = int(os.getenv("SP_GIT_MAX_PUSH_BYTES", str(500 * 1024 * 1024)))
+_MAX_UPLOAD_PACK_BYTES = int(os.getenv("SP_GIT_MAX_UPLOAD_PACK_BYTES", str(8 * 1024 * 1024)))
+# Scopes a notebook-session token can exercise here: the same REST ceiling as
+# scope_guard, so the admin claim on chat run tokens never reaches git.
+_SESSION_SCOPE_ALLOWLIST = frozenset({"read", "write", "query", "execute"})
 
 
 async def _authenticate(request: Request) -> dict:
@@ -76,6 +83,7 @@ async def _authenticate(request: Request) -> dict:
                 "org_id": matched.org_id or "local",
                 "scopes": matched.scopes or [],
                 "auth_method": "api_key",
+                "eval_run_id": matched.eval_run_id,
             }
 
     # Session JWT validation (for notebook pods)
@@ -85,7 +93,7 @@ async def _authenticate(request: Request) -> dict:
         return {
             "user_id": claims["sub"],
             "org_id": claims["org_id"],
-            "scopes": claims.get("scopes", ["read", "write"]),
+            "scopes": [s for s in claims.get("scopes", ["read", "write"]) if s in _SESSION_SCOPE_ALLOWLIST],
             "auth_method": "notebook_session",
         }
     except Exception:
@@ -122,6 +130,53 @@ def _is_write_operation(method: str, remainder: str, query: str) -> bool:
     return False
 
 
+async def _read_body(request: Request, limit: int, *, is_write: bool) -> bytes:
+    """Buffer the request body up to ``limit`` inflated bytes.
+
+    git clients gzip the upload-pack/receive-pack POST body and send
+    `Content-Encoding: gzip`. git-http-backend does NOT inflate it, so the raw
+    gzip bytes reach upload-pack as pkt-lines → "fatal: protocol error: bad line
+    length character" and the clone hangs ("the remote end hung up"). Inflate
+    here, incrementally, so a small compressed body cannot expand past the
+    ceiling in memory; gzip and deflate both occur in the wild.
+    """
+    content_encoding = request.headers.get("content-encoding", "").lower().strip()
+    inflater = None
+    if content_encoding in ("gzip", "x-gzip"):
+        inflater = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    elif content_encoding == "deflate":
+        inflater = zlib.decompressobj()
+    too_large = HTTPException(status_code=413, detail="Push too large" if is_write else "Request too large")
+
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        if not chunk:
+            continue
+        if inflater is not None:
+            try:
+                chunk = inflater.decompress(chunk, limit + 1 - total)
+            except zlib.error as exc:
+                logger.warning("git: failed to inflate %s body: %s", content_encoding, exc)
+                raise HTTPException(status_code=400, detail="Malformed request encoding")
+        total += len(chunk)
+        if total > limit or (inflater is not None and inflater.unconsumed_tail):
+            raise too_large
+        chunks.append(chunk)
+    if inflater is not None:
+        try:
+            tail = inflater.flush()
+        except zlib.error as exc:
+            logger.warning("git: failed to inflate %s body: %s", content_encoding, exc)
+            raise HTTPException(status_code=400, detail="Malformed request encoding")
+        if total + len(tail) > limit:
+            raise too_large
+        chunks.append(tail)
+        if total + len(tail) and not inflater.eof:
+            raise HTTPException(status_code=400, detail="Malformed request encoding")
+    return b"".join(chunks)
+
+
 @router.api_route(
     "/git/{project_id}.git/{remainder:path}",
     methods=["GET", "POST"],
@@ -147,37 +202,21 @@ async def git_http_handler(project_id: str, remainder: str, request: Request):
     if not repo_exists(project_id):
         raise HTTPException(status_code=404, detail="Repository not found")
 
-    # 6. Enforce read/write scope
+    # 6. Enforce read/write scope. Eval keys are pinned to one connection and a
+    # document set; workspace repositories are outside that boundary.
+    if auth.get("eval_run_id"):
+        raise HTTPException(status_code=403, detail="Eval credentials cannot access git")
     query_string = str(request.url.query) if request.url.query else ""
     is_write = _is_write_operation(request.method, remainder, query_string)
+    scopes = auth.get("scopes", [])
 
-    if is_write and "write" not in auth.get("scopes", []):
+    if is_write and "write" not in scopes:
         raise HTTPException(status_code=403, detail="Write access required")
+    if not is_write and "read" not in scopes:
+        raise HTTPException(status_code=403, detail="Read access required")
 
-    # 7. Read body with size limit for pushes
-    body = await request.body()
-
-    # git clients gzip the upload-pack/receive-pack POST body and send
-    # `Content-Encoding: gzip`. git-http-backend does NOT inflate it, so the raw
-    # gzip bytes reach upload-pack as pkt-lines → "fatal: protocol error: bad line
-    # length character" and the clone hangs ("the remote end hung up"). Inflate
-    # here and pass the decompressed body (CONTENT_LENGTH is set from len(body)
-    # below, after this, so it stays correct). gzip and deflate both occur in the
-    # wild; handle both.
-    content_encoding = request.headers.get("content-encoding", "").lower().strip()
-    if content_encoding in ("gzip", "x-gzip", "deflate"):
-        import zlib
-        try:
-            if content_encoding == "deflate":
-                body = zlib.decompress(body)
-            else:
-                body = zlib.decompress(body, 16 + zlib.MAX_WBITS)
-        except zlib.error as exc:
-            logger.warning("git: failed to inflate %s body: %s", content_encoding, exc)
-            raise HTTPException(status_code=400, detail="Malformed request encoding")
-
-    if is_write and len(body) > _MAX_PUSH_BYTES:
-        raise HTTPException(status_code=413, detail="Push too large")
+    # 7. Read the body with a size ceiling (inflated bytes), for reads and writes.
+    body = await _read_body(request, _MAX_PUSH_BYTES if is_write else _MAX_UPLOAD_PACK_BYTES, is_write=is_write)
 
     # 8. Resolve repo path and verify it's within REPOS_ROOT
     path = repo_path(project_id)

@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 import time
 
-from .repos import repo_path, repo_exists, _run_git, list_branches
+from .repos import repo_path, repo_exists, _run_git, list_branches, set_remote_url, split_remote_credentials
 
 logger = logging.getLogger(__name__)
 
@@ -31,14 +31,15 @@ def is_agent_branch(branch: str) -> bool:
     return branch.startswith(AGENT_BRANCH_PREFIXES)
 
 
-def configure_github_remote(project_id: str, remote_url: str) -> None:
-    """Add or update the 'github' remote on the bare repo."""
-    rp = repo_path(project_id)
-    rc, _, _ = _run_git("remote", "get-url", GITHUB_REMOTE_NAME, cwd=rp)
-    if rc == 0:
-        _run_git("remote", "set-url", GITHUB_REMOTE_NAME, remote_url, cwd=rp)
-    else:
-        _run_git("remote", "add", GITHUB_REMOTE_NAME, remote_url, cwd=rp)
+def configure_github_remote(project_id: str, remote_url: str) -> dict[str, str]:
+    """Add or update the 'github' remote on the bare repo.
+
+    Only the credential-free URL is written to the repo config (SP-11). The
+    returned env carries the credential for this invocation's git commands.
+    """
+    plain_url, auth_env = split_remote_credentials(remote_url)
+    set_remote_url(repo_path(project_id), GITHUB_REMOTE_NAME, plain_url)
+    return auth_env
 
 
 def push_branch(project_id: str, remote_url: str, branch: str) -> dict:
@@ -55,7 +56,7 @@ def push_branch(project_id: str, remote_url: str, branch: str) -> dict:
         return {"error": "Repo not found"}
 
     rp = repo_path(project_id)
-    configure_github_remote(project_id, remote_url)
+    auth_env = configure_github_remote(project_id, remote_url)
 
     rc, _, _ = _run_git("rev-parse", "--verify", f"refs/heads/{branch}", cwd=rp)
     if rc != 0:
@@ -64,7 +65,7 @@ def push_branch(project_id: str, remote_url: str, branch: str) -> dict:
     # Try fast-forward push
     rc, out, err = _run_git(
         "push", GITHUB_REMOTE_NAME, f"refs/heads/{branch}:refs/heads/{branch}",
-        cwd=rp, timeout=120,
+        cwd=rp, timeout=120, env=auth_env,
     )
     if rc == 0:
         return {"pushed": True, "branch": branch, "output": out.strip() or err.strip()}
@@ -73,7 +74,7 @@ def push_branch(project_id: str, remote_url: str, branch: str) -> dict:
     if "non-fast-forward" in err or "rejected" in err or "failed to push" in err:
         logger.info("Push rejected for %s, fetching + rebasing...", branch)
 
-        frc, _, ferr = _run_git("fetch", GITHUB_REMOTE_NAME, branch, cwd=rp, timeout=120)
+        frc, _, ferr = _run_git("fetch", GITHUB_REMOTE_NAME, branch, cwd=rp, timeout=120, env=auth_env)
         if frc != 0:
             return {"error": f"Fetch failed during rebase: {ferr.strip()}"}
 
@@ -100,7 +101,7 @@ def push_branch(project_id: str, remote_url: str, branch: str) -> dict:
             # Local is strictly ahead — force push should work
             rc2, out2, err2 = _run_git(
                 "push", "--force", GITHUB_REMOTE_NAME, f"{local_ref}:{local_ref}",
-                cwd=rp, timeout=120,
+                cwd=rp, timeout=120, env=auth_env,
             )
             if rc2 == 0:
                 return {"pushed": True, "branch": branch, "force": True,
@@ -128,9 +129,9 @@ def fetch_all(project_id: str, remote_url: str) -> dict:
         return {"error": "Repo not found"}
 
     rp = repo_path(project_id)
-    configure_github_remote(project_id, remote_url)
+    auth_env = configure_github_remote(project_id, remote_url)
 
-    rc, out, err = _run_git("fetch", GITHUB_REMOTE_NAME, "--prune", cwd=rp, timeout=120)
+    rc, out, err = _run_git("fetch", GITHUB_REMOTE_NAME, "--prune", cwd=rp, timeout=120, env=auth_env)
     if rc != 0:
         return {"error": f"Fetch failed: {err.strip()}"}
 
@@ -147,10 +148,10 @@ def pull_branch(project_id: str, remote_url: str, branch: str) -> dict:
         return {"error": "Repo not found"}
 
     rp = repo_path(project_id)
-    configure_github_remote(project_id, remote_url)
+    auth_env = configure_github_remote(project_id, remote_url)
 
     # Fetch the specific branch
-    rc, _, err = _run_git("fetch", GITHUB_REMOTE_NAME, branch, cwd=rp, timeout=120)
+    rc, _, err = _run_git("fetch", GITHUB_REMOTE_NAME, branch, cwd=rp, timeout=120, env=auth_env)
     if rc != 0:
         return {"error": f"Fetch failed: {err.strip()}"}
 

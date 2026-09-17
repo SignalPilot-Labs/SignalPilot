@@ -83,16 +83,22 @@ async def github_webhook(request: Request):
     if not repo or not isinstance(pr_number, int):
         raise HTTPException(status_code=400, detail="missing repository/pull_request in payload")
 
-    # Org from the repo link when present; local default otherwise. A lookup
-    # FAILURE (DB down) must not read as "repo not linked" — 503 so GitHub
-    # retries the delivery.
+    # Org from the repo link when present; local default otherwise. The
+    # delivery's installation id picks the owning org when the same repo is
+    # linked in several orgs (SP-26). A lookup FAILURE (DB down) must not read
+    # as "repo not linked" — 503 so GitHub retries the delivery.
+    installation_id = (payload.get("installation") or {}).get("id")
+    if not isinstance(installation_id, int) or isinstance(installation_id, bool):
+        installation_id = None
     try:
         from gateway.db.engine import get_session_factory
         from gateway.store import github as github_store
 
         factory = get_session_factory()
         async with factory() as session:
-            org_id = await github_store.get_org_for_repo(session, repo_full_name=repo)
+            org_id = await github_store.get_org_for_repo(
+                session, repo_full_name=repo, installation_id=installation_id
+            )
     except Exception as exc:
         logger.warning("Webhook org lookup failed for %s: %r", repo, exc)
         raise HTTPException(status_code=503, detail="temporary lookup failure, retry")

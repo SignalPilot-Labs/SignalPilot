@@ -149,6 +149,10 @@ def dispatch_agent_trigger(
     Intentionally a stub: it records the intent so the wiring (webhook ->
     per-project config -> dispatch) is exercised end to end before the actual
     agent execution lands.
+
+    The reverse direction (agent work -> GitHub pull request) is implemented:
+    see gateway/git/agent_pr.py (open_pull_request) and the open_pull_request
+    MCP tool in gateway/mcp/tools/open_pull_request.py.
     """
     logger.info(
         "agent-trigger (stub): org=%s project=%s repo=%s pr=%d",

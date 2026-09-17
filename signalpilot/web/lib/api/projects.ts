@@ -2,6 +2,7 @@
 
 import { request } from "./client";
 import type {
+  AgentPullRequest,
   DbtMapColumnsResponse,
   DbtMapConeResponse,
   DbtMapInfo,
@@ -177,6 +178,58 @@ export const getGitHubInstallations = () =>
 
 export const deleteGitHubInstallation = (id: string) =>
   request<void>(`/api/github/installations/${id}`, { method: "DELETE" });
+
+/** Re-list the installation's repositories from GitHub and update the count. */
+export const refreshGitHubInstallation = (id: string) =>
+  request<GitHubInstallation>(`/api/github/installations/${id}/refresh`, {
+    method: "POST",
+  });
+
+/**
+ * Link existing GitHub App installations for a GitHub account or org login
+ * to the calling org. Admin only. 404 when GitHub has no installation for
+ * that account, 409 when another org already claimed it.
+ */
+export const discoverGitHubInstallations = (account: string) =>
+  request<GitHubInstallation[]>(
+    `/api/github/installations/discover?account=${encodeURIComponent(account)}`,
+    { method: "POST" },
+  );
+
+export const listAgentPullRequests = (projectId?: string) =>
+  request<AgentPullRequest[]>(
+    `/api/github/pull-requests${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ""}`,
+  );
+
+/** Open a GitHub PR for a branch the chat agent already pushed. */
+export const createAgentPullRequest = (body: {
+  project_id: string;
+  github_branch: string;
+  title: string;
+  body?: string;
+  draft?: boolean;
+  base_branch?: string;
+  conversation_id?: string;
+}) =>
+  request<AgentPullRequest>("/api/github/pull-requests", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+export const updateAgentPullRequest = (
+  recordId: string,
+  body: { title?: string; body?: string },
+) =>
+  request<AgentPullRequest>(
+    `/api/github/pull-requests/${encodeURIComponent(recordId)}`,
+    { method: "PATCH", body: JSON.stringify(body) },
+  );
+
+export const commentOnAgentPullRequest = (recordId: string, body: string) =>
+  request<{ pr_url: string | null; pr_number: number | null; comment_url: string | null }>(
+    `/api/github/pull-requests/${encodeURIComponent(recordId)}/comments`,
+    { method: "POST", body: JSON.stringify({ body }) },
+  );
 
 export const getGitHubRepos = (installationId: string) =>
   request<GitHubRepo[]>(`/api/github/installations/${installationId}/repos`);

@@ -82,6 +82,10 @@ MCP_TOOL_SCOPES: dict[str, str] = {
     "sandbox_write_file": "execute",
     "sandbox_read_file": "execute",
     "dbt_execute": "execute",
+    # Pull request lifecycle for pushed chat branches; chat run tokens carry write.
+    "open_pull_request": "write",
+    "update_pull_request": "write",
+    "comment_on_pull_request": "write",
     "refresh_mart": "execute",
     "describe_table": "query",
     "list_tables": "query",
@@ -252,6 +256,28 @@ async def _audit_tool_call(
         _mcp_logger.debug("Failed to audit MCP tool call %s", tool_name, exc_info=True)
 
 
+# Generic result budget. Tool results above this size are spilled to a file by
+# the sandbox CLI and never reach the model, so the wrapper truncates first
+# and tells the agent how to narrow the call. Tools whose contract is a whole
+# file body keep their own limits.
+RESULT_BUDGET_CHARS = 40_000
+RESULT_BUDGET_EXEMPT_TOOLS: frozenset[str] = frozenset(
+    {"sandbox_read_file", "read_notebook", "download_artifacts"}
+)
+
+
+def apply_result_budget(tool_name: str, result: object) -> object:
+    """Truncate an oversized string result and append a narrowing hint."""
+    if not isinstance(result, str) or tool_name in RESULT_BUDGET_EXEMPT_TOOLS:
+        return result
+    if len(result) <= RESULT_BUDGET_CHARS:
+        return result
+    return (
+        result[:RESULT_BUDGET_CHARS]
+        + f"\n[truncated: result was {len(result)} chars; narrow the request with the tool's filter parameters]"
+    )
+
+
 def _audited_tool(fn):
     """Decorator that wraps an MCP tool function with audit logging."""
 
@@ -289,7 +315,7 @@ def _audited_tool(fn):
                 elif denial:
                     result = denial
                 else:
-                    result = await fn(*args, **kwargs)
+                    result = apply_result_budget(tool_name, await fn(*args, **kwargs))
             duration_ms = (time.time() - t0) * 1000
             # Detect blocked queries from return value
             result_str = result if isinstance(result, str) else (str(result) if result and not is_agent else "")

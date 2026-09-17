@@ -1,9 +1,8 @@
-"""GitHub App OAuth flow + REST endpoints."""
+"""GitHub App installation flow + REST endpoints."""
 
 from __future__ import annotations
 
 import logging
-import time
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, HTTPException, Query
@@ -23,6 +22,8 @@ from ..runtime.mode import is_cloud_mode
 from ..security.scope_guard import RequireScope
 from ._oauth_state import make_state, verify_state
 from .deps import ProjectsGate, StoreD
+from .github_installs import router as installs_router
+from .github_prs import router as prs_router
 from .github_sync import _import_workspace_revision
 from .github_sync import router as sync_router
 
@@ -60,21 +61,27 @@ async def github_install_url(store: StoreD):
 
 @router.get("/auth/github/callback")
 async def github_oauth_callback(
-    installation_id: int = Query(...),
-    code: str = Query(None),
+    installation_id: int | None = Query(None),
     state: str = Query(""),
     setup_action: str = Query("install"),
 ):
+    """GitHub App installation callback (no OAuth code exchange).
+
+    GitHub sends the browser here after install / update / request with
+    ``installation_id`` and our signed ``state``. The state binds the flow to
+    the org that started it; the app JWT proves the installation exists and
+    which account owns it; the installation's own repository list becomes
+    the token scope. ``setup_action=update`` refreshes an existing row.
+    """
     settings = get_github_settings()
     if not settings.is_configured:
         return _github_settings_redirect(settings.sp_web_url, error="github_app_not_configured")
 
+    org_id: str | None
     if is_cloud_mode():
-        if not state:
-            return _github_settings_redirect(settings.sp_web_url, error="oauth_state_invalid")
-        org_id = verify_state(state)
-        if org_id is None:
-            return _github_settings_redirect(settings.sp_web_url, error="oauth_state_invalid")
+        # GitHub's "redirect on update" carries no state. That case is resolved
+        # below from the existing claim; a NEW claim always needs a valid state.
+        org_id = verify_state(state) if state else None
     else:
         # Local mode: empty state falls back to "local", non-empty state is verified
         if state:
@@ -84,102 +91,53 @@ async def github_oauth_callback(
         else:
             org_id = "local"
 
+    if setup_action == "request" or installation_id is None:
+        if org_id is None:
+            return _github_settings_redirect(settings.sp_web_url, error="oauth_state_invalid")
+        # The installer lacks rights on the GitHub account and an owner must
+        # approve the request first; no installation exists yet. The row is
+        # created when the owner's approval redirect (or discover) arrives.
+        logger.info("GitHub App installation requested for org=%s (pending approval)", org_id)
+        return _github_settings_redirect(settings.sp_web_url, pending="true")
+
     from ..db.engine import get_session_factory
-    from ..github_client import (
-        create_installation_token,
-        create_unrestricted_installation_token,
-        exchange_code_for_token,
-        generate_app_jwt,
-        get_installation_details,
-        list_user_installation_repositories,
-        list_user_installations,
+    from ..store.github_installs import (
+        InstallationClaimedError,
+        InstallationNotFoundError,
+        RepositoryListingError,
+        active_claim_owners,
+        complete_installation,
     )
-    from ..store import github as gh_store
-    from ..store.crypto import _encrypt
-
-    # Repository ids the authorizing user can actually reach inside the
-    # installation. Populated in cloud mode only; stays None in local mode,
-    # where there is no user token to intersect against.
-    authorized_repository_ids: list[int] | None = None
-
-    # Installation IDs are guessable integers, not authorization proof. Complete
-    # the user-authorization leg and require the installation to be accessible
-    # to the user who authorized this flow before minting a token for it.
-    # Local mode skips this: there is no tenant boundary to cross.
-    if is_cloud_mode():
-        if not code:
-            return _github_settings_redirect(settings.sp_web_url, error="oauth_code_missing")
-        if not settings.sp_github_app_client_secret:
-            logger.error("SP_GITHUB_APP_CLIENT_SECRET not set — cannot verify installation ownership")
-            return _github_settings_redirect(settings.sp_web_url, error="github_app_not_configured")
-        try:
-            token_resp = await exchange_code_for_token(
-                settings.sp_github_app_client_id, settings.sp_github_app_client_secret, code
-            )
-            user_token = token_resp.get("access_token")
-            if not user_token:
-                raise ValueError(token_resp.get("error", "no access_token in response"))
-            user_installations = await list_user_installations(user_token)
-        except Exception as e:
-            logger.warning("GitHub user authorization failed for org=%s: %s", org_id, e)
-            return _github_settings_redirect(settings.sp_web_url, error="oauth_verification_failed")
-        if installation_id not in {inst.get("id") for inst in user_installations}:
-            logger.warning(
-                "GitHub installation_id=%s not accessible to authorizing user (org=%s)",
-                installation_id, org_id,
-            )
-            return _github_settings_redirect(settings.sp_web_url, error="installation_not_authorized")
-
-        # Installation visibility does not grant access to every installation repository.
-        # Restrict the token to repositories that the user can access.
-        # Refuse authorization when the intersection is empty.
-        try:
-            user_repos = await list_user_installation_repositories(user_token, installation_id)
-        except Exception as e:
-            logger.warning("Could not enumerate user-accessible repos for org=%s: %s", org_id, e)
-            return _github_settings_redirect(settings.sp_web_url, error="oauth_verification_failed")
-        authorized_repository_ids = [r["id"] for r in user_repos if r.get("id") is not None]
-        if not authorized_repository_ids:
-            logger.warning(
-                "GitHub installation_id=%s has no user-accessible repositories (org=%s) — refusing to mint",
-                installation_id, org_id,
-            )
-            return _github_settings_redirect(settings.sp_web_url, error="no_accessible_repositories")
-
-    app_jwt = generate_app_jwt(settings.sp_github_app_id, settings.sp_github_app_private_key)
-    details = await get_installation_details(app_jwt, installation_id)
-    if authorized_repository_ids:
-        token_data = await create_installation_token(
-            app_jwt, installation_id, repository_ids=authorized_repository_ids
-        )
-    else:
-        # Local/single-tenant install: no user token exists to intersect
-        # against and there is no tenant boundary to cross.
-        token_data = await create_unrestricted_installation_token(app_jwt, installation_id)
-
-    token = token_data["token"]
-    from datetime import datetime
-    expires_str = token_data.get("expires_at", "")
-    if expires_str:
-        expires_at = datetime.fromisoformat(expires_str.replace("Z", "+00:00")).timestamp()
-    else:
-        expires_at = time.time() + 3600
 
     factory = get_session_factory()
-    async with factory() as session:
-        await gh_store.upsert_installation(
-            session,
-            org_id=org_id,
-            github_installation_id=installation_id,
-            github_account_login=details.get("account", {}).get("login", "unknown"),
-            github_account_type=details.get("account", {}).get("type", "User"),
-            access_token_enc=_encrypt(token),
-            token_expires_at=expires_at,
-            permissions=details.get("permissions"),
-            authorized_repository_ids=authorized_repository_ids,
-        )
+    try:
+        async with factory() as session:
+            if org_id is None:
+                # No usable state: only a refresh of an EXISTING single-org
+                # claim is allowed (setup_action=update lands here). Nobody
+                # holding the installation means a new claim, which is refused.
+                owners = await active_claim_owners(session, installation_id)
+                if len(owners) != 1:
+                    logger.warning(
+                        "GitHub callback without state for installation %s: %d claim owner(s); refusing",
+                        installation_id, len(owners),
+                    )
+                    return _github_settings_redirect(settings.sp_web_url, error="oauth_state_invalid")
+                org_id = owners[0]
+                logger.info("GitHub App stateless %s refresh for installation %s org=%s", setup_action, installation_id, org_id)
+            await complete_installation(session, org_id=org_id, github_installation_id=installation_id)
+    except InstallationClaimedError:
+        return _github_settings_redirect(settings.sp_web_url, error="installation_claimed")
+    except InstallationNotFoundError as exc:
+        logger.warning("GitHub installation %s not found for org=%s: %s", installation_id, org_id, exc)
+        return _github_settings_redirect(settings.sp_web_url, error="installation_not_found")
+    except RepositoryListingError as exc:
+        logger.warning("GitHub installation %s repo listing failed (org=%s): %s", installation_id, org_id, exc)
+        return _github_settings_redirect(settings.sp_web_url, error="repository_listing_failed")
 
-    logger.info("GitHub App installed: installation_id=%s org=%s", installation_id, org_id)
+    logger.info(
+        "GitHub App %s: installation_id=%s org=%s", setup_action, installation_id, org_id,
+    )
     return _github_settings_redirect(settings.sp_web_url, installed="true")
 
 
@@ -218,15 +176,19 @@ async def delete_installation(installation_id: str, store: StoreD):
     dependencies=[RequireScope("read")],
 )
 async def list_repos(installation_id: str, store: StoreD):
-    from ..github_client import list_installation_repos
     from ..store import github as gh_store
+    from ..store.github_installs import RepositoryListingError, refresh_installation_repositories
 
     row = await gh_store.get_installation(store.session, org_id=store.org_id or "local", installation_id=installation_id)
     if not row:
         raise HTTPException(status_code=404, detail="Installation not found")
 
-    token = await gh_store.get_valid_token(store.session, row)
-    repos = await list_installation_repos(token)
+    # Live listing through the app: repositories added to the installation on
+    # GitHub appear immediately, and the stored token scope follows.
+    try:
+        repos = await refresh_installation_repositories(store.session, row)
+    except RepositoryListingError as exc:
+        raise HTTPException(status_code=502, detail=f"Could not list installation repositories: {exc}")
 
     return [
         GitHubRepoInfo(
@@ -567,3 +529,5 @@ async def get_git_credentials(project_id: str, store: StoreD):
 
 
 router.include_router(sync_router)
+router.include_router(installs_router)
+router.include_router(prs_router)

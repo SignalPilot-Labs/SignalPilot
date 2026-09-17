@@ -7,6 +7,7 @@ import uuid
 from sqlalchemy import (
     JSON,
     BigInteger,
+    Boolean,
     Float,
     Index,
     Integer,
@@ -14,6 +15,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    false,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -138,6 +140,9 @@ class GatewayGitHubInstallation(GatewayBase):
     # New and refreshed installation tokens remain restricted to this set.
     # NULL requires the installation to reconnect before token issuance.
     authorized_repository_ids: Mapped[list | None] = mapped_column(JSON)
+    # Display copy of the scope above: [{"id": int, "full_name": str}, ...].
+    # Refreshed together with authorized_repository_ids from the installation.
+    authorized_repositories: Mapped[list | None] = mapped_column(JSON)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
     created_by: Mapped[str | None] = mapped_column(String)
     created_at: Mapped[float] = mapped_column(Float, nullable=False)
@@ -146,6 +151,45 @@ class GatewayGitHubInstallation(GatewayBase):
     __table_args__ = (
         UniqueConstraint("org_id", "github_installation_id", name="uq_gw_ghinstall_org_install"),
         Index("ix_gw_ghinstall_org_id", "org_id"),
+    )
+
+
+class GatewayAgentPullRequest(GatewayBase):
+    """Pull request opened on GitHub from a SignalPilot workspace branch.
+
+    One row per (org, project, github_branch). ``source_branch`` is the
+    workspace branch whose revision was exported; ``github_branch`` is the
+    non-agent name the commit was pushed under. Status ``pushed`` means the
+    branch is on GitHub with no pull request yet (chat agent git push).
+    """
+
+    __tablename__ = "gateway_agent_pull_requests"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    org_id: Mapped[str] = mapped_column(String, nullable=False)
+    project_id: Mapped[str] = mapped_column(String, nullable=False)
+    conversation_id: Mapped[str | None] = mapped_column(String)
+    repo_full_name: Mapped[str] = mapped_column(String(500), nullable=False)
+    source_branch: Mapped[str] = mapped_column(String(200), nullable=False)
+    github_branch: Mapped[str] = mapped_column(String(200), nullable=False)
+    base_branch: Mapped[str] = mapped_column(String(200), nullable=False)
+    pr_number: Mapped[int | None] = mapped_column(Integer)
+    pr_url: Mapped[str | None] = mapped_column(Text)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="open")
+    error_message: Mapped[str | None] = mapped_column(Text)
+    export_commit_sha: Mapped[str | None] = mapped_column(String(64))
+    # Head of ``github_branch`` after the latest accepted chat push (0035).
+    last_pushed_sha: Mapped[str | None] = mapped_column(String(64))
+    last_pushed_at: Mapped[float | None] = mapped_column(Float)
+    draft: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
+    created_by: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "project_id", "github_branch", name="uq_gw_agentpr_org_project_branch"),
+        Index("ix_gw_agentpr_org_project", "org_id", "project_id"),
     )
 
 

@@ -103,6 +103,7 @@ from .queries import (
     GatewayStructuredQueryResult,
 )
 from .runtime import (
+    GatewayAgentPullRequest,
     GatewayAgentRun,
     GatewayDbtManifest,
     GatewayGitHubInstallation,
@@ -120,6 +121,7 @@ from .workspace import (
 )
 
 __all__ = [
+    "GatewayAgentPullRequest",
     "GatewayAgentRun",
     "GatewayAnalysisTrail",
     "GatewayApiKey",

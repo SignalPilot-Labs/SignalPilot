@@ -21,6 +21,9 @@ import { StatusDot } from "~/components/ui/data-viz";
 import { TimeAgo } from "~/components/ui/time-ago";
 import { useToast } from "~/components/ui/toast";
 import { UsageSkeleton } from "~/components/ui/skeleton";
+import { ALLOTMENT_BAR_COLOR, INCLUDED_USAGE_COPY, splitAllotment } from "~/lib/allotment";
+import { useTeamPermissions } from "~/lib/team/use-team-permissions";
+import { usageTabs } from "~/components/usage/usage-shared";
 import {
   generateDailyUsage,
   generateKeyUsage,
@@ -54,27 +57,14 @@ function UsageTooltip({
 }
 
 // ---------------------------------------------------------------------------
-// Rate limit bar — accepts UsageSummaryResponse (real or mock-mapped)
+// Included-requests bar — accepts UsageSummaryResponse (real or mock-mapped).
+// Past the allotment the bar stays full in its normal colour and the excess
+// is shown as extra usage; it is not an error state.
 // ---------------------------------------------------------------------------
 
 function RateLimitCard({ summary }: { summary: UsageSummaryResponse }) {
-  const percentage = summary.daily_limit > 0
-    ? Math.round((summary.daily_used / summary.daily_limit) * 100)
-    : 0;
-
-  const barColor =
-    percentage < 50
-      ? "var(--color-success)"
-      : percentage < 80
-        ? "var(--color-warning)"
-        : "var(--color-error)";
-
-  const textColor =
-    percentage < 50
-      ? "text-[var(--color-success)]"
-      : percentage < 80
-        ? "text-[var(--color-warning)]"
-        : "text-[var(--color-error)]";
+  const split = splitAllotment(summary.daily_used, summary.daily_limit);
+  const percentage = Math.round(split.fillPct);
 
   const resetDate = new Date(summary.daily_reset_at);
   const resetTimeStr = resetDate.toLocaleTimeString("en-US", {
@@ -87,21 +77,12 @@ function RateLimitCard({ summary }: { summary: UsageSummaryResponse }) {
     <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] rounded-[14px] p-5 mb-6 card-accent-top">
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
-          <StatusDot
-            status={
-              percentage < 50
-                ? "healthy"
-                : percentage < 80
-                  ? "warning"
-                  : "error"
-            }
-            size={4}
-          />
+          <StatusDot status="healthy" size={4} />
           <span className="text-[11px] text-[var(--color-text-muted)] uppercase tracking-[0.08em]">
-            daily rate limit
+            daily included requests
           </span>
         </div>
-        <span className={`text-[13px] font-mono tabular-nums ${textColor}`}>
+        <span className="text-[13px] font-mono tabular-nums text-[var(--color-text)]">
           {percentage}%
         </span>
       </div>
@@ -112,14 +93,14 @@ function RateLimitCard({ summary }: { summary: UsageSummaryResponse }) {
         aria-valuenow={summary.daily_used}
         aria-valuemin={0}
         aria-valuemax={summary.daily_limit}
-        aria-label={`Rate limit: ${summary.daily_used} of ${summary.daily_limit} requests used today`}
+        aria-label={`Included requests: ${summary.daily_used} of ${summary.daily_limit} used today`}
         className="h-1.5 bg-[var(--color-border)] w-full mb-3 rounded-full overflow-hidden"
       >
         <div
           className="h-full transition-all duration-500"
           style={{
-            width: `${Math.min(percentage, 100)}%`,
-            backgroundColor: barColor,
+            width: `${split.fillPct}%`,
+            backgroundColor: ALLOTMENT_BAR_COLOR,
           }}
         />
       </div>
@@ -130,13 +111,27 @@ function RateLimitCard({ summary }: { summary: UsageSummaryResponse }) {
             {summary.daily_used.toLocaleString()}
           </span>{" "}
           of{" "}
-          <span className="font-mono tabular-nums">{summary.daily_limit.toLocaleString()}</span> requests
+          <span className="font-mono tabular-nums">{summary.daily_limit.toLocaleString()}</span> included
+          {split.over && (
+            <>
+              {" · "}
+              <span data-testid="usage-extra" className="text-[var(--color-text)]">
+                Extra usage:{" "}
+                <span className="font-mono tabular-nums">{Math.round(split.extra).toLocaleString()}</span> requests
+              </span>
+            </>
+          )}
         </span>
         <span className="text-[var(--color-text-dim)]">
           resets at{" "}
           <span className="text-[var(--color-text-muted)] font-mono tabular-nums">{resetTimeStr}</span>
         </span>
       </div>
+      {split.over && (
+        <p data-testid="usage-included-copy" className="mt-2 text-[12px] text-[var(--color-text-dim)]">
+          {INCLUDED_USAGE_COPY}
+        </p>
+      )}
     </div>
   );
 }
@@ -217,6 +212,7 @@ function KeyUsageTableHeader() {
 
 function UsageContent() {
   const client = useBackendClient();
+  const { isAdmin } = useTeamPermissions();
   const { data: plan } = usePlan();
   const planTier = plan?.tier ?? "free";
   const { toast } = useToast();
@@ -305,7 +301,8 @@ function UsageContent() {
       <PageHeader
         title="usage"
         subtitle="analytics"
-        description="api request usage and rate limits"
+        description="api request usage and included allowance"
+        tabs={usageTabs(isAdmin)}
       />
 
       <TerminalBar

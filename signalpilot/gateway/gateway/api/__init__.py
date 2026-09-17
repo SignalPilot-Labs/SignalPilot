@@ -49,6 +49,7 @@ from .settings import router as settings_router
 from .slack import router as slack_router
 from .standalone_chat import router as standalone_chat_router
 from .uploads import router as uploads_router
+from .usage import router as usage_router
 from .user_secrets import router as user_secrets_router
 from .workspace_files import router as workspace_files_router
 from .workspace_projects import router as workspace_projects_router
@@ -106,6 +107,7 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(schema_watches_router)
     app.include_router(uploads_router)
     app.include_router(eval_runs_router)
+    app.include_router(usage_router)
     app.include_router(user_secrets_router)
     app.include_router(mcp_connectors_router)
     app.include_router(git_http_router)

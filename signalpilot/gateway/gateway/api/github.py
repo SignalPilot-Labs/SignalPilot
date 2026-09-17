@@ -10,6 +10,7 @@ from fastapi.responses import RedirectResponse
 
 from ..auth import OrgAdmin
 from ..config.github import get_github_settings
+from ..git.repos import github_token_remote_url
 from ..models.github import (
     GitCredentialsResponse,
     GitHubInstallationInfo,
@@ -268,7 +269,7 @@ async def get_git_credentials(project_id: str, store: StoreD):
         return GitCredentialsResponse(source="github", clone_url=None, default_branch=link.default_branch)
 
     token = await gh_store.get_valid_token(store.session, installation)
-    clone_url = f"https://x-access-token:{token}@github.com/{link.repo_full_name}.git"
+    clone_url = github_token_remote_url(token, link.repo_full_name)
 
     return GitCredentialsResponse(
         source="github",

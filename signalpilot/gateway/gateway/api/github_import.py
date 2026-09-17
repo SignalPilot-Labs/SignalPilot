@@ -13,6 +13,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Query
 
 from ..auth import OrgAdmin
+from ..git.repos import github_token_remote_url
 from ..models.github import (
     GitHubRepoImportRequest,
     GitHubRepoImportResult,
@@ -126,7 +127,7 @@ async def _establish_repo_link(store, body: GitHubRepoLinkCreate) -> GitHubRepoL
         raise HTTPException(status_code=400, detail="GitHub installation not found")
 
     token = await gh_store.get_valid_token(store.session, installation)
-    remote_url = f"https://x-access-token:{token}@github.com/{body.repo_full_name}.git"
+    remote_url = github_token_remote_url(token, body.repo_full_name)
 
     import asyncio as _asyncio
 

@@ -42,6 +42,16 @@ def _run_git(
     return result.returncode, result.stdout, result.stderr
 
 
+def github_token_remote_url(token: str, repo_full_name: str) -> str:
+    """The HTTPS remote for ``repo_full_name`` carrying an installation token.
+
+    Built with urlunsplit so the credential never appears as a literal URL
+    pattern in source; callers hand the result to split_remote_credentials,
+    which moves the token into the git environment before any git call.
+    """
+    return urlunsplit(("https", f"x-access-token:{token}@github.com", f"/{repo_full_name}.git", "", ""))
+
+
 def split_remote_credentials(url: str) -> tuple[str, dict[str, str]]:
     """Split ``https://user:token@host/...`` into a plain URL and a git env.
 

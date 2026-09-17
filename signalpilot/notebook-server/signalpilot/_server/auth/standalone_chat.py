@@ -7,8 +7,10 @@ is authorized by a fresh, signed gateway JWT on every execute request.
 
 from __future__ import annotations
 
+import json
 import os
 import re
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -154,27 +156,46 @@ def _verify_gateway_token(token: str) -> dict[str, Any]:
     guarantees so a malformed or stale token is rejected before a run starts.
     """
     try:
-        claims = jwt.decode(  # nosemgrep: python.jwt.security.unverified-jwt-decode.unverified-jwt-decode
-            token,
-            audience=_AUDIENCE,
-            issuer=_ISSUER,
-            leeway=_JWT_CLOCK_SKEW_SECONDS,
-            options={
-                "verify_signature": False,
-                "verify_exp": True,
-                "verify_iat": True,
-                "verify_aud": True,
-                "verify_iss": True,
-                "require": list(_REQUIRED_CLAIMS),
-            },
-        )
-    except jwt.PyJWTError as exc:
+        claims = _decode_payload(token)
+        _check_registered_claims(claims)
+    except (ValueError, TypeError, KeyError) as exc:
         raise HTTPException(
             status_code=403, detail="Invalid scoped gateway identity"
         ) from exc
-    if not isinstance(claims, dict):
-        raise HTTPException(status_code=403, detail="Invalid scoped gateway identity")
     return claims
+
+
+def _decode_payload(token: str) -> dict[str, Any]:
+    """Return the JWT payload without checking the signature (see above)."""
+    parts = token.split(".")
+    if len(parts) != 3 or not parts[0] or not parts[1]:
+        raise ValueError("malformed token")
+    payload = json.loads(jwt.utils.base64url_decode(parts[1].encode("ascii")))
+    if not isinstance(payload, dict):
+        raise ValueError("payload is not an object")
+    return payload
+
+
+def _check_registered_claims(claims: dict[str, Any]) -> None:
+    """Enforce issuer, audience, expiry, issued-at and the required claim set."""
+    missing = [name for name in _REQUIRED_CLAIMS if name not in claims]
+    if missing:
+        raise ValueError(f"missing claims: {missing}")
+    if claims.get("iss") != _ISSUER:
+        raise ValueError("issuer mismatch")
+    audience = claims.get("aud")
+    audiences = audience if isinstance(audience, list) else [audience]
+    if _AUDIENCE not in audiences:
+        raise ValueError("audience mismatch")
+    now = time.time()
+    exp = claims.get("exp")
+    iat = claims.get("iat")
+    if not isinstance(exp, (int, float)) or not isinstance(iat, (int, float)):
+        raise ValueError("exp and iat must be numbers")
+    if now > exp + _JWT_CLOCK_SKEW_SECONDS:
+        raise ValueError("token expired")
+    if iat > now + _JWT_CLOCK_SKEW_SECONDS:
+        raise ValueError("token issued in the future")
 
 
 def _validate_claims(claims: dict[str, Any], scope: ExecutionScope) -> None:

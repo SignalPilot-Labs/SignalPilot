@@ -11,6 +11,7 @@ import logging
 from fastapi import APIRouter, HTTPException
 
 from ..auth import OrgAdmin
+from ..git.repos import github_token_remote_url
 from ..security.scope_guard import RequireScope
 from .deps import StoreD
 from .github_import import _import_workspace_revision
@@ -94,7 +95,7 @@ async def fetch_from_github_endpoint(project_id: str, store: StoreD):
         raise HTTPException(status_code=404, detail="GitHub installation not found")
 
     token = await gh_store.get_valid_token(store.session, installation)
-    remote_url = f"https://x-access-token:{token}@github.com/{link.repo_full_name}.git"
+    remote_url = github_token_remote_url(token, link.repo_full_name)
 
     result = fetch_all(project_id, remote_url)
     if result.get("fetched"):

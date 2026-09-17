@@ -35,7 +35,7 @@ from .ref_policy import (
     reason_exists_on_github,
     reason_other_chat,
 )
-from .repos import repo_path, repo_exists, REPOS_ROOT
+from .repos import REPOS_ROOT, github_token_remote_url, repo_exists, repo_path
 
 logger = logging.getLogger(__name__)
 
@@ -75,8 +75,9 @@ async def _authenticate(request: Request) -> dict:
         raise HTTPException(status_code=401, detail="Token required")
 
     # Local dev key check (fast path, no DB)
-    from ..store import get_local_api_key
     import hmac
+
+    from ..store import get_local_api_key
 
     local_key = get_local_api_key()
     if local_key and hmac.compare_digest(token, local_key):
@@ -133,9 +134,10 @@ def chat_run_id(auth: dict) -> str | None:
 
 async def _authorize_project(auth: dict, project_id: str) -> None:
     """Verify the caller's org owns this project. Raises HTTPException if not."""
+    from sqlalchemy import select
+
     from ..db.engine import get_session_factory
     from ..db.models import GatewayWorkspaceProject
-    from sqlalchemy import select
 
     factory = get_session_factory()
     async with factory() as session:
@@ -392,6 +394,7 @@ async def git_http_handler(project_id: str, remainder: str, request: Request):
         else:
             # Auto-mirror to GitHub after a successful push (fire and forget).
             import asyncio
+
             from .sync import mirror_push_to_github
             org_id = auth.get("org_id", "local")
             for branch in pushed_branches(body) or ["main"]:
@@ -430,7 +433,7 @@ async def github_remote_url(session, org_id: str, link) -> str | None:
     except Exception as exc:
         logger.warning("git: GitHub access unavailable for project %s (%s)", link.project_id, type(exc).__name__)
         return None
-    return f"https://x-access-token:{token}@github.com/{link.repo_full_name}.git"
+    return github_token_remote_url(token, link.repo_full_name)
 
 
 async def chat_run_conversation(session, org_id: str, run_id: str) -> str | None:

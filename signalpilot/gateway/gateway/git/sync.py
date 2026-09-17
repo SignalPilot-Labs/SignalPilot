@@ -18,6 +18,7 @@ import time
 from .repos import (
     _run_git,
     _validate_branch_name,
+    github_token_remote_url,
     list_branches,
     repo_exists,
     repo_path,
@@ -303,7 +304,7 @@ async def ensure_repo_mirror(session, *, org_id: str, project_id: str, default_b
         logger.warning("ensure_repo_mirror: installation missing for project %s", project_id)
         return False
     token = await gh_store.get_valid_token(session, installation)
-    remote_url = f"https://x-access-token:{token}@github.com/{link.repo_full_name}.git"
+    remote_url = github_token_remote_url(token, link.repo_full_name)
     try:
         await _asyncio.to_thread(clone_from_remote, project_id, remote_url)
         await _asyncio.to_thread(materialize_local_branches, project_id, branch)
@@ -360,7 +361,7 @@ async def fetch_if_stale(
     except Exception as exc:
         logger.warning("fetch_if_stale: GitHub access unavailable for project %s (%s)", project_id, type(exc).__name__)
         return False
-    remote_url = f"https://x-access-token:{token}@github.com/{link.repo_full_name}.git"
+    remote_url = github_token_remote_url(token, link.repo_full_name)
 
     # Claim the slot before the network call so concurrent readiness checks
     # do not all fetch at once.
@@ -428,7 +429,7 @@ async def sync_project_with_github(project_id: str, org_id: str) -> dict:
         )
 
         token = await gh_store.get_valid_token(session, installation)
-        remote_url = f"https://x-access-token:{token}@github.com/{link.repo_full_name}.git"
+        remote_url = github_token_remote_url(token, link.repo_full_name)
 
         # Push all non-agent local branches
         branches = list_branches(project_id)
@@ -452,6 +453,7 @@ async def sync_project_with_github(project_id: str, org_id: str) -> dict:
 
         # Update last_sync_at
         from sqlalchemy import update
+
         from ..db.models import GatewayGitHubRepoLink
         await session.execute(
             update(GatewayGitHubRepoLink)
@@ -496,11 +498,12 @@ async def mirror_push_to_github(project_id: str, org_id: str, branch: str) -> di
             logger.warning("Failed to get GitHub token for mirror push: %s", e)
             return None
 
-        remote_url = f"https://x-access-token:{token}@github.com/{link.repo_full_name}.git"
+        remote_url = github_token_remote_url(token, link.repo_full_name)
         result = push_branch(project_id, remote_url, branch)
 
         if not result.get("error") and not result.get("skipped"):
             from sqlalchemy import update
+
             from ..db.models import GatewayGitHubRepoLink
             await session.execute(
                 update(GatewayGitHubRepoLink)

@@ -61,7 +61,9 @@ cell depends on the output of an earlier one that you have not seen yet. Fix
 failed cells in one more batch, not one per call.
 
 Keep the order in "Plan first" for the plan and skill calls; parallelism and
-batching apply to the work between them.
+batching apply to the work between them. Run probe commands such as `ls` or
+`test` in their own turn, not in a parallel batch. The Grep tool has no `-o`
+option. Use Bash `grep -o` for match-only output.
 
 ## Use the filesystem
 
@@ -93,9 +95,11 @@ directory instead:
 Write `analytics-steps.md` before the analysis. It is the plan and the early
 trace of your reasoning.
 
-You have no git access. Skip every skill step that writes, fixes, or refactors
-a model, and do not propose code changes. Deliver the analysis the user asked
-for.
+Your working directory has no git access. Model edits and git commands
+happen in the sandbox VM, at `/workspace`, through `sandbox_write_file` and
+`sandbox_exec`. Load the `github` skill before any git or pull request work.
+See the section "Publish your work". Change models only when the user asks
+for a change. Otherwise deliver the analysis the user asked for.
 
 Two more skill rules do not apply:
 

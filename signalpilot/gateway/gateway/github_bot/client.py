@@ -137,6 +137,23 @@ class GitHubBotClient:
             )
         ).json()
 
+    async def update_pull_request(
+        self, repo: str, number: int, *, title: str | None = None, body: str | None = None
+    ) -> dict:
+        """PATCH the title and/or body of pull request ``number``."""
+        payload: dict = {}
+        if title is not None:
+            payload["title"] = title
+        if body is not None:
+            payload["body"] = body
+        return (await self._request("PATCH", f"/repos/{repo}/pulls/{number}", json=payload)).json()
+
+    async def create_issue_comment(self, repo: str, number: int, body: str) -> dict:
+        """POST a new comment on issue or pull request ``number``."""
+        return (
+            await self._request("POST", f"/repos/{repo}/issues/{number}/comments", json={"body": body})
+        ).json()
+
     async def get_default_branch(self, repo: str) -> str:
         return (await self._request("GET", f"/repos/{repo}")).json().get("default_branch", "main")
 

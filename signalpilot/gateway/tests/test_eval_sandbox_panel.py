@@ -23,7 +23,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from gateway.api.deps import get_store
 from gateway.api.eval_runs import router as eval_runs_router
-from gateway.config import get_governance_settings
 from gateway.config.evals import EvalRunSettings, get_eval_run_settings
 from gateway.db.models import GatewayBase
 from gateway.evals import runner, sandboxes
@@ -60,11 +59,13 @@ class FakeStore:
 
 
 @pytest.fixture(autouse=True)
-def _staff_ids(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("SP_ADMIN_USER_IDS", STAFF_USER)
-    get_governance_settings.cache_clear()
-    yield
-    get_governance_settings.cache_clear()
+def _paid_plan(monkeypatch: pytest.MonkeyPatch):
+    from gateway.governance import plan_limits
+
+    async def _paid(org_id: str):
+        return plan_limits.PLAN_TIERS["enterprise"]
+
+    monkeypatch.setattr(plan_limits, "get_org_limits", _paid)
 
 
 @pytest.fixture(autouse=True)

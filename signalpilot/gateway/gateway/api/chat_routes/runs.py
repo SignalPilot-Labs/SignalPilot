@@ -31,7 +31,7 @@ from gateway.security.scope_guard import RequireScope
 from gateway.standalone_chat.query_approvals import decide_query_proposal
 from gateway.store import standalone_chat as chat_store
 
-from ..deps import StoreD
+from ..deps import ChatGate, StoreD
 from .common import RequireInteractiveUser
 from .common import is_admin as _is_admin
 from .common import readiness_or_error as _readiness_or_error
@@ -76,7 +76,7 @@ async def decide_query(
     "/conversations/{conversation_id}/runs",
     status_code=201,
     response_model=ChatRunInfo,
-    dependencies=[RequireScope("write"), RequireInteractiveUser],
+    dependencies=[RequireScope("write"), RequireInteractiveUser, ChatGate],
 )
 async def create_run(
     conversation_id: str,

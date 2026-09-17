@@ -9,10 +9,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import socket
+import time
 import uuid
+from contextlib import suppress
 from typing import Any
 
 import httpx
@@ -25,12 +28,60 @@ from gateway.standalone_chat.worker_context import (
     message_context as _message_context,
 )
 
+logger = logging.getLogger(__name__)
+
+# A lease renewal that lands this much later than its interval means the
+# worker's event loop stalled; the claim query may hand the run to another
+# worker after the lease expires.
+LEASE_RENEWAL_LATE_SECONDS = 10.0
+# Bound on the notebook-runtime cancel call made before a re-execute.
+PREVIOUS_ATTEMPT_CANCEL_TIMEOUT_SECONDS = 10.0
+
 
 def _worker() -> Any:
     """Return the worker module. Import it late to avoid a circular import."""
     from gateway.standalone_chat import worker
 
     return worker
+
+
+async def _cancel_previous_attempt(
+    execution: Any,
+    *,
+    run_id: str,
+    reason: str,
+    timeout: float = PREVIOUS_ATTEMPT_CANCEL_TIMEOUT_SECONDS,
+) -> bool:
+    """Stop a still-running previous attempt of ``run_id`` on the runtime.
+
+    Called before re-executing a re-claimed run (and on the worker's own
+    reconnect). ``keep_kernels=1`` tells the runtime to stop the agent but
+    leave its notebooks alive so the next /execute inherits them. Waits for
+    a 2xx or the timeout; a failure only logs, the execute still proceeds.
+    """
+    url = execution.url.rsplit("/execute", 1)[0] + f"/cancel/{run_id}"
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(
+                url,
+                headers=execution.headers,
+                params={"keep_kernels": "1"},
+            )
+    except (httpx.HTTPError, OSError) as exc:
+        logger.warning(
+            "Previous attempt cancel failed run_id=%s reason=%s error=%s",
+            run_id,
+            reason,
+            type(exc).__name__,
+        )
+        return False
+    logger.info(
+        "Previous attempt cancel run_id=%s reason=%s status=%s",
+        run_id,
+        reason,
+        response.status_code,
+    )
+    return response.is_success
 
 
 def _worker_id() -> str:
@@ -83,24 +134,74 @@ def _notebook_started_payload(
     return payload
 
 
+async def _announce_notebook(run_id: str, payload: dict[str, Any]) -> None:
+    """Append the notebook_started event and persist the conversation pointer.
+
+    The pointer makes the conversation row the single source of truth for
+    where the notebook lives. Persist only a complete id set: a partial
+    payload cannot be attached to and must not clobber a good pointer.
+    """
+    await _worker()._append(run_id, "notebook_started", payload)
+    gateway_session_id = payload.get("gateway_session_id")
+    kernel_session_id = payload.get("kernel_session_id")
+    notebook_path = payload.get("notebook_path")
+    if not (gateway_session_id and kernel_session_id and notebook_path):
+        return
+    with suppress(Exception):
+        factory = _worker().get_session_factory()
+        async with factory() as db:
+            await _worker().chat_store.set_conversation_notebook_for_run(
+                db,
+                run_id=run_id,
+                gateway_session_id=str(gateway_session_id),
+                kernel_session_id=str(kernel_session_id),
+                notebook_path=str(notebook_path),
+                name=str(payload.get("notebook") or "analysis"),
+            )
+
+
 async def _lease_renewer(run_id: str, worker_id: str, stop: asyncio.Event) -> None:
     interval = max(5.0, lease_seconds() / 3)
     factory = _worker().get_session_factory()
+    last_renewed_at = time.monotonic()
     while not stop.is_set():
         try:
             await asyncio.wait_for(stop.wait(), timeout=interval)
             return
         except TimeoutError:
             pass
+        # Watchdog: a stalled event loop shows up here as a late wake-up.
+        late_by = time.monotonic() - last_renewed_at - interval
+        if late_by > LEASE_RENEWAL_LATE_SECONDS:
+            logger.warning(
+                "Lease renewal late run_id=%s worker_id=%s late_by_s=%.1f lease_s=%s",
+                run_id,
+                worker_id,
+                late_by,
+                lease_seconds(),
+            )
         async with factory() as db:
-            if not await _worker().chat_store.renew_lease(
+            renewed = await _worker().chat_store.renew_lease(
                 db,
                 run_id=run_id,
                 worker_id=worker_id,
                 lease_seconds=lease_seconds(),
-            ):
-                stop.set()
-                return
+            )
+        last_renewed_at = time.monotonic()
+        if not renewed:
+            logger.warning(
+                "Lease renewal lost run_id=%s worker_id=%s; stopping the run",
+                run_id,
+                worker_id,
+            )
+            stop.set()
+            return
+        logger.info(
+            "Lease renewed run_id=%s worker_id=%s lease_s=%s",
+            run_id,
+            worker_id,
+            lease_seconds(),
+        )
 
 
 async def _cancellation_monitor(

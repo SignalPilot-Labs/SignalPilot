@@ -112,7 +112,7 @@ export function DbtRunRunning({ step }: ToolCardContext) {
 const SEGMENTS: { key: keyof DbtTally; label: string; tone: "success" | "warning" | "error" | "neutral"; color: string }[] = [
   { key: "pass", label: "Pass", tone: "success", color: "bg-[var(--color-success)]/80" },
   { key: "warn", label: "Warn", tone: "warning", color: "bg-[var(--color-warning)]/80" },
-  { key: "error", label: "Error", tone: "error", color: "bg-[var(--color-error)]/85" },
+  { key: "error", label: "Error", tone: "warning", color: "bg-[var(--color-warning)]/85" },
   { key: "skip", label: "Skip", tone: "neutral", color: "bg-[var(--color-text-dim)]/50" },
 ];
 
@@ -158,10 +158,10 @@ function Failures({ failures }: { failures: DbtRunResult["failures"] }) {
       {ordered.map((failure, index) => (
         <li
           key={`${failure.node}-${index}`}
-          className="border-l-2 border-[var(--color-error)]/60 bg-[rgba(255,68,68,0.04)] px-3.5 py-2"
+          className="border-l-2 border-[var(--color-warning)]/60 px-3.5 py-2"
         >
           <div className="font-mono text-[11px] text-[var(--color-text)]">{failure.node}</div>
-          <div className="mt-0.5 break-words text-[11px] leading-4 text-[var(--color-error)]/90">
+          <div className="mt-0.5 break-words text-[11px] leading-4 text-[var(--color-text-muted)]">
             {failure.message}
           </div>
         </li>

@@ -14,7 +14,6 @@ from gateway.standalone_chat.config import (
     default_chat_effort,
     default_chat_model,
     enterprise_chat_feature_flags,
-    standalone_chat_enabled,
 )
 from gateway.standalone_chat.projects import (
     authorize_chat_project,
@@ -58,9 +57,12 @@ async def bootstrap_chat(store: StoreD, role: OrgRole):
     selected_model = default_chat_model()
     effort_options = [{"id": effort_id, "label": label} for effort_id, label in CHAT_EFFORT_OPTIONS]
     selected_effort = default_chat_effort()
-    if not standalone_chat_enabled():
+    from gateway.governance.plan_limits import get_org_limits
+
+    if not (await get_org_limits(store.org_id or "local")).chat:
         return ChatBootstrapResponse(
             enabled=False,
+            plan_locked=True,
             projects=[],
             selected_project_id=None,
             is_admin=_is_admin(role),

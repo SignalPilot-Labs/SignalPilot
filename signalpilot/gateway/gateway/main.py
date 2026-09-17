@@ -269,6 +269,27 @@ def _build_allowed_origins() -> list[str]:
 
 
 _ALLOWED_ORIGINS = _build_allowed_origins()
+
+
+def _runtime_archive_body_limit() -> int:
+    """Body cap for POST /api/chat/runtime-archives, derived from its schema.
+
+    The archive payload is base64 fields whose max_length values sum to about
+    47 MB; the global 2 MB cap made every real archive upload a 413 that the
+    runtime reported as a bare ReadTimeout. Add slack for JSON framing.
+    """
+    from .api.chat_routes.runtime_archives import RuntimeArchiveCreate
+
+    total = 0
+    for field in RuntimeArchiveCreate.model_fields.values():
+        total += max((getattr(meta, "max_length", 0) or 0) for meta in field.metadata) if field.metadata else 0
+    return total + 64 * 1024
+
+
+# Path-prefix overrides for the request body cap. Everything else stays at 2 MB.
+BODY_SIZE_PATH_OVERRIDES: dict[str, int] = {
+    "/api/chat/runtime-archives": _runtime_archive_body_limit(),
+}
 _CSRF_ENABLED = is_cloud_mode()
 
 # Middleware runs in reverse registration order. The last registered middleware runs first.
@@ -289,6 +310,7 @@ app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(
     RequestBodySizeLimitMiddleware,
     max_body_bytes=2_097_152,
+    path_max_bytes=BODY_SIZE_PATH_OVERRIDES,
 )
 app.add_middleware(
     CORSMiddleware,

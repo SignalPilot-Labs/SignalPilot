@@ -594,3 +594,78 @@ async def test_adopted_turn_recovery_reseeds_with_the_adopted_scratch_paths(
     reseeded = (adopted_scratch / "analysis.py").read_text(encoding="utf-8")
     assert repr(str(adopted_scratch / ".gateway-token")) in reseeded
     assert str(tmp_path / "scratch" / run_id) not in reseeded
+
+
+@pytest.mark.asyncio
+async def test_start_tool_reseeds_a_missing_analysis_notebook(
+    tmp_path: Path,
+) -> None:
+    """A superseded attempt can remove the scratch; the tool reseeds instead
+    of failing with NotebookFileNotFound."""
+    analysis = tmp_path / "analysis.py"  # never written
+    seeds: list[str] = []
+    started_paths: list[str] = []
+
+    def seeder(name: str) -> Path:
+        path = tmp_path / f"{name}.py"
+        path.write_text("import marimo\n", encoding="utf-8")
+        seeds.append(name)
+        return path
+
+    def start_notebook(
+        _context: Any, arguments: dict[str, Any]
+    ) -> list[TextContent]:
+        started_paths.append(arguments["file_path"])
+        return [
+            TextContent(
+                type="text", text=json.dumps({"session_id": "s-analysis"})
+            )
+        ]
+
+    lifecycle = StandaloneNotebookLifecycle()
+    server = build_standalone_chat_mcp_server(
+        notebook_mcp_app=object(),
+        analysis_notebook_path=analysis,
+        notebook_lifecycle=lifecycle,
+        notebook_starter=start_notebook,
+        notebook_session_resolver=lambda _session_id: SimpleNamespace(),
+        notebook_seeder=seeder,
+    )["instance"]
+
+    response = await server.request_handlers[CallToolRequest](
+        CallToolRequest(
+            params=CallToolRequestParams(
+                name="start_analysis_notebook", arguments={}
+            )
+        )
+    )
+
+    assert response.root.isError is False
+    body = json.loads(response.root.content[0].text)
+    assert body["session_id"] == "s-analysis"
+    assert seeds == ["analysis"]
+    assert started_paths == [str(analysis)]
+    assert analysis.is_file()
+    assert lifecycle.sessions == {"analysis": "s-analysis"}
+
+
+@pytest.mark.asyncio
+async def test_start_tool_without_a_seeder_reports_the_missing_analysis(
+    tmp_path: Path,
+) -> None:
+    server = build_standalone_chat_mcp_server(
+        notebook_mcp_app=object(),
+        analysis_notebook_path=tmp_path / "analysis.py",
+        notebook_lifecycle=StandaloneNotebookLifecycle(),
+        notebook_starter=lambda _c, _a: [],
+        notebook_session_resolver=lambda _s: SimpleNamespace(),
+    )["instance"]
+    response = await server.request_handlers[CallToolRequest](
+        CallToolRequest(
+            params=CallToolRequestParams(
+                name="start_analysis_notebook", arguments={}
+            )
+        )
+    )
+    assert response.root.isError is True
+    assert "cannot be reseeded" in response.root.content[0].text

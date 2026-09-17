@@ -153,7 +153,7 @@ export type EvalRunDetail = EvalRun & { tasks: EvalRunTask[] };
 /** Any authenticated user can read availability. Entitlement controls all other evaluation routes. */
 export type EvalAvailability = {
   enabled: boolean;
-  reason: "ok" | "not_enabled_for_org";
+  reason: "ok" | "plan" | "not_enabled_for_org";
 };
 export const getEvalAvailability = () =>
   request<EvalAvailability>("/api/evals/availability");

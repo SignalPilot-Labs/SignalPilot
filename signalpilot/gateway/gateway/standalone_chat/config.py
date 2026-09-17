@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-from gateway.runtime.mode import is_cloud_mode, runtime_env
+from gateway.runtime.mode import runtime_env
 
 __all__ = ["runtime_env"]
 
@@ -42,10 +42,8 @@ def default_chat_effort() -> str:
 
 
 def standalone_chat_enabled() -> bool:
-    raw = os.getenv("SP_FEATURE_STANDALONE_CHAT")
-    if raw is None:
-        return not is_cloud_mode()
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
+    """Standalone chat is always available; paid-plan gating happens at bootstrap and run creation."""
+    return True
 
 
 def _disabled_by_default_flag(name: str) -> bool:

@@ -9,7 +9,6 @@ from __future__ import annotations
 import pytest
 
 from gateway.api import eval_runs
-from gateway.config import get_governance_settings
 from gateway.config.evals import get_eval_run_settings
 
 ALLOWED_ORG = "org_2allowedclerkid"
@@ -50,16 +49,18 @@ class _EnumLike:
 
 @pytest.fixture(autouse=True)
 def _env(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("SP_EVAL_ALLOWED_ORGS", ALLOWED_ORG)
     monkeypatch.setenv("SP_EVAL_RUNNER_IMAGE", RUNNER_IMAGE)
-    monkeypatch.setenv("SP_ADMIN_USER_IDS", "user-1")
     get_eval_run_settings.cache_clear()
-    get_governance_settings.cache_clear()
     eval_runs._last_autorun.clear()
     eval_runs._active_tasks.clear()
+    from gateway.governance import plan_limits
+
+    async def _paid(org_id: str):
+        return plan_limits.PLAN_TIERS["enterprise"]
+
+    monkeypatch.setattr(plan_limits, "get_org_limits", _paid)
     yield
     get_eval_run_settings.cache_clear()
-    get_governance_settings.cache_clear()
     eval_runs._last_autorun.clear()
     eval_runs._active_tasks.clear()
 
@@ -108,16 +109,26 @@ class TestItDoesNotFire:
         await eval_runs.maybe_autorun_after_knowledge_change(_store(), FakeDoc(status=status))
         assert launched == []
 
-    async def test_non_allowlisted_org_cannot_spend_via_autorun(self, launched) -> None:
-        """The gates are bypassed on this path, so the allowlist is re-checked."""
+    async def test_free_plan_org_is_refused_by_autorun(self, launched, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The gates are bypassed on this path, so the plan is re-checked."""
+        from gateway.governance import plan_limits
+
+        async def _free(org_id: str):
+            return plan_limits.PLAN_TIERS["free"]
+
+        monkeypatch.setattr(plan_limits, "get_org_limits", _free)
         await eval_runs.maybe_autorun_after_knowledge_change(_store(OTHER_ORG), FakeDoc())
         assert launched == []
 
-    async def test_non_staff_admin_cannot_spend_via_autorun(
+    async def test_free_plan_org_cannot_spend_via_autorun(
         self, launched, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("SP_ADMIN_USER_IDS", "platform-staff")
-        get_governance_settings.cache_clear()
+        from gateway.governance import plan_limits
+
+        async def _free(org_id: str):
+            return plan_limits.PLAN_TIERS["free"]
+
+        monkeypatch.setattr(plan_limits, "get_org_limits", _free)
         await eval_runs.maybe_autorun_after_knowledge_change(_store(), FakeDoc())
         assert launched == []
 
@@ -151,9 +162,6 @@ class TestCoalescing:
         assert len(launched) == 2
 
     async def test_debounce_is_per_org(self, launched, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("SP_EVAL_ALLOWED_ORGS", f"{ALLOWED_ORG},{OTHER_ORG}")
-        get_eval_run_settings.cache_clear()
-
         await eval_runs.maybe_autorun_after_knowledge_change(_store(ALLOWED_ORG), FakeDoc())
         await eval_runs.maybe_autorun_after_knowledge_change(_store(OTHER_ORG), FakeDoc())
         assert {c["org"] for c in launched} == {ALLOWED_ORG, OTHER_ORG}

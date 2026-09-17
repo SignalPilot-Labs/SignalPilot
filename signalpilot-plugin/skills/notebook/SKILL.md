@@ -41,6 +41,9 @@ edit or remove the hidden cells. Put the title in the empty cell.
 - Prefix disposable names with one underscore, for example `_fig`. Never use
   an underscore name from another cell.
 - Build DataFrames from query results. Show a small preview only.
+- `pd` and `np` are already imported in the setup cell. Do not import them
+  again.
+- Use only the methods this skill names. The SDK has no other functions.
 
 ## Tools
 
@@ -59,7 +62,8 @@ Read every `run_cells` result. A cell with `status: "failed"` has an
 | Call | Result |
 |---|---|
 | `sp.connections()` | Names of the connections you may query. |
-| `db.query(sql, row_limit=1000)` | Rows as a list of dicts. |
+| `db.query(sql, row_limit=1000)` | Rows as a list of dicts. Call `.df()` on it to get a typed DataFrame. |
+| `db.query_df(sql, row_limit=1000)` | A typed DataFrame. Numeric and date columns are already converted. |
 | `db.query_result(sql, row_limit=100_000)` | Dict with `rows`, `columns`, and `completeness`. `truncated` means the limit cut the result. Aggregate or add a limit. |
 | `db.query_dataset(sql)` | A private Parquet dataset for large results. Open it with `sp.open_dataset(ref)`. |
 | `sp.artifact_path("name.png")` | The path for one artifact file. |

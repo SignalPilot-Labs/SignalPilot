@@ -39,6 +39,14 @@ _SEPARATOR = " | "
 
 _INT_RE = re.compile(r"^-?\d{1,18}$")
 _FLOAT_RE = re.compile(r"^-?\d{1,18}\.\d+$")
+# The query tools raise their failures as tool errors whose text starts with
+# "Query error:"; the MCP server may prefix "Error executing tool <name>: ".
+_QUERY_ERROR_RE = re.compile(r"^\s*(?:Error executing tool \S+: )?Query error:")
+
+
+def is_query_error_text(text: str) -> bool:
+    """True when ``text`` is a query tool failure body."""
+    return bool(_QUERY_ERROR_RE.match(text or ""))
 
 
 def _cell(value: str) -> Any:
@@ -98,8 +106,10 @@ def _table_summary(row_count: int | None, preview: int, execution_ms: float | No
 def project_query_database(content: str, tool_input: dict[str, Any] | None) -> ProjectedResult:
     text = content or ""
     stripped = text.strip()
-    if stripped.startswith("Query error:"):
-        return text_result(text, summary=first_line(text))
+    if is_query_error_text(stripped):
+        projected = text_result(text, summary=first_line(text))
+        projected.error = True
+        return projected
     parsed = try_json(stripped)
     if isinstance(parsed, dict):
         route = parsed.get("route")

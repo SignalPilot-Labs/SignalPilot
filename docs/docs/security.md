@@ -74,7 +74,7 @@ See [Governance reference](/docs/reference/governance) for the complete rule set
 
 ## Evaluation workloads
 
-- Eval configuration, execution, evidence, and live-sandbox routes require a user ID listed in `SP_ADMIN_USER_IDS` and an org listed in `SP_EVAL_ALLOWED_ORGS`.
+- Eval configuration, execution, evidence, and live-sandbox routes require a paid plan; execution additionally requires the `admin` scope.
 - Every task receives a short-lived API key bound to one run, one task, and one database connection. The key cannot access query history, workspace integrations, notebooks, connection mutation, or Xata branch-control tools.
 - Write tasks receive a disposable branch credential. The local Postgres provider refuses to start a task while its role can connect to any other non-template database.
 - Eval pods run non-root with a read-only root filesystem, all Linux capabilities dropped, no service-account token, resource limits, and mandatory NetworkPolicy in cloud mode.

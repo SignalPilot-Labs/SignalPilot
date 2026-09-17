@@ -25,8 +25,23 @@ class AnalysisRuntimeError(RuntimeError):
         stderr: str | None = None,
         raw_error_truncated: bool = False,
         stderr_truncated: bool = False,
+        public_error_code: str | None = None,
+        public_error_message: str | None = None,
     ) -> None:
         super().__init__(message)
+        # Set when the runtime already classified the failure (for example
+        # the transport breaker's ``gateway_unavailable``); the worker then
+        # persists that code and sentence instead of ``analysis_failed``.
+        self.public_error_code = (
+            str(public_error_code).strip()[:100] or None
+            if isinstance(public_error_code, str)
+            else None
+        )
+        self.public_error_message = (
+            str(public_error_message).strip() or None
+            if isinstance(public_error_message, str)
+            else None
+        )
         self.full_trace = full_trace
         self.diagnostic_context = diagnostic_context
         self.raw_error = raw_error if isinstance(raw_error, str) else message
@@ -58,9 +73,70 @@ def public_raw_error_fields(exc: Exception) -> dict[str, Any]:
     return result
 
 
-def public_error_message(exc: Exception) -> str:
-    """Return the upstream error verbatim except for credential redaction."""
-    return redact_error_text(str(exc))
+_DEFAULT_OPERATION = "finishing the run"
+# `ReadTimeout('')`, `ConnectError('[Errno 111] ...')`: an exception repr that
+# the runtime forwarded as text. Never show it to the user as the answer.
+_REPR_FORM = re.compile(r"^\s*(?:[\w.]+\.)?(?P<type>[A-Za-z_]\w*)\((?P<body>.*)\)\s*$", re.DOTALL)
+# Only applied to HTTPStatusError text ("Server error '502 Bad Gateway' ...").
+_HTTP_STATUS_IN_TEXT = re.compile(r"\b(?P<code>[1-5]\d{2})\b")
+
+
+def _http_status_of(exc: Exception) -> int | None:
+    response = getattr(exc, "response", None)
+    code = getattr(response, "status_code", None)
+    return code if isinstance(code, int) else None
+
+
+def _sentence_for_type(type_name: str, *, operation: str, status: int | None, body: str = "") -> str | None:
+    """Map a known runtime exception type (by name) to a plain sentence."""
+    if type_name.endswith(("Timeout", "TimeoutException", "TimeoutError")):
+        return f"The analysis runtime timed out while {operation}"
+    if type_name == "HTTPStatusError":
+        if status is None:
+            found = _HTTP_STATUS_IN_TEXT.search(body)
+            status = int(found.group("code")) if found else None
+        return f"The analysis runtime returned HTTP {status}" if status else "The analysis runtime returned an HTTP error"
+    if type_name.endswith(("ConnectionError", "ConnectError", "NetworkError", "RemoteProtocolError")):
+        return "Could not reach the analysis runtime"
+    return None
+
+
+def _plain_sentence(text: str) -> str | None:
+    """First line of ``text`` if it reads as a sentence, else None.
+
+    Rejects empty text, exception reprs (``Type('...')``) and anything that
+    starts a traceback.
+    """
+    first = text.strip().splitlines()[0].strip() if text.strip() else ""
+    if not first or first.startswith("Traceback") or _REPR_FORM.match(first):
+        return None
+    return first
+
+
+def public_error_message(exc: Exception, *, operation: str = _DEFAULT_OPERATION) -> str:
+    """Return a user-safe sentence for a chat run failure.
+
+    Never returns ``str(exc)`` or ``repr(exc)`` raw. Known runtime failures map
+    to fixed sentences; other errors contribute their first line only when it
+    reads as a sentence. The raw text stays in the trace and raw_error fields.
+    """
+    operation = operation.strip() or _DEFAULT_OPERATION
+    text = str(exc)
+    mapped = _sentence_for_type(type(exc).__name__, operation=operation, status=_http_status_of(exc), body=text)
+    if mapped:
+        return mapped
+    # Text that is itself an exception repr (the runtime forwards
+    # `repr(exc)` inside an AnalysisRuntimeError): map by the named type.
+    forwarded = _REPR_FORM.match(text.strip().splitlines()[0]) if text.strip() else None
+    if forwarded:
+        mapped = _sentence_for_type(
+            forwarded.group("type"), operation=operation, status=None, body=forwarded.group("body")
+        )
+        return mapped or f"{forwarded.group('type')} during {operation}"
+    sentence = _plain_sentence(text)
+    if sentence is None:
+        return f"{type(exc).__name__} during {operation}"
+    return redact_error_text(sentence)
 
 
 def public_full_trace(exc: Exception) -> str:

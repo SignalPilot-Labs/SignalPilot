@@ -1,5 +1,6 @@
 "use client";
 
+import { TriangleAlert } from "lucide-react";
 import type { DashboardScreenshotResult, RunStep } from "~/lib/chat-run-steps";
 import { InputPills, ProgressRail, SkeletonRows, plural } from "../card-primitives";
 import { registerToolCard, type ToolCardContext, type ToolCardSummary } from "../registry";
@@ -72,8 +73,10 @@ function DashboardScreenshotExpanded({ step }: ToolCardContext) {
       {(result.error || !result.dashboardValid) && (
         <div
           data-testid="chat-dashboard-screenshot-error"
-          className="text-[11.5px] leading-5 text-[var(--color-error)]"
+          className="flex items-start gap-2 text-[11.5px] leading-5 text-[var(--color-text-muted)]"
         >
+          <TriangleAlert className="mt-1 h-3 w-3 flex-none text-[var(--color-warning)]" aria-hidden />
+          <div className="min-w-0">
           <p className="font-medium">
             {result.error === "renderer_unavailable"
               ? "The dashboard renderer is not available in this sandbox."
@@ -88,6 +91,7 @@ function DashboardScreenshotExpanded({ step }: ToolCardContext) {
               ))}
             </ul>
           )}
+          </div>
         </div>
       )}
       {result.rendered.length > 0 && (

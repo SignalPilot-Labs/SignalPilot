@@ -188,15 +188,6 @@ async def test_rejects_a_finished_run_and_a_foreign_project(db_session, enabled,
     assert exc.value.status_code == 403
 
 
-@pytest.mark.asyncio
-async def test_disabled_feature_hides_the_route(db_session, storage, monkeypatch):
-    monkeypatch.setenv("SP_FEATURE_STANDALONE_CHAT", "0")
-    run = await _running_run(db_session)
-    with pytest.raises(HTTPException) as exc:
-        await _post(db_session, run, "artifacts/x.png", PNG)
-    assert exc.value.status_code == 404
-
-
 # ── Path rules ───────────────────────────────────────────────────────────────
 
 

@@ -10,9 +10,8 @@ import re
 import time
 import uuid
 from contextlib import suppress
-from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any
 
 import sqlglot
 from sqlalchemy import select
@@ -28,6 +27,21 @@ from gateway.governance.bindings import BoundQuery, BoundQueryError
 from gateway.governance.cost_estimator import CostEstimate, CostEstimator
 from gateway.governance.pii import PIIRedactor
 from gateway.governance.plan_limits import check_query_limit, get_org_limits, record_query
+from gateway.governance.query_failures import (
+    fail_execution,
+    persistence_failed,
+    record_execution_failure,
+    reject_result,
+)
+from gateway.governance.query_types import (
+    GovernedQueryContext,
+    GovernedQueryError,
+    GovernedQueryResult,
+    actual_scan_bytes,
+    describe_columns,
+    encode_rows,
+    load_stored_rows,
+)
 from gateway.standalone_chat.config import enterprise_chat_feature_flags
 from gateway.standalone_chat.object_storage import chat_object_storage, runtime_object_key
 from gateway.standalone_chat.query_approvals import (
@@ -37,39 +51,14 @@ from gateway.standalone_chat.query_approvals import (
 from gateway.store import Store
 from gateway.store import standalone_chat as chat_store
 
-
-class GovernedQueryError(RuntimeError):
-    def __init__(self, code: str, message: str):
-        super().__init__(message)
-        self.code = code
-
-
-@dataclass(frozen=True)
-class GovernedQueryContext:
-    path: Literal["direct_api", "mcp", "sdk", "dashboard"]
-    conversation_id: str | None = None
-    run_id: str | None = None
-    project_id: str | None = None
-    commit_sha: str | None = None
-    branch: str | None = None
-    plan_id: str | None = None
-
-
-@dataclass(frozen=True)
-class GovernedQueryResult:
-    execution_id: str
-    result_id: str
-    rows: list[dict[str, Any]]
-    row_count: int
-    tables: list[str]
-    execution_ms: float
-    sql_hash: str
-    completeness: str
-    truncation_reason: str | None
-    columns: list[dict[str, Any]]
-    estimated_cost_usd: float
-    estimate_warning: str | None
-    pii_redacted: list[str]
+__all__ = [
+    "GovernedQueryContext",
+    "GovernedQueryError",
+    "GovernedQueryExecutor",
+    "GovernedQueryResult",
+    "governed_query_executor",
+    "normalize_sql",
+]
 
 
 def normalize_sql(sql: str, dialect: str | None) -> str:
@@ -79,49 +68,6 @@ def normalize_sql(sql: str, dialect: str | None) -> str:
         return expression.sql(dialect=dialect, pretty=False, normalize=True)
     except Exception:
         return re.sub(r"\s+", " ", sql.strip().rstrip(";"))
-
-
-def _logical_type(value: Any) -> str:
-    if value is None:
-        return "unknown"
-    if isinstance(value, bool):
-        return "boolean"
-    if isinstance(value, int):
-        return "integer"
-    if isinstance(value, float):
-        return "number"
-    if isinstance(value, datetime):
-        return "timestamp"
-    return type(value).__name__.lower()
-
-
-def _json_safe(value: Any) -> Any:
-    return json.loads(json.dumps(value, default=str))
-
-
-def _actual_scan_bytes(stats: dict[str, Any]) -> int | None:
-    for key in ("total_bytes_processed", "total_bytes_billed", "bytes_scanned", "scanned_bytes"):
-        value = stats.get(key)
-        if value is not None:
-            try:
-                return max(0, int(value))
-            except (TypeError, ValueError):
-                continue
-    return None
-
-
-async def _stored_result_rows(result: GatewayStructuredQueryResult) -> list[dict[str, Any]]:
-    if result.storage_kind != "object":
-        return list(result.rows_json or [])
-    if not result.object_key:
-        raise GovernedQueryError("result_unavailable", "Stored query result is unavailable")
-    data = await chat_object_storage().get_bytes(result.object_key, max_bytes=10 * 1024 * 1024)
-    if result.content_hash and hashlib.sha256(data).hexdigest() != result.content_hash:
-        raise GovernedQueryError("result_integrity_failed", "Stored query result failed integrity validation")
-    rows = json.loads(data)
-    if not isinstance(rows, list):
-        raise GovernedQueryError("result_unavailable", "Stored query result is invalid")
-    return rows
 
 
 class GovernedQueryExecutor:
@@ -229,7 +175,7 @@ class GovernedQueryExecutor:
             ).one_or_none()
             if prior is not None:
                 prior_execution, prior_result = prior
-                prior_rows = await _stored_result_rows(prior_result)
+                prior_rows = await load_stored_rows(prior_result)
                 await store.session.commit()
                 await chat_store.append_event(
                     store.session,
@@ -239,6 +185,7 @@ class GovernedQueryExecutor:
                         "execution_id": prior_execution.id,
                         "result_id": prior_result.id,
                         "plan_id": context.plan_id,
+                        "status": "reused",
                         "reused": True,
                         "row_count": prior_result.saved_row_count,
                         "completeness": prior_result.result_completeness,
@@ -404,63 +351,17 @@ class GovernedQueryExecutor:
         except GovernedQueryError:
             raise
         except Exception as exc:
-            elapsed = (time.monotonic() - started) * 1000
-            health_monitor.record(connection_name, elapsed, False, type(exc).__name__, info.db_type)
-            with suppress(Exception):
-                await store.session.refresh(execution)
-            explicitly_cancelled = execution.status == "cancelled"
-            code = (
-                "query_cancelled"
-                if explicitly_cancelled
-                else "query_timeout"
-                if "timeout" in str(exc).lower()
-                else "query_failed"
-            )
-            with suppress(Exception):
-                await self.cancel(execution.id)
-            execution.execution_ms = elapsed
-            if not explicitly_cancelled:
-                await self._fail(store, execution, code)
-            else:
-                await store.session.commit()
-            if context.run_id:
-                with suppress(Exception):
-                    await chat_store.append_event(
-                        store.session,
-                        run_id=context.run_id,
-                        event_type=(
-                            "query_cancelled" if code in {"query_timeout", "query_cancelled"} else "query_completed"
-                        ),
-                        payload={
-                            "execution_id": execution.id,
-                            "proposal_id": proposal_id,
-                            "sql_hash": sql_hash,
-                            "status": (
-                                "cancelled"
-                                if code == "query_cancelled"
-                                else "timed_out"
-                                if code == "query_timeout"
-                                else "failed"
-                            ),
-                            "error_code": code,
-                        },
-                    )
-            if proposal_id:
-                await reconcile_reservation(
-                    store.session,
-                    proposal_id=proposal_id,
-                    actual_cost_usd=None,
-                    completed=False,
-                )
-            from gateway.errors.mcp import sanitize_mcp_error
-
-            raise GovernedQueryError(
-                code,
-                "Query cancelled"
-                if code == "query_cancelled"
-                else "Query timed out"
-                if code == "query_timeout"
-                else f"Query failed: {sanitize_mcp_error(str(exc))}",
+            raise await record_execution_failure(
+                store,
+                execution,
+                exc,
+                context=context,
+                connection_name=connection_name,
+                db_type=info.db_type,
+                elapsed_ms=(time.monotonic() - started) * 1000,
+                proposal_id=proposal_id,
+                sql_hash=sql_hash,
+                cancel=self.cancel,
             ) from exc
 
         elapsed_ms = (time.monotonic() - started) * 1000
@@ -484,42 +385,25 @@ class GovernedQueryExecutor:
             and not (persisted_plan and persisted_plan.scout_row_limit)
         ):
             route_code = "runtime_required" if context.path == "mcp" else "aggregate_required"
-            actual_cost_usd = float(native_stats.get("estimated_cost_usd") or 0) or (elapsed_ms / 1000) * 0.000014
-            execution.status = "failed"
-            execution.public_error_code = route_code
-            execution.actual_cost_usd = actual_cost_usd
-            execution.actual_scan_bytes = _actual_scan_bytes(native_stats)
-            execution.execution_ms = elapsed_ms
-            execution.row_count = row_limit
-            execution.completeness = "truncated"
-            execution.truncation_reason = f"actual output exceeded the {row_limit}-row route limit"
-            execution.terminal_at = datetime.now(UTC)
-            await store.session.commit()
-            if proposal_id:
-                await reconcile_reservation(
-                    store.session,
-                    proposal_id=proposal_id,
-                    actual_cost_usd=actual_cost_usd,
-                    completed=True,
-                )
-            record_query(org_id)
-            await chat_store.append_event(
-                store.session,
-                run_id=context.run_id,
-                event_type="query_completed",
-                payload={
-                    "execution_id": execution.id,
-                    "plan_id": context.plan_id,
-                    "status": "rejected",
-                    "error_code": route_code,
-                    "actual_rows_exceeded": row_limit,
-                },
-            )
-            raise GovernedQueryError(
-                route_code,
-                "Actual MCP output requires the notebook SDK; create a fresh plan"
-                if route_code == "runtime_required"
-                else "Actual output exceeds Track A; aggregate, filter, segment, or narrow the query",
+            raise await reject_result(
+                store,
+                execution,
+                context=context,
+                org_id=org_id,
+                route_code=route_code,
+                message=(
+                    "Actual MCP output requires the notebook SDK; create a fresh plan"
+                    if route_code == "runtime_required"
+                    else "Actual output exceeds Track A; aggregate, filter, segment, or narrow the query"
+                ),
+                elapsed_ms=elapsed_ms,
+                native_stats=native_stats,
+                proposal_id=proposal_id,
+                sql_hash=sql_hash,
+                row_count=row_limit,
+                completeness="truncated",
+                truncation_reason=f"actual output exceeded the {row_limit}-row route limit",
+                event_extra={"actual_rows_exceeded": row_limit},
             )
         explicit_limit = bool(re.search(r"\bLIMIT\s+\d+", normalized_sql, flags=re.IGNORECASE))
         if persisted_plan and persisted_plan.scout_row_limit:
@@ -539,11 +423,9 @@ class GovernedQueryExecutor:
             truncation_reason = None
             query_row_count = len(saved_rows)
 
-        serialized_rows = _json_safe(saved_rows)
+        serialized_rows = encode_rows(saved_rows)
         serialized_bytes = json.dumps(serialized_rows, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         if len(serialized_bytes) > 10 * 1024 * 1024:
-            actual_cost_usd = float(native_stats.get("estimated_cost_usd") or 0) or (elapsed_ms / 1000) * 0.000014
-            execution.status = "failed"
             route_code = (
                 "runtime_required"
                 if context.run_id and context.path == "mcp" and enterprise_chat_feature_flags().size_router
@@ -551,53 +433,23 @@ class GovernedQueryExecutor:
                 if context.run_id and enterprise_chat_feature_flags().size_router
                 else "result_too_large"
             )
-            execution.public_error_code = route_code
-            execution.actual_cost_usd = actual_cost_usd
-            execution.actual_scan_bytes = _actual_scan_bytes(native_stats)
-            execution.actual_output_bytes = len(serialized_bytes)
-            execution.execution_ms = elapsed_ms
-            execution.row_count = len(saved_rows)
-            execution.completeness = completeness
-            execution.terminal_at = datetime.now(UTC)
-            await store.session.commit()
-            if proposal_id:
-                await reconcile_reservation(
-                    store.session,
-                    proposal_id=proposal_id,
-                    actual_cost_usd=actual_cost_usd,
-                    completed=True,
-                )
-            record_query(org_id)
-            if context.run_id:
-                await chat_store.append_event(
-                    store.session,
-                    run_id=context.run_id,
-                    event_type="query_completed",
-                    payload={
-                        "execution_id": execution.id,
-                        "proposal_id": proposal_id,
-                        "sql_hash": sql_hash,
-                        "status": "rejected",
-                        "error_code": route_code,
-                    },
-                )
-            raise GovernedQueryError(
-                route_code,
-                "Governed result exceeds 10 MiB; aggregate, filter, segment, or narrow the query",
+            raise await reject_result(
+                store,
+                execution,
+                context=context,
+                org_id=org_id,
+                route_code=route_code,
+                message="Governed result exceeds 10 MiB; aggregate, filter, segment, or narrow the query",
+                elapsed_ms=elapsed_ms,
+                native_stats=native_stats,
+                proposal_id=proposal_id,
+                sql_hash=sql_hash,
+                row_count=len(saved_rows),
+                completeness=completeness,
+                output_bytes=len(serialized_bytes),
             )
 
-        columns = []
-        if saved_rows:
-            for name in saved_rows[0]:
-                values = [row.get(name) for row in saved_rows]
-                sample = next((value for value in values if value is not None), None)
-                columns.append(
-                    {
-                        "name": str(name),
-                        "logical_type": _logical_type(sample),
-                        "nullable": any(v is None for v in values),
-                    }
-                )
+        columns = describe_columns(saved_rows)
 
         result_id = str(uuid.uuid4())
         storage_kind = "inline"
@@ -667,7 +519,7 @@ class GovernedQueryExecutor:
         execution.truncation_reason = truncation_reason
         actual_cost_usd = float(native_stats.get("estimated_cost_usd") or 0) or (elapsed_ms / 1000) * 0.000014
         execution.actual_cost_usd = actual_cost_usd
-        execution.actual_scan_bytes = _actual_scan_bytes(native_stats)
+        execution.actual_scan_bytes = actual_scan_bytes(native_stats)
         execution.actual_output_bytes = len(serialized_bytes)
         execution.execution_ms = elapsed_ms
         execution.terminal_at = datetime.now(UTC)
@@ -675,34 +527,18 @@ class GovernedQueryExecutor:
             await store.session.commit()
         except Exception as exc:
             await store.session.rollback()
-            if object_key:
-                with suppress(Exception):
-                    await chat_object_storage().delete(object_key)
-            with suppress(Exception):
-                persisted_execution = await store.session.get(GatewayGovernedQueryExecution, execution.id)
-                if persisted_execution is not None:
-                    persisted_execution.status = "failed"
-                    persisted_execution.public_error_code = "result_persistence_failed"
-                    persisted_execution.actual_cost_usd = actual_cost_usd
-                    persisted_execution.actual_scan_bytes = _actual_scan_bytes(native_stats)
-                    persisted_execution.actual_output_bytes = len(serialized_bytes)
-                    persisted_execution.execution_ms = elapsed_ms
-                    persisted_execution.row_count = len(saved_rows)
-                    persisted_execution.completeness = completeness
-                    persisted_execution.terminal_at = datetime.now(UTC)
-                    await store.session.commit()
-            if proposal_id:
-                with suppress(Exception):
-                    await reconcile_reservation(
-                        store.session,
-                        proposal_id=proposal_id,
-                        actual_cost_usd=actual_cost_usd,
-                        completed=True,
-                    )
-            record_query(org_id)
-            raise GovernedQueryError(
-                "result_persistence_failed",
-                "The query completed but its governed result could not be persisted",
+            raise await persistence_failed(
+                store,
+                execution,
+                org_id=org_id,
+                object_key=object_key,
+                proposal_id=proposal_id,
+                actual_cost_usd=actual_cost_usd,
+                native_stats=native_stats,
+                output_bytes=len(serialized_bytes),
+                elapsed_ms=elapsed_ms,
+                row_count=len(saved_rows),
+                completeness=completeness,
             ) from exc
         if proposal_id:
             await reconcile_reservation(
@@ -732,6 +568,7 @@ class GovernedQueryExecutor:
                     "result_id": result_id,
                     "proposal_id": proposal_id,
                     "sql_hash": sql_hash,
+                    "status": "completed",
                     "row_count": len(saved_rows),
                     "completeness": completeness,
                     "truncation_reason": truncation_reason,
@@ -741,7 +578,7 @@ class GovernedQueryExecutor:
         return GovernedQueryResult(
             execution_id=execution.id,
             result_id=result_id,
-            rows=saved_rows,
+            rows=serialized_rows,
             row_count=len(saved_rows),
             tables=validation.tables,
             execution_ms=elapsed_ms,
@@ -756,10 +593,7 @@ class GovernedQueryExecutor:
 
     @staticmethod
     async def _fail(store: Store, execution: GatewayGovernedQueryExecution, code: str) -> None:
-        execution.status = "failed"
-        execution.public_error_code = code
-        execution.terminal_at = datetime.now(UTC)
-        await store.session.commit()
+        await fail_execution(store, execution, code)
 
 
 governed_query_executor = GovernedQueryExecutor()

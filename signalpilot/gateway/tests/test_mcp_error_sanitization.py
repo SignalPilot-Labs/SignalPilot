@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from gateway.errors.mcp import (
     _SENSITIVE_PATTERNS,
+    DB_ERROR_CAP,
     sanitize_mcp_error,
     sanitize_proxy_response,
 )
@@ -73,6 +74,20 @@ class TestSanitizeMcpError:
         assert "db.internal.corp" not in result
         assert "[REDACTED]" in result
 
+    def test_redacts_host_inside_a_keyword_dsn(self):
+        """A libpq-style DSN names the host next to other connection keys."""
+        error = "FATAL: host=db.internal.corp port=5432 dbname=prod user=app sslmode=require"
+        result = sanitize_mcp_error(error)
+        assert "db.internal.corp" not in result
+        assert result.startswith("FATAL: [REDACTED] port=5432")
+
+    def test_keeps_host_inside_a_sql_error_body(self):
+        """host= inside a warehouse SQL error is the user's own text."""
+        error = "syntax error at or near \"host=\" LINE 1: select host=1 from t"
+        assert sanitize_mcp_error(error, cap=DB_ERROR_CAP) == error
+        error = "Invalid column name 'host=' in object 'dbo.events' (state 1, line 3)"
+        assert sanitize_mcp_error(error, cap=DB_ERROR_CAP) == error
+
     def test_redacts_access_token(self):
         """access_token patterns must be replaced with [REDACTED]."""
         error = "unauthorized: access_token=eyJhbGciOiJSUzI1"
@@ -126,6 +141,15 @@ class TestSanitizeMcpError:
         result = sanitize_mcp_error(db_error, cap=300)
         assert "column" in result
         assert len(result) <= 303
+
+    def test_db_error_cap_is_500(self):
+        """Warehouse error bodies keep 500 characters: the token and position
+        sit past 300 in most MSSQL and Snowflake messages."""
+        assert DB_ERROR_CAP == 500
+        db_error = "Incorrect syntax near the keyword 'TOP'. " * 20
+        result = sanitize_mcp_error(db_error, cap=DB_ERROR_CAP)
+        assert len(result) == 503 and result.endswith("...")
+        assert result.startswith(db_error[:500])
 
     def test_clean_string_passes_through(self):
         """Clean error messages must pass through unchanged (except capping)."""

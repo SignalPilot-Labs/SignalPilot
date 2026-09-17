@@ -193,6 +193,61 @@ async def test_tool_error_summary_is_sanitized_not_the_placeholder(monkeypatch: 
 
 
 @pytest.mark.asyncio
+async def test_query_error_body_is_recorded_as_an_error_even_when_sdk_says_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    appended = await _run_stream(monkeypatch, _query_events(is_error=False, content="Query error: syntax error at 'FORM'"))
+
+    (payload,) = _completed(appended)
+    assert payload["error"] is True
+    assert payload["summary"] == "Query error: syntax error at 'FORM'"
+
+
+@pytest.mark.asyncio
+async def test_oversized_result_spill_notice_is_recorded_as_an_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    notice = (
+        "Error: result (72,412 characters) exceeds maximum allowed tokens. "
+        "Output has been saved to /home/notebook/.sp/tool-results/list_tables.txt."
+    )
+    events = [
+        {
+            "type": "tool_use",
+            "tool_name": "mcp__signalpilot__list_tables",
+            "tool_call_id": "call-1",
+            "tool_input": {"connection_name": "production"},
+        },
+        {"type": "tool_result", "tool_call_id": "call-1", "content": notice, "is_error": False},
+    ]
+    appended = await _run_stream(monkeypatch, events)
+
+    (payload,) = _completed(appended)
+    assert payload["error"] is True and payload["result"]["too_large"] is True
+
+
+@pytest.mark.asyncio
+async def test_bash_probe_exit_is_recorded_as_neutral(monkeypatch: pytest.MonkeyPatch) -> None:
+    events = [
+        {
+            "type": "tool_use",
+            "tool_name": "Bash",
+            "tool_call_id": "call-1",
+            "tool_input": {"command": "ls models/optional.sql"},
+        },
+        {
+            "type": "tool_result",
+            "tool_call_id": "call-1",
+            "content": "Exit code 2\nls: cannot access 'models/optional.sql': No such file or directory",
+            "is_error": True,
+        },
+    ]
+    appended = await _run_stream(monkeypatch, events)
+
+    (payload,) = _completed(appended)
+    assert payload["error"] is False
+    assert payload["result"]["probe"] is True and payload["result"]["exit_code"] == 2
+
+
+@pytest.mark.asyncio
 async def test_notebook_cell_and_agent_side_effects_are_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
     notebook_reply = json.dumps(
         {"session_id": "s_abc", "status": "started", "notebook_path": "/w/analysis.py", "notebook": "analysis"}

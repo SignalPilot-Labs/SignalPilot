@@ -152,6 +152,8 @@ describe("dbt run card", () => {
     const failures = q(container, '[data-testid="chat-dbt-run-failures"]');
     expect(failures?.textContent).toContain("model.analytics.rpt_region_rollup");
     expect(failures?.textContent).toContain("region_name");
+    expect(failures?.innerHTML).toContain("color-warning");
+    expect(container.innerHTML).not.toContain("color-error");
     expect(container.textContent).toContain("target analytics · sync pushed · exit 1");
     // Errors open the log by default.
     expect(

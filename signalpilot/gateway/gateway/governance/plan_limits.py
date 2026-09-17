@@ -45,6 +45,8 @@ class PlanLimits:
     knowledge_storage_mb: int  # per-org knowledge storage cap in MiB (0 = unlimited)
     knowledge_history_versions: int  # edit history versions kept per doc (0 = unlimited)
     projects: bool  # workspace projects + notebook sessions (paid feature)
+    chat: bool  # standalone data chat (paid feature)
+    evals: bool  # knowledge evals (paid feature)
 
 
 PLAN_TIERS: dict[str, PlanLimits] = {
@@ -64,6 +66,8 @@ PLAN_TIERS: dict[str, PlanLimits] = {
         knowledge_storage_mb=50,
         knowledge_history_versions=5,
         projects=False,
+        chat=False,
+        evals=False,
     ),
     "pro": PlanLimits(
         tier="pro",
@@ -81,6 +85,8 @@ PLAN_TIERS: dict[str, PlanLimits] = {
         knowledge_storage_mb=250,
         knowledge_history_versions=5,
         projects=True,
+        chat=True,
+        evals=True,
     ),
     "team": PlanLimits(
         tier="team",
@@ -98,6 +104,8 @@ PLAN_TIERS: dict[str, PlanLimits] = {
         knowledge_storage_mb=1000,
         knowledge_history_versions=25,
         projects=True,
+        chat=True,
+        evals=True,
     ),
     "enterprise": PlanLimits(
         tier="enterprise",
@@ -115,6 +123,8 @@ PLAN_TIERS: dict[str, PlanLimits] = {
         knowledge_storage_mb=5000,
         knowledge_history_versions=50,
         projects=True,
+        chat=True,
+        evals=True,
     ),
     "unlimited": PlanLimits(
         tier="unlimited",
@@ -132,6 +142,8 @@ PLAN_TIERS: dict[str, PlanLimits] = {
         knowledge_storage_mb=0,
         knowledge_history_versions=100,
         projects=True,
+        chat=True,
+        evals=True,
     ),
 }
 
@@ -349,6 +361,8 @@ def check_feature(feature_name: str, limits: PlanLimits) -> None:
         "budget_controls": limits.budget_controls,
         "audit_export": limits.audit_export,
         "projects": limits.projects,
+        "chat": limits.chat,
+        "evals": limits.evals,
     }
     enabled = feature_map.get(feature_name)
     if enabled is None:

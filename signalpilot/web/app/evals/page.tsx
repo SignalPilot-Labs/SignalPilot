@@ -1359,6 +1359,30 @@ function RunsList({ runs, selectedRun, onSelect }: { runs: EvalRun[]; selectedRu
 
 /* The following code displays unavailable evaluation settings. */
 
+function PlanLockedState() {
+  return (
+    <div className="ev-card p-8">
+      <div className="flex items-center gap-3">
+        <FlaskConical className="w-5 h-5 text-[var(--color-text-dim)]" strokeWidth={1.25} />
+        <h2 className="text-2xl font-semibold tracking-[-0.01em] text-[var(--color-text)]">
+          Evals are a Pro feature
+        </h2>
+      </div>
+      <p className="mt-3 text-sm text-[var(--color-text-muted)] max-w-2xl leading-relaxed">
+        Evals run your proposed knowledge entries against a graded task set, so you can see
+        whether an entry actually changes an agent’s answers before you approve it. Upgrade to
+        Pro, Team, or Enterprise to turn them on for this workspace.
+      </p>
+      <a
+        href="/settings/billing"
+        className="mt-6 inline-flex items-center gap-2 px-5 py-3 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium rounded-[10px] transition-colors duration-150 hover:opacity-90"
+      >
+        Upgrade plan
+      </a>
+    </div>
+  );
+}
+
 function SetupState() {
   return (
     <div className="ev-card p-8">
@@ -1456,7 +1480,7 @@ function EvalsPageInner() {
               <Loader2 className="w-4 h-4 animate-spin" /> loading…
             </div>
           ) : (
-            <SetupState />
+            availability.reason === "plan" ? <PlanLockedState /> : <SetupState />
           )}
         </div>
       </div>

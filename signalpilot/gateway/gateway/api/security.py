@@ -5,11 +5,10 @@ from __future__ import annotations
 import logging
 import os
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from sqlalchemy import func, or_, select
 
 from ..auth import OrgAdmin, OrgID
-from ..config import get_governance_settings
 from ..db.models import GatewayBYOKKey, GatewayCredential
 from ..store import CURRENT_KEY_VERSION
 from ..store.crypto import _validate_encryption_health
@@ -19,26 +18,12 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api")
 
-_ADMIN_USER_IDS: frozenset[str] = get_governance_settings().admin_user_ids
-
-
-def _require_admin(store: StoreD) -> None:
-    """Raise 403 if the current user is not in the admin set."""
-    if not store.user_id:
-        raise HTTPException(status_code=403, detail="Admin access required.")
-    uid = store.user_id
-    if uid not in _ADMIN_USER_IDS:
-        raise HTTPException(status_code=403, detail="Admin access required.")
-
-
 @router.get("/security/status")
 async def security_status(store: StoreD, org_id: OrgID, _role: OrgAdmin):
     """Return encryption health and credential storage statistics.
 
-    Admin-only: accessible only to user IDs listed in SP_ADMIN_USER_IDS
-    (defaults to "local" for single-user local deployments).
+    Organization admins only.
     """
-    _require_admin(store)
 
     key_source = "environment" if os.getenv("SP_ENCRYPTION_KEY") else "auto-generated"
     encryption_healthy = _validate_encryption_health()

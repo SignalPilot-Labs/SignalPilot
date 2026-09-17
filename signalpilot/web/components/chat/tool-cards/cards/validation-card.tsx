@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, ChevronRight, X } from "lucide-react";
+import { Check, ChevronRight, TriangleAlert } from "lucide-react";
 import { useState } from "react";
 import { ChatCode } from "~/components/chat/chat-code";
 import {
@@ -125,20 +125,20 @@ function Headline({ result, failed }: { result: ValidationResult; failed: boolea
         className={`flex h-8 w-8 flex-none items-center justify-center rounded-full border ${
           ok
             ? "border-[var(--color-success)]/35 bg-[rgba(0,255,136,0.08)] text-[var(--color-success)]"
-            : "border-[var(--color-error)]/35 bg-[rgba(255,68,68,0.08)] text-[var(--color-error)]"
+            : "border-[var(--color-warning)]/35 bg-[rgba(255,170,0,0.08)] text-[var(--color-warning)]"
         }`}
       >
         {ok ? (
           <Check className="chat-boot-check h-4 w-4" strokeWidth={2.5} />
         ) : (
-          <X className="h-4 w-4" strokeWidth={2.5} />
+          <TriangleAlert className="h-4 w-4" strokeWidth={2.25} />
         )}
       </span>
       <div className="min-w-0 flex-1">
         <div
           data-testid="chat-validation-verdict"
           className={`text-[12px] font-medium ${
-            ok ? "text-[var(--color-success)]" : "text-[var(--color-error)]"
+            ok ? "text-[var(--color-success)]" : "text-[var(--color-warning)]"
           }`}
         >
           {ok ? "Valid" : "Invalid"}

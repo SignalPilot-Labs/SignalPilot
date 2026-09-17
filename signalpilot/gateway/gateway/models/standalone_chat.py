@@ -75,6 +75,7 @@ class StandaloneChatProject(BaseModel):
 
 class ChatBootstrapResponse(BaseModel):
     enabled: bool
+    plan_locked: bool = False
     projects: list[StandaloneChatProject]
     selected_project_id: str | None
     is_admin: bool

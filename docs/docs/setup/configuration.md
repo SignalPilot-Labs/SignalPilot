@@ -88,7 +88,6 @@ Each lease keeps query state and cancellation isolated from other requests. Thes
 |----------|---------|-------------|
 | `SP_MAX_EXPORT_ROWS` | `50000` | Maximum rows allowed in a single audit export. |
 | `SP_ANNOTATIONS_TTL` | `60.0` | Cache TTL in seconds for schema annotation files. |
-| `SP_ADMIN_USER_IDS` | `local` | Comma-separated platform-staff user IDs with access to security administration and eval operations. Set this explicitly in cloud; an unset cloud deployment fails closed on eval routes. The value `local` is the single-user local-deployment sentinel. |
 
 ## SSRF protection
 

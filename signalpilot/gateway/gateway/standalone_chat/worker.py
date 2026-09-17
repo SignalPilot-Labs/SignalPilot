@@ -14,7 +14,6 @@ import httpx
 from gateway.db.engine import get_session_factory, init_db
 from gateway.standalone_chat.config import (
     lease_seconds,
-    standalone_chat_enabled,
     worker_concurrency,
     worker_poll_seconds,
 )
@@ -55,6 +54,8 @@ from gateway.standalone_chat.worker_errors import (
     public_raw_error_fields as _public_raw_error_fields,
 )
 from gateway.standalone_chat.worker_events import (
+    _announce_notebook,
+    _cancel_previous_attempt,
     _cancellation_monitor,
     _lease_renewer,
     _notebook_started_payload,  # noqa: F401 — re-exported for tests
@@ -107,32 +108,6 @@ async def _flush_deltas(run_id: str) -> None:
     batcher = _delta_batchers.get(run_id)
     if batcher is not None:
         await batcher.flush()
-
-
-async def _announce_notebook(run_id: str, payload: dict[str, Any]) -> None:
-    """Append the notebook_started event and persist the conversation pointer.
-
-    The pointer makes the conversation row the single source of truth for
-    where the notebook lives. Persist only a complete id set: a partial
-    payload cannot be attached to and must not clobber a good pointer.
-    """
-    await _append(run_id, "notebook_started", payload)
-    gateway_session_id = payload.get("gateway_session_id")
-    kernel_session_id = payload.get("kernel_session_id")
-    notebook_path = payload.get("notebook_path")
-    if not (gateway_session_id and kernel_session_id and notebook_path):
-        return
-    with suppress(Exception):
-        factory = get_session_factory()
-        async with factory() as db:
-            await chat_store.set_conversation_notebook_for_run(
-                db,
-                run_id=run_id,
-                gateway_session_id=str(gateway_session_id),
-                kernel_session_id=str(kernel_session_id),
-                notebook_path=str(notebook_path),
-                name=str(payload.get("notebook") or "analysis"),
-            )
 
 
 async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
@@ -264,6 +239,16 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                                 stop,
                             )
                         )
+                if recovering or notebook_attempt > 0:
+                    # A re-claimed run, or our own reconnect: the previous
+                    # attempt may still be running under this run id on the
+                    # notebook runtime. Stop it (keeping its kernels for
+                    # the resumed model) before executing again.
+                    await _cancel_previous_attempt(
+                        execution,
+                        run_id=run_id,
+                        reason="re-claimed" if recovering else "reconnect",
+                    )
                 async for event in stream_execution(execution):
                     if stop.is_set():
                         raise asyncio.CancelledError
@@ -405,6 +390,8 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                             stderr=event.get("stderr"),
                             raw_error_truncated=event.get("raw_error_truncated") is True,
                             stderr_truncated=event.get("stderr_truncated") is True,
+                            public_error_code=event.get("public_error_code"),
+                            public_error_message=event.get("public_error_message"),
                         )
                     elif event_type == "final":
                         final_text = content or final_text or streamed_text
@@ -499,7 +486,9 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
             type(exc).__name__,
             exc_info=True,
         )
-        public_message = _public_error_message(exc)
+        # A runtime-classified failure keeps its own code and sentence.
+        public_code = getattr(exc, "public_error_code", None) or "analysis_failed"
+        public_message = getattr(exc, "public_error_message", None) or _public_error_message(exc)
         full_trace = _public_full_trace(exc)
         diagnostic_context = _public_diagnostic_context(exc)
         diagnostic_context["run_id"] = run_id
@@ -508,7 +497,7 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                 run_id,
                 "error",
                 {
-                    "code": "analysis_failed",
+                    "code": public_code,
                     "message": public_message,
                     "full_trace": full_trace,
                     "diagnostic_context": diagnostic_context,
@@ -522,7 +511,7 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                 db,
                 run_id=run_id,
                 worker_id=worker_id,
-                code="analysis_failed",
+                code=public_code,
                 message=public_message,
             )
     finally:
@@ -558,9 +547,6 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
 
 async def run_worker() -> None:
     await init_db()
-    if not standalone_chat_enabled():
-        logger.info("Standalone chat worker disabled by feature flag")
-        return
     worker_id = _worker_id()
     concurrency = worker_concurrency()
     active: set[asyncio.Task[None]] = set()

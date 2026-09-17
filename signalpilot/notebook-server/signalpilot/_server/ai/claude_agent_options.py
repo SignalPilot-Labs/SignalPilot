@@ -32,6 +32,7 @@ __all__ = [
     "_build_agent_env",
     "_build_agent_options_kwargs",
     "_build_disallowed_tools",
+    "resolve_agent_cwd",
 ]
 
 FILE_EDIT_TOOLS = ["Write", "Edit", "MultiEdit", "NotebookEdit", "Bash"]
@@ -42,6 +43,31 @@ def _agent_effort(override: str | None = None) -> str:
     """Reasoning effort for the agent CLI. Defaults to medium."""
     effort = (override or os.getenv("SP_AGENT_EFFORT", "medium")).strip().lower()
     return effort if effort in _EFFORT_LEVELS else "medium"
+
+
+def resolve_agent_cwd(workspace: str | None) -> tuple[str, str]:
+    """The agent working directory and the dbt project directory.
+
+    When the workspace holds exactly one ``dbt_project.yml`` in a direct
+    subdirectory, both are that subdirectory, so ``cd models`` and every
+    later relative path resolve after the CLI resets the shell directory.
+    A ``dbt_project.yml`` at the root, none, or several keep the root.
+    """
+    root = Path(workspace or os.getcwd())
+    try:
+        if (root / "dbt_project.yml").is_file():
+            return str(root), str(root)
+        candidates = [
+            child
+            for child in root.iterdir()
+            if child.is_dir() and (child / "dbt_project.yml").is_file()
+        ]
+    except OSError:
+        return str(root), str(root)
+    if len(candidates) == 1:
+        project = str(candidates[0])
+        return project, project
+    return str(root), str(root)
 
 
 def _build_agent_env(
@@ -86,6 +112,12 @@ def _build_agent_options_kwargs(
     is_resume: bool,
 ) -> dict[str, Any]:
     """Assemble the kwargs passed to ``ClaudeAgentOptions``."""
+    from signalpilot._server.ai.transport_breaker import (
+        build_transport_breaker_hooks,
+    )
+
+    effective_cwd, project_dir = resolve_agent_cwd(cwd)
+    agent_env["SP_PROJECT_DIR"] = project_dir
     agent_options_kwargs: dict[str, Any] = {
         "model": model,
         "max_turns": max_turns,
@@ -113,8 +145,11 @@ def _build_agent_options_kwargs(
             "preset": "claude_code",
             "append": system_prompt,
         },
-        "cwd": cwd or os.getcwd(),
+        "cwd": effective_cwd,
         "env": agent_env,
+        # Transport breaker: deny gateway tool calls with a concrete wait
+        # after a transport failure; stop the run after three in a row.
+        "hooks": build_transport_breaker_hooks(chat_session_id),
         # Reasoning effort. Medium keeps extended thinking useful without
         # long stalls before the first tool call. Override with
         # SP_AGENT_EFFORT (low|medium|high|xhigh|max).

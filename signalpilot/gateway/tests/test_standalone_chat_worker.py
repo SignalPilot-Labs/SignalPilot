@@ -11,7 +11,7 @@ import pytest
 from gateway.standalone_chat import worker, worker_context
 
 
-def test_public_error_message_preserves_upstream_text_verbatim() -> None:
+def test_public_error_message_keeps_the_upstream_headline_only() -> None:
     error = RuntimeError(
         "CLIConnectionError: OAuth token expired\n"
         "stderr: authentication failed\n"
@@ -22,7 +22,10 @@ def test_public_error_message_preserves_upstream_text_verbatim() -> None:
 
     message = worker._public_error_message(error)
 
-    assert message == str(error)
+    # The headline is the user-facing message; stderr and the traceback stay
+    # in full_trace / raw_error, never in the assistant reply.
+    assert message == "CLIConnectionError: OAuth token expired"
+    assert "Traceback" not in message
 
 
 def test_public_error_message_redacts_credentials() -> None:

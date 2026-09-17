@@ -16,6 +16,11 @@ class ProjectedResult:
     ``result`` always has a ``kind`` (see the wire contract in
     ``web/lib/api/standalone-chat.ts``). ``result_text`` is the capped raw
     text; ``result_chars`` the full length before any cap.
+
+    ``error`` is the projector's verdict on the call: ``True`` when the text
+    is a failure the SDK did not flag (a ``Query error:`` body, the oversized
+    result spill notice), ``False`` when the SDK flagged a harmless probe
+    (``ls`` on an optional file), ``None`` when the SDK flag stands.
     """
 
     summary: str
@@ -23,6 +28,7 @@ class ProjectedResult:
     result_text: str | None = None
     result_chars: int | None = None
     truncated: bool = False
+    error: bool | None = None
 
 
 def build(

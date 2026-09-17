@@ -64,9 +64,8 @@ SQL needs `read` and `query` and nothing else. The API accepts an optional
 `expires_at` on creation; the web form does not set one, so keys made in the UI
 do not expire — rotate them by creating a new key and deleting the old one.
 
-Some routes require more than a scope. Platform-administration and eval routes
-additionally require the caller's user id to appear in `SP_ADMIN_USER_IDS`, and
-eval routes require the workspace to be allow-listed.
+Some routes require more than a scope. Security administration requires the
+organization admin role, and eval routes require a paid plan.
 
 ## Clerk JWT (cloud mode)
 

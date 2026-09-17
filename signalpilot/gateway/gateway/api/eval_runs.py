@@ -15,33 +15,20 @@ import time
 import zipfile
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import PlainTextResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from ..config import get_governance_settings
 from ..config.evals import get_eval_run_settings
 from ..evals import runner, sandboxes
 from ..evals.object_store import EvidenceStoreDisabled, get_object_store
 from ..security.scope_guard import RequireScope
-from .deps import RequirePlatformStaff, StoreD
+from .deps import EvalsGate, StoreD
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api")
 
-
-async def _require_allowed_org(store: StoreD) -> None:
-    """Restrict evals to the orgs named in SP_EVAL_ALLOWED_ORGS.
-
-    The active org is what carries the eval state, so a user switching into a
-    non-allowlisted org loses access.
-    """
-    if not get_eval_run_settings().org_allowed(store.org_id):
-        raise HTTPException(status_code=403, detail="Evals are not enabled for this workspace.")
-
-
-RequireAllowedOrg = Depends(_require_allowed_org)
 
 # The routes use three access tiers because each tier has different risks.
 # Assign each new route to one of these lists.
@@ -51,9 +38,9 @@ RequireAllowedOrg = Depends(_require_allowed_org)
 # EVIDENCE permits access to transcripts, captures, artifacts, and exports.
 # This evidence can contain warehouse data and agent output.
 # EXECUTE permits operations that incur costs, change configuration, or select a repository.
-EVAL_GUARDS = [RequireScope("read"), RequirePlatformStaff, RequireAllowedOrg]
-EVAL_EVIDENCE_GUARDS = [RequireScope("query"), RequirePlatformStaff, RequireAllowedOrg]
-EVAL_EXECUTE_GUARDS = [RequireScope("admin"), RequirePlatformStaff, RequireAllowedOrg]
+EVAL_GUARDS = [RequireScope("read"), EvalsGate]
+EVAL_EVIDENCE_GUARDS = [RequireScope("query"), EvalsGate]
+EVAL_EXECUTE_GUARDS = [RequireScope("admin"), EvalsGate]
 
 # In-process registry so a second trigger doesn't stack runs unboundedly.
 _active_tasks: dict[str, asyncio.Task] = {}
@@ -112,14 +99,17 @@ class EvalRunRequest(BaseModel):
     task_ids: list[str] | None = Field(None, max_length=200)
 
 
-@router.get("/evals/availability", dependencies=[RequireScope("read"), RequirePlatformStaff])
+@router.get("/evals/availability", dependencies=[RequireScope("read")])
 async def get_eval_availability(store: StoreD):
-    """Return whether the caller can use evaluations.
+    """Return whether the organization plan includes evaluations.
 
-    This route does not report access for other callers.
+    Any authenticated user can read this; every other eval route is plan-gated.
     """
-    if not get_eval_run_settings().org_allowed(store.org_id):
-        return {"enabled": False, "reason": "not_enabled_for_org"}
+    from ..governance.plan_limits import get_org_limits
+
+    limits = await get_org_limits(store.org_id or "local")
+    if not limits.evals:
+        return {"enabled": False, "reason": "plan"}
     return {"enabled": True, "reason": "ok"}
 
 
@@ -367,9 +357,11 @@ async def maybe_autorun_after_knowledge_change(store, doc) -> None:
             return
 
         settings = get_eval_run_settings()
-        if not settings.enabled or not settings.org_allowed(store.org_id):
+        if not settings.enabled:
             return
-        if not store.user_id or store.user_id not in get_governance_settings().admin_user_ids:
+        from ..governance.plan_limits import get_org_limits
+
+        if not (await get_org_limits(store.org_id or "local")).evals:
             return
 
         cfg = await store.get_eval_config()

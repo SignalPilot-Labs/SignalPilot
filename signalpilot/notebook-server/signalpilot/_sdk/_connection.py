@@ -1,10 +1,25 @@
-"""Connection object — user-facing interface to a SignalPilot data connection."""
+"""Connection object: the user-facing interface to a SignalPilot data connection."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from signalpilot._sdk._client import GatewayClient
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+    import pandas as pd
+
+# Gateway ``columns[].logical_type`` values that hold numbers or times. The
+# replay cache serialises Decimal, date and datetime as strings, so the
+# frame coerces by logical type rather than by the value's Python type.
+NUMERIC_LOGICAL_TYPES = frozenset(
+    {"integer", "int", "number", "float", "decimal", "numeric", "bigint"}
+)
+DATETIME_LOGICAL_TYPES = frozenset(
+    {"timestamp", "datetime", "date", "timestamptz"}
+)
 
 
 @dataclass(frozen=True)
@@ -16,6 +31,71 @@ class DatasetRef:
     completeness: str
     expires_at: str
     _client: GatewayClient = field(repr=False, compare=False)
+
+
+class QueryRows(list):
+    """Rows from ``db.query`` with the gateway column schema attached.
+
+    Behaves as the plain list of row dicts it always was: integer and slice
+    indexing, iteration and ``len`` are unchanged. ``rows["rows"]`` returns
+    the list itself so code written against the old ``query_result`` shape
+    keeps working. ``.columns`` holds the gateway schema and ``.df()``
+    builds a typed pandas DataFrame.
+    """
+
+    def __init__(
+        self,
+        rows: Iterable[dict[str, Any]] = (),
+        columns: Iterable[dict[str, Any]] = (),
+    ) -> None:
+        super().__init__(rows)
+        self.columns: list[dict[str, Any]] = [dict(c) for c in columns]
+
+    @property
+    def rows(self) -> QueryRows:
+        return self
+
+    def __getitem__(self, key: Any) -> Any:
+        if isinstance(key, str):
+            if key == "rows":
+                return self
+            if key == "columns":
+                return self.columns
+            raise KeyError(key)
+        return super().__getitem__(key)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        try:
+            return self[key]
+        except KeyError:
+            return default
+
+    def df(self) -> pd.DataFrame:
+        """A pandas DataFrame with columns coerced by gateway logical type."""
+        import pandas as pd
+
+        names = [str(c.get("name")) for c in self.columns if c.get("name")]
+        frame = pd.DataFrame(list(self), columns=names or None)
+        return coerce_frame(frame, self.columns)
+
+    def __repr__(self) -> str:
+        return f"QueryRows({list.__repr__(self)}, columns={self.columns!r})"
+
+
+def coerce_frame(frame: pd.DataFrame, columns: Iterable[dict[str, Any]]) -> pd.DataFrame:
+    """Coerce ``frame`` columns in place by the gateway ``logical_type``."""
+    import pandas as pd
+
+    for column in columns:
+        name = column.get("name")
+        logical = str(column.get("logical_type") or "").lower()
+        if name not in frame.columns:
+            continue
+        if logical in NUMERIC_LOGICAL_TYPES:
+            frame[name] = pd.to_numeric(frame[name], errors="coerce")
+        elif logical in DATETIME_LOGICAL_TYPES:
+            frame[name] = pd.to_datetime(frame[name], errors="coerce")
+    return frame
 
 
 class Connection:
@@ -30,9 +110,17 @@ class Connection:
         """The connection name on the gateway."""
         return self._name
 
-    def query(self, sql: str, row_limit: int = 1000) -> list[dict[str, Any]]:
-        """Execute a governed SQL query. Compatibility wrapper returning rows."""
-        return self.query_result(sql, row_limit).get("rows", [])
+    def query(self, sql: str, row_limit: int = 1000) -> QueryRows:
+        """Execute a governed SQL query and return the rows.
+
+        The result is a list of row dicts with ``.columns`` and ``.df()``.
+        """
+        data = self.query_result(sql, row_limit)
+        return QueryRows(data.get("rows") or [], data.get("columns") or [])
+
+    def query_df(self, sql: str, row_limit: int = 1000) -> pd.DataFrame:
+        """Execute a governed SQL query and return a typed pandas DataFrame."""
+        return self.query(sql, row_limit).df()
 
     def query_result(
         self,
@@ -80,7 +168,7 @@ class Connection:
         return data.get("tables", data.get("schema", []))
 
     def describe(self, table: str) -> list[dict[str, Any]]:
-        """Column details for a table — types, stats, annotations."""
+        """Column details for a table: types, stats, annotations."""
         data = self._client.get(
             f"/api/connections/{self._name}/schema/explore-table",
             {"table_name": table},
@@ -115,7 +203,7 @@ class Connection:
         return data.get("paths", data.get("joins", []))
 
     def schema_overview(self) -> dict[str, Any]:
-        """High-level schema summary — table counts, sizes, etc."""
+        """High-level schema summary: table counts, sizes, etc."""
         return self._client.get(f"/api/connections/{self._name}/schema/overview")
 
     def __repr__(self) -> str:

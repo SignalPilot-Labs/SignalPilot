@@ -145,10 +145,15 @@ async def handle_tool_result(
                 # The rows are now authoritative; a large raw copy is redundant.
                 if projected.result_text and len(projected.result_text) > _STRUCTURED_TEXT_MAX:
                     projected.result_text = None
+    # The recorded flag merges the SDK's verdict with the projector's: a
+    # "Query error:" body or a spilled result is an error even when the SDK
+    # says success; a Bash probe (ls on an optional file) is not, even when
+    # it says failure. The agent itself still sees the SDK's flag.
+    error = is_error if projected.error is None else projected.error
     payload: dict[str, Any] = {
         "tool_call_id": event.get("tool_call_id"),
         "tool": completed_tool or None,
-        "error": is_error,
+        "error": error,
         "summary": projected.summary,
         "result": projected.result,
         "result_text": projected.result_text,

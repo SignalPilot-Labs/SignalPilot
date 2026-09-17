@@ -390,6 +390,44 @@ export interface GitHubInstallation {
   github_account_type: string;
   permissions: Record<string, string> | null;
   status: string;
+  /** Number of repositories the installation grants access to (0 when unknown). */
+  authorized_repository_count: number;
+  /** Repository full names the installation grants access to (may be empty). */
+  repositories: string[];
+  created_at: number;
+  updated_at: number;
+}
+
+export type AgentPullRequestStatus =
+  | "pushed"
+  | "open"
+  | "merged"
+  | "closed"
+  | "error";
+
+/**
+ * A branch the chat agent pushed to the gateway git server, and the GitHub
+ * pull request opened on it (status "pushed" = branch mirrored, no PR yet).
+ */
+export interface AgentPullRequest {
+  id: string;
+  org_id: string;
+  project_id: string;
+  conversation_id: string | null;
+  repo_full_name: string;
+  source_branch: string;
+  github_branch: string;
+  base_branch: string;
+  pr_number: number | null;
+  pr_url: string | null;
+  title: string;
+  status: AgentPullRequestStatus;
+  error_message: string | null;
+  export_commit_sha: string | null;
+  last_pushed_sha: string | null;
+  last_pushed_at: number | null;
+  draft: boolean;
+  created_by: string;
   created_at: number;
   updated_at: number;
 }
@@ -485,4 +523,71 @@ export interface GitCredentials {
   clone_url: string | null;
   default_branch: string;
   expires_at: number | null;
+}
+
+// ---------------------------------------------------------------------------
+// Usage analytics (GET /api/usage/org and /api/usage/me)
+// ---------------------------------------------------------------------------
+
+export interface UsageWindow {
+  from_ts: number;
+  to_ts: number;
+  days: number;
+}
+
+export interface UsageTotals {
+  chat_runs: number;
+  conversations: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
+  cost_usd: number;
+  queries: number;
+  blocked_queries: number;
+  rows_returned: number;
+  eval_runs?: number | null;
+  last_active_at?: number | null;
+}
+
+export interface MemberUsage extends UsageTotals {
+  user_id: string;
+}
+
+export interface DailyUsage {
+  date: string;
+  chat_runs: number;
+  cost_usd: number;
+  queries: number;
+}
+
+export interface OrgUsageResponse {
+  window: UsageWindow;
+  totals: UsageTotals;
+  members: MemberUsage[];
+  daily: DailyUsage[];
+}
+
+export interface ConversationUsage {
+  conversation_id: string;
+  title: string;
+  chat_runs: number;
+  cost_usd: number;
+  last_activity_at: number;
+}
+
+export interface ConnectionUsage {
+  connection_name: string;
+  queries: number;
+  rows_returned: number;
+  blocked_queries: number;
+}
+
+export interface MyUsageResponse {
+  window: UsageWindow;
+  user_id: string;
+  totals: UsageTotals;
+  daily: DailyUsage[];
+  conversations: ConversationUsage[];
+  connections: ConnectionUsage[];
 }

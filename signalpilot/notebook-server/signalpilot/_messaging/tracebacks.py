@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import html
+import re
 import sys
 
 from signalpilot._messaging.cell_output import CellChannel, CellOutput
@@ -103,3 +105,41 @@ def _trim_traceback(traceback: str) -> str:
 
 def is_code_highlighting(value: str) -> bool:
     return 'class="codehilite"' in value
+
+
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+TRACEBACK_MIMETYPE = "application/vnd.sp+traceback"
+
+
+def plain_traceback_text(
+    value: str, *, frames: int = 3, max_chars: int = 600
+) -> str:
+    """Return a traceback as plain text: the last ``frames`` frames, no HTML.
+
+    Accepts the Pygments HTML the kernel emits for the UI or a raw traceback
+    string. Earlier frames are replaced by one summary line and the result is
+    clipped from the front so the final exception line always survives.
+    """
+    text = value
+    if "<" in text and ">" in text:
+        text = html.unescape(_HTML_TAG_RE.sub("", text))
+    lines = [line.rstrip() for line in text.strip().splitlines()]
+    if not lines:
+        return ""
+    header: list[str] = []
+    body = lines
+    if lines[0].startswith("Traceback (most recent call last)"):
+        header, body = [lines[0]], lines[1:]
+    frame_starts = [
+        index for index, line in enumerate(body) if line.startswith("  File ")
+    ]
+    if frames > 0 and len(frame_starts) > frames:
+        omitted = len(frame_starts) - frames
+        body = [
+            f"  ... {omitted} earlier frame(s) omitted",
+            *body[frame_starts[-frames] :],
+        ]
+    result = "\n".join([*header, *body])
+    if max_chars > 0 and len(result) > max_chars:
+        result = "..." + result[-(max_chars - 3) :]
+    return result

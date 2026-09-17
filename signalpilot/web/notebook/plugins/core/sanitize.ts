@@ -1,7 +1,7 @@
 import { atom, useAtomValue } from "jotai";
 import { hasRunAnyCellAtom } from "@/components/editor/cell/useRunCells";
 import { autoInstantiateAtom } from "@/core/config/config";
-import { getCurrentAppMode } from "@/core/mode";
+import { getCurrentAppMode, viewerOnlyAtom } from "@/core/mode";
 import { hasTrustedExportContext } from "@/core/static/export-context";
 
 // Re-export so existing consumers don't break.
@@ -14,6 +14,13 @@ export { sanitizeHtml } from "./sanitize-html";
  * flips after the user runs a cell.
  */
 const sanitizeHtmlAtom = atom<boolean>((get) => {
+  // Viewer-only surfaces (the chat live notebook panel and /chat-notebook)
+  // show agent-authored output. The "read mode = an app the author trusts"
+  // assumption below does not hold there, so always sanitize first.
+  if (get(viewerOnlyAtom)) {
+    return true;
+  }
+
   const hasRunAnyCell = get(hasRunAnyCellAtom);
   const autoInstantiate = get(autoInstantiateAtom);
 

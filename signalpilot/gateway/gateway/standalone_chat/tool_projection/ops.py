@@ -36,6 +36,13 @@ _DBT_ELAPSED_RE = re.compile(
 _DBT_RUN_RESULTS_RE = re.compile(r"^run_results: (.*)$", re.MULTILINE)
 _EXIT_CODE_RE = re.compile(r"^exit_code: (-?\d+)$", re.MULTILINE)
 _BASH_EXIT_RE = re.compile(r"^Exit code (\d+)\s*\n?")
+# Bash probe class: these programs exit 1 or 2 to answer a question (missing
+# file, no match), so that exit is not a failed tool call.
+_PROBE_EXIT_CODES = frozenset({1, 2})
+_SHELL_SPLIT_RE = re.compile(r"&&|\|\||;|\|")
+_PROBE_FIRST_TOKEN_RE = re.compile(
+    r"^(?:ls|test|\[|\[\[|grep|find|cat|stat|head|tail)(?:\s|$)",
+)
 _SEARCH_HIT_RE = re.compile(r"^\s*id=(\S+) scope=(\S+) category=(\S+) title=(.*)$")
 _SNIPPET_RE = re.compile(r"^\s*snippet: (.*)$")
 _DOC_HEADER_RE = re.compile(r"^\[([^:\]]+):([^\]]*)\]\[([^\]]+)\]$")
@@ -144,6 +151,19 @@ def project_sandbox_exec(content: str, tool_input: dict[str, Any] | None) -> Pro
     )
 
 
+def is_probe_command(command: str) -> bool:
+    """True when every segment of ``command`` starts with a probe program.
+
+    ``ls`` on an optional file, ``grep`` with no match or ``test -f`` exit
+    1 or 2 by design; the agent is asking a question, not failing.
+    """
+    segments = [segment.strip() for segment in _SHELL_SPLIT_RE.split(command or "")]
+    segments = [segment for segment in segments if segment]
+    if not segments:
+        return False
+    return all(_PROBE_FIRST_TOKEN_RE.match(segment) for segment in segments)
+
+
 def project_bash(content: str, tool_input: dict[str, Any] | None, *, is_error: bool) -> ProjectedResult:
     text = content or ""
     command = str(tool_input.get("command") or "") if isinstance(tool_input, dict) else ""
@@ -153,13 +173,20 @@ def project_bash(content: str, tool_input: dict[str, Any] | None, *, is_error: b
     if match:
         exit_code = int(match.group(1))
         body = text[match.end() :]
-    return _terminal(
+    probe = is_error and exit_code in _PROBE_EXIT_CODES and is_probe_command(command)
+    projected = _terminal(
         command=command or None,
         exit_code=exit_code,
         stdout=body if not is_error else "",
         stderr=body if is_error else "",
         text=text,
     )
+    if probe:
+        # The agent still sees the SDK's error flag; only the recorded event
+        # and the UI treat the call as a neutral probe.
+        projected.result["probe"] = True
+        projected.error = False
+    return projected
 
 
 def project_knowledge(content: str, tool_input: dict[str, Any] | None, *, mode: str) -> ProjectedResult:

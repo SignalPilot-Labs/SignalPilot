@@ -4,7 +4,7 @@ Verifies that:
 - Global exception handler returns generic 500 for unhandled exceptions
 - Global handler does NOT swallow intentional HTTPException responses
 - Error responses do not contain raw exception details
-- SQL parse errors are capped at 100 chars
+- SQL parse errors are capped at 300 chars and name the dialect
 """
 
 from __future__ import annotations
@@ -109,23 +109,22 @@ class TestGlobalExceptionHandler:
 
 
 class TestSQLParseErrorSanitization:
-    """SQL parse errors must be capped at 100 chars."""
+    """SQL parse errors must be capped at 300 chars and name the dialect."""
 
-    def test_parse_error_message_capped_at_100_chars(self):
+    def test_parse_error_message_capped_at_300_chars(self):
         """A very long sqlglot parse error must be truncated in blocked_reason."""
         # Craft SQL that reliably triggers a parse error
-        result = validate_sql("SELECT @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+        result = validate_sql("SELECT " + "@" * 2000, dialect="postgres")
         if not result.ok and result.blocked_reason and result.blocked_reason.startswith("SQL parse error"):
-            # The message after "SQL parse error: " must be at most 100 chars
-            prefix = "SQL parse error: "
-            error_part = result.blocked_reason[len(prefix) :]
-            assert len(error_part) <= 100, f"Error detail exceeds 100 chars: {len(error_part)} chars"
+            assert result.blocked_reason.startswith("SQL parse error (postgres)")
+            assert len(result.blocked_reason) <= 300, f"Error exceeds 300 chars: {len(result.blocked_reason)}"
+            assert "\x1b" not in result.blocked_reason
         else:
             pytest.skip("sqlglot did not raise a parse error on crafted input")
 
     def test_parse_error_contains_sql_parse_error_prefix(self):
         """Parse error blocked_reason must start with 'SQL parse error'."""
-        result = validate_sql("SELCET * FORM users WHRE")
+        result = validate_sql("SELCET * FORM users WHRE", dialect="postgres")
         if not result.ok and result.blocked_reason and "parse error" in result.blocked_reason.lower():
             assert result.blocked_reason.startswith("SQL parse error")
         else:
@@ -133,7 +132,7 @@ class TestSQLParseErrorSanitization:
 
     def test_parse_error_does_not_leak_library_internals(self):
         """Parse error must not contain Python class names or file paths."""
-        result = validate_sql("SELECT @#$% INVALID SQL !!!")
+        result = validate_sql("SELECT @#$% INVALID SQL !!!", dialect="postgres")
         if not result.ok and result.blocked_reason:
             # Must not contain Python tracebacks or module paths
             assert "Traceback" not in (result.blocked_reason or "")

@@ -69,15 +69,23 @@ const removeWrappingHtmlTags: TransformFn = (
   }
 };
 
+// Sandbox applied to iframes rendered outside a trusted notebook context.
+// No `allow-same-origin`: a srcdoc frame gets an opaque origin and cannot
+// reach the app's DOM, cookies, or session; no `allow-top-navigation`.
+const UNTRUSTED_IFRAME_SANDBOX = "allow-scripts allow-forms allow-popups";
+
 const replaceValidIframes = (domNode: DOMNode) => {
   // For iframe, we just want to use dangerouslySetInnerHTML so:
   // 1) we can remount the iframe when the src changes
   // 2) keep event attributes (onload, etc.) since this library removes them
+  //    (trusted context only: libraries such as folium rely on onload plus
+  //    same-origin contentDocument access in the user's own notebook)
   if (
     domNode instanceof Element &&
     domNode.attribs &&
     domNode.name === "iframe"
   ) {
+    const trusted = hasTrustedNotebookContext();
     const element = document.createElement("iframe");
     Object.entries(domNode.attribs).forEach(([key, value]) => {
       // If it is wrapped in quotes, remove them
@@ -86,8 +94,16 @@ const replaceValidIframes = (domNode: DOMNode) => {
       if (key.startsWith('"') && key.endsWith('"')) {
         key = key.slice(1, -1);
       }
+      // Untrusted context (chat viewer, edit mode before any run): drop
+      // inline event handlers and the author's own sandbox value.
+      if (!trusted && (/^on/i.test(key) || key.toLowerCase() === "sandbox")) {
+        return;
+      }
       element.setAttribute(key, value);
     });
+    if (!trusted) {
+      element.setAttribute("sandbox", UNTRUSTED_IFRAME_SANDBOX);
+    }
     return <div dangerouslySetInnerHTML={{ __html: element.outerHTML }} />;
   }
 };

@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  AlertCircle,
   Bot,
   Check,
   FileCode2,
@@ -12,6 +11,7 @@ import {
   ListTodo,
   NotebookPen,
   Play,
+  TriangleAlert,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -20,6 +20,7 @@ import {
   type RunStep,
   type RunStepCategory,
 } from "~/lib/chat-run-steps";
+import { FAILED_TONE_CLASS } from "./card-primitives";
 import { resolveToolCard, type ToolCardAccent, type ToolCardDefinition } from "./registry";
 import { NOUN_BY_KIND } from "./registry-tools";
 
@@ -201,7 +202,10 @@ export function mergeChips(
   });
 }
 
-/** The pill itself; `flash` plays the pick highlight once. */
+/**
+ * The pill itself; `flash` plays the pick highlight once. A failed chip
+ * keeps the neutral colours and swaps the check for an amber warning icon.
+ */
 export function ChipPill({
   chip,
   onClick,
@@ -224,15 +228,11 @@ export function ChipPill({
       data-accent={chip.accent}
       onClick={onClick}
       title={chip.stat ? `${chip.title} · ${chip.stat}` : chip.title}
-      className={`inline-flex h-6 max-w-full items-center gap-1.5 rounded-full border bg-[var(--color-bg-input)] px-2 text-[11px] leading-none transition-colors hover:bg-[var(--color-bg-hover)] ${
-        chip.ok
-          ? "border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
-          : "border-[var(--color-error)]/35 text-[var(--color-error)]"
-      } ${flash ? "chat-tool-chip-flash" : ""} ${entering ? "chat-tool-collapse-in" : ""}`}
+      className={`inline-flex h-6 max-w-full items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-bg-input)] px-2 text-[11px] leading-none text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] ${
+        flash ? "chat-tool-chip-flash" : ""
+      } ${entering ? "chat-tool-collapse-in" : ""}`}
     >
-      <chip.Icon
-        className={`h-3 w-3 flex-none ${chip.ok ? "chat-tool-accent-text" : ""}`}
-      />
+      <chip.Icon className="chat-tool-accent-text h-3 w-3 flex-none" />
       <span className="truncate">{chip.title}</span>
       {chip.stat && (
         <>
@@ -243,7 +243,11 @@ export function ChipPill({
       {chip.ok ? (
         <Check className="h-3 w-3 flex-none text-[var(--color-success)]/70" />
       ) : (
-        <AlertCircle className="h-3 w-3 flex-none" />
+        <TriangleAlert
+          data-testid="chat-tool-chip-failed"
+          aria-label="Failed"
+          className={`h-3 w-3 flex-none ${FAILED_TONE_CLASS}`}
+        />
       )}
       {duration && chip.stepKeys.length === 1 && (
         <span className="text-[10px] tabular-nums text-[var(--color-text-dim)]">

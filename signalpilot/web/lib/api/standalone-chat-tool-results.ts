@@ -113,6 +113,11 @@ export type ToolResult =
       stderr: string;
       stdout_truncated: boolean;
       stderr_truncated: boolean;
+      /**
+       * True when a non-zero exit is an expected probe outcome (ls/grep/test
+       * on a missing path) rather than a failure; `error` is false then.
+       */
+      probe?: boolean;
     }
   | {
       kind: "knowledge";

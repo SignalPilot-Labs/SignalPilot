@@ -135,9 +135,19 @@ describe("ToolCard (generic)", () => {
     );
     const card = q(container, '[data-testid="chat-tool-card"]');
     expect(card?.getAttribute("data-density")).toBe("expanded");
-    expect(q(container, '[data-testid="chat-tool-error"]')?.textContent).toContain(
-      "does not exist",
-    );
+    const error = q(container, '[data-testid="chat-tool-error"]');
+    expect(error?.textContent).toContain("does not exist");
+    // Neutral frame plus an amber badge: nothing in the card goes red.
+    expect(q(container, '[data-testid="chat-tool-failed-badge"]')?.textContent).toBe("Failed");
+    expect(card?.innerHTML).not.toContain("color-error");
+    expect(error?.className).toContain("text-[var(--color-text-muted)]");
+    expect(q(container, '[data-testid="chat-step-status-failed"]')).not.toBeNull();
+  });
+
+  it("shows no failed badge on a completed step", async () => {
+    await render(step({ result: jsonResult({}) }), { focusRequested: 1 });
+    expect(q(container, '[data-testid="chat-tool-failed-badge"]')).toBeNull();
+    expect(q(container, '[data-testid="chat-tool-chip-failed"]')).toBeNull();
   });
 
   it("opens a compact card when a focus request arrives", async () => {

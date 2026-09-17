@@ -13,6 +13,7 @@ import logging
 import re
 import time
 import zipfile
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import PlainTextResponse, Response, StreamingResponse
@@ -492,7 +493,7 @@ async def download_eval_artifact(store: StoreD, run_id: str, task_id: str, filen
     return Response(
         content=data,
         media_type="application/octet-stream",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": _attachment(filename)},
     )
 
 
@@ -550,6 +551,12 @@ def _object_store_or_422():
         return get_object_store()
     except EvidenceStoreDisabled as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+
+
+def _attachment(filename: str) -> str:
+    """Content-Disposition for a stored filename: quoted-string safe plus RFC 6266 filename*."""
+    ascii_name = re.sub(r'[^ -~]|["\;]', "_", filename)
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename, safe='')}"
 
 
 def _safe_id(run_id: str) -> str:

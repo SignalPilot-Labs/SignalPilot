@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError
+
 from gateway.billing.emitters.queries import emit_query_credit
 from gateway.connectors.health_monitor import health_monitor
 from gateway.connectors.pool_manager import pool_manager
@@ -18,7 +20,12 @@ from gateway.governance.bindings import BoundQueryError
 from gateway.governance.cost_estimator import CostEstimate, CostEstimator
 from gateway.governance.query_executor_persist import fail_execution
 from gateway.governance.query_executor_route import PreparedQuery
-from gateway.governance.query_executor_types import GovernedQueryContext, GovernedQueryError
+from gateway.governance.query_executor_types import (
+    GATEWAY_DB_UNAVAILABLE,
+    GATEWAY_DB_UNAVAILABLE_MESSAGE,
+    GovernedQueryContext,
+    GovernedQueryError,
+)
 from gateway.standalone_chat.config import enterprise_chat_feature_flags
 from gateway.standalone_chat.query_approvals import (
     reconcile_reservation,
@@ -29,6 +36,100 @@ from gateway.store import standalone_chat as chat_store
 
 if TYPE_CHECKING:
     from gateway.governance.query_executor import GovernedQueryExecutor
+
+# Warehouse connectors never raise SQLAlchemy errors; only the gateway's own
+# session does. So a DBAPIError inside the execution block means SignalPilot's
+# database dropped, not the customer's warehouse.
+_GATEWAY_DB_ERRORS: tuple[type[BaseException], ...] = (DBAPIError, OperationalError, InterfaceError)
+
+
+def is_gateway_db_error(exc: BaseException) -> bool:
+    return isinstance(exc, _GATEWAY_DB_ERRORS)
+
+
+def _failure_status(code: str) -> str:
+    if code == "query_cancelled":
+        return "cancelled"
+    if code == "query_timeout":
+        return "timed_out"
+    return "failed"
+
+
+async def record_execution_failure(
+    executor: GovernedQueryExecutor,
+    store: Store,
+    execution: GatewayGovernedQueryExecution,
+    exc: Exception,
+    *,
+    context: GovernedQueryContext,
+    connection_name: str,
+    db_type: Any,
+    elapsed_ms: float,
+    proposal_id: str | None,
+    sql_hash: str,
+) -> GovernedQueryError:
+    """Persist a failed execution and return the public error to raise.
+
+    The chat event carries ``status`` (``failed``, ``cancelled`` or
+    ``timed_out``) and, for a gateway database outage, ``retryable: true``.
+    """
+    if is_gateway_db_error(exc):
+        code = GATEWAY_DB_UNAVAILABLE
+        explicitly_cancelled = False
+    else:
+        health_monitor.record(connection_name, elapsed_ms, False, type(exc).__name__, db_type)
+        with suppress(Exception):
+            await store.session.refresh(execution)
+        explicitly_cancelled = execution.status == "cancelled"
+        code = (
+            "query_cancelled"
+            if explicitly_cancelled
+            else "query_timeout"
+            if "timeout" in str(exc).lower()
+            else "query_failed"
+        )
+    with suppress(Exception):
+        await executor.cancel(execution.id)
+    execution.execution_ms = elapsed_ms
+    with suppress(Exception):
+        if not explicitly_cancelled:
+            await fail_execution(store, execution, code)
+        else:
+            await store.session.commit()
+    if context.run_id:
+        payload: dict[str, Any] = {
+            "execution_id": execution.id,
+            "proposal_id": proposal_id,
+            "sql_hash": sql_hash,
+            "status": _failure_status(code),
+            "error_code": code,
+        }
+        if code == GATEWAY_DB_UNAVAILABLE:
+            payload["retryable"] = True
+        with suppress(Exception):
+            await chat_store.append_event(
+                store.session,
+                run_id=context.run_id,
+                event_type="query_cancelled" if code in {"query_timeout", "query_cancelled"} else "query_completed",
+                payload=payload,
+            )
+    if proposal_id:
+        with suppress(Exception):
+            await reconcile_reservation(
+                store.session,
+                proposal_id=proposal_id,
+                actual_cost_usd=None,
+                completed=False,
+            )
+    if code == GATEWAY_DB_UNAVAILABLE:
+        return GovernedQueryError(code, GATEWAY_DB_UNAVAILABLE_MESSAGE, retryable=True)
+    if code == "query_cancelled":
+        return GovernedQueryError(code, "Query cancelled")
+    if code == "query_timeout":
+        return GovernedQueryError(code, "Query timed out")
+    from gateway.errors.mcp import sanitize_mcp_error
+
+    return GovernedQueryError(code, f"Query failed: {sanitize_mcp_error(str(exc))}")
 
 
 @dataclass
@@ -184,63 +285,17 @@ async def run_query(
     except GovernedQueryError:
         raise
     except Exception as exc:
-        elapsed = (time.monotonic() - started) * 1000
-        health_monitor.record(connection_name, elapsed, False, type(exc).__name__, info.db_type)
-        with suppress(Exception):
-            await store.session.refresh(execution)
-        explicitly_cancelled = execution.status == "cancelled"
-        code = (
-            "query_cancelled"
-            if explicitly_cancelled
-            else "query_timeout"
-            if "timeout" in str(exc).lower()
-            else "query_failed"
-        )
-        with suppress(Exception):
-            await executor.cancel(execution.id)
-        execution.execution_ms = elapsed
-        if not explicitly_cancelled:
-            await fail_execution(store, execution, code)
-        else:
-            await store.session.commit()
-        if context.run_id:
-            with suppress(Exception):
-                await chat_store.append_event(
-                    store.session,
-                    run_id=context.run_id,
-                    event_type=(
-                        "query_cancelled" if code in {"query_timeout", "query_cancelled"} else "query_completed"
-                    ),
-                    payload={
-                        "execution_id": execution.id,
-                        "proposal_id": proposal_id,
-                        "sql_hash": sql_hash,
-                        "status": (
-                            "cancelled"
-                            if code == "query_cancelled"
-                            else "timed_out"
-                            if code == "query_timeout"
-                            else "failed"
-                        ),
-                        "error_code": code,
-                    },
-                )
-        if proposal_id:
-            await reconcile_reservation(
-                store.session,
-                proposal_id=proposal_id,
-                actual_cost_usd=None,
-                completed=False,
-            )
-        from gateway.errors.mcp import sanitize_mcp_error
-
-        raise GovernedQueryError(
-            code,
-            "Query cancelled"
-            if code == "query_cancelled"
-            else "Query timed out"
-            if code == "query_timeout"
-            else f"Query failed: {sanitize_mcp_error(str(exc))}",
+        raise await record_execution_failure(
+            executor,
+            store,
+            execution,
+            exc,
+            context=context,
+            connection_name=connection_name,
+            db_type=info.db_type,
+            elapsed_ms=(time.monotonic() - started) * 1000,
+            proposal_id=proposal_id,
+            sql_hash=sql_hash,
         ) from exc
 
     elapsed_ms = (time.monotonic() - started) * 1000

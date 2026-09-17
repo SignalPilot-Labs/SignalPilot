@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import secrets
 import shlex
 import time
 from dataclasses import dataclass, field
@@ -179,13 +180,16 @@ class VercelNotebookBackend:
 
     @staticmethod
     def _process_env(request: LaunchRequest) -> dict[str, str]:
-        from gateway.auth.jwt_secret import load_session_jwt_secret
-
+        # The gateway JWT signing secret never rides along: a sandbox only
+        # needs its own bearer tokens. SP_NOTEBOOK_TOKEN_SECRET is a fresh
+        # per-launch key for the runtime's derived (skew/auth) tokens; each
+        # sandbox is a single instance, so it need not be stable across
+        # launches.
         process_env = {
             **request.env,
             "SP_NOTEBOOK_TOKEN": request.notebook_token,
             "SP_SESSION_JWT": request.session_jwt,
-            "SP_SESSION_JWT_SECRET": load_session_jwt_secret(),
+            "SP_NOTEBOOK_TOKEN_SECRET": secrets.token_urlsafe(32),
             "SP_SESSION_ID": request.session_id,
             "SP_ORG_ID": request.org_id,
             "SP_USER_ID": request.user_id,

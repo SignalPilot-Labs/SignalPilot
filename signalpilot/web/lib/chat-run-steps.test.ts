@@ -260,9 +260,12 @@ describe("foldRunBlocks", () => {
     expect(chain1.steps.at(-1)?.tool).toBe("Agent");
     expect(chain1.steps.at(-2)?.tool).toBe("query_database");
     expect(narration.text).toContain("analysis runtime");
-    // notebook → write → bash → 3 export writes → edit → md write → todo →
-    // run_cells
-    expect(chain2.steps).toHaveLength(10);
+    // notebook → write → bash → bash probe → 3 export writes → edit →
+    // md write → todo → run_cells
+    expect(chain2.steps).toHaveLength(11);
+    // The `ls` probe exits 1 but is a completed step, not a failure.
+    expect(chain2.steps[3]?.status).toBe("succeeded");
+    expect(chain2.steps[3]?.result?.kind === "terminal" && chain2.steps[3].result.probe).toBe(true);
     expect(chain2.steps[0]?.tool).toBe("start_analysis_notebook");
     expect(answer.text).toContain("EMEA drove the growth");
     // Dashboard load + check + render, then the follow-up verification
@@ -385,10 +388,10 @@ describe("summarizeRunSteps", () => {
   it("counts queries, code runs, files and errors", () => {
     const summary = summarizeRunSteps(foldRunSteps(allEvents, FIXTURE_RUN_ID));
     expect(summary.queries).toBe(2); // validate_sql + query_database
-    expect(summary.codeRuns).toBe(2); // Bash + run_cells
+    expect(summary.codeRuns).toBe(3); // Bash + Bash probe + run_cells
     // 5 Writes (py + html + svg + csv + md) + Edit
     expect(summary.files).toBe(6);
-    expect(summary.errors).toBe(1);
+    expect(summary.errors).toBe(1); // the probe is not an error
     expect(summary.running).toBe(false);
   });
 });

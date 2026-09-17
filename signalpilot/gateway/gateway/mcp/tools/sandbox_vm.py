@@ -33,6 +33,7 @@ from gateway.mcp.context import (
     mcp_project_id_var,
 )
 from gateway.mcp.server import mcp
+from gateway.mcp.tools.sandbox_git import git_exec_env, git_seed_env, git_setup_command
 from gateway.sandbox_runtime import SandboxRuntimeError, SandboxSpec, get_sandbox_runtime
 
 SANDBOX_CAPABILITY = "sandbox:execute"
@@ -97,6 +98,11 @@ async def _seed_project(runtime, sandbox_id: str) -> None:
         "out = pathlib.Path('/tmp/sp-profiles'); out.mkdir(parents=True, exist_ok=True)\n"
         "(out / 'profiles.yml').write_text(yaml.safe_dump(stub))\n"
     )
+    # After hydration, make /workspace a git checkout of the project mirror
+    # (origin = the gateway git server). The block never fails the seed; the
+    # credential is SP_GIT_TOKEN from the exec env, read at call time.
+    seed_git_env = git_seed_env(project_id, branch)
+    git_setup = git_setup_command() if seed_git_env else ""
     result = await runtime.exec(
         sandbox_id,
         "set -e; "
@@ -104,8 +110,9 @@ async def _seed_project(runtime, sandbox_id: str) -> None:
         # Image runs as root without `sudo`; create /workspace directly.
         "mkdir -p /workspace 2>/dev/null || sudo mkdir -p /workspace; "
         'curl -fsSL "$SP_SNAPSHOT_URL" | tar xz -C /workspace; '
+        f"{git_setup}"
         f"python - <<'SP_EOF'\n{stub}\nSP_EOF",
-        env={"SP_SNAPSHOT_URL": snapshot_url},
+        env={"SP_SNAPSHOT_URL": snapshot_url, **seed_git_env, **git_exec_env()},
         timeout_seconds=300,
     )
     if not result.ok:
@@ -169,7 +176,9 @@ async def sandbox_exec(command: str, cwd: str = "", timeout_seconds: int = 0) ->
     preinstalled (PATH includes /opt/sp-notebook/.venv/bin); a stub profile at
     /tmp/sp-profiles supports `dbt deps` / `dbt parse` / `dbt compile`
     immediately. It has NO warehouse credentials — use the dbt_execute tool
-    for warehouse-connected commands (run/test/build).
+    for warehouse-connected commands (run/test/build). /workspace is a git
+    checkout with origin = SignalPilot; `git push origin HEAD:signalpilot/<name>`
+    publishes a branch (credentials are preconfigured).
 
     Args:
         command: Shell command to run (bash -c).
@@ -190,6 +199,8 @@ async def sandbox_exec(command: str, cwd: str = "", timeout_seconds: int = 0) ->
             sandbox_id,
             command,
             cwd=cwd or None,
+            # Fresh per-call git credential; never persisted in the sandbox.
+            env=git_exec_env() or None,
             timeout_seconds=timeout,
         )
     except SandboxRuntimeError as exc:

@@ -126,12 +126,20 @@ def test_candidate_graph_rejects_invalid_batches(
     with pytest.raises(NotebookToolError) as raised:
         _validate_candidate_graph(cells)
 
-    assert _payload(raised.value)["error"] == {
+    error = _payload(raised.value)["error"]
+    assert {key: error[key] for key in ("cell_ids", "type", "variable")} == {
         "cell_ids": cell_ids,
-        "message": _payload(raised.value)["error"]["message"],
         "type": error_type,
         "variable": variable,
     }
+    assert error["message"]
+    if error_type in {
+        "MultipleDefinitionError",
+        "PrivateVariableCrossCellReference",
+    }:
+        assert error["hint"]
+    else:
+        assert "hint" not in error
 
 
 def test_private_names_remain_valid_inside_their_own_cell_and_nested_scope():
@@ -185,6 +193,10 @@ async def test_duplicate_definition_is_an_mcp_error_before_document_mutation(
     assert '"type": "MultipleDefinitionError"' in response.root.content[0].text
     assert session._signalpilot_notebook_failures[-1]["error"] == {
         "cell_ids": ["a", "b"],
+        "hint": (
+            "cell a already defines `df`. Either include update_cell for a "
+            "in this batch, or use a different name in cell b."
+        ),
         "message": session._signalpilot_notebook_failures[-1]["error"][
             "message"
         ],
@@ -540,6 +552,7 @@ def test_run_cells_returns_a_structured_success(
         ],
         "failed_cell_ids": [],
         "has_errors": False,
+        "skipped_cell_ids": [],
         "status": "completed",
         "timed_out": False,
     }

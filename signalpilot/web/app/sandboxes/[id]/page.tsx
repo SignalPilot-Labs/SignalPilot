@@ -29,6 +29,7 @@ import { useToast } from "~/components/ui/toast";
 import { ConfirmDialog } from "~/components/ui/confirm-dialog";
 import { Breadcrumb } from "~/components/ui/breadcrumb";
 import { CodeBlock } from "~/components/ui/code-block";
+import { ALLOTMENT_BAR_COLOR, splitAllotment } from "~/lib/allotment";
 import { EXAMPLE_SNIPPETS } from "./_lib/example-snippets";
 import { extractRichOutput, type HistoryEntry } from "./_lib/rich-output";
 
@@ -227,7 +228,7 @@ export default function SandboxDetailPage() {
     );
   }
 
-  const budgetPct = sandbox.budget_usd > 0 ? (sandbox.budget_used / sandbox.budget_usd) * 100 : 0;
+  const budget = splitAllotment(sandbox.budget_used, sandbox.budget_usd);
   const inputCount = history.filter(h => h.type === "input").length;
 
   return (
@@ -284,13 +285,18 @@ export default function SandboxDetailPage() {
                 <span>${sandbox.budget_usd.toFixed(2)}</span>
               </div>
               <MiniBar
-                value={budgetPct}
+                value={budget.fillPct}
                 max={100}
                 width={80}
                 height={4}
-                color={budgetPct > 80 ? "var(--color-error)" : budgetPct > 50 ? "var(--color-warning)" : "var(--color-success)"}
+                color={ALLOTMENT_BAR_COLOR}
               />
             </div>
+            {budget.over && (
+              <span className="text-[11px] tabular-nums text-[var(--color-text)]">
+                extra cost ${budget.extra.toFixed(4)}
+              </span>
+            )}
           </div>
 
           <div className="h-3 w-px bg-[var(--color-border)]" />

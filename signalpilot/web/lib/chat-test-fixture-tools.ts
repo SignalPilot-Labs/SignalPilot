@@ -260,6 +260,30 @@ check: 3 regions, growth sums to 51.9`;
   );
 }
 
+// --- t7b: Bash probe (ls on a missing path, exit 1, not an error) ----------
+
+export const FIXTURE_PROBE_COMMAND = "ls analysis/cache/q3_growth.json";
+
+export function fixtureProbeTerminalCompletion(toolCallId: string) {
+  const stderr = "ls: cannot access 'analysis/cache/q3_growth.json': No such file or directory";
+  return completed(
+    toolCallId,
+    "Bash",
+    `${FIXTURE_PROBE_COMMAND} · exit 1`,
+    {
+      kind: "terminal",
+      command: FIXTURE_PROBE_COMMAND,
+      exit_code: 1,
+      stdout: "",
+      stderr,
+      stdout_truncated: false,
+      stderr_truncated: false,
+      probe: true,
+    },
+    stderr,
+  );
+}
+
 // --- t13: list_tables → table_list -----------------------------------------
 
 const SCHEMA_TABLES: Record<string, string[]> = {

@@ -25,6 +25,7 @@ import { useConversationArtifacts } from "~/components/chat/use-conversation-not
 import { pickDefaultNotebook } from "~/lib/chat-live-notebook";
 import { hasArtifactsContent } from "~/lib/chat-artifacts";
 import { ChatUiContext } from "~/components/chat/chat-ui-context";
+import { ChatPaywall } from "~/components/billing/chat-paywall";
 import { ChatMessage } from "~/components/chat/chat-message";
 import {
   ChatReplayView,
@@ -308,6 +309,9 @@ export function StandaloneDataChat({
 
   if (bootstrapLoading) {
     return <ChatBootstrapSpinner />;
+  }
+  if (bootstrap?.plan_locked) {
+    return <ChatPaywall />;
   }
   if (bootstrapError || !bootstrap?.enabled) {
     // A free org gets 200 with `enabled: false` and its entitlement; a gated

@@ -2,3 +2,15 @@
 # Test fixture that once held a placeholder Postgres DSN (user:password@host); the
 # literal was removed, but commit-range scans still see the historical diff.
 ^signalpilot/gateway/tests/test_admin_audit_logging_connections\.py$
+# Placeholder warehouse DSNs and git URLs with fake tokens in unit tests. The values
+# are invented (dbuser:...@warehouse.internal, x-access-token:...@127.0.0.1) and the
+# tests exist to prove those strings are rewritten or redacted, so they cannot be removed.
+^signalpilot/gateway/tests/test_dbt_executor_tunnel\.py$
+^signalpilot/gateway/tests/test_git_chat_ref_policy\.py$
+^signalpilot/gateway/tests/test_query_executor_events\.py$
+^signalpilot/gateway/tests/test_secfix_git_token_persistence\.py$
+^signalpilot/gateway/tests/test_worker_public_error_message\.py$
+# git/repos.py once had a docstring example of the form scheme://user:token@host. The
+# example is reworded at HEAD, but the commit that introduced it stays in this branch's
+# range. Remove this entry after the branch merges.
+^signalpilot/gateway/gateway/git/repos\.py$

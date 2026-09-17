@@ -20,7 +20,6 @@ from gateway.governance.bindings import BoundQuery, BoundQueryError
 from gateway.governance.pii import PIIRedactor
 from gateway.governance.query_executor_persist import (
     _actual_scan_bytes,
-    _json_safe,
     _stored_result_rows,
     actual_cost_usd,
 )
@@ -28,6 +27,7 @@ from gateway.governance.query_executor_types import (
     GovernedQueryContext,
     GovernedQueryError,
     GovernedQueryResult,
+    encode_rows,
     normalize_sql,
 )
 from gateway.standalone_chat.config import enterprise_chat_feature_flags
@@ -179,6 +179,7 @@ async def resolve_plan(
             "execution_id": prior_execution.id,
             "result_id": prior_result.id,
             "plan_id": context.plan_id,
+            "status": "reused",
             "reused": True,
             "row_count": prior_result.saved_row_count,
             "completeness": prior_result.result_completeness,
@@ -233,8 +234,15 @@ async def _reject_route(
     execution: GatewayGovernedQueryExecution,
     cost_usd: float,
     proposal_id: str | None,
-    event_payload: dict[str, Any] | None,
+    sql_hash: str,
+    route_code: str,
+    event_extra: dict[str, Any] | None = None,
 ) -> None:
+    """Close a query that ran but whose output the route refuses to return.
+
+    The ``query_completed`` event carries ``status: rejected`` so the worker
+    reports the tool as failed rather than silently empty.
+    """
     await emit_query_credit(store.session, execution)
     await store.session.commit()
     if proposal_id:
@@ -244,12 +252,20 @@ async def _reject_route(
             actual_cost_usd=cost_usd,
             completed=True,
         )
-    if event_payload is not None:
+    if context.run_id:
         await chat_store.append_event(
             store.session,
             run_id=context.run_id,
             event_type="query_completed",
-            payload=event_payload,
+            payload={
+                "execution_id": execution.id,
+                "plan_id": context.plan_id,
+                "proposal_id": proposal_id,
+                "sql_hash": sql_hash,
+                "status": "rejected",
+                "error_code": route_code,
+                **(event_extra or {}),
+            },
         )
 
 
@@ -293,13 +309,9 @@ async def route_rows(
             execution=execution,
             cost_usd=cost_usd,
             proposal_id=proposal_id,
-            event_payload={
-                "execution_id": execution.id,
-                "plan_id": context.plan_id,
-                "status": "rejected",
-                "error_code": route_code,
-                "actual_rows_exceeded": row_limit,
-            },
+            sql_hash=sql_hash,
+            route_code=route_code,
+            event_extra={"actual_rows_exceeded": row_limit},
         )
         raise GovernedQueryError(
             route_code,
@@ -325,7 +337,7 @@ async def route_rows(
         truncation_reason = None
         query_row_count = len(saved_rows)
 
-    serialized_rows = _json_safe(saved_rows)
+    serialized_rows = encode_rows(saved_rows)
     serialized_bytes = json.dumps(serialized_rows, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     if len(serialized_bytes) > 10 * 1024 * 1024:
         cost_usd = actual_cost_usd(native_stats, elapsed_ms)
@@ -351,17 +363,8 @@ async def route_rows(
             execution=execution,
             cost_usd=cost_usd,
             proposal_id=proposal_id,
-            event_payload=(
-                {
-                    "execution_id": execution.id,
-                    "proposal_id": proposal_id,
-                    "sql_hash": sql_hash,
-                    "status": "rejected",
-                    "error_code": route_code,
-                }
-                if context.run_id
-                else None
-            ),
+            sql_hash=sql_hash,
+            route_code=route_code,
         )
         raise GovernedQueryError(
             route_code,

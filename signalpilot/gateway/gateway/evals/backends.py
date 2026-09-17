@@ -173,12 +173,16 @@ class DockerBackend:
 
 # Vercel.
 
-# Prepares a fresh Vercel sandbox for the runner script: the script assumes
-# /work exists and `claude` is on PATH — both baked into the runner image on
-# the container backends, neither present in a stock sandbox.
+# Prepares a Vercel sandbox for the runner script, which assumes /work exists
+# and `claude` is on PATH. Two sandbox shapes reach this: the digest-pinned
+# runner image (unprivileged user, /work already writable, no sudo, claude
+# installed) and a stock VM when no runner image is configured (root-owned
+# filesystem, sudo available, no claude). Each step tries the image-native
+# path first and only falls back to sudo, so neither shape hard-requires it.
 _VERCEL_BOOTSTRAP = (
-    "sudo mkdir -p /work && sudo chown \"$(id -u):$(id -g)\" /work && "
-    "command -v claude >/dev/null 2>&1 || sudo npm install -g @anthropic-ai/claude-code"
+    "{ mkdir -p /work && test -w /work ; } 2>/dev/null "
+    '|| { sudo mkdir -p /work && sudo chown "$(id -u):$(id -g)" /work; } && '
+    "{ command -v claude >/dev/null 2>&1 || sudo npm install -g @anthropic-ai/claude-code; }"
 )
 _VERCEL_BOOTSTRAP_TIMEOUT = 240
 # Provider-side ceiling on execution_time_limit (45 min); creation headroom
@@ -194,10 +198,12 @@ _VERCEL_LOG_PATH = "/tmp/sp-eval-output.log"  # nosec B108
 class VercelBackend:
     """One ephemeral Vercel sandbox VM per eval container.
 
-    Unlike the container backends, there is no runner image: the sandbox is a
-    stock VM bootstrapped with the Claude CLI at start. The eval MCP config
-    must therefore point at a publicly reachable gateway URL (SP_EVAL_MCP_URL)
-    — sandboxes run in Vercel's network, not next to the gateway.
+    The sandbox boots `spec.image` (the digest-pinned SP_EVAL_RUNNER_IMAGE,
+    which ships the Claude CLI, the SignalPilot plugin and dbt) when one is
+    configured, and otherwise a stock VM that the bootstrap fits with the
+    Claude CLI. The eval MCP config must point at a publicly reachable gateway
+    URL (SP_EVAL_MCP_URL): sandboxes run in Vercel's network, not next to the
+    gateway.
 
     Credentials ride the exec environment only; they are never baked into the
     sandbox spec, and the sandbox is destroyed in a finally block with the
@@ -249,7 +255,13 @@ class VercelBackend:
         # Secrets go to exec env, not the creation spec: creation metadata is
         # readable back from the provider API, per-exec env is not persisted.
         sandbox_id = await runtime.create(
-            SandboxSpec(time_limit_seconds=lifetime, tags={"sp-eval": "1", "org": self._org_id[:64]})
+            SandboxSpec(
+                time_limit_seconds=lifetime,
+                tags={"sp-eval": "1", "org": self._org_id[:64]},
+                # The runner image when configured; None keeps the stock VM
+                # for local development without a pushed image.
+                image=spec.image or None,
+            )
         )
         _notify_start(spec, {"backend": "vercel", "name": sandbox_id, "namespace": ""})
         try:

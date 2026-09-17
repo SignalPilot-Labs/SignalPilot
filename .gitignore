@@ -176,3 +176,7 @@ redshift_*.py
 /.*creds*
 /.*credentials*
 e2e-eval/project-repo/
+
+# kubeconfigs
+k3s.yaml
+kubeconfig*

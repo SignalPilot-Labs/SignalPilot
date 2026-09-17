@@ -115,7 +115,7 @@ async def get_org_anthropic_key_for_runtime(request: Request, store: StoreD) -> 
     return OrgAnthropicKeyResponse(anthropic_api_key=key)
 
 
-@router.put("/secrets", response_model=OrgSecretsResponse, dependencies=[RequireScope("write")])
+@router.put("/secrets", response_model=OrgSecretsResponse, dependencies=[RequireScope("admin")])
 async def update_org_secrets(body: OrgSecretsUpdate, store: StoreD, _role: OrgAdmin) -> OrgSecretsResponse:
     """Store, rotate, or clear org-scoped secrets. Values are encrypted at rest."""
     org_id = store.org_id or "local"

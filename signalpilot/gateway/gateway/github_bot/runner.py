@@ -27,7 +27,7 @@ async def run_pr_scan(*, org_id: str, repo: str, pr_number: int, connection_name
     from gateway.github_bot.scanner import render_report_markdown, scan_pr_models
     from gateway.store import Store
 
-    token = await resolve_bot_token(repo)
+    token = await resolve_bot_token(repo, org_id=org_id)
     if not token:
         raise RuntimeError(f"no GitHub token available for {repo} (link the repo or set SP_GITHUB_BOT_TOKEN)")
     client = GitHubBotClient(token)

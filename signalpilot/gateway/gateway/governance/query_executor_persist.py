@@ -1,4 +1,9 @@
-"""Persistence phase of the governed query executor: execution rows, results, events."""
+"""Persistence phase of the governed query executor: execution rows, results, events.
+
+Every ``query_completed`` event carries ``status`` (``completed`` here,
+``reused`` and ``rejected`` in the route phase, ``failed`` in the run phase)
+so the chat worker can derive ``tool_completed.error`` from it.
+"""
 
 from __future__ import annotations
 
@@ -19,24 +24,6 @@ from gateway.standalone_chat.object_storage import chat_object_storage, runtime_
 from gateway.standalone_chat.query_approvals import reconcile_reservation
 from gateway.store import Store
 from gateway.store import standalone_chat as chat_store
-
-
-def _logical_type(value: Any) -> str:
-    if value is None:
-        return "unknown"
-    if isinstance(value, bool):
-        return "boolean"
-    if isinstance(value, int):
-        return "integer"
-    if isinstance(value, float):
-        return "number"
-    if isinstance(value, datetime):
-        return "timestamp"
-    return type(value).__name__.lower()
-
-
-def _json_safe(value: Any) -> Any:
-    return json.loads(json.dumps(value, default=str))
 
 
 def _actual_scan_bytes(stats: dict[str, Any]) -> int | None:
@@ -103,22 +90,6 @@ async def create_execution(
     store.session.add(execution)
     await store.session.commit()
     return execution
-
-
-def build_columns(saved_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    columns: list[dict[str, Any]] = []
-    if saved_rows:
-        for name in saved_rows[0]:
-            values = [row.get(name) for row in saved_rows]
-            sample = next((value for value in values if value is not None), None)
-            columns.append(
-                {
-                    "name": str(name),
-                    "logical_type": _logical_type(sample),
-                    "nullable": any(v is None for v in values),
-                }
-            )
-    return columns
 
 
 async def persist_result(
@@ -278,6 +249,7 @@ async def persist_result(
                 "result_id": result_id,
                 "proposal_id": proposal_id,
                 "sql_hash": sql_hash,
+                "status": "completed",
                 "row_count": len(saved_rows),
                 "completeness": completeness,
                 "truncation_reason": truncation_reason,

@@ -1,6 +1,6 @@
 import { hasRunAnyCellAtom } from "@/components/editor/cell/useRunCells";
 import { autoInstantiateAtom } from "@/core/config/config";
-import { getCurrentAppMode } from "@/core/mode";
+import { getCurrentAppMode, viewerOnlyAtom } from "@/core/mode";
 import { store } from "@/core/state/jotai";
 
 export interface SpExportContext {
@@ -60,8 +60,14 @@ export function hasTrustedExportContext(): boolean {
  * Edit mode before any user interaction is intentionally NOT trusted — that
  * is the only surface where we must prevent notebook-authored content from
  * loading scripts or bypassing HTML sanitization.
+ *
+ * Viewer-only surfaces (the chat live notebook panel) are never trusted:
+ * the notebook author there is the agent, not the user.
  */
 export function hasTrustedNotebookContext(): boolean {
+  if (store.get(viewerOnlyAtom)) {
+    return false;
+  }
   if (store.get(hasRunAnyCellAtom)) {
     return true;
   }

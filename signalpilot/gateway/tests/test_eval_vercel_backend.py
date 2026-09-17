@@ -159,6 +159,32 @@ class TestLifecycle:
         assert fake.execs[1]["env"]["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-oauth-supersecret"
         assert fake.execs[1]["env"]["SP_MODEL"] == "sonnet"
 
+    async def test_runner_image_is_passed_to_the_sandbox_spec(self, vercel_env):
+        """The digest-pinned runner image (Claude CLI + plugin + dbt) boots the
+        sandbox instead of a stock VM."""
+        fake = FakeRuntime([ExecResult(0, "", ""), ExecResult(0, "", "")])
+        await _backend(fake).run(_spec(image=_DIGEST_IMAGE))
+        assert fake.created[0].image == _DIGEST_IMAGE
+
+    async def test_empty_runner_image_keeps_the_stock_vm(self, vercel_env):
+        fake = FakeRuntime([ExecResult(0, "", ""), ExecResult(0, "", "")])
+        await _backend(fake).run(_spec(image=""))
+        assert fake.created[0].image is None
+
+    async def test_bootstrap_does_not_hard_require_sudo(self, vercel_env):
+        """The runner image has no sudo and /work already writable; sudo is
+        only a fallback for the stock VM."""
+        from gateway.evals.backends import _VERCEL_BOOTSTRAP
+
+        fake = FakeRuntime([ExecResult(0, "", ""), ExecResult(0, "", "")])
+        await _backend(fake).run(_spec())
+        boot = fake.execs[0]["command"]
+        assert boot == _VERCEL_BOOTSTRAP
+        assert not boot.startswith("sudo")
+        assert "mkdir -p /work && test -w /work" in boot
+        assert "|| { sudo mkdir -p /work" in boot
+        assert "command -v claude" in boot and "|| sudo npm install" in boot
+
     async def test_bootstrap_failure_reports_without_running_task(self, vercel_env):
         fake = FakeRuntime([ExecResult(1, "", "npm exploded")])
         exit_code, logs = await _backend(fake).run(_spec())

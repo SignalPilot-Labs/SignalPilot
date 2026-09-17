@@ -1,10 +1,12 @@
 """Bare git repo management — init, delete, list branches via git CLI."""
 
+import base64
 import logging
 import os
 import re
 import subprocess
 from pathlib import Path
+from urllib.parse import unquote, urlsplit, urlunsplit
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +40,58 @@ def _run_git(
         env={**os.environ, **env} if env else None,
     )
     return result.returncode, result.stdout, result.stderr
+
+
+def github_token_remote_url(token: str, repo_full_name: str) -> str:
+    """The HTTPS remote for ``repo_full_name`` carrying an installation token.
+
+    Built with urlunsplit so the credential never appears as a literal URL
+    pattern in source; callers hand the result to split_remote_credentials,
+    which moves the token into the git environment before any git call.
+    """
+    return urlunsplit(("https", f"x-access-token:{token}@github.com", f"/{repo_full_name}.git", "", ""))
+
+
+def split_remote_credentials(url: str) -> tuple[str, dict[str, str]]:
+    """Split a remote URL whose authority carries a credential into a plain URL and a git env.
+
+    The credential must never be persisted in the bare repo's config (it is a
+    live GitHub App installation token). It is handed to git per invocation
+    through ``GIT_CONFIG_*`` environment variables as an ``http.<host>.extraheader``
+    so it appears neither in ``.git/config`` nor in argv. URLs without userinfo
+    (local paths, plain https) come back unchanged with an empty env.
+    """
+    parts = urlsplit(url)
+    if parts.scheme not in ("http", "https") or not (parts.username or parts.password):
+        return url, {}
+    host = parts.hostname or ""
+    if parts.port:
+        host = f"{host}:{parts.port}"
+    plain = urlunsplit((parts.scheme, host, parts.path, parts.query, parts.fragment))
+    userinfo = f"{unquote(parts.username or '')}:{unquote(parts.password or '')}"
+    basic = base64.b64encode(userinfo.encode("utf-8")).decode("ascii")
+    env = {
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": f"http.{parts.scheme}://{host}/.extraheader",
+        "GIT_CONFIG_VALUE_0": f"AUTHORIZATION: basic {basic}",
+        # Never fall through to an interactive credential prompt.
+        "GIT_TERMINAL_PROMPT": "0",
+    }
+    return plain, env
+
+
+def set_remote_url(path: Path, remote: str, url: str) -> None:
+    """Point ``remote`` at the credential-free form of ``url`` (add or update).
+
+    Also the one-time cleanup for mirrors written before SP-11: a remote whose
+    stored URL still embeds ``x-access-token`` is rewritten to the plain URL.
+    """
+    plain, _ = split_remote_credentials(url)
+    rc, _, _ = _run_git("remote", "get-url", remote, cwd=path)
+    if rc == 0:
+        _run_git("remote", "set-url", remote, plain, cwd=path)
+    else:
+        _run_git("remote", "add", remote, plain, cwd=path)
 
 
 def repo_path(project_id: str) -> Path:
@@ -150,27 +204,24 @@ def clone_from_remote(project_id: str, clone_url: str) -> Path:
       refs/remotes/github/*, so we materialize local heads from them afterward.
     """
     path = repo_path(project_id)
+    plain_url, auth_env = split_remote_credentials(clone_url)
     if path.exists():
         # Point the github remote at the provided URL before fetching: at
         # repo-link time no remote exists yet, so a bare `fetch --all` is a
         # silent no-op and the import "succeeds" without importing anything.
-        rc, _, _ = _run_git("remote", "get-url", _GITHUB_REMOTE, cwd=path)
-        if rc == 0:
-            _run_git("remote", "set-url", _GITHUB_REMOTE, clone_url, cwd=path)
-        else:
-            _run_git("remote", "add", _GITHUB_REMOTE, clone_url, cwd=path)
-        rc, _, err = _run_git("fetch", _GITHUB_REMOTE, cwd=path, timeout=120)
+        set_remote_url(path, _GITHUB_REMOTE, plain_url)
+        rc, _, err = _run_git("fetch", _GITHUB_REMOTE, cwd=path, timeout=120, env=auth_env)
         if rc != 0:
             raise RuntimeError(f"git fetch {_GITHUB_REMOTE} failed: {err}")
-        materialize_local_branches(project_id)
+        materialize_local_branches(project_id, auth_env=auth_env)
         return path
 
-    rc, out, err = _run_git("clone", "--bare", clone_url, str(path), timeout=120)
+    rc, out, err = _run_git("clone", "--bare", plain_url, str(path), timeout=120, env=auth_env)
     if rc != 0:
         raise RuntimeError(f"git clone --bare failed: {err}")
 
     _run_git("config", "http.receivepack", "true", cwd=path)
-    materialize_local_branches(project_id)
+    materialize_local_branches(project_id, auth_env=auth_env)
     logger.info("Cloned bare repo from remote")
     return path
 
@@ -225,10 +276,10 @@ def branch_head_sha(project_id: str, branch: str) -> str | None:
     return out.strip() if rc == 0 and out.strip() else None
 
 
-def _detect_remote_default_branch(path: Path) -> str | None:
+def _detect_remote_default_branch(path: Path, auth_env: dict[str, str] | None = None) -> str | None:
     """Best-effort: ask the github remote which branch HEAD points to."""
     # Populates refs/remotes/github/HEAD as a symref to the default branch.
-    _run_git("remote", "set-head", _GITHUB_REMOTE, "-a", cwd=path)
+    _run_git("remote", "set-head", _GITHUB_REMOTE, "-a", cwd=path, env=auth_env)
     rc, out, _ = _run_git(
         "symbolic-ref", f"refs/remotes/{_GITHUB_REMOTE}/HEAD", cwd=path
     )
@@ -250,7 +301,9 @@ def _is_pristine_scaffold(path: Path, branch: str) -> bool:
     return rc == 0 and not out.strip()
 
 
-def materialize_local_branches(project_id: str, default_branch: str | None = None) -> None:
+def materialize_local_branches(
+    project_id: str, default_branch: str | None = None, *, auth_env: dict[str, str] | None = None
+) -> None:
     """Ensure local refs/heads/* + HEAD reflect the fetched github branches.
 
     A bare repo serves refs/heads/* to clients (the notebook pod clones these).
@@ -291,7 +344,7 @@ def materialize_local_branches(project_id: str, default_branch: str | None = Non
 
     # Point HEAD at the default branch (resolve it if not given).
     if default_branch is None:
-        default_branch = _detect_remote_default_branch(path)
+        default_branch = _detect_remote_default_branch(path, auth_env)
     if default_branch is None:
         default_branch = "main" if "main" in created else (created[0] if created else "main")
 

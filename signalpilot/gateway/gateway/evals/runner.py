@@ -27,6 +27,7 @@ from typing import Any
 
 from ..config.evals import EvalRunSettings, get_eval_run_settings
 from ..db.engine import get_session_factory
+from ..git.repos import github_token_remote_url
 from ..store import Store
 from ..store import evals as evals_store
 from .backends import ContainerRun, get_execution_backend
@@ -335,7 +336,7 @@ async def _authed_clone_url(
         else:
             token = await gh_store.get_org_token_for_repo(session, org_id=org_id, repo_full_name=full_name)
     if token:
-        return f"https://x-access-token:{token}@github.com/{full_name}.git"
+        return github_token_remote_url(token, full_name)
     # Public repositories can clone without GitHub App authorization.
     logger.info("No GitHub App authorization for repository %s. Cloning anonymously.", full_name)
     return repo_url
@@ -495,8 +496,15 @@ _RUNNER_SCRIPT = (
     # Project context, when the eval set ships a CLAUDE.md. Written after the
     # tarball unpack so the eval set's instructions win over the project's.
     '{ [ -n "$SP_CLAUDE_MD_B64" ] && echo "$SP_CLAUDE_MD_B64" | base64 -d > /work/CLAUDE.md; true; } && '
+    # The runner image ships dbt in a venv and the SignalPilot plugin (skills
+    # and verifier agents). Both are optional at the shell level so the eval
+    # stub image and older runner images keep working.
+    '{ [ -d /opt/sp-eval/.venv/bin ] && export PATH="/opt/sp-eval/.venv/bin:$PATH"; true; } && '
+    'SP_PLUGIN_ARGS=""; { [ -d "${SP_AGENT_PLUGIN_PATH:-/opt/signalpilot-plugin}" ] '
+    '&& SP_PLUGIN_ARGS="--plugin-dir ${SP_AGENT_PLUGIN_PATH:-/opt/signalpilot-plugin}"; true; } && '
     'claude -p "$SP_PROMPT" --mcp-config /work/.mcp.json --strict-mcp-config '
-    '--output-format stream-json --verbose --model "$SP_MODEL" --dangerously-skip-permissions'
+    '--output-format stream-json --verbose --model "$SP_MODEL" --dangerously-skip-permissions '
+    "$SP_PLUGIN_ARGS"
 )
 
 

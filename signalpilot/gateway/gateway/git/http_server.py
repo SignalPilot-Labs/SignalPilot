@@ -7,7 +7,13 @@ Security:
 - Path traversal blocked: project_id validated as UUID
 - CGI env vars sanitized: no user-controlled data in shell-sensitive vars
 - Generic error messages: no internal paths or repo structure leaked
-- Push size limited to SP_GIT_MAX_PUSH_BYTES (default 500MB)
+- Push size limited to SP_GIT_MAX_PUSH_BYTES (default 500MB); fetch requests to
+  SP_GIT_MAX_UPLOAD_PACK_BYTES (default 8MB). Both apply to the inflated body.
+- Eval credentials (connection-pinned keys) never reach git
+- Chat run tokens (execution_identity "chat:<run_id>") may only create or
+  update refs/heads/signalpilot/** (ref_policy.py); git itself refuses their
+  force pushes and deletes. Each accepted branch is recorded and mirrored to
+  GitHub before the push returns.
 """
 
 import base64
@@ -15,11 +21,21 @@ import logging
 import os
 import re
 import subprocess
+import zlib
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 
-from .repos import repo_path, repo_exists, REPOS_ROOT
+from .ref_policy import (
+    RefUpdate,
+    build_rejection_report,
+    check_chat_push,
+    parse_receive_pack_commands,
+    pushed_branches,
+    reason_exists_on_github,
+    reason_other_chat,
+)
+from .repos import REPOS_ROOT, github_token_remote_url, repo_exists, repo_path
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +44,10 @@ router = APIRouter()
 _UUID_RE = re.compile(r"^[a-f0-9\-]{36}$")
 _PATH_RE = re.compile(r"^[a-zA-Z0-9/_\-\.]+$")
 _MAX_PUSH_BYTES = int(os.getenv("SP_GIT_MAX_PUSH_BYTES", str(500 * 1024 * 1024)))
+_MAX_UPLOAD_PACK_BYTES = int(os.getenv("SP_GIT_MAX_UPLOAD_PACK_BYTES", str(8 * 1024 * 1024)))
+# Scopes a notebook-session token can exercise here: the same REST ceiling as
+# scope_guard, so the admin claim on chat run tokens never reaches git.
+_SESSION_SCOPE_ALLOWLIST = frozenset({"read", "write", "query", "execute"})
 
 
 async def _authenticate(request: Request) -> dict:
@@ -55,8 +75,9 @@ async def _authenticate(request: Request) -> dict:
         raise HTTPException(status_code=401, detail="Token required")
 
     # Local dev key check (fast path, no DB)
-    from ..store import get_local_api_key
     import hmac
+
+    from ..store import get_local_api_key
 
     local_key = get_local_api_key()
     if local_key and hmac.compare_digest(token, local_key):
@@ -76,6 +97,7 @@ async def _authenticate(request: Request) -> dict:
                 "org_id": matched.org_id or "local",
                 "scopes": matched.scopes or [],
                 "auth_method": "api_key",
+                "eval_run_id": matched.eval_run_id,
             }
 
     # Session JWT validation (for notebook pods)
@@ -85,8 +107,9 @@ async def _authenticate(request: Request) -> dict:
         return {
             "user_id": claims["sub"],
             "org_id": claims["org_id"],
-            "scopes": claims.get("scopes", ["read", "write"]),
+            "scopes": [s for s in claims.get("scopes", ["read", "write"]) if s in _SESSION_SCOPE_ALLOWLIST],
             "auth_method": "notebook_session",
+            "execution_identity": claims.get("execution_identity"),
         }
     except Exception:
         pass
@@ -94,11 +117,27 @@ async def _authenticate(request: Request) -> dict:
     raise HTTPException(status_code=403, detail="Invalid credentials")
 
 
+def chat_run_id(auth: dict) -> str | None:
+    """The chat run behind a session token, or None for every other identity.
+
+    Only a notebook-session token whose execution_identity is ``chat:<run_id>``
+    is a chat identity; API keys and plain notebook sessions keep the open
+    policy (they push signalpilot-agent/* working branches).
+    """
+    if auth.get("auth_method") != "notebook_session":
+        return None
+    identity = auth.get("execution_identity") or ""
+    if not identity.startswith("chat:") or len(identity) <= 5:
+        return None
+    return identity[5:]
+
+
 async def _authorize_project(auth: dict, project_id: str) -> None:
     """Verify the caller's org owns this project. Raises HTTPException if not."""
+    from sqlalchemy import select
+
     from ..db.engine import get_session_factory
     from ..db.models import GatewayWorkspaceProject
-    from sqlalchemy import select
 
     factory = get_session_factory()
     async with factory() as session:
@@ -120,6 +159,53 @@ def _is_write_operation(method: str, remainder: str, query: str) -> bool:
     if "service=git-receive-pack" in query:
         return True
     return False
+
+
+async def _read_body(request: Request, limit: int, *, is_write: bool) -> bytes:
+    """Buffer the request body up to ``limit`` inflated bytes.
+
+    git clients gzip the upload-pack/receive-pack POST body and send
+    `Content-Encoding: gzip`. git-http-backend does NOT inflate it, so the raw
+    gzip bytes reach upload-pack as pkt-lines → "fatal: protocol error: bad line
+    length character" and the clone hangs ("the remote end hung up"). Inflate
+    here, incrementally, so a small compressed body cannot expand past the
+    ceiling in memory; gzip and deflate both occur in the wild.
+    """
+    content_encoding = request.headers.get("content-encoding", "").lower().strip()
+    inflater = None
+    if content_encoding in ("gzip", "x-gzip"):
+        inflater = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    elif content_encoding == "deflate":
+        inflater = zlib.decompressobj()
+    too_large = HTTPException(status_code=413, detail="Push too large" if is_write else "Request too large")
+
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        if not chunk:
+            continue
+        if inflater is not None:
+            try:
+                chunk = inflater.decompress(chunk, limit + 1 - total)
+            except zlib.error as exc:
+                logger.warning("git: failed to inflate %s body: %s", content_encoding, exc)
+                raise HTTPException(status_code=400, detail="Malformed request encoding")
+        total += len(chunk)
+        if total > limit or (inflater is not None and inflater.unconsumed_tail):
+            raise too_large
+        chunks.append(chunk)
+    if inflater is not None:
+        try:
+            tail = inflater.flush()
+        except zlib.error as exc:
+            logger.warning("git: failed to inflate %s body: %s", content_encoding, exc)
+            raise HTTPException(status_code=400, detail="Malformed request encoding")
+        if total + len(tail) > limit:
+            raise too_large
+        chunks.append(tail)
+        if total + len(tail) and not inflater.eof:
+            raise HTTPException(status_code=400, detail="Malformed request encoding")
+    return b"".join(chunks)
 
 
 @router.api_route(
@@ -147,37 +233,42 @@ async def git_http_handler(project_id: str, remainder: str, request: Request):
     if not repo_exists(project_id):
         raise HTTPException(status_code=404, detail="Repository not found")
 
-    # 6. Enforce read/write scope
+    # 6. Enforce read/write scope. Eval keys are pinned to one connection and a
+    # document set; workspace repositories are outside that boundary.
+    if auth.get("eval_run_id"):
+        raise HTTPException(status_code=403, detail="Eval credentials cannot access git")
     query_string = str(request.url.query) if request.url.query else ""
     is_write = _is_write_operation(request.method, remainder, query_string)
+    scopes = auth.get("scopes", [])
 
-    if is_write and "write" not in auth.get("scopes", []):
+    if is_write and "write" not in scopes:
         raise HTTPException(status_code=403, detail="Write access required")
+    if not is_write and "read" not in scopes:
+        raise HTTPException(status_code=403, detail="Read access required")
 
-    # 7. Read body with size limit for pushes
-    body = await request.body()
+    # 7. Read the body with a size ceiling (inflated bytes), for reads and writes.
+    body = await _read_body(request, _MAX_PUSH_BYTES if is_write else _MAX_UPLOAD_PACK_BYTES, is_write=is_write)
 
-    # git clients gzip the upload-pack/receive-pack POST body and send
-    # `Content-Encoding: gzip`. git-http-backend does NOT inflate it, so the raw
-    # gzip bytes reach upload-pack as pkt-lines → "fatal: protocol error: bad line
-    # length character" and the clone hangs ("the remote end hung up"). Inflate
-    # here and pass the decompressed body (CONTENT_LENGTH is set from len(body)
-    # below, after this, so it stays correct). gzip and deflate both occur in the
-    # wild; handle both.
-    content_encoding = request.headers.get("content-encoding", "").lower().strip()
-    if content_encoding in ("gzip", "x-gzip", "deflate"):
-        import zlib
-        try:
-            if content_encoding == "deflate":
-                body = zlib.decompress(body)
-            else:
-                body = zlib.decompress(body, 16 + zlib.MAX_WBITS)
-        except zlib.error as exc:
-            logger.warning("git: failed to inflate %s body: %s", content_encoding, exc)
-            raise HTTPException(status_code=400, detail="Malformed request encoding")
-
-    if is_write and len(body) > _MAX_PUSH_BYTES:
-        raise HTTPException(status_code=413, detail="Push too large")
+    # 7b. Chat identities: refuse the whole push when any command leaves
+    # refs/heads/signalpilot/** or deletes a ref. The refusal is a valid
+    # report-status so the git client prints "! [remote rejected] ... (reason)".
+    run_id = chat_run_id(auth)
+    commands: list[RefUpdate] = []
+    if is_write and run_id and remainder.endswith("git-receive-pack"):
+        commands, capabilities = parse_receive_pack_commands(body)
+        reasons = check_chat_push(commands)
+        if commands and not reasons:
+            reasons = await chat_branch_ownership_reasons(auth, project_id, run_id, commands)
+        if reasons:
+            logger.info(
+                "git: chat push rejected: run=%s user=%s project=%s refs=%s",
+                run_id, auth.get("user_id"), project_id, dict(reasons),
+            )
+            return Response(
+                content=build_rejection_report(commands, reasons, capabilities),
+                media_type="application/x-git-receive-pack-result",
+                headers={"Cache-Control": "no-cache"},
+            )
 
     # 8. Resolve repo path and verify it's within REPOS_ROOT
     path = repo_path(project_id)
@@ -208,6 +299,16 @@ async def git_http_handler(project_id: str, remainder: str, request: Request):
         "GIT_CONFIG_KEY_0": "safe.directory",
         "GIT_CONFIG_VALUE_0": "*",
     }
+    if run_id and is_write:
+        # git refuses force pushes and deletes itself, with its normal
+        # "(non-fast-forward)" / "(deletion prohibited)" message.
+        env.update({
+            "GIT_CONFIG_COUNT": "3",
+            "GIT_CONFIG_KEY_1": "receive.denyNonFastForwards",
+            "GIT_CONFIG_VALUE_1": "true",
+            "GIT_CONFIG_KEY_2": "receive.denyDeletes",
+            "GIT_CONFIG_VALUE_2": "true",
+        })
 
     # Forward the git wire-protocol version. Modern git clients (>=2.26) default to
     # protocol v2 and send `Git-Protocol: version=2`. git-http-backend only speaks
@@ -283,13 +384,21 @@ async def git_http_handler(project_id: str, remainder: str, request: Request):
     if proc.stderr and logger.isEnabledFor(logging.DEBUG):
         logger.debug("git stderr for project %s: %s", project_id, proc.stderr.decode("utf-8", errors="replace")[:100])
 
-    # Auto-mirror to GitHub after a successful push
     if is_write and status_code < 400:
-        import asyncio
-        from .sync import mirror_push_to_github
-        org_id = auth.get("org_id", "local")
-        for branch in _detect_pushed_branches(body):
-            asyncio.ensure_future(mirror_push_to_github(project_id, org_id, branch))
+        if run_id:
+            # Chat push: record + publish the accepted signalpilot/** branches
+            # before answering so the branch is on GitHub when `git push` returns.
+            # mirror_push_to_github must NOT also run here (it would push twice).
+            if commands:
+                await publish_chat_push(auth, project_id, run_id, commands)
+        else:
+            # Auto-mirror to GitHub after a successful push (fire and forget).
+            import asyncio
+
+            from .sync import mirror_push_to_github
+            org_id = auth.get("org_id", "local")
+            for branch in pushed_branches(body) or ["main"]:
+                asyncio.ensure_future(mirror_push_to_github(project_id, org_id, branch))
 
     # The git smart-HTTP Content-Type (e.g. application/x-git-upload-pack-advertisement)
     # MUST reach the client or git rejects the stream and the clone hangs
@@ -311,19 +420,155 @@ async def git_http_handler(project_id: str, remainder: str, request: Request):
     )
 
 
-def _detect_pushed_branches(request_body: bytes) -> list[str]:
-    """Extract branch names from git-receive-pack request body.
+async def github_remote_url(session, org_id: str, link) -> str | None:
+    """Credentialed push URL for the project's active GitHub link, or None."""
+    from ..store import github as gh_store
 
-    The pkt-line format contains refs like:
-    old_sha new_sha refs/heads/main\0capabilities...
-    old_sha new_sha refs/heads/feat/my-branch
+    installation = await gh_store.get_installation(session, org_id=org_id, installation_id=link.installation_id)
+    if not installation or installation.status != "active":
+        logger.warning("git: GitHub installation %s unavailable for %s", link.installation_id, link.project_id)
+        return None
+    try:
+        token = await gh_store.get_valid_token(session, installation)
+    except Exception as exc:
+        logger.warning("git: GitHub access unavailable for project %s (%s)", link.project_id, type(exc).__name__)
+        return None
+    return github_token_remote_url(token, link.repo_full_name)
+
+
+async def chat_run_conversation(session, org_id: str, run_id: str) -> str | None:
+    from sqlalchemy import select
+
+    from ..db.models import GatewayChatRun
+
+    run = (
+        await session.execute(
+            select(GatewayChatRun).where(GatewayChatRun.id == run_id, GatewayChatRun.org_id == org_id)
+        )
+    ).scalar_one_or_none()
+    return run.conversation_id if run else None
+
+
+async def chat_branch_ownership_reasons(
+    auth: dict, project_id: str, run_id: str, commands: list[RefUpdate]
+) -> dict[str, str]:
+    """Pre-receive checks that need the database: refname -> reason.
+
+    - A branch whose push record belongs to another conversation is refused.
+    - A branch creation (old sha all zeros) with no record of ours, on a
+      project with a usable GitHub link, is refused when GitHub already has
+      that branch (one ls-remote). No link or no token: the push proceeds
+      and is recorded unpublished.
     """
-    branches = []
-    text = request_body.decode("utf-8", errors="replace")
-    for match in re.finditer(r"refs/heads/([\w/.@_-]+)", text):
-        branch = match.group(1)
-        if branch not in branches:
-            branches.append(branch)
-    if not branches:
-        branches.append("main")
-    return branches
+    import asyncio
+
+    from ..db.engine import get_session_factory
+    from ..store import github as gh_store
+    from ..store import github_prs
+    from .sync import remote_branch_exists
+
+    org_id = auth.get("org_id", "local")
+    reasons: dict[str, str] = {}
+    factory = get_session_factory()
+    async with factory() as session:
+        conversation_id = await chat_run_conversation(session, org_id, run_id)
+        link = await gh_store.get_repo_link_for_project(session, org_id=org_id, project_id=project_id)
+        remote_url: str | None = None
+        for command in commands:
+            branch = command.branch
+            if not branch:
+                continue
+            record = await github_prs.get_branch_record(
+                session, org_id=org_id, project_id=project_id, github_branch=branch
+            )
+            if record is not None:
+                if record.conversation_id and record.conversation_id != conversation_id:
+                    reasons[command.refname] = reason_other_chat(branch)
+                continue
+            if not command.is_create or link is None:
+                continue
+            if remote_url is None:
+                remote_url = await github_remote_url(session, org_id, link)
+                if remote_url is None:
+                    break
+            exists = await asyncio.to_thread(remote_branch_exists, project_id, remote_url, branch)
+            if exists:
+                reasons[command.refname] = reason_exists_on_github(branch)
+    return reasons
+
+
+async def publish_chat_push(auth: dict, project_id: str, run_id: str, commands: list[RefUpdate]) -> list[dict]:
+    """Record and mirror every branch a chat push actually updated.
+
+    A command counts as accepted when the mirror's head now equals its new
+    sha (git may have refused some, e.g. non-fast-forward). Each accepted
+    branch gets an upserted push record; when the project has an active
+    GitHub link the branch is pushed under the same name (fast-forward
+    only). A branch that exists on GitHub without a push record of ours is
+    left alone and not recorded: we never touch branches we did not create.
+    Returns one result dict per accepted branch (for logs and tests).
+    """
+    import asyncio
+
+    from ..db.engine import get_session_factory
+    from ..store import github as gh_store
+    from ..store import github_prs
+    from .repos import branch_head_sha
+    from .sync import publish_agent_branch
+
+    org_id = auth.get("org_id", "local")
+    actor = auth.get("user_id", "")
+    accepted = [
+        (c.branch, c.new_sha) for c in commands
+        if c.branch and branch_head_sha(project_id, c.branch) == c.new_sha
+    ]
+    if not accepted:
+        logger.info("git: chat push accepted no refs: run=%s project=%s", run_id, project_id)
+        return []
+
+    results: list[dict] = []
+    factory = get_session_factory()
+    async with factory() as session:
+        conversation_id = await chat_run_conversation(session, org_id, run_id)
+        link = await gh_store.get_repo_link_for_project(session, org_id=org_id, project_id=project_id)
+        remote_url = await github_remote_url(session, org_id, link) if link else None
+
+        for branch, sha in accepted:
+            existing = await github_prs.get_branch_record(
+                session, org_id=org_id, project_id=project_id, github_branch=branch
+            )
+            result: dict = {"branch": branch, "sha": sha, "published": False}
+            if remote_url:
+                outcome = await asyncio.to_thread(
+                    publish_agent_branch, project_id, remote_url, branch, known_branch=existing is not None
+                )
+                if outcome.get("exists"):
+                    logger.warning(
+                        "git: chat push not mirrored, branch exists on GitHub and is not ours: "
+                        "run=%s project=%s branch=%s", run_id, project_id, branch,
+                    )
+                    results.append({**result, "error": outcome["error"], "exists": True})
+                    continue
+                result["published"] = bool(outcome.get("pushed"))
+                result["error"] = outcome.get("error")
+            record = await github_prs.record_branch_push(
+                session,
+                org_id=org_id,
+                project_id=project_id,
+                conversation_id=conversation_id,
+                repo_full_name=link.repo_full_name if link else "",
+                github_branch=branch,
+                base_branch=(link.default_branch if link else None) or "main",
+                sha=sha,
+                actor=actor,
+                error_message=result.get("error"),
+            )
+            result["record_id"] = record.id
+            results.append(result)
+            logger.info(
+                "git: chat push accepted: run=%s user=%s project=%s branch=%s sha=%s conversation=%s "
+                "published=%s%s",
+                run_id, actor, project_id, branch, sha[:12], conversation_id, result["published"],
+                f" error={result['error']}" if result.get("error") else "",
+            )
+    return results

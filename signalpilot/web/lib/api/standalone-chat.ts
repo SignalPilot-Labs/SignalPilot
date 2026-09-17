@@ -79,6 +79,8 @@ export type StandaloneChatEffortOption = {
 
 export type StandaloneChatBootstrap = {
   enabled: boolean;
+  /** True when the org's plan does not include chat (free tier). */
+  plan_locked?: boolean;
   projects: StandaloneChatProject[];
   selected_project_id: string | null;
   is_admin: boolean;

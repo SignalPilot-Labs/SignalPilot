@@ -12,12 +12,12 @@ from gateway.agent_execution.contracts import AgentLaunchRequest
 from gateway.agent_execution.service import AgentService
 from gateway.db.models import (
     GatewayChatConversation,
-    GatewayChatRun,
     GatewayChatMessage,
+    GatewayChatRun,
     GatewayChatRunEvent,
-    GatewayWorkspaceProject,
     GatewayChatUserPreference,
     GatewaySetting,
+    GatewayWorkspaceProject,
 )
 from gateway.store import standalone_chat as chat_store
 from gateway.store.standalone_chat.helpers import _stage_run_event
@@ -200,8 +200,5 @@ async def test_browser_followup_and_retry_cannot_bypass_mcp_account_cap(service)
 
 def test_default_feature_uses_chats_not_separate_runtime(monkeypatch):
     monkeypatch.delenv("SP_FEATURE_MCP_AGENT", raising=False)
-    monkeypatch.setenv("SP_FEATURE_STANDALONE_CHAT", "true")
-    AgentService.require_enabled()
-    monkeypatch.setenv("SP_FEATURE_STANDALONE_CHAT", "false")
-    with pytest.raises(ValueError, match="Chats is not enabled"):
-        AgentService.require_enabled()
+    monkeypatch.delenv("SP_FEATURE_STANDALONE_CHAT", raising=False)
+    AgentService.require_enabled()  # chats are always on; plan gating lives on the routes

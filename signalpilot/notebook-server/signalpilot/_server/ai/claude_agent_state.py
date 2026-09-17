@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import queue
+import threading
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -11,7 +12,6 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     import asyncio
-    import threading
 
 _SESSIONS_FILE = Path(__file__).parent / ".chat_sessions.json"
 
@@ -129,6 +129,14 @@ class _ActiveAgent:
     client: Any | None = None
     accepted_steering_ids: set[str] = field(default_factory=set)
     pending_steering_turns: int = 0
+    # Guards the two fields above plus ``closing``. The relay loop (agent
+    # thread) and steer_agent (server loop) both touch them; a threading
+    # lock is the only primitive both loops can share.
+    steering_lock: threading.Lock = field(default_factory=threading.Lock)
+    # Set by the relay loop once it decides the client is done. A steering
+    # message that arrives after this point is refused instead of being
+    # queued on a client that is about to exit.
+    closing: bool = False
 
 
 _active_agents: dict[str, _ActiveAgent] = {}

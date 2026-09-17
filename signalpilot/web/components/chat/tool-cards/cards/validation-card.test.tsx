@@ -175,6 +175,10 @@ describe("validation card", () => {
       "Invalid",
     );
     expect(q(container, ".chat-boot-check")).toBeNull();
+    // The verdict is amber, never the red error token.
+    const verdict = q(container, '[data-testid="chat-validation-verdict"]');
+    expect(verdict?.className).toContain("text-[var(--color-warning)]");
+    expect(container.innerHTML).not.toContain("color-error");
     expect(container.textContent).toContain(MESSAGE);
     const fix = q(container, '[data-testid="chat-validation-fix"]');
     expect(fix?.textContent).toContain("Suggested fix");

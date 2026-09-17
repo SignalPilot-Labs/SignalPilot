@@ -20,6 +20,7 @@ import logging
 from sqlalchemy import select
 
 from ..db.models import GatewayWorkspaceProject
+from ..git.repos import github_token_remote_url
 from .runner import schedule_compile
 
 logger = logging.getLogger(__name__)
@@ -57,7 +58,7 @@ async def _pull_and_import(session, link, branch: str) -> bool:
         logger.warning("push trigger: no active installation for link %s", link.id)
         return False
     token = await gh_store.get_valid_token(session, installation)
-    remote_url = f"https://x-access-token:{token}@github.com/{link.repo_full_name}.git"
+    remote_url = github_token_remote_url(token, link.repo_full_name)
 
     result = await asyncio.to_thread(fetch_all, link.project_id, remote_url)
     if result.get("error"):
@@ -149,6 +150,10 @@ def dispatch_agent_trigger(
     Intentionally a stub: it records the intent so the wiring (webhook ->
     per-project config -> dispatch) is exercised end to end before the actual
     agent execution lands.
+
+    The reverse direction (agent work -> GitHub pull request) is implemented:
+    see gateway/git/agent_pr.py (open_pull_request) and the open_pull_request
+    MCP tool in gateway/mcp/tools/open_pull_request.py.
     """
     logger.info(
         "agent-trigger (stub): org=%s project=%s repo=%s pr=%d",

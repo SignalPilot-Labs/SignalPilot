@@ -102,7 +102,8 @@ export function ProjectAutomationSettings({
         pr_agent_trigger: prAgentTrigger,
       };
       if (dbtDir === AUTO) {
-        delete nextSettings.dbt_project_dir;
+        // PUT merges settings key-by-key; an explicit null removes the key.
+        nextSettings.dbt_project_dir = null;
       } else {
         nextSettings.dbt_project_dir = dbtDir;
       }

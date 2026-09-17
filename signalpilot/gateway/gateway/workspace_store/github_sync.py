@@ -43,6 +43,7 @@ from ..git.repos import (
     _run_git,
     branch_head_sha,
     get_head_ref,
+    github_token_remote_url,
     repo_exists,
     repo_path,
 )
@@ -308,7 +309,7 @@ async def _resolve_remote_url(db: AsyncSession, *, org_id: str, project_id: str)
     if not installation:
         return None
     token = await gh_store.get_valid_token(db, installation)
-    return f"https://x-access-token:{token}@github.com/{link.repo_full_name}.git"
+    return github_token_remote_url(token, link.repo_full_name)
 
 
 async def export_revision_to_git(

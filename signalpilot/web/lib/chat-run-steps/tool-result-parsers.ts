@@ -226,6 +226,7 @@ export function parseTerminal(r: Record<string, unknown>): Omit<TerminalResult, 
     stderr: str(r.stderr),
     stdoutTruncated: bool(r.stdout_truncated),
     stderrTruncated: bool(r.stderr_truncated),
+    probe: bool(r.probe),
   };
 }
 

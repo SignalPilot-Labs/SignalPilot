@@ -27,7 +27,11 @@ from gateway.standalone_chat.tool_projection.text import (
 _DB_MODE_RE = re.compile(r"This connection has (\d+) databases and (\d+) tables total\.")
 _DB_LINE_RE = re.compile(r"^\s+(\S+) \((\d+) tables\)$")
 _HEADER_RE = re.compile(r"^(?:Database|Connection): (.+?) \(([^)]*)\)$")
-_TABLE_LINE_RE = re.compile(r"^(\S+?)(?: \(([\d.]+[MK]?) rows\))?: (.*)$")
+# Full form: "schema.table (1.2M rows): col*, col→ref, col". Compact form
+# (list_tables over its byte budget): "schema.table (1.2M rows, 12 cols)".
+_TABLE_LINE_RE = re.compile(
+    r"^(\S+?)(?: \((?:([\d.]+[MK]?) rows)?(?:, )?(?:(\d+) cols)?\))?(?:: (.*))?$"
+)
 _DESCRIBE_COL_RE = re.compile(r"^  (\S+) — (.+?) \((nullable|NOT NULL)\)( \[PK\])?$")
 _EXPLORE_COL_RE = re.compile(r"^  (\S+) (.+?)(?: \[([^\]]*)\])?(?: -- (.*))?$")
 _PROFILE_HEADER_RE = re.compile(r"^(Table|View): (.+?) \(([\d,]+|\?) rows\)$")
@@ -74,13 +78,13 @@ def project_list_tables(content: str, tool_input: dict[str, Any] | None) -> Proj
             declared = parse_count(line[len("Tables: ") :])
             continue
         match = _TABLE_LINE_RE.match(line)
-        if not match:
+        if not match or (match.group(4) is None and match.group(3) is None):
             continue
         if len(entries) >= TABLE_LIST_MAX:
             result["entries_truncated"] = True
             continue
         columns = []
-        raw_columns = [part.strip() for part in match.group(3).split(",") if part.strip()]
+        raw_columns = [part.strip() for part in (match.group(4) or "").split(",") if part.strip()]
         for raw in raw_columns[:TABLE_LIST_COLS_MAX]:
             name, _, reference = raw.partition("→")
             column: dict[str, Any] = {"name": name.rstrip("*"), "primary_key": name.endswith("*")}
@@ -95,6 +99,8 @@ def project_list_tables(content: str, tool_input: dict[str, Any] | None) -> Proj
         }
         if match.group(2):
             entry["row_count_label"] = match.group(2)
+        if match.group(3):
+            entry["column_count"] = int(match.group(3))
         entries.append(entry)
     total = declared if declared is not None else len(entries)
     result["entries"] = entries

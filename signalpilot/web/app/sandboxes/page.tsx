@@ -23,6 +23,7 @@ import { PageHeader, TerminalBar } from "~/components/ui/page-header";
 import { StatusDot, MiniBar } from "~/components/ui/data-viz";
 import { useToast } from "~/components/ui/toast";
 import { TimeAgo } from "~/components/ui/time-ago";
+import { ALLOTMENT_BAR_COLOR, splitAllotment } from "~/lib/allotment";
 
 const statusConfig: Record<string, { indicator: string; label: string }> = {
   ready: { indicator: "bg-blue-400", label: "ready" },
@@ -167,7 +168,7 @@ export default function SandboxesPage() {
         <div className="grid grid-cols-3 gap-3 stagger-fade-in">
           {sandboxes.map((sb) => {
             const status = statusConfig[sb.status] || statusConfig.error;
-            const budgetPct = sb.budget_usd > 0 ? (sb.budget_used / sb.budget_usd) * 100 : 0;
+            const budget = splitAllotment(sb.budget_used, sb.budget_usd);
 
             return (
               <Link
@@ -235,6 +236,11 @@ export default function SandboxesPage() {
                     <div className="flex items-center gap-1.5 tabular-nums">
                       <DollarSign className="w-3 h-3" strokeWidth={1.5} />
                       ${sb.budget_used.toFixed(4)} / ${sb.budget_usd.toFixed(2)}
+                      {budget.over && (
+                        <span className="text-[var(--color-text)]">
+                          · extra cost ${budget.extra.toFixed(4)}
+                        </span>
+                      )}
                     </div>
                     <div className="flex items-center gap-1.5">
                       <Shield className="w-3 h-3 text-[var(--color-success)]" strokeWidth={1.5} />
@@ -247,10 +253,10 @@ export default function SandboxesPage() {
                     {sb.budget_usd > 0 && (
                       <div className="flex-1">
                         <MiniBar
-                          value={budgetPct}
+                          value={budget.fillPct}
                           max={100}
                           height={3}
-                          color={budgetPct > 80 ? "var(--color-error)" : budgetPct > 50 ? "var(--color-warning)" : "var(--color-success)"}
+                          color={ALLOTMENT_BAR_COLOR}
                         />
                       </div>
                     )}

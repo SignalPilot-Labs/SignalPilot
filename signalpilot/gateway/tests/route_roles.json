@@ -358,5 +358,13 @@
   "PUT /notebook/{session_id}/{path:path}": "owner",
   "POST /api/dbt-proxy/run-tokens": "member",
   "DELETE /api/dbt-proxy/run-tokens/{run_id}": "owner",
-  "GET /api/dbt-proxy/run-tokens/{run_id}": "owner"
+  "GET /api/dbt-proxy/run-tokens/{run_id}": "owner",
+  "GET /api/github/pull-requests": "member",
+  "POST /api/github/pull-requests": "member",
+  "PATCH /api/github/pull-requests/{record_id}": "member",
+  "POST /api/github/pull-requests/{record_id}/comments": "member",
+  "POST /api/github/installations/discover": "admin",
+  "POST /api/github/installations/{installation_id}/refresh": "member",
+  "GET /api/usage/me": "member",
+  "GET /api/usage/org": "admin"
 }

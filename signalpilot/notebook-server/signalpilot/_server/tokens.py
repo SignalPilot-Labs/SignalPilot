@@ -9,8 +9,10 @@ import secrets
 # across instances serving the same notebook, so they cannot simply be random —
 # but deriving them from the source alone makes them reproducible by anyone who
 # can read that source. Keying the derivation fixes that without losing
-# stability, provided every instance shares the secret.
-_TOKEN_SECRET_VARS = ("SP_NOTEBOOK_TOKEN_SECRET", "SP_SESSION_JWT_SECRET")
+# stability, provided every instance shares the secret. The gateway provides a
+# per-launch random SP_NOTEBOOK_TOKEN_SECRET; the gateway JWT signing secret is
+# never delivered to the runtime and must not be used here.
+_TOKEN_SECRET_VARS = ("SP_NOTEBOOK_TOKEN_SECRET",)
 
 
 def _derivation_key() -> bytes | None:

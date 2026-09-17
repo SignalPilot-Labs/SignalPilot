@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from urllib.parse import parse_qs
 
 from starlette.authentication import requires
 from starlette.responses import JSONResponse
 
 from signalpilot._server.ai.claude_agent import steer_agent, stop_agent
+from signalpilot._server.api.endpoints.standalone_chat_handover import (
+    supersede_run,
+)
 from signalpilot._server.api.endpoints.standalone_chat_runtime import (
     _ANALYSIS_SESSIONS_BY_RUN,
     _close_analysis_kernel,
@@ -53,6 +57,21 @@ async def steer(*, request: Request) -> JSONResponse:
 async def cancel(*, request: Request) -> JSONResponse:
     run_id = validate_run_id(request.path_params["run_id"])
     # The conversation-specific notebook bearer authorizes cancellation.
+    if _keep_kernels_requested(request):
+        # Handover cancel from the gateway worker before it re-executes the
+        # run: stop the agent, leave every kernel and the scratch alive, and
+        # let the next /execute inherit them. The superseded attempt's
+        # cleanup skips kernel close and scratch removal.
+        superseded = supersede_run(
+            run_id, stop_agent_fn=stop_agent, reason="gateway handover"
+        )
+        return JSONResponse(
+            {
+                "stopped": superseded is not None,
+                "kernel_stopped": False,
+                "superseded": superseded is not None,
+            }
+        )
     stopped = stop_agent(f"standalone-{run_id}")
     kernel_stopped = False
     # Close EVERY live kernel of the run, not only the analysis notebook.
@@ -65,3 +84,14 @@ async def cancel(*, request: Request) -> JSONResponse:
         except Exception:
             pass
     return JSONResponse({"stopped": stopped, "kernel_stopped": kernel_stopped})
+
+
+def _keep_kernels_requested(request: Request) -> bool:
+    query = parse_qs(
+        request.scope.get("query_string", b"").decode("utf-8", "replace")
+    )
+    return str((query.get("keep_kernels") or [""])[0]).lower() in {
+        "1",
+        "true",
+        "yes",
+    }

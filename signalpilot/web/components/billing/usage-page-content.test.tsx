@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   DailyUsageResponse,
   UsageByUserResponse,
-  UsageMeResponse,
   UsageSummaryResponse,
 } from "~/lib/backend-client";
 
@@ -76,38 +75,20 @@ const BY_USER: UsageByUserResponse = {
   ],
 };
 
-const ME: UsageMeResponse = {
-  period_start: "2026-09-01",
-  period_end: "2026-10-01",
-  rows: [
-    {
-      user_id: "user_2",
-      name: "Bob",
-      email: "bob@example.com",
-      credits_consumed: -212,
-      threads: 3,
-      queries: 41,
-      tokens_in: 10_000,
-      tokens_out: 2_000,
-      tokens_cache_read: 500,
-      token_credits: -2,
-    },
-  ],
-};
-
 const client = vi.hoisted(() => ({
   getUsageSummary: vi.fn(),
   getUsageDaily: vi.fn(),
   getUsageByUser: vi.fn(),
-  getUsageMe: vi.fn(),
 }));
+
+vi.mock("next/navigation", () => ({ usePathname: () => "/settings/usage" }));
 
 vi.mock("~/lib/backend-client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("~/lib/backend-client")>();
   return { ...actual, useBackendClient: () => client };
 });
 
-import { MyUsageContent, OrgUsageContent } from "~/components/billing/usage-page-content";
+import { OrgUsageContent } from "~/components/billing/usage-page-content";
 
 async function flush() {
   await act(async () => {
@@ -126,7 +107,6 @@ describe("usage page content", () => {
     client.getUsageSummary.mockReset().mockResolvedValue(SUMMARY);
     client.getUsageDaily.mockReset().mockResolvedValue(DAILY);
     client.getUsageByUser.mockReset().mockResolvedValue(BY_USER);
-    client.getUsageMe.mockReset().mockResolvedValue(ME);
   });
 
   afterEach(async () => {
@@ -149,7 +129,6 @@ describe("usage page content", () => {
     expect(rows[0].getAttribute("data-testid")).toBe("usage-user-user_1");
     expect(client.getUsageByUser).toHaveBeenCalledTimes(1);
     expect(client.getUsageByUser.mock.calls[0][0]).toMatch(/^\d{4}-\d{2}-01$/);
-    expect(client.getUsageMe).not.toHaveBeenCalled();
   });
 
   it("admin period selector refetches by-user rows", async () => {
@@ -167,24 +146,28 @@ describe("usage page content", () => {
     expect(client.getUsageByUser).toHaveBeenLastCalledWith(second);
   });
 
-  it("member view shows only the caller's own numbers and no org totals", async () => {
-    await act(async () => root.render(<MyUsageContent />));
+  it("admin view links the sibling usage tabs it is given", async () => {
+    await act(async () =>
+      root.render(<OrgUsageContent tabs={[{ label: "My usage", href: "/settings/usage/me" }]} />),
+    );
     await flush();
-    expect(container.querySelector('[data-testid="my-usage-page"]')).not.toBeNull();
-    expect(container.querySelector('[data-testid="my-threads"]')?.textContent).toContain("3");
-    expect(container.querySelector('[data-testid="my-queries"]')?.textContent).toContain("41");
-    expect(container.querySelector('[data-testid="my-tokens"]')?.textContent).toContain("12,000");
-    expect(container.textContent).not.toContain("allowances");
-    expect(container.querySelector('[data-testid="usage-by-user-table"]')).toBeNull();
-    expect(container.textContent).toContain("Managed by your org admins");
-    expect(client.getUsageSummary).not.toHaveBeenCalled();
-    expect(client.getUsageByUser).not.toHaveBeenCalled();
+    expect(container.querySelector('a[href="/settings/usage/me"]')).not.toBeNull();
   });
 
-  it("member view renders zeros when nothing was consumed", async () => {
-    client.getUsageMe.mockResolvedValue({ period_start: "2026-09-01", period_end: "2026-10-01", rows: [] });
-    await act(async () => root.render(<MyUsageContent />));
+  it("admin view reads extra usage as neutral extra cost, never the error token", async () => {
+    client.getUsageSummary.mockResolvedValue({
+      ...SUMMARY,
+      consumed: 5_400,
+      available: -400,
+      overage: 400,
+      overage_cents: 400,
+    });
+    await act(async () => root.render(<OrgUsageContent />));
     await flush();
-    expect(container.querySelector('[data-testid="my-credits"]')?.textContent).toContain("0");
+    const balance = container.querySelector('[data-testid="credit-balance"]')!;
+    expect(balance.querySelector('[data-testid="usage-extra"]')?.textContent).toContain("400");
+    expect(balance.querySelector('[data-testid="usage-included-copy"]')).not.toBeNull();
+    expect(balance.querySelector('[class*="color-error"]')).toBeNull();
+    expect(container.textContent).not.toContain("overage");
   });
 });

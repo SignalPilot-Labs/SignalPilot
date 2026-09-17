@@ -11,7 +11,7 @@
 import type { EChartsOption } from "echarts";
 
 import type { DatasetRows } from "../datasets";
-import { formatValue, toNumber } from "../format";
+import { escapeHtml, formatValue, toNumber } from "../format";
 import type {
   CartesianChart,
   ComboChart,
@@ -140,14 +140,16 @@ function buildCartesianOption(
         const firstData = first?.data as { rowIndex?: number } | undefined;
         const rowIndex = firstData?.rowIndex ?? -1;
         const heading =
-          rowIndex >= 0 ? formatXValue(model, rowIndex, rows[rowIndex]?.[chart.x.column]) : "";
+          rowIndex >= 0
+            ? escapeHtml(formatXValue(model, rowIndex, rows[rowIndex]?.[chart.x.column]))
+            : "";
         const lines = params.map((param) => {
           const data = param.data as { value?: unknown; column?: string } | undefined;
           const value = Array.isArray(data?.value)
             ? data?.value[horizontal ? 0 : 1]
             : data?.value;
           const format = data?.column ? formatByColumn.get(data.column) : yFormat;
-          return `${param.seriesName ?? ""}: ${formatValue(value, format)}`;
+          return `${escapeHtml(param.seriesName ?? "")}: ${escapeHtml(formatValue(value, format))}`;
         });
         return [heading, ...lines].filter(Boolean).join("<br/>");
       },
@@ -182,7 +184,7 @@ function buildPieOption(
         const param = paramsArray(raw)[0] as TooltipParam & { name?: string; percent?: number };
         const value = (param?.data as { value?: unknown } | undefined)?.value;
         const percent = typeof param?.percent === "number" ? ` (${param.percent.toFixed(1)}%)` : "";
-        return `${param?.name ?? ""}: ${formatValue(value, format)}${percent}`;
+        return `${escapeHtml(param?.name ?? "")}: ${escapeHtml(formatValue(value, format))}${percent}`;
       },
     },
     series: [
@@ -263,11 +265,11 @@ function buildScatterOption(
         const row = rows[rowIndex];
         if (!row) return "";
         const lines = [
-          `${chart.x.label ?? chart.x.column}: ${formatXValue(model, rowIndex, row[chart.x.column])}`,
-          `${chart.y.label ?? chart.y.column}: ${formatValue(row[chart.y.column], chart.y.format)}`,
+          `${escapeHtml(chart.x.label ?? chart.x.column)}: ${escapeHtml(formatXValue(model, rowIndex, row[chart.x.column]))}`,
+          `${escapeHtml(chart.y.label ?? chart.y.column)}: ${escapeHtml(formatValue(row[chart.y.column], chart.y.format))}`,
         ];
-        if (sizeColumn) lines.push(`${sizeColumn}: ${formatValue(row[sizeColumn])}`);
-        if (colorColumn) lines.unshift(String(row[colorColumn] ?? "–"));
+        if (sizeColumn) lines.push(`${escapeHtml(sizeColumn)}: ${escapeHtml(formatValue(row[sizeColumn]))}`);
+        if (colorColumn) lines.unshift(escapeHtml(String(row[colorColumn] ?? "–")));
         return lines.join("<br/>");
       },
     },

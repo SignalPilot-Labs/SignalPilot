@@ -1,5 +1,6 @@
 "use client";
 
+import { TriangleAlert } from "lucide-react";
 import type { CSSProperties } from "react";
 import type {
   DashboardSampleChart,
@@ -130,8 +131,10 @@ function DashboardSampleExpanded({ step }: ToolCardContext) {
       {!result.dashboardValid && (
         <div
           data-testid="chat-dashboard-sample-invalid"
-          className="border-b border-[var(--color-border)] px-3.5 py-2.5 text-[11.5px] leading-5 text-[var(--color-error)]"
+          className="flex items-start gap-2 border-b border-[var(--color-border)] px-3.5 py-2.5 text-[11.5px] leading-5 text-[var(--color-text-muted)]"
         >
+          <TriangleAlert className="mt-1 h-3 w-3 flex-none text-[var(--color-warning)]" aria-hidden />
+          <div className="min-w-0">
           <p className="font-medium">The dashboard spec is not valid.</p>
           {result.errors.length > 0 && (
             <ul className="mt-1 list-disc space-y-0.5 pl-4 font-mono text-[10.5px]">
@@ -140,6 +143,7 @@ function DashboardSampleExpanded({ step }: ToolCardContext) {
               ))}
             </ul>
           )}
+          </div>
         </div>
       )}
       {result.charts.length === 0 ? (

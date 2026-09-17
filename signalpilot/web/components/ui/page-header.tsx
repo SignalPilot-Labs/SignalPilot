@@ -21,6 +21,9 @@ export function PageHeader({
   tabs?: { label: string; href: string }[];
 }) {
   const pathname = usePathname();
+  // When one tab matches the path exactly, only that tab is active; otherwise
+  // a tab is active for any path nested under it.
+  const exactTab = tabs?.some((t) => t.href === pathname) ?? false;
   return (
     <div className="mb-8">
       {/* Title row */}
@@ -42,7 +45,7 @@ export function PageHeader({
       {tabs && tabs.length > 0 && (
         <div className="mt-5 flex items-center gap-1">
           {tabs.map((t) => {
-            const active = pathname === t.href || pathname.startsWith(`${t.href}/`);
+            const active = exactTab ? pathname === t.href : pathname.startsWith(`${t.href}/`);
             return (
               <Link
                 key={t.href}

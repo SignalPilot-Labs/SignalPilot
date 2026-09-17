@@ -146,6 +146,14 @@ class ConnectorProxy:
             return True
 
     async def list_tools(self) -> list[types.Tool]:
+        """Serve the approved inventory, never the live upstream text (SP-20).
+
+        Names, titles and descriptions come from the stored inventory the
+        admin reviewed (``tools_json``, sanitized by ``plain_text`` at probe
+        and refresh). The live ``tools/list`` only narrows the set to tools the
+        server still offers and supplies the current input schema; a live tool
+        whose name is not in the inventory is omitted.
+        """
         access, member = await self._access()
         if not access.usable:
             return []
@@ -156,17 +164,23 @@ class ConnectorProxy:
         except UpstreamError as exc:
             logger.info("Connector %s tools/list fell back to the stored inventory: %s", self.connector.id, exc)
             live = None
-        if live is not None:
-            return [tool for tool in live if tool.name in allowed]
-        return [
-            types.Tool(
-                name=tool["name"],
-                description=tool.get("description") or None,
-                inputSchema=dict(tool.get("input_schema") or {"type": "object"}),
+        live_by_name = {tool.name: tool for tool in live} if live is not None else None
+        served: list[types.Tool] = []
+        for tool in self.connector.tools_json or []:
+            name = tool["name"]
+            if name not in allowed or (live_by_name is not None and name not in live_by_name):
+                continue
+            live_tool = live_by_name.get(name) if live_by_name else None
+            schema = (live_tool.input_schema if live_tool is not None else None) or tool.get("input_schema")
+            served.append(
+                types.Tool(
+                    name=name,
+                    title=tool.get("title") or None,
+                    description=tool.get("description") or None,
+                    inputSchema=dict(schema or {"type": "object"}),
+                )
             )
-            for tool in (self.connector.tools_json or [])
-            if tool["name"] in allowed
-        ]
+        return served
 
     async def call_tool(self, name: str, arguments: dict[str, Any] | None) -> types.CallToolResult:
         started = time.monotonic()

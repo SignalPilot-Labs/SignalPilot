@@ -1,4 +1,4 @@
-"""Verify repository restrictions in gateway/evals/runner._assert_repo_allowed.
+"""Verify repository restrictions in gateway/evals/runner.assert_repo_allowed.
 
 The gateway passes the repository URL to Git clone. Local mode restricts local
 paths to projects_dir and permits only GitHub URLs. Cloud mode permits only
@@ -52,17 +52,17 @@ def cloud_mode(monkeypatch: pytest.MonkeyPatch):
 
 def _refused(url: str, settings) -> None:
     with pytest.raises(runner.RepoRefused):
-        runner._assert_repo_allowed(url, settings=settings, what="eval repo")
+        runner.assert_repo_allowed(url, settings=settings, what="eval repo")
 
 
 class TestLocalMode:
     def test_a_path_under_projects_dir_is_allowed(self, local_mode, projects, settings) -> None:
-        runner._assert_repo_allowed(
+        runner.assert_repo_allowed(
             str(projects / "set-1"), settings=settings, what="eval repo"
         )  # must not raise
 
     def test_projects_dir_itself_is_allowed(self, local_mode, projects, settings) -> None:
-        runner._assert_repo_allowed(str(projects), settings=settings, what="eval repo")
+        runner.assert_repo_allowed(str(projects), settings=settings, what="eval repo")
 
     def test_a_path_outside_projects_dir_is_refused(
         self, local_mode, tmp_path, settings
@@ -91,7 +91,7 @@ class TestLocalMode:
         _refused(url, settings)
 
     def test_https_github_is_allowed(self, local_mode, settings) -> None:
-        runner._assert_repo_allowed(
+        runner.assert_repo_allowed(
             "https://github.com/o/r.git", settings=settings, what="eval repo"
         )
 
@@ -101,14 +101,14 @@ class TestLocalMode:
 
     def test_the_refusal_names_what_was_gated(self, local_mode, settings) -> None:
         with pytest.raises(runner.RepoRefused, match="dbt project repo"):
-            runner._assert_repo_allowed(
+            runner.assert_repo_allowed(
                 "git://host/x", settings=settings, what="dbt project repo"
             )
 
 
 class TestCloudMode:
     def test_https_github_is_the_only_allowed_shape(self, cloud_mode, settings) -> None:
-        runner._assert_repo_allowed(
+        runner.assert_repo_allowed(
             "https://github.com/o/r.git", settings=settings, what="eval repo"
         )
 

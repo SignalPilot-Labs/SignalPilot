@@ -29,7 +29,6 @@ symlinks are rejected — the loader will not read outside the repo.
 {
   "name": "northwind",
   "description": "Northwind RCM warehouse — 10 silent data-quality defects + controls.",
-  "project_repo": "https://github.com/acme/northwind-dbt",
   "build_fingerprint": "",
   "defaults": { "tolerance": 0.15, "class": "read" },
   "setup": { "timeout_seconds": 900, "env_file": "" },
@@ -42,12 +41,18 @@ symlinks are rejected — the loader will not read outside the repo.
 | `name` | no | Display name. Defaults to the repo directory name. |
 | `description` | no | Shown under the set name. |
 | `tasks` | **yes** | The task list. An empty list is an error. |
-| `project_repo` | no | dbt project the warehouse was built from. Cloned gateway-side and shipped to each sandbox as a tarball. Also the source for coverage denominators. |
 | `build_fingerprint` | no | Pin the set to one warehouse build — see below. |
 | `defaults.tolerance` | no | Relative tolerance for checks that do not set their own. Default `0.15`. |
 | `defaults.class` | no | `read` or `write`, applied to tasks that omit `class`. Default `read`. |
 | `setup.timeout_seconds` | no | Timeout for every setup/teardown container. Defaults to the gateway's `SP_EVAL_SETUP_TIMEOUT_SECONDS` (1800). |
 | `setup.env_file` | no | Repo-relative file of `KEY=VALUE` lines injected into setup/teardown containers. No other keys are allowed under `setup`. |
+
+The dbt project a run evaluates is not part of the manifest. It is the
+**project repository** linked in the eval configuration (see
+[the quickstart](./quickstart.mdx)), so the same eval set grades whatever the
+project currently is, and later a pull request branch. A manifest that still
+carries a `project_repo` key keeps working: the key is ignored and the run log
+records one warning.
 
 ### Build fingerprint
 

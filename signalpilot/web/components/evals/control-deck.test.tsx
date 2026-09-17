@@ -51,10 +51,11 @@ import { ControlDeck } from "~/components/evals/control-deck";
 
 const liveRun = { id: "run-1", status: "running" } as unknown as EvalRun;
 
-function deck(activeRun?: EvalRun) {
+function deck(activeRun?: EvalRun, projectRepoUrl = "https://github.com/acme/dbt-project") {
   return (
     <ControlDeck
       repoUrl="https://github.com/acme/evals.git"
+      projectRepoUrl={projectRepoUrl}
       model="sonnet"
       runnerEnabled
       activeRun={activeRun}
@@ -125,5 +126,16 @@ describe("ControlDeck permissions", () => {
 
     await act(async () => root.render(deck(liveRun)));
     expect(enabledButtons(container, '[data-testid="eval-stop-run"]')).toHaveLength(1);
+  });
+
+  it("blocks the run and points at configuration when no dbt project repository is set", async () => {
+    mocks.granted = new Set(["evals.run"]);
+    await act(async () => root.render(deck(undefined, "")));
+
+    expect(container.querySelector('[data-testid="eval-project-blocker"]')?.textContent).toContain(
+      "Select the dbt project repository.",
+    );
+    expect(enabledButtons(container, '[data-testid="eval-run-suite"]')).toHaveLength(0);
+    expect(enabledButtons(container, '[data-testid="eval-run-dial"]')).toHaveLength(0);
   });
 });

@@ -43,6 +43,7 @@ Open **Evals** and click **Configure**.
 | Field | What it does |
 |-------|--------------|
 | **Repo** | The eval set. A `https://github.com/…` URL, or a path under `SP_EVAL_PROJECTS_DIR` when self-hosting. |
+| **Project repository** | **Required.** The dbt project every run evaluates: a `https://github.com/…` URL (public, or covered by your GitHub installation), or a path under `SP_EVAL_PROJECTS_DIR` when self-hosting. Optionally pin a branch; empty means the repository default branch. Local paths are checked when you save. |
 | **Model** | Model alias the graded agent runs as (`sonnet`, `opus`, …). |
 | **Max tasks per run** | `0` runs everything. A small number is useful while authoring. |
 | **Connection** | **Required.** The warehouse connection every task is pinned to, and the parent for forked branches. |

@@ -168,7 +168,7 @@ storage networks. The harness enforces:
 - **Bounded lifetime.** The sandbox is destroyed when the task ends, with the
   provider's execution time limit as backstop.
 - **GitHub HTTPS repositories only.** Cloud mode refuses local paths and SSH
-  URLs for the eval repo and the manifest's `project_repo`.
+  URLs for both the eval repo and the project repository.
 
 Local-path eval sets and host bind mounts are refused on this backend; use a
 git eval repo with a self-contained setup script.
@@ -180,9 +180,10 @@ Nothing to deploy. What you control:
 1. **Enablement.** Evals are on for every organization on a paid plan. If the
    page shows a plan prompt, your organization is on the free plan; if it shows
    a deployment notice, the deployment is not wired to run evals.
-2. **The eval repo.** Cloud mode accepts `https://github.com/…` only, no other
-   host, no local paths, no SSH URLs. The same rule applies to the manifest's
-   `project_repo`.
+2. **The eval repo and the project repository.** Cloud mode accepts
+   `https://github.com/…` only, no other host, no local paths, no SSH URLs.
+   The same rule applies to both repositories. The project repository can pin
+   a branch; leave it empty for the repository default branch.
 3. **Private repos.** Connect GitHub from **Settings → GitHub** and install the
    app on the repositories you want to use. The gateway then clones them with a
    short-lived installation token scoped to your organization; a repository that

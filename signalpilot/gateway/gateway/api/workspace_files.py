@@ -15,13 +15,14 @@ from __future__ import annotations
 import base64
 import binascii
 import re
-
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
-from ..auth import DBSession, OrgID, UserID
+from ..auth import DBSession, OrgID, OrgRole, UserID
+from ..auth.permissions import ADMIN_ROLE_REQUIRED
+from ..auth.user import is_org_admin_role
 from ..security.scope_guard import RequireScope
 from ..workspace_store import (
     RevisionConflict,
@@ -31,9 +32,9 @@ from ..workspace_store import (
     workspace_object_storage,
 )
 from ..workspace_store.store import RevisionNotFound, Upsert
-from .deps import ProjectsGate, StoreD
+from .deps import RequireBillablePlan, StoreD
 
-router = APIRouter(prefix="/api", dependencies=[ProjectsGate])
+router = APIRouter(prefix="/api", dependencies=[RequireBillablePlan])
 
 _BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -54,18 +55,29 @@ def _valid_branch(branch: str) -> str:
     return branch
 
 
-async def _require_project(store, ws: WorkspaceStore, db, project_id: str) -> None:
-    """404 for a project that never existed, 410 Gone for a deleted one whose
-    revision history remains — old links tombstone instead of erroring."""
+async def _require_project(store, ws: WorkspaceStore, db, project_id: str):
+    """The live project; 404 for one that never existed, 410 Gone for a deleted
+    one whose revision history remains — old links tombstone instead of erroring."""
     project = await store.get_workspace_project(project_id)
     if project is not None:
-        return
+        return project
     if await ws.has_revisions(db, project_id=project_id):
         raise HTTPException(
             status_code=410,
             detail={"tombstone": True, "project_id": project_id, "reason": "Project was deleted"},
         )
     raise HTTPException(status_code=404, detail="Project not found")
+
+
+def _require_branch_write(project, branch: str, role: str) -> str:
+    """Decision 6: only an admin writes to the project's production (default) branch.
+
+    Members write on every other branch. Returns the validated branch name.
+    """
+    branch = _valid_branch(branch)
+    if branch == (project.default_branch or "main") and not is_org_admin_role(role):
+        raise HTTPException(status_code=403, detail=ADMIN_ROLE_REQUIRED)
+    return branch
 
 
 def _confined(path: str) -> str:
@@ -127,12 +139,14 @@ async def put_file(
     request: Request,
     org_id: OrgID,
     user_id: UserID,
+    role: OrgRole,
     db: DBSession,
     store: StoreD,
     ws: WorkspaceStoreD,
     branch: str = Query("main"),
 ):
-    await _require_project(store, ws, db, project_id)
+    project = await _require_project(store, ws, db, project_id)
+    branch = _require_branch_write(project, branch, role)
     content = await request.body()
     if len(content) > _MAX_INLINE_BYTES:
         raise HTTPException(status_code=413, detail="Use files:upload-url for files over 8 MB")
@@ -140,7 +154,7 @@ async def put_file(
         db,
         org_id=org_id,
         project_id=project_id,
-        branch=_valid_branch(branch),
+        branch=branch,
         upserts=[Upsert(path=_confined(path), content=content)],
         deletes=[],
         created_by=user_id,
@@ -158,13 +172,14 @@ async def delete_file(
     path: str,
     org_id: OrgID,
     user_id: UserID,
+    role: OrgRole,
     db: DBSession,
     store: StoreD,
     ws: WorkspaceStoreD,
     branch: str = Query("main"),
 ):
-    await _require_project(store, ws, db, project_id)
-    branch = _valid_branch(branch)
+    project = await _require_project(store, ws, db, project_id)
+    branch = _require_branch_write(project, branch, role)
     path = _confined(path)
     try:
         manifest = await ws.load_manifest(db, org_id=org_id, project_id=project_id, branch=branch)
@@ -280,11 +295,12 @@ async def copy_file(
     body: _CopyRequest,
     org_id: OrgID,
     user_id: UserID,
+    role: OrgRole,
     db: DBSession,
     store: StoreD,
     ws: WorkspaceStoreD,
 ):
-    return await _copy_or_move(project_id, body, org_id, user_id, db, store, ws, move=False)
+    return await _copy_or_move(project_id, body, org_id, user_id, role, db, store, ws, move=False)
 
 
 @router.post(
@@ -296,21 +312,23 @@ async def move_file(
     body: _CopyRequest,
     org_id: OrgID,
     user_id: UserID,
+    role: OrgRole,
     db: DBSession,
     store: StoreD,
     ws: WorkspaceStoreD,
 ):
-    return await _copy_or_move(project_id, body, org_id, user_id, db, store, ws, move=True)
+    return await _copy_or_move(project_id, body, org_id, user_id, role, db, store, ws, move=True)
 
 
-async def _copy_or_move(project_id, body, org_id, user_id, db, store, ws, *, move: bool):
-    await _require_project(store, ws, db, project_id)
+async def _copy_or_move(project_id, body, org_id, user_id, role, db, store, ws, *, move: bool):
+    project = await _require_project(store, ws, db, project_id)
+    branch = _require_branch_write(project, body.branch, role)
     try:
         manifest = await ws.copy_file(
             db,
             org_id=org_id,
             project_id=project_id,
-            branch=_valid_branch(body.branch),
+            branch=branch,
             source=_confined(body.source),
             destination=_confined(body.destination),
             created_by=user_id,
@@ -352,11 +370,13 @@ async def batch_commit(
     body: _BatchRequest,
     org_id: OrgID,
     user_id: UserID,
+    role: OrgRole,
     db: DBSession,
     store: StoreD,
     ws: WorkspaceStoreD,
 ):
-    await _require_project(store, ws, db, project_id)
+    project = await _require_project(store, ws, db, project_id)
+    branch = _require_branch_write(project, body.branch, role)
     if not body.upserts and not body.deletes:
         raise HTTPException(status_code=400, detail="Empty batch")
     upserts: list[Upsert] = []
@@ -389,7 +409,7 @@ async def batch_commit(
             db,
             org_id=org_id,
             project_id=project_id,
-            branch=_valid_branch(body.branch),
+            branch=branch,
             base_revision=body.base_revision,
             upserts=upserts,
             deletes=body.deletes,

@@ -2,6 +2,7 @@
 // plan usage, health, and metrics.
 
 import { GATEWAY_URL, _getAuthHeader, request } from "./client";
+import type { EntitlementPayload } from "~/lib/entitlement";
 
 // Settings
 export const getMcpAgentDefaults = () =>
@@ -194,27 +195,25 @@ export const resolveAnalysisTrail = (params: {
 // The following function returns gateway health.
 export const getHealth = () => request<Record<string, unknown>>("/health");
 
-// The following functions support plan limits and usage.
+// `GET /api/plan`: the org's entitlement, the abuse ceilings the gateway
+// enforces, and current use against them. Metered units (threads, queries,
+// models, seats, eval runs) are the credit ledger's business and live on the
+// billing backend's usage routes instead.
+export type PlanLimit = number | "unlimited";
+
 export interface PlanUsage {
   tier: string;
+  is_billable: boolean;
+  entitlement: EntitlementPayload;
   limits: {
-    connections: number | "unlimited";
-    users: number | "unlimited";
-    api_keys: number | "unlimited";
-    queries_per_day: number | "unlimited";
-    audit_retention_days: number | "unlimited";
+    connections: PlanLimit;
+    api_keys: PlanLimit;
+    knowledge_storage_mb: PlanLimit;
+    knowledge_history_versions: PlanLimit;
   };
   usage: {
     connections: number;
     api_keys: number;
-    queries_today: number;
-  };
-  features: {
-    pii_redaction: boolean;
-    byok: boolean;
-    sso: boolean;
-    budget_controls: boolean;
-    audit_export: boolean;
   };
 }
 export const getPlan = () => request<PlanUsage>("/api/plan");

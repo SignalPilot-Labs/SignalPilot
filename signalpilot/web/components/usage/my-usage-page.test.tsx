@@ -7,11 +7,18 @@ import { MyUsagePage } from "./my-usage-page";
 const mocks = vi.hoisted(() => ({
   getMyUsage: vi.fn(),
   auth: { isCloudMode: true, isLoaded: true },
-  org: { membership: { role: "org:member" } as { role: string } | undefined },
+  perms: { isAdmin: false },
 }));
 vi.mock("~/lib/api/usage", () => ({ getMyUsage: mocks.getMyUsage }));
 vi.mock("~/lib/auth-context", () => ({ useAppAuth: () => mocks.auth }));
-vi.mock("@clerk/nextjs", () => ({ useOrganization: () => mocks.org }));
+vi.mock("~/lib/hooks/use-permissions", () => ({
+  usePermissions: () => ({
+    role: mocks.perms.isAdmin ? "admin" : "member",
+    isAdmin: mocks.perms.isAdmin,
+    loaded: true,
+    can: (p: string) => mocks.perms.isAdmin || p === "usage.self",
+  }),
+}));
 // jsdom has no ResizeObserver, which recharts' ResponsiveContainer needs.
 vi.mock("./daily-usage-charts", () => ({
   DailyUsageCharts: ({ daily }: { daily: unknown[] }) => <div data-testid="usage-daily-charts" data-points={daily.length} />,
@@ -42,7 +49,7 @@ describe("MyUsagePage", () => {
   let root: Root;
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.org.membership = { role: "org:member" };
+    mocks.perms.isAdmin = false;
     mocks.getMyUsage.mockResolvedValue(sample);
     container = document.createElement("div");
     document.body.appendChild(container);
@@ -67,7 +74,7 @@ describe("MyUsagePage", () => {
   });
 
   it("offers the members tab to admins and shows empty states", async () => {
-    mocks.org.membership = { role: "org:admin" };
+    mocks.perms.isAdmin = true;
     mocks.getMyUsage.mockResolvedValue({ ...sample, daily: [], conversations: [], connections: [] });
     await render();
     expect(container.querySelector('a[href="/settings/usage/members"]')).not.toBeNull();

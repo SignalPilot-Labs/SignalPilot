@@ -1,0 +1,122 @@
+---
+sidebar_position: 2
+title: Add MCP servers to chat
+description: Give SignalPilot's chat agent tools from other services such as Linear, GitHub, Notion, or any MCP server with a URL.
+hide_title: true
+sidebar_label: Add MCP servers
+---
+
+import PageHero from '@site/src/components/PageHero';
+import { Steps, Step } from '@site/src/components/Steps';
+import FieldTable from '@site/src/components/FieldTable';
+import Callout from '@site/src/components/Callout';
+import { Connectors } from '@site/src/components/illustrations';
+
+<PageHero
+  eyebrow="Extend · Connectors"
+  title="Add MCP servers to chat"
+  lede="Connectors let the chat agent use tools from other services alongside your data. Add a server once and it is available in every new chat, with each tool switched on or off individually."
+  illustration={<Connectors />}
+/>
+
+<Callout kind="note" title="Connectors are not Connections">
+**Connections** are your databases and warehouses. **Connectors** are outside tool servers the agent can call, such as an issue tracker or a wiki. This page is about connectors. To add a database, see [Connect a database](/docs/connect-database).
+</Callout>
+
+## What you can add
+
+Any server that speaks the Model Context Protocol (MCP). Most providers publish one; look in their docs under "MCP". Two kinds are supported:
+
+- **A server address** such as `https://mcp.linear.app/mcp`. SignalPilot calls it on the agent's behalf and records every call.
+- **A command** such as `npx -y @modelcontextprotocol/server-github`. It runs inside the agent's sandbox when a chat starts. Commands are handy for open-source servers, but see the note on sandbox connectors below before relying on them.
+
+## Add a connector
+
+<Steps>
+  <Step title="Open Connectors">
+    In SignalPilot, open **Settings → Connectors** and choose **Add connector**. The first time, the page is empty and the button sits in the middle.
+  </Step>
+
+  <Step title="Where is it?">
+    Paste the **server URL or command**. SignalPilot detects which one it is and immediately checks it: for an address it asks the server what tools it offers; for a command it installs and starts it, which can take up to a minute and a half the first time.
+
+    If the check fails you can still choose **Save anyway** and fix it later from the connector's settings.
+  </Step>
+
+  <Step title="Access">
+    Choose how the agent gets access. The right option is usually detected from the server.
+
+    <FieldTable
+      rows={[
+        { label: 'No sign-in', value: 'The server is open, or needs nothing from you.' },
+        { label: 'Sign in', value: 'A normal sign-in window opens after you connect. Each person signs in as themselves.' },
+        { label: 'Key', value: 'A header name (default Authorization) and a key from the provider. Saved encrypted and never shown again.' },
+      ]}
+    />
+
+    For an organization connector that uses a key, you can tick **Each member provides their own key** so the provider sees each person's own account rather than yours.
+  </Step>
+
+  <Step title="Tools and name">
+    Give the connector a **name**. The agent sees its tools as `mcp__<name>__<tool>`, so pick something short and obvious like `Linear`.
+
+    Choose **who can use it**: **Only me** for a personal connector, or **Everyone in your organization** if you are an admin.
+
+    Review the tool list. **Read-only tools start on. Anything that writes starts off** until you turn it on. Choose **Connect**.
+  </Step>
+
+  <Step title="Finish access, then start a new chat">
+    If the connector needs a sign-in or a key, the final screen asks for it. Once it shows **Ready**, open a new chat. Existing chats keep the tools they started with; changes always apply to new chats.
+  </Step>
+</Steps>
+
+## Use connectors in a chat
+
+Open **Chat settings** from any chat. The **Connectors** section shows every connector available to you, how many tools go to your next chat, and a switch labelled **On for me** per connector. Organization connectors can be turned off for yourself without affecting anyone else. If a connector needs attention, the row shows **Sign in** or **Retry** instead of a switch.
+
+When the agent calls a tool, the call appears in the chat transcript like any other action. If a sign-in expires mid-run, a card in the transcript asks you to sign in and retry.
+
+## Manage a connector
+
+Choosing a connector opens a panel with four tabs.
+
+| Tab | What you can do |
+|---|---|
+| **Tools** | Search tools, filter by **Read-only**, **Writes**, or **Destructive**, and switch each one on or off. Turning on a destructive tool asks you to confirm. Newly discovered tools start off and are flagged for review. |
+| **Access** | See who is signed in, sign out, replace a key. Admins can sign everyone out of an organization connector. |
+| **Activity** | Every call made through the connector: the tool, who ran it, when, the outcome, and how long it took. |
+| **Settings** | Rename, change the address or command, turn it on or off, or remove it. |
+
+Tool descriptions come from the provider and are shown as plain text. SignalPilot does not verify a provider's claim that a tool is read-only, but the on/off switches are enforced on every call.
+
+## Personal and organization connectors
+
+| | Personal | Organization |
+|---|---|---|
+| Who can add one | Any member, if the organization allows it | Admins only |
+| Who can use it | Only you | Everyone in the organization |
+| Sign-in | Yours | Each member signs in with their own account |
+| Keys | Yours | A shared key, or one each member supplies |
+| Turning tools on | You decide | Admins decide; members can turn tools off for themselves |
+
+Admins set the **Organization policy** at the top of the Connectors page: whether members may add personal connectors at all, and which hosts personal connectors may reach. Leaving the host list empty allows any public host.
+
+<Callout kind="security" title="How SignalPilot keeps connectors safe">
+- Only **https** addresses are accepted, and addresses that point at private or internal networks are refused.
+- Keys and sign-in tokens are stored encrypted and are never returned by the interface after you save them.
+- Every call through an address-based connector is logged with the person who made it, and each call is re-checked against the current on/off switches before it goes out.
+</Callout>
+
+<Callout kind="warning" title="Sandbox (command) connectors are different">
+A command runs inside the agent's sandbox, so the agent can read that server's settings, including any keys you give it. Tool switches for command connectors are enforced by the agent's own permissions rather than by SignalPilot, and their calls do not appear in the Activity tab. Prefer an address when the provider offers one. Docker-based commands cannot run in the sandbox.
+</Callout>
+
+## If Connectors is missing
+
+If the Connectors page says connectors are not turned on for your workspace, an administrator needs to enable the feature. Members who cannot see a **Personal** section are in an organization that has switched personal connectors off.
+
+## Related
+
+- [Chat with your data](/docs/product/chat) for what happens during a run.
+- [Use SignalPilot in Claude](/docs/clients/claude) is the reverse direction: SignalPilot as a connector inside Claude.
+- [Running multiple MCP servers in Claude Code](/docs/clients/multiple-mcps) covers client-side setups.

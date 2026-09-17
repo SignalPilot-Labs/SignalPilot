@@ -115,6 +115,9 @@ class PreparedExecution:
     # on notebook_started events so the browser can attach the live notebook
     # view through the notebook proxy.
     session_id: str | None = None
+    # Which credential the run bills to: platform | org (BYOK) | improvement | none.
+    # Read by the token credit emitter when the run reports its cost.
+    key_source: str = "none"
 
 
 async def ensure_execution_runtime(
@@ -165,28 +168,35 @@ async def prepare_execution(
     is_improvement_run = bool(conversation and getattr(conversation, "origin", "user") == "improvement")
     force_oauth = chat_force_oauth_token() and not is_improvement_run
     runtime_auth: dict[str, str] | None = None
+    key_source = "none"
     _local_oauth = os.getenv("CLAUDE_CODE_OAUTH_TOKEN") or os.getenv("OAUTH_TOKEN")
     if force_oauth:
         if not _local_oauth:
             raise RuntimeError("SP_CHAT_FORCE_OAUTH_TOKEN is enabled but no Claude OAuth token is configured")
         runtime_auth = {"type": "oauth", "token": _local_oauth}
+        key_source = "platform"
     elif os.getenv("SP_RUNTIME_PREFER_OAUTH_TOKEN") and _local_oauth and not is_improvement_run:
         # Local/staging testing override: bill agent runs to the OAuth token in
         # the environment instead of the org's stored API key. Off in
         # production (the flag lives only in the local container env), so the
         # normal org-key-first resolution below is unchanged there.
         runtime_auth = {"type": "oauth", "token": _local_oauth}
+        key_source = "platform"
     elif is_improvement_run and (improvement_key := os.getenv("SP_IMPROVEMENT_ANTHROPIC_KEY")):
         # Automated improvement runs bill to a dedicated Claude Code OAuth
         # token (sk-ant-oat...), never to the author's personal credential.
         # OAuth only for now — no API-key path.
         runtime_auth = {"type": "oauth", "token": improvement_key}
+        key_source = "improvement"
     elif anthropic_api_key := await org_secrets_store.resolve_anthropic_key(db, run.org_id):
         runtime_auth = {"type": "api_key", "token": anthropic_api_key}
+        key_source = "org"
     elif oauth_token := (os.getenv("CLAUDE_CODE_OAUTH_TOKEN") or os.getenv("OAUTH_TOKEN")):
         runtime_auth = {"type": "oauth", "token": oauth_token}
+        key_source = "platform"
     elif server_api_key := os.getenv("ANTHROPIC_API_KEY"):
         runtime_auth = {"type": "api_key", "token": server_api_key}
+        key_source = "platform"
     runtime = await ensure_execution_runtime(
         db,
         run=run,
@@ -307,6 +317,7 @@ async def prepare_execution(
         headers=headers,
         payload=payload,
         session_id=runtime.session_id,
+        key_source=key_source,
     )
 
 

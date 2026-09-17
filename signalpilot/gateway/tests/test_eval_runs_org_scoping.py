@@ -26,13 +26,10 @@ RUN_B = "run-20260101-020202-bbbbbb"
 
 @pytest.fixture(autouse=True)
 def _settings_cache(monkeypatch: pytest.MonkeyPatch):
+    """Local mode (unlimited tier, no plan gate) on a deployment that can run evals."""
+    monkeypatch.setenv("SP_EVAL_RUNNER_IMAGE", "example.com/eval-runner@sha256:" + "a" * 64)
+    monkeypatch.setenv("SP_EVAL_S3_BUCKET", "sp-eval-runs")
     get_eval_run_settings.cache_clear()
-    from gateway.governance import plan_limits
-
-    async def _paid(org_id: str):
-        return plan_limits.PLAN_TIERS["enterprise"]
-
-    monkeypatch.setattr(plan_limits, "get_org_limits", _paid)
     yield
     get_eval_run_settings.cache_clear()
 

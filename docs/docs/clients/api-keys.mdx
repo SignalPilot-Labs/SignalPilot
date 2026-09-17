@@ -1,0 +1,144 @@
+---
+sidebar_position: 5
+title: API keys and permissions
+description: Create, scope, rotate, and revoke the keys that let AI tools reach your data through SignalPilot.
+hide_title: true
+sidebar_label: API keys
+---
+
+import PageHero from '@site/src/components/PageHero';
+import { Steps, Step } from '@site/src/components/Steps';
+import FieldTable from '@site/src/components/FieldTable';
+import Callout from '@site/src/components/Callout';
+import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+import { ApiKey } from '@site/src/components/illustrations';
+
+<PageHero
+  eyebrow="Connect · API keys"
+  title="API keys and permissions"
+  lede="An API key is how a tool proves it is allowed to talk to your workspace. Each key has a name, a set of permissions, and belongs to one organization. You decide what each key can do and can switch it off at any moment."
+  illustration={<ApiKey />}
+/>
+
+Every AI tool you connect, whether Claude, Claude Code, Cursor, or something you built, sends a key with each request. SignalPilot checks the key, applies the key's permissions and your workspace's governance rules, and records the call in the audit log. Nothing reaches your database without passing that check.
+
+## Create a key
+
+<Steps>
+  <Step title="Open API Keys">
+    In [SignalPilot](https://app.signalpilot.ai), open **Settings → API Keys** and choose **Create new key**. You need to be a member of the workspace; creating keys with the **admin** scope requires an admin role.
+  </Step>
+
+  <Step title="Name it after where it lives">
+    Use the tool and place as the name, such as `cursor-laptop`, `claude-desktop`, or `weekly-report-job`. When you look at the list in six months, a name like that tells you exactly what to revoke.
+  </Step>
+
+  <Step title="Choose permissions">
+    The form pre-selects **read** and **query**, which is all a normal chat or coding tool needs. Only add more if the tool will do more. The full list is below.
+  </Step>
+
+  <Step title="Copy the key">
+    The key starts with `sp_` and is shown **once**. SignalPilot stores only a scrambled version, so it cannot show it again. Paste it into the tool right away. If you lose it, delete it and create a new one.
+  </Step>
+</Steps>
+
+## Permissions (scopes)
+
+Each scope unlocks one kind of action. A key with only `read` and `query` can explore and ask questions, and nothing else.
+
+| Scope | What it allows, in plain terms |
+|---|---|
+| `read` | Look around: which connections exist, table and column names, the status of runs, workspace settings. No data rows. |
+| `query` | Run read-only SQL through governance and see the results. This is what answers questions. |
+| `write` | Change workspace content: propose knowledge base entries, upload files, and similar. Never writes to your database. |
+| `execute` | Start work that uses compute on your behalf, such as notebooks and sandboxed builds. |
+| `dbt_proxy` | Only the dbt proxy endpoint, for running dbt against a connection through SignalPilot. |
+| `agent:run` | Start and drive SignalPilot's own chat agent from another tool. |
+| `admin` | Change settings, manage keys, trigger eval runs. Reserve for automation you fully trust. |
+
+<Callout kind="tip" title="Grant the least that works">
+A key for exploring schema and asking questions needs `read` and `query` and nothing else. If a tool later needs more, make a second key with the extra scope rather than widening the first. Some administrative actions also require the person behind the key to hold an admin role, so a scope alone is not enough to change the workspace.
+</Callout>
+
+## Send the key
+
+Tools send the key as a request header. Use whichever format your tool supports; both reach the same key.
+
+<FieldTable
+  rows={[
+    { label: 'Header (preferred)', value: 'x-api-key: sp_your_key_here', mono: true, copy: true, note: 'This is what Settings → MCP Connect puts in generated configs.' },
+    { label: 'Bearer token', value: 'Authorization: Bearer sp_your_key_here', mono: true, copy: true, note: 'For tools that only offer a bearer token field.' },
+  ]}
+/>
+
+In Claude Code that looks like:
+
+<MiniCopyBlock
+  label="claude code"
+  code={`claude mcp add --transport http signalpilot https://gateway.signalpilot.ai/mcp \\\n  --header "x-api-key: sp_your_key_here"`}
+/>
+
+In a JSON config file:
+
+<MiniCopyBlock
+  label="json config"
+  plain
+  code={`{\n  "headers": {\n    "x-api-key": "sp_your_key_here"\n  }\n}`}
+/>
+
+## Rotate and revoke
+
+Keys made in the app do not expire on their own, so rotate them on your own schedule or whenever a person leaves or a laptop goes missing.
+
+1. Create a new key with the same scopes.
+2. Update the tool to use the new key.
+3. Delete the old key under **Settings → API Keys**.
+
+**Delete is immediate.** The next request with a deleted key is refused, even if the tool is in the middle of a task. There is no undo, so if you are unsure, create the replacement first.
+
+## Rate limits
+
+Limits keep one runaway tool from slowing the workspace for everyone.
+
+| Limit | Applies to |
+|---|---|
+| 60 requests per minute | Each network address, on sign-in and key endpoints. Protects against guessing attacks. |
+| 120 tool calls per minute | Each API key. |
+| 300 tool calls per minute | Each organization on SignalPilot Cloud, across all its keys. |
+
+A tool that hits a limit gets a clear "too many requests" reply and can retry a moment later. The **Usage** page under Settings shows how close each key is to its limit.
+
+## Keys belong to one organization
+
+Every key is tied to the organization it was created in. It can only see that organization's connections, knowledge base, and audit log. A key from one organization cannot reach another's data, even by accident, because the boundary is enforced where the data is read, not just at the front door.
+
+## Sign in instead of a key
+
+Some tools can sign in to SignalPilot with your own account rather than carrying a key. Where a tool offers a sign-in option for MCP servers, use it: the tool then acts as you, with your role and permissions, and nothing needs to be copied or rotated. Where sign-in is not offered, an API key is the way in.
+
+<Callout kind="security" title="Treat keys like passwords">
+Keep keys out of shared documents, chat messages, and committed code. Prefer environment variables or your tool's secret store. If a key may have leaked, delete it first and ask questions later; creating a replacement takes seconds.
+</Callout>
+
+## Self-hosted
+
+On a gateway you run yourself, the same keys and scopes apply with a few differences.
+
+- **No key until the first key.** A fresh gateway accepts MCP requests with no key at all, so you can try it locally before setting anything up. As soon as the first key is created, every MCP request must carry one.
+- **REST access from the same machine** is allowed without a key, which is how the first key gets made.
+
+Create a key from the app at `http://localhost:3200` under **Settings → API Keys**, or with a single request:
+
+<MiniCopyBlock
+  label="create a key on a self-hosted gateway"
+  code={`curl -X POST http://localhost:3300/api/keys \\\n  -H "Content-Type: application/json" \\\n  -d '{"name": "claude-code-local", "scopes": ["read", "query"]}'`}
+/>
+
+Delete a key by its id:
+
+<MiniCopyBlock
+  label="delete a key"
+  code={`curl -X DELETE http://localhost:3300/api/keys/KEY_ID \\\n  -H "x-api-key: sp_your_admin_key_here"`}
+/>
+
+The rate limits above are defaults and can be changed in the gateway's configuration.

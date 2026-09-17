@@ -11,6 +11,7 @@ from gateway.api.deps import (
     require_connection,
 )
 from gateway.api.schema._router import router
+from gateway.auth import OrgAdmin
 from gateway.connectors.schema_cache import schema_cache
 from gateway.security.scope_guard import RequireScope
 
@@ -28,7 +29,7 @@ async def get_endorsements(name: str, store: StoreD):
 
 
 @router.put("/connections/{name}/schema/endorsements", dependencies=[RequireScope("write")])
-async def update_endorsements(name: str, store: StoreD, body: dict):
+async def update_endorsements(name: str, store: StoreD, body: dict, _role: OrgAdmin):
     """Set schema endorsement config for a connection.
 
     Body: {"endorsed": ["schema.table", ...], "hidden": ["schema.table", ...], "mode": "all|endorsed_only"}

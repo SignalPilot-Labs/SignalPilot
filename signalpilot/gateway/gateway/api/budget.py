@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from ..auth import UserID
+from ..auth import OrgAdmin, UserID
 from ..connectors.pool_manager import pool_manager
 from ..governance.annotations import generate_skeleton, load_annotations
 from ..governance.budget import budget_ledger
@@ -21,7 +21,7 @@ class BudgetCreateRequest(BaseModel):
 
 
 @router.post("/budget", status_code=201, dependencies=[RequireScope("write")])
-async def create_budget(_: UserID, store: StoreD, req: BudgetCreateRequest):
+async def create_budget(_: UserID, _role: OrgAdmin, store: StoreD, req: BudgetCreateRequest):
     """Create a budget for a session."""
     budget = await budget_ledger.create_session(req.session_id, req.budget_usd)
     return budget.to_dict()
@@ -46,7 +46,7 @@ async def list_budgets(_: UserID, store: StoreD):
 
 
 @router.delete("/budget/{session_id}", status_code=204, response_model=None, dependencies=[RequireScope("write")])
-async def close_budget(_: UserID, store: StoreD, session_id: str):
+async def close_budget(_: UserID, _role: OrgAdmin, store: StoreD, session_id: str):
     """Close and remove a session budget."""
     closed = await budget_ledger.close_session(session_id)
     if not closed:

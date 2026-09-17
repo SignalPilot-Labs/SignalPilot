@@ -4,7 +4,9 @@ from fastapi import APIRouter, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
-from gateway.auth import OrgRole
+from gateway.auth import OrgAdmin, OrgID, OrgRole
+from gateway.auth.permissions import normalize_role, permissions_for
+from gateway.billing.entitlements import OrgEntitlement, get_entitlement
 from gateway.db.models import GatewayChatUserPreference, GatewayWorkspaceProject
 from gateway.models.standalone_chat import ChatBootstrapResponse
 from gateway.security.scope_guard import RequireScope
@@ -14,6 +16,7 @@ from gateway.standalone_chat.config import (
     default_chat_effort,
     default_chat_model,
     enterprise_chat_feature_flags,
+    standalone_chat_enabled,
 )
 from gateway.standalone_chat.projects import (
     authorize_chat_project,
@@ -23,7 +26,7 @@ from gateway.standalone_chat.projects import (
 )
 from gateway.store.standalone_chat.preferences import default_chat_budgets
 
-from ..deps import StoreD
+from ..deps import RequireBillablePlan, StoreD, deployment_capabilities
 from .common import is_admin as _is_admin
 from .common import readiness_or_error as _readiness_or_error
 from .common import require_enabled as _require_enabled
@@ -38,40 +41,50 @@ class DefaultProjectUpdate(BaseModel):
     project_id: str = Field(..., min_length=1, max_length=200)
 
 
+def exposed_enterprise_features(entitlement: OrgEntitlement) -> dict[str, bool]:
+    """The ``enterprise_features`` payload: each flag is ``is_billable and not kill_switch_off``.
+
+    The keys stay as the web app knows them; only the source changed, from the
+    environment alone to the plan rule combined with the operator kill switches.
+    """
+    billable = entitlement.is_billable
+    flags = enterprise_chat_feature_flags().as_dict()
+    return {name: billable and value for name, value in flags.items() if name != "sandbox_runtime"}
+
+
 @router.get("/bootstrap", response_model=ChatBootstrapResponse, dependencies=[RequireScope("read")])
-async def bootstrap_chat(store: StoreD, role: OrgRole):
-    feature_flags = enterprise_chat_feature_flags()
-    exposed_flags = {
-        "query_approval": feature_flags.query_approval,
-        "structured_results": feature_flags.structured_results,
-        "organization_sharing": feature_flags.organization_sharing,
-        "forking": feature_flags.forking,
-        "size_router": feature_flags.size_router,
-        "size_router_shadow": feature_flags.size_router_shadow,
-        "runtime_results": feature_flags.runtime_results,
-        "runtime_artifacts": feature_flags.runtime_artifacts,
-        "dataset_refs": feature_flags.dataset_refs,
-        "mcp_connectors": feature_flags.mcp_connectors,
-    }
+async def bootstrap_chat(store: StoreD, role: OrgRole, org_id: OrgID, refresh: bool = False):
+    """Chat bootstrap for every org.
+
+    A free org gets ``enabled=False`` with its entitlement, so the web app can
+    show a plan prompt; a billable org gets its projects. ``capabilities``
+    reports what this deployment can run regardless of plan. ``?refresh=1``
+    bypasses the entitlement cache (used once after Stripe Checkout).
+    """
+    entitlement = await get_entitlement(org_id, refresh=refresh)
+    exposed_flags = exposed_enterprise_features(entitlement)
+    capabilities = deployment_capabilities()
     model_options = [{"id": model_id, "label": label} for model_id, label in CHAT_MODEL_OPTIONS]
     selected_model = default_chat_model()
     effort_options = [{"id": effort_id, "label": label} for effort_id, label in CHAT_EFFORT_OPTIONS]
     selected_effort = default_chat_effort()
-    from gateway.governance.plan_limits import get_org_limits
-
-    if not (await get_org_limits(store.org_id or "local")).chat:
+    if not standalone_chat_enabled() or not entitlement.is_billable:
         return ChatBootstrapResponse(
             enabled=False,
             plan_locked=True,
             projects=[],
             selected_project_id=None,
             is_admin=_is_admin(role),
+            role=normalize_role(role),
+            permissions=sorted(permissions_for(role)),
             starter_questions=[],
             available_models=model_options,
             default_model=selected_model,
             available_efforts=effort_options,
             default_effort=selected_effort,
             enterprise_features=exposed_flags,
+            entitlement=entitlement.to_dict(),
+            capabilities=capabilities,
         )
     org_id = store._require_org_id()
     user_id = store.user_id or "local"
@@ -152,6 +165,8 @@ async def bootstrap_chat(store: StoreD, role: OrgRole):
         ],
         selected_project_id=selected_id,
         is_admin=_is_admin(role),
+        role=normalize_role(role),
+        permissions=sorted(permissions_for(role)),
         starter_questions=starters,
         default_per_query_budget_usd=per_query_budget_usd,
         default_chat_budget_usd=chat_budget_usd,
@@ -160,12 +175,14 @@ async def bootstrap_chat(store: StoreD, role: OrgRole):
         available_efforts=effort_options,
         default_effort=selected_effort,
         enterprise_features=exposed_flags,
+        entitlement=entitlement.to_dict(),
+        capabilities=capabilities,
     )
 
 
 @router.get(
     "/projects/{project_id}/readiness",
-    dependencies=[RequireScope("read")],
+    dependencies=[RequireScope("read"), RequireBillablePlan],
 )
 async def project_readiness(project_id: str, store: StoreD, role: OrgRole):
     _require_enabled()
@@ -194,8 +211,8 @@ async def project_readiness(project_id: str, store: StoreD, role: OrgRole):
     }
 
 
-@router.put("/default-project", status_code=204, dependencies=[RequireScope("write")])
-async def update_default_project(body: DefaultProjectUpdate, store: StoreD):
+@router.put("/default-project", status_code=204, dependencies=[RequireScope("write"), RequireBillablePlan])
+async def update_default_project(body: DefaultProjectUpdate, store: StoreD, _role: OrgAdmin):
     _require_enabled()
     project, _ = await _readiness_or_error(store, body.project_id)
     org_id = store._require_org_id()

@@ -10,41 +10,18 @@ import logging
 
 from fastapi import APIRouter, HTTPException
 
+from ..auth import OrgAdmin
 from ..security.scope_guard import RequireScope
 from .deps import StoreD
+from .github_import import _import_workspace_revision
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-async def _import_workspace_revision(
-    session, *, org_id: str, project_id: str, branch: str | None, progress_cb=None
-):
-    """Best-effort GitHub → S3 revision import (three-tier pull side).
-
-    Never raises: the git operation that preceded it already succeeded, and
-    editing/linking must not be blocked by workspace-store availability.
-    Returns a small status dict for inclusion in API responses.
-    """
-    from ..workspace_store import workspace_object_storage
-    from ..workspace_store.github_sync import import_repo_to_revisions
-
-    storage = workspace_object_storage()
-    if not storage.enabled:
-        return {"skipped": True, "reason": "workspace storage not configured"}
-    try:
-        result = await import_repo_to_revisions(
-            session, storage, org_id=org_id, project_id=project_id, branch=branch,
-            progress_cb=progress_cb,
-        )
-        return {"imported": result.imported, "revision": result.revision}
-    except Exception as e:
-        logger.warning("Workspace import failed for project %s: %s", project_id, e)
-        return {"error": str(e)}
-
 
 @router.post("/api/github/sync/{project_id}", dependencies=[RequireScope("write")])
-async def sync_with_github(project_id: str, store: StoreD):
+async def sync_with_github(project_id: str, store: StoreD, _role: OrgAdmin):
     """Bidirectional sync: fetch from GitHub, push local changes back.
 
     GitHub wins on conflicts: local branches are force-updated to match.

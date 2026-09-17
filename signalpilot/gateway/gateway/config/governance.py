@@ -7,6 +7,10 @@ before adding — if any test touches it, keep it as os.getenv (Class B).
 Class A vars managed here: SP_ANNOTATIONS_TTL, SP_MAX_EXPORT_ROWS
 
 Note: SP_ANNOTATIONS_TTL is a float (seconds). Default is 60.0.
+
+The gateway has no platform-staff identity. Customer-facing features are gated
+by the org's plan (``gateway.billing.entitlements``) and by the org role; the
+former ``SP_ADMIN_USER_IDS`` list no longer exists.
 """
 
 from __future__ import annotations
@@ -29,7 +33,7 @@ class GovernanceSettings(_GatewaySettingsBase):
 def get_governance_settings() -> GovernanceSettings:
     """Return cached GovernanceSettings instance.
 
-    Safe to cache: SP_ANNOTATIONS_TTL, SP_MAX_EXPORT_ROWS are not
+    Safe to cache: SP_ANNOTATIONS_TTL and SP_MAX_EXPORT_ROWS are not
     monkeypatched by any test in tests/ (confirmed by grep before migration).
     """
     return GovernanceSettings()

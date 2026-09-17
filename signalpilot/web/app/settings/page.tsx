@@ -26,10 +26,19 @@ import { StatusDot } from "~/components/ui/data-viz";
 import { useToast } from "~/components/ui/toast";
 import { CodeBlock } from "~/components/ui/code-block";
 import { SectionHeader } from "~/components/ui/section-header";
+import { AdminGate } from "~/components/settings/admin-gate";
 
 const IS_CLOUD_MODE = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "cloud";
 
 export default function SettingsPage() {
+  return (
+    <AdminGate permission="settings.write" title="settings" subtitle="config" what="gateway settings">
+      <SettingsContent />
+    </AdminGate>
+  );
+}
+
+function SettingsContent() {
   if (IS_CLOUD_MODE) {
     return (
       <div className="p-10">

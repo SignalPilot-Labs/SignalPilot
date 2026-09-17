@@ -1,0 +1,150 @@
+/* SignalPilot docs — figures + utilities.
+   Holds: figures/images/screenshots, two-column utility, reading width,
+   details/collapsible, scrollbar, misc, wide tables on narrow viewports. */
+
+/* ── Figures & images ──────────────────────────────────────────────────── */
+.markdown figure {
+  margin: 2rem 0;
+}
+
+.markdown figure img,
+.markdown p > img,
+.markdown > img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--sp-radius-panel);
+  border: 1px solid var(--sp-line);
+  background: var(--sp-card-solid);
+}
+
+/* Screenshot figure: `<figure className="sp-screenshot">` around an <img>
+   and an optional <figcaption>. Slightly stronger frame than a plain image. */
+.sp-screenshot {
+  margin: 1.75rem 0 2rem;
+  max-width: 100%;
+}
+
+.sp-screenshot img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--sp-radius-panel);
+  border: 1px solid var(--sp-line-2);
+  background: var(--sp-card-solid);
+  box-shadow: 0 1px 0 var(--sp-line), 0 18px 40px -28px rgba(0, 0, 0, 0.35);
+}
+
+.sp-screenshot figcaption,
+.markdown figure figcaption {
+  margin-top: 0.7rem;
+  font-family: var(--sp-font-sans);
+  font-size: 12.5px;
+  line-height: 1.5;
+  letter-spacing: 0;
+  color: var(--sp-dim);
+  max-width: 68ch;
+}
+
+/* Two-column utility: text beside an illustration; stacks under 768px. */
+.sp-two-col {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1.5rem 2rem;
+  align-items: center;
+  margin: 1.5rem 0 2rem;
+}
+
+.sp-two-col > * {
+  min-width: 0;
+}
+
+.sp-two-col > * > :last-child {
+  margin-bottom: 0;
+}
+
+@media (max-width: 768px) {
+  .sp-two-col {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Running text stays readable; headings, tables and code can run wider. */
+.markdown > p,
+.markdown > ul,
+.markdown > ol,
+.markdown > blockquote {
+  max-width: 74ch;
+}
+
+/* ── Details / collapsible ─────────────────────────────────────────────── */
+details,
+.theme-admonition details {
+  border-radius: var(--sp-radius-card);
+  border: 1px solid var(--sp-line) !important;
+  background: var(--sp-card) !important;
+}
+
+details > summary {
+  font-family: var(--sp-font-sans);
+  font-weight: 500;
+  font-size: 14px;
+}
+
+/* ── Scrollbar ─────────────────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--sp-line-2);
+  border-radius: var(--sp-radius-pill);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--sp-line-2);
+  opacity: 0.8;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--sp-line-2) transparent;
+}
+
+/* ── Misc ──────────────────────────────────────────────────────────────── */
+[class^="iconExternalLink"] {
+  display: none;
+}
+
+.theme-back-to-top-button {
+  border-radius: var(--sp-radius-pill) !important;
+}
+
+/* Announcement bar reads like the landing eyebrow */
+div[class^="announcementBar"] {
+  font-family: var(--sp-font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: var(--sp-track-eyebrow);
+  border-bottom: 1px solid var(--sp-line);
+}
+
+/* ── Wide tables on narrow viewports ───────────────────────────────────── */
+/* `display: table` is what makes tables fill the column on desktop, but a
+   reference table wider than a phone then gets clipped by the body's
+   overflow-x: clip and its right-hand columns become unreachable. Below the
+   sidebar breakpoint, fall back to Docusaurus' scrollable block table. */
+@media (max-width: 996px) {
+  .markdown table {
+    display: block;
+    width: max-content;
+    max-width: 100%;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+  }
+}

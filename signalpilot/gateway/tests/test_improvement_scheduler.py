@@ -293,10 +293,11 @@ class TestRunDueImprovementRuns:
 
 
 class TestSettingsRoundTrip:
-    async def test_defaults_to_false(self, session_factory) -> None:
+    async def test_defaults_to_true(self, session_factory) -> None:
+        """On for every org until an org admin turns it off in settings."""
         async with session_factory() as session:
             settings = await load_settings(session, org_id=ORG)
-        assert settings.improvement_runs_enabled is False
+        assert settings.improvement_runs_enabled is True
 
     async def test_enabled_flag_round_trips(self, session_factory) -> None:
         async with session_factory() as session:

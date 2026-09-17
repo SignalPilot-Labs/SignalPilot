@@ -1,7 +1,10 @@
 """Verify automatic evaluation runs for knowledge base additions.
 
-The automatic run path checks the organization allowlist before it spends model
-resources. The tests use a test double for ``store.get_eval_config``.
+The automatic run path bypasses the route guards, so it re-checks the same two
+questions before it spends model resources: can this deployment run evals, and
+is the org on a billable plan. The tests use a test double for
+``store.get_eval_config`` and a table of entitlements in place of the
+subscriptions read.
 """
 
 from __future__ import annotations
@@ -9,17 +12,26 @@ from __future__ import annotations
 import pytest
 
 from gateway.api import eval_runs
+from gateway.billing import entitlements as ent
+from gateway.billing.entitlements import OrgEntitlement
 from gateway.config.evals import get_eval_run_settings
 
-ALLOWED_ORG = "org_2allowedclerkid"
-OTHER_ORG = "org_2someoneelse"
+BILLABLE_ORG = "org_2teamclerkid"
+OTHER_BILLABLE_ORG = "org_2scaleclerkid"
+FREE_ORG = "org_2freeclerkid"
 RUNNER_IMAGE = "example.com/eval-runner@sha256:" + "a" * 64
+
+ENTITLEMENTS = {
+    BILLABLE_ORG: OrgEntitlement(org_id=BILLABLE_ORG, tier="team", status="active"),
+    OTHER_BILLABLE_ORG: OrgEntitlement(org_id=OTHER_BILLABLE_ORG, tier="scale", status="active"),
+    FREE_ORG: OrgEntitlement(org_id=FREE_ORG, tier="free", status="none"),
+}
 
 
 class FakeStore:
     """Verify that the run path reads only the organization and config."""
 
-    def __init__(self, org_id: str = ALLOWED_ORG, cfg: dict | None = None) -> None:
+    def __init__(self, org_id: str = BILLABLE_ORG, cfg: dict | None = None) -> None:
         self.org_id = org_id
         self.user_id = "user-1"
         self._cfg = cfg if cfg is not None else {}
@@ -28,7 +40,7 @@ class FakeStore:
         return dict(self._cfg)
 
 
-def _store(org_id: str = ALLOWED_ORG, **overrides) -> FakeStore:
+def _store(org_id: str = BILLABLE_ORG, **overrides) -> FakeStore:
     cfg = {"repo_url": "https://example.com/set.git", "autorun_on_knowledge_add": True}
     cfg.update(overrides)
     return FakeStore(org_id, cfg)
@@ -49,17 +61,22 @@ class _EnumLike:
 
 @pytest.fixture(autouse=True)
 def _env(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("SP_BACKEND_URL", "https://backend.invalid")
+    monkeypatch.delenv("SP_DEPLOYMENT_MODE", raising=False)
     monkeypatch.setenv("SP_EVAL_RUNNER_IMAGE", RUNNER_IMAGE)
+    monkeypatch.setenv("SP_EVAL_S3_BUCKET", "sp-eval-runs")
+    monkeypatch.delenv("SP_EVAL_EXECUTION_BACKEND", raising=False)
     get_eval_run_settings.cache_clear()
+
+    async def _load(org_id: str) -> OrgEntitlement:
+        return ENTITLEMENTS.get(org_id) or ent.free_entitlement(org_id)
+
+    monkeypatch.setattr(ent, "_load_entitlement", _load)
+    ent.invalidate()
     eval_runs._last_autorun.clear()
     eval_runs._active_tasks.clear()
-    from gateway.governance import plan_limits
-
-    async def _paid(org_id: str):
-        return plan_limits.PLAN_TIERS["enterprise"]
-
-    monkeypatch.setattr(plan_limits, "get_org_limits", _paid)
     yield
+    ent.invalidate()
     get_eval_run_settings.cache_clear()
     eval_runs._last_autorun.clear()
     eval_runs._active_tasks.clear()
@@ -96,10 +113,17 @@ class TestItFires:
         await eval_runs.maybe_autorun_after_knowledge_change(_store(), doc)
         assert len(launched) == 1
 
+    async def test_any_user_of_a_billable_org_can_trigger_it(self, launched) -> None:
+        """There is no staff list: the org's plan is the only entitlement."""
+        store = _store()
+        store.user_id = "user_plain_member"
+        await eval_runs.maybe_autorun_after_knowledge_change(store, FakeDoc())
+        assert len(launched) == 1
+
 
 class TestItDoesNotFire:
     async def test_off_by_default(self, launched) -> None:
-        store = FakeStore(ALLOWED_ORG, {"repo_url": "https://example.com/set.git"})
+        store = FakeStore(BILLABLE_ORG, {"repo_url": "https://example.com/set.git"})
         await eval_runs.maybe_autorun_after_knowledge_change(store, FakeDoc())
         assert launched == []
 
@@ -109,27 +133,9 @@ class TestItDoesNotFire:
         await eval_runs.maybe_autorun_after_knowledge_change(_store(), FakeDoc(status=status))
         assert launched == []
 
-    async def test_free_plan_org_is_refused_by_autorun(self, launched, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_free_org_cannot_spend_via_autorun(self, launched) -> None:
         """The gates are bypassed on this path, so the plan is re-checked."""
-        from gateway.governance import plan_limits
-
-        async def _free(org_id: str):
-            return plan_limits.PLAN_TIERS["free"]
-
-        monkeypatch.setattr(plan_limits, "get_org_limits", _free)
-        await eval_runs.maybe_autorun_after_knowledge_change(_store(OTHER_ORG), FakeDoc())
-        assert launched == []
-
-    async def test_free_plan_org_cannot_spend_via_autorun(
-        self, launched, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from gateway.governance import plan_limits
-
-        async def _free(org_id: str):
-            return plan_limits.PLAN_TIERS["free"]
-
-        monkeypatch.setattr(plan_limits, "get_org_limits", _free)
-        await eval_runs.maybe_autorun_after_knowledge_change(_store(), FakeDoc())
+        await eval_runs.maybe_autorun_after_knowledge_change(_store(FREE_ORG), FakeDoc())
         assert launched == []
 
     async def test_no_repo_configured(self, launched) -> None:
@@ -138,6 +144,12 @@ class TestItDoesNotFire:
 
     async def test_runner_disabled(self, launched, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("SP_EVAL_RUNNER_IMAGE", raising=False)
+        get_eval_run_settings.cache_clear()
+        await eval_runs.maybe_autorun_after_knowledge_change(_store(), FakeDoc())
+        assert launched == []
+
+    async def test_deployment_without_an_evidence_store(self, launched, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("SP_EVAL_S3_BUCKET", raising=False)
         get_eval_run_settings.cache_clear()
         await eval_runs.maybe_autorun_after_knowledge_change(_store(), FakeDoc())
         assert launched == []
@@ -157,14 +169,14 @@ class TestCoalescing:
         assert len(launched) == 1
 
         # Move the recorded timestamp back beyond the debounce window.
-        eval_runs._last_autorun[ALLOWED_ORG] -= eval_runs._AUTORUN_DEBOUNCE_SECONDS + 1
+        eval_runs._last_autorun[BILLABLE_ORG] -= eval_runs._AUTORUN_DEBOUNCE_SECONDS + 1
         await eval_runs.maybe_autorun_after_knowledge_change(_store(), FakeDoc())
         assert len(launched) == 2
 
-    async def test_debounce_is_per_org(self, launched, monkeypatch: pytest.MonkeyPatch) -> None:
-        await eval_runs.maybe_autorun_after_knowledge_change(_store(ALLOWED_ORG), FakeDoc())
-        await eval_runs.maybe_autorun_after_knowledge_change(_store(OTHER_ORG), FakeDoc())
-        assert {c["org"] for c in launched} == {ALLOWED_ORG, OTHER_ORG}
+    async def test_debounce_is_per_org(self, launched) -> None:
+        await eval_runs.maybe_autorun_after_knowledge_change(_store(BILLABLE_ORG), FakeDoc())
+        await eval_runs.maybe_autorun_after_knowledge_change(_store(OTHER_BILLABLE_ORG), FakeDoc())
+        assert {c["org"] for c in launched} == {BILLABLE_ORG, OTHER_BILLABLE_ORG}
 
     async def test_at_the_concurrency_limit_it_skips(self, launched) -> None:
         eval_runs._active_tasks.update(
@@ -193,10 +205,11 @@ class TestItNeverBreaksTheWrite:
         await eval_runs.maybe_autorun_after_knowledge_change(_store(), FakeDoc())
 
     async def test_a_broken_store_does_not_propagate(self) -> None:
-        """Verify that the allowlist check occurs before the config read."""
+        """Verify that the gating checks occur before the config read."""
 
         class _BrokenStore:
-            org_id = ALLOWED_ORG
+            org_id = BILLABLE_ORG
+            user_id = "user-1"
 
             async def get_eval_config(self):
                 raise RuntimeError("db down")

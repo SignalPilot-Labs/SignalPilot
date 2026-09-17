@@ -2,7 +2,7 @@
 
 /**
  * /settings/usage/members: organization-wide usage per member. Rendered for
- * org admins only (Clerk role org:admin via useTeamPermissions); everyone
+ * org admins only (the `usage.org` permission from usePermissions); everyone
  * else, and any 403 from the gateway, sees a short admins-only notice.
  */
 
@@ -12,7 +12,7 @@ import { Users } from "lucide-react";
 import { getOrgUsage, type UsageDays } from "~/lib/api/usage";
 import { requestErrorStatus } from "~/lib/api/client";
 import { useAppAuth } from "~/lib/auth-context";
-import { useTeamPermissions } from "~/lib/team/use-team-permissions";
+import { usePermissions } from "~/lib/hooks/use-permissions";
 import type { MemberUsage, OrgUsageResponse } from "~/lib/types";
 import { formatCompact, formatCount, formatUsd, toEpochSeconds } from "~/lib/usage-format";
 import { PageHeader } from "~/components/ui/page-header";
@@ -152,12 +152,13 @@ function MembersContent({ days, onDays }: { days: UsageDays; onDays: (d: UsageDa
 
 export function MembersUsagePage() {
   const { isCloudMode, isLoaded } = useAppAuth();
-  const { isAdmin } = useTeamPermissions();
+  const { can, loaded: permissionsLoaded } = usePermissions();
   const [days, setDays] = useState<UsageDays>(30);
   // Local mode has no organization roles; the gateway decides there.
-  const allowed = !isCloudMode || isAdmin;
+  const allowed = !isCloudMode || can("usage.org");
 
-  if (!isLoaded) return <UsageSkeleton />;
+  // Wait for the role so a member never requests the org totals first.
+  if (!isLoaded || (isCloudMode && !permissionsLoaded)) return <UsageSkeleton />;
 
   return (
     <div className="p-8 max-w-4xl animate-fade-in">

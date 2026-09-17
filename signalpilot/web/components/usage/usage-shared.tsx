@@ -18,11 +18,12 @@ export const USAGE_TAB_OVERVIEW = { label: "Overview", href: "/settings/usage" }
 export const USAGE_TAB_ME = { label: "My usage", href: "/settings/usage/me" };
 export const USAGE_TAB_MEMBERS = { label: "Members", href: "/settings/usage/members" };
 
-/** Tab row for every usage page. The members tab is only offered to admins. */
+/**
+ * Tab row for every usage page. The overview (org credit ledger) and the
+ * members table are admin-only; a member has one page, "my usage".
+ */
 export function usageTabs(isAdmin: boolean) {
-  return isAdmin
-    ? [USAGE_TAB_OVERVIEW, USAGE_TAB_ME, USAGE_TAB_MEMBERS]
-    : [USAGE_TAB_OVERVIEW, USAGE_TAB_ME];
+  return isAdmin ? [USAGE_TAB_OVERVIEW, USAGE_TAB_ME, USAGE_TAB_MEMBERS] : [USAGE_TAB_ME];
 }
 
 // ---------------------------------------------------------------------------

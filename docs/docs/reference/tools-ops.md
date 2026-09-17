@@ -74,7 +74,7 @@ List the dbt and notebook projects available in the user's workspace.
 
 ### run_notebook
 
-Run a `.py` notebook in a sandboxed cloud Kubernetes pod. Writes the notebook into the user's notebook workspace and executes it with `sp export session`.
+Run a `.py` notebook in an isolated cloud sandbox. Writes the notebook into the user's notebook workspace and executes it with `sp export session`.
 
 **Parameters:**
 
@@ -85,7 +85,7 @@ Run a `.py` notebook in a sandboxed cloud Kubernetes pod. Writes the notebook in
 
 **Returns:** stdout/stderr from the run plus a URL to view the notebook in the browser.
 
-**Sandboxing:** Notebook pods run under gVisor with per-org NetworkPolicy isolation, read-only rootfs, and blocked IMDS egress. See [Security](/docs/security).
+**Sandboxing:** Each notebook session runs in its own isolated microVM with restricted egress and no access to other tenants. See [Security](/docs/security).
 
 ---
 

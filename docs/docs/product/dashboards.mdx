@@ -1,8 +1,19 @@
 ---
 sidebar_position: 7
+sidebar_label: Dashboards
+title: Published dashboards
+hide_title: true
 ---
 
-# Published dashboards
+import PageHero from '@site/src/components/PageHero';
+import { Dashboard } from '@site/src/components/illustrations';
+
+<PageHero
+  eyebrow="Product · Dashboards"
+  title="Published dashboards"
+  lede="A chat can save an answer as a dashboard. Publish turns that dashboard into one your team can open on its own, outside the conversation, and refresh on a schedule."
+  illustration={<Dashboard />}
+/>
 
 A chat can save a dashboard as `artifacts/<name>.dashboard.json`. The
 **Artifacts** panel renders it in place. **Publish** turns that file into a

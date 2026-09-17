@@ -18,6 +18,7 @@ import {
   updateWorkspaceProject,
 } from "~/lib/api";
 import type { DbtMapInfo, WorkspaceProjectInfo } from "~/lib/types";
+import { ProjectAutomationReadOnly } from "~/components/projects/project-automation-readonly";
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
@@ -28,9 +29,12 @@ const AUTO = "__auto__";
 export function ProjectAutomationSettings({
   project,
   onProjectUpdated,
+  readOnly = false,
 }: {
   project: WorkspaceProjectInfo;
   onProjectUpdated: (next: WorkspaceProjectInfo) => void;
+  /** Member view: values only, no inputs, no compile or save. */
+  readOnly?: boolean;
 }) {
   const { toast } = useToast();
   const settings = (project.settings ?? {}) as Record<string, unknown>;
@@ -146,6 +150,18 @@ export function ProjectAutomationSettings({
         </div>
       </div>
 
+      {readOnly ? (
+        <ProjectAutomationReadOnly
+          dbtDir={dbtDir === AUTO ? null : dbtDir}
+          detectedDir={detectedDirs[0]}
+          watchedBranches={watchedBranches}
+          autoCompileOnPush={autoCompileOnPush}
+          compileOnPr={compileOnPr}
+          prAgentTrigger={prAgentTrigger}
+          mapStatus={mapStatus}
+          mapInfo={mapInfo}
+        />
+      ) : (
       <div className="space-y-5 p-6">
         {/* dbt project folder */}
         <div>
@@ -299,6 +315,7 @@ export function ProjectAutomationSettings({
           </div>
         </div>
       </div>
+      )}
     </section>
   );
 }

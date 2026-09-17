@@ -38,6 +38,9 @@ import { useToast } from "~/components/ui/toast";
 import { InstallationCard } from "~/components/github/installation-card";
 import { LinkExistingInstallation } from "~/components/github/link-existing-installation";
 import { AgentPullRequests } from "~/components/github/agent-pull-requests";
+import { AdminOnlyControl } from "~/components/access/admin-only-control";
+import { ReadOnlyNote } from "~/components/access/read-only-note";
+import { usePermissions } from "~/lib/hooks/use-permissions";
 
 const GITHUB_ERROR_MESSAGES: Record<string, string> = {
   oauth_state_invalid: "GitHub connection expired. Please try again.",
@@ -54,6 +57,8 @@ export default function GitHubConnectionsPage() {
   const { toast } = useToast();
   const searchParams = useSearchParams();
   const router = useRouter();
+  const { can } = usePermissions();
+  const canWriteGitHub = can("github.write");
 
   const [installations, setInstallations] = useState<GitHubInstallation[]>([]);
   const [repoLinks, setRepoLinks] = useState<GitHubRepoLink[]>([]);
@@ -285,7 +290,7 @@ export default function GitHubConnectionsPage() {
               </p>
             </div>
           </div>
-          {githubError !== "github_app_not_configured" && (
+          {githubError !== "github_app_not_configured" && canWriteGitHub && (
             <button
               type="button"
               onClick={handleConnectGitHub}
@@ -327,19 +332,25 @@ export default function GitHubConnectionsPage() {
               <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em]">
                 connected accounts
               </span>
-              <button
-                type="button"
-                onClick={handleConnectGitHub}
-                disabled={connecting}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-[var(--color-text)] bg-[var(--color-bg-input)] border border-[var(--color-border)] rounded-[10px] hover:border-[var(--color-text-dim)] transition-colors duration-150 disabled:opacity-50"
-              >
-                {connecting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plug className="w-3 h-3" />}
-                connect github
-              </button>
+              {canWriteGitHub ? (
+                <button
+                  type="button"
+                  onClick={handleConnectGitHub}
+                  disabled={connecting}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-[var(--color-text)] bg-[var(--color-bg-input)] border border-[var(--color-border)] rounded-[10px] hover:border-[var(--color-text-dim)] transition-colors duration-150 disabled:opacity-50"
+                >
+                  {connecting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plug className="w-3 h-3" />}
+                  connect github
+                </button>
+              ) : (
+                <ReadOnlyNote>the GitHub App is installed by an org admin</ReadOnlyNote>
+              )}
             </div>
             {installations.length === 0 ? (
               <div className="p-8 text-center text-xs text-[var(--color-text-dim)]">
-                no GitHub accounts connected. Click &quot;connect github&quot; to get started
+                {canWriteGitHub
+                  ? "no GitHub accounts connected. Click \"connect github\" to get started"
+                  : "no GitHub accounts connected"}
               </div>
             ) : (
               <div className="divide-y divide-[var(--color-border)]">
@@ -355,17 +366,19 @@ export default function GitHubConnectionsPage() {
                 ))}
               </div>
             )}
-            <LinkExistingInstallation
-              onLinked={(linked) => {
-                if (linked.length > 0) {
-                  toast(
-                    `Linked ${linked.length} GitHub installation${linked.length === 1 ? "" : "s"}`,
-                    "success",
-                  );
-                }
-                refresh();
-              }}
-            />
+            {canWriteGitHub && (
+              <LinkExistingInstallation
+                onLinked={(linked) => {
+                  if (linked.length > 0) {
+                    toast(
+                      `Linked ${linked.length} GitHub installation${linked.length === 1 ? "" : "s"}`,
+                      "success",
+                    );
+                  }
+                  refresh();
+                }}
+              />
+            )}
           </div>
 
           {/* Repo Picker */}
@@ -472,12 +485,14 @@ export default function GitHubConnectionsPage() {
                           >
                             <SettingsIcon className="w-3 h-3 text-[var(--color-text)]" /> settings
                           </a>
-                          <button
-                            onClick={() => setConfirmDeleteLink(link.id)}
-                            className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-[var(--color-text-dim)] border border-[var(--color-border)] rounded-[10px] hover:border-[var(--color-error)] hover:text-[var(--color-error)] transition-colors duration-150"
-                          >
-                            <Unlink className="w-3 h-3" /> unlink
-                          </button>
+                          <AdminOnlyControl permission="github.write">
+                            <button
+                              onClick={() => setConfirmDeleteLink(link.id)}
+                              className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-[var(--color-text-dim)] border border-[var(--color-border)] rounded-[10px] hover:border-[var(--color-error)] hover:text-[var(--color-error)] transition-colors duration-150"
+                            >
+                              <Unlink className="w-3 h-3" /> unlink
+                            </button>
+                          </AdminOnlyControl>
                         </div>
                       )}
                     </div>

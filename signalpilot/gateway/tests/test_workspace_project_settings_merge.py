@@ -86,7 +86,7 @@ def _workspace_app(storage, factory, audit_sink: list):
     from fastapi import FastAPI
 
     import gateway.api.workspace_files as wf
-    from gateway.api.deps import require_projects_feature
+    from gateway.api.deps import require_billable_plan
     from gateway.api.workspace_files import router as files_router
     from gateway.api.workspace_projects import router as projects_router
     from gateway.auth import resolve_org_id, resolve_user_id
@@ -124,7 +124,7 @@ def _workspace_app(storage, factory, audit_sink: list):
     app.dependency_overrides[resolve_user_id] = _user
     app.dependency_overrides[resolve_org_id] = _org
     app.dependency_overrides[scope_resolve_user_id] = _user
-    app.dependency_overrides[require_projects_feature] = _no_gate
+    app.dependency_overrides[require_billable_plan] = _no_gate
     app.dependency_overrides[wf.get_workspace_store] = lambda: WorkspaceStore(storage)
     return app, real_append
 

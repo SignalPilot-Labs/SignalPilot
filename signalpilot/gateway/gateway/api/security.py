@@ -1,29 +1,35 @@
-"""Security status endpoint — admin-only encryption health check."""
+"""Security status endpoint: encryption health for the caller's own org.
+
+Org admins on a billable plan can read it. There is no platform-staff list.
+"""
 
 from __future__ import annotations
 
 import logging
 import os
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from sqlalchemy import func, or_, select
 
 from ..auth import OrgAdmin, OrgID
 from ..db.models import GatewayBYOKKey, GatewayCredential
 from ..store import CURRENT_KEY_VERSION
 from ..store.crypto import _validate_encryption_health
-from .deps import StoreD
+from .deps import RequireBillablePlan, StoreD
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api")
 
-@router.get("/security/status")
-async def security_status(store: StoreD, org_id: OrgID, _role: OrgAdmin):
-    """Return encryption health and credential storage statistics.
 
-    Organization admins only.
+@router.get("/security/status", dependencies=[RequireBillablePlan])
+async def security_status(store: StoreD, org_id: OrgID, _role: OrgAdmin):
+    """Return encryption health and credential storage statistics for the caller's org.
+
+    Requires the org-admin role and a billable plan.
     """
+    if not store.user_id:
+        raise HTTPException(status_code=403, detail="Admin access required.")
 
     key_source = "environment" if os.getenv("SP_ENCRYPTION_KEY") else "auto-generated"
     encryption_healthy = _validate_encryption_health()

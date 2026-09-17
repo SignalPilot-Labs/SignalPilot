@@ -10,7 +10,7 @@ import Link from "next/link";
 import { Database, MessageSquare } from "lucide-react";
 import { getMyUsage, type UsageDays } from "~/lib/api/usage";
 import { useAppAuth } from "~/lib/auth-context";
-import { useTeamPermissions } from "~/lib/team/use-team-permissions";
+import { usePermissions } from "~/lib/hooks/use-permissions";
 import type { ConnectionUsage, ConversationUsage, MyUsageResponse } from "~/lib/types";
 import { formatCount, formatUsd, toEpochSeconds } from "~/lib/usage-format";
 import { PageHeader } from "~/components/ui/page-header";
@@ -140,7 +140,7 @@ function MyUsageContent({ days, onDays }: { days: UsageDays; onDays: (d: UsageDa
 
 export function MyUsagePage() {
   const { isCloudMode, isLoaded } = useAppAuth();
-  const { isAdmin } = useTeamPermissions();
+  const { isAdmin } = usePermissions();
   const [days, setDays] = useState<UsageDays>(30);
 
   if (!isLoaded) return <UsageSkeleton />;

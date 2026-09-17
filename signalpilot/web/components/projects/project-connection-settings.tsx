@@ -24,6 +24,8 @@ import {
 } from "~/lib/api";
 import type { ConnectionInfo, WorkspaceProjectInfo } from "~/lib/types";
 import { ProjectAutomationSettings } from "~/components/projects/project-automation-settings";
+import { ReadOnlyNote } from "~/components/access/read-only-note";
+import { usePermissions } from "~/lib/hooks/use-permissions";
 
 type ProjectReadiness = Awaited<
   ReturnType<typeof getStandaloneChatProjectReadiness>
@@ -36,6 +38,8 @@ function errorMessage(error: unknown) {
 export function ProjectConnectionSettings({ projectId }: { projectId: string }) {
   const router = useRouter();
   const { toast } = useToast();
+  const { can } = usePermissions();
+  const canWrite = can("projects.write");
   const [project, setProject] = useState<WorkspaceProjectInfo | null>(null);
   const [connections, setConnections] = useState<ConnectionInfo[]>([]);
   const [selectedConnection, setSelectedConnection] = useState("");
@@ -187,6 +191,17 @@ export function ProjectConnectionSettings({ projectId }: { projectId: string }) 
         </div>
 
         <div className="space-y-4 p-6">
+          {!canWrite && (
+            <ReadOnlyNote block>connection binding, watched branches and automation</ReadOnlyNote>
+          )}
+          {!canWrite ? (
+            <div>
+              <span className="mb-1.5 block text-xs text-[var(--color-text-dim)]">Connection</span>
+              <p className="text-sm text-[var(--color-text)]" data-testid="project-connection-value">
+                {project.connection_name || "No production connection assigned"}
+              </p>
+            </div>
+          ) : (
           <div>
             <label
               htmlFor="project-production-connection"
@@ -214,8 +229,9 @@ export function ProjectConnectionSettings({ projectId }: { projectId: string }) 
               ))}
             </select>
           </div>
+          )}
 
-          {connections.length === 0 && (
+          {canWrite && connections.length === 0 && (
             <div className="rounded-lg border border-[var(--color-warning)]/25 p-3 text-xs text-[var(--color-warning)]">
               No data connections are available. Create and test one before
               assigning it to this project.
@@ -249,6 +265,7 @@ export function ProjectConnectionSettings({ projectId }: { projectId: string }) 
             </div>
           )}
 
+          {canWrite && (
           <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
             <a
               href="/connections"
@@ -270,10 +287,11 @@ export function ProjectConnectionSettings({ projectId }: { projectId: string }) 
               {saving ? "Validating…" : "Validate and save"}
             </button>
           </div>
+          )}
         </div>
       </section>
 
-      <ProjectAutomationSettings project={project} onProjectUpdated={setProject} />
+      <ProjectAutomationSettings project={project} onProjectUpdated={setProject} readOnly={!canWrite} />
     </div>
   );
 }

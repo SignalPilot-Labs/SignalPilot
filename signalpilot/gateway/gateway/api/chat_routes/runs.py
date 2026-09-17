@@ -31,7 +31,7 @@ from gateway.security.scope_guard import RequireScope
 from gateway.standalone_chat.query_approvals import decide_query_proposal
 from gateway.store import standalone_chat as chat_store
 
-from ..deps import ChatGate, StoreD
+from ..deps import RequireBillablePlan, StoreD
 from .common import RequireInteractiveUser
 from .common import is_admin as _is_admin
 from .common import readiness_or_error as _readiness_or_error
@@ -45,7 +45,7 @@ router = APIRouter()
 @router.post(
     "/query-proposals/{proposal_id}/decision",
     response_model=ChatRunInfo,
-    dependencies=[RequireScope("write"), RequireInteractiveUser],
+    dependencies=[RequireScope("write"), RequireInteractiveUser, RequireBillablePlan],
 )
 async def decide_query(
     proposal_id: str,
@@ -76,7 +76,7 @@ async def decide_query(
     "/conversations/{conversation_id}/runs",
     status_code=201,
     response_model=ChatRunInfo,
-    dependencies=[RequireScope("write"), RequireInteractiveUser, ChatGate],
+    dependencies=[RequireScope("write"), RequireInteractiveUser, RequireBillablePlan],
 )
 async def create_run(
     conversation_id: str,
@@ -264,7 +264,7 @@ async def cancel_run(run_id: str, store: StoreD):
     "/runs/{run_id}/steer",
     status_code=202,
     response_model=StandaloneMessageInfo,
-    dependencies=[RequireScope("write"), RequireInteractiveUser],
+    dependencies=[RequireScope("write"), RequireInteractiveUser, RequireBillablePlan],
 )
 async def steer_run(run_id: str, body: StandaloneSteeringCreate, store: StoreD):
     _require_enabled()
@@ -286,7 +286,7 @@ async def steer_run(run_id: str, body: StandaloneSteeringCreate, store: StoreD):
 @router.post(
     "/runs/{run_id}/clarification",
     response_model=ChatRunInfo,
-    dependencies=[RequireScope("write"), RequireInteractiveUser],
+    dependencies=[RequireScope("write"), RequireInteractiveUser, RequireBillablePlan],
 )
 async def clarify_run(run_id: str, body: StandaloneClarificationCreate, store: StoreD):
     _require_enabled()
@@ -309,7 +309,7 @@ async def clarify_run(run_id: str, body: StandaloneClarificationCreate, store: S
     "/runs/{run_id}/retry",
     status_code=201,
     response_model=ChatRunInfo,
-    dependencies=[RequireScope("write"), RequireInteractiveUser],
+    dependencies=[RequireScope("write"), RequireInteractiveUser, RequireBillablePlan],
 )
 async def retry_run(run_id: str, store: StoreD, role: OrgRole):
     _require_enabled()

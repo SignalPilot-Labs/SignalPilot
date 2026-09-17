@@ -41,27 +41,33 @@ def default_chat_effort() -> str:
     return configured if configured in CHAT_EFFORT_IDS else FALLBACK_CHAT_EFFORT
 
 
-def standalone_chat_enabled() -> bool:
-    """Standalone chat is always available; paid-plan gating happens at bootstrap and run creation."""
-    return True
-
-
-def _disabled_by_default_flag(name: str) -> bool:
-    """Read an enterprise rollout flag that is always opt-in."""
-    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _enabled_by_default_flag(name: str) -> bool:
-    """Read a flag that is on in every mode unless explicitly turned off."""
+def _kill_switch_on(name: str) -> bool:
+    """Read an emergency kill switch: on in every mode unless explicitly set to false."""
     raw = os.getenv(name)
     if raw is None or not raw.strip():
         return True
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def standalone_chat_enabled() -> bool:
+    """Kill switch ``SP_FEATURE_STANDALONE_CHAT``: chat and reports are on unless it is set to false.
+
+    Who may use chat is the org's plan (``RequireBillablePlan``). This switch
+    exists only to take the whole surface offline in an emergency; when it is
+    off the routes answer 503 ``not_available_in_deployment``.
+    """
+    return _kill_switch_on("SP_FEATURE_STANDALONE_CHAT")
+
+
 @dataclass(frozen=True)
 class EnterpriseChatFeatureFlags:
-    """Independent rollout boundaries for the enterprise runtime phases."""
+    """Deployment kill switches for the chat runtime capabilities.
+
+    Every flag is on by default. The ``SP_FEATURE_CHAT_*`` variables are
+    emergency switches for operators, not entitlements: whether an org may use
+    chat at all is the billable-plan rule, and the bootstrap payload reports
+    each capability as ``is_billable and not kill_switch_off``.
+    """
 
     sandbox_runtime: bool
     query_approval: bool
@@ -73,25 +79,47 @@ class EnterpriseChatFeatureFlags:
     runtime_results: bool
     runtime_artifacts: bool
     dataset_refs: bool
-    # Connectors: external MCP servers for the chat agent. On everywhere; opt out with
-    # SP_FEATURE_CHAT_MCP_CONNECTORS=false.
+    # Connectors: external MCP servers for the chat agent.
     mcp_connectors: bool
+
+    def as_dict(self) -> dict[str, bool]:
+        return {
+            "sandbox_runtime": self.sandbox_runtime,
+            "query_approval": self.query_approval,
+            "structured_results": self.structured_results,
+            "organization_sharing": self.organization_sharing,
+            "forking": self.forking,
+            "size_router": self.size_router,
+            "size_router_shadow": self.size_router_shadow,
+            "runtime_results": self.runtime_results,
+            "runtime_artifacts": self.runtime_artifacts,
+            "dataset_refs": self.dataset_refs,
+            "mcp_connectors": self.mcp_connectors,
+        }
 
 
 def enterprise_chat_feature_flags() -> EnterpriseChatFeatureFlags:
-    size_router_value = os.getenv("SP_FEATURE_CHAT_SIZE_ROUTER", "").strip().lower()
+    """Read the kill switches. Unset means on.
+
+    ``SP_FEATURE_CHAT_SIZE_ROUTER`` accepts a third value, ``shadow``, which
+    estimates routes without enforcing them.
+    """
+    size_router_raw = os.getenv("SP_FEATURE_CHAT_SIZE_ROUTER")
+    size_router_value = (size_router_raw or "").strip().lower()
+    size_router_shadow = size_router_value == "shadow"
+    size_router = not size_router_shadow and _kill_switch_on("SP_FEATURE_CHAT_SIZE_ROUTER")
     return EnterpriseChatFeatureFlags(
-        sandbox_runtime=_disabled_by_default_flag("SP_FEATURE_CHAT_SANDBOX_RUNTIME"),
-        query_approval=_disabled_by_default_flag("SP_FEATURE_CHAT_QUERY_APPROVAL"),
-        structured_results=_disabled_by_default_flag("SP_FEATURE_CHAT_STRUCTURED_RESULTS"),
-        organization_sharing=_disabled_by_default_flag("SP_FEATURE_CHAT_ORG_SHARING"),
-        forking=_disabled_by_default_flag("SP_FEATURE_CHAT_FORKING"),
-        size_router=size_router_value in {"1", "true", "yes", "on", "enforced"},
-        size_router_shadow=size_router_value == "shadow",
-        runtime_results=_disabled_by_default_flag("SP_FEATURE_CHAT_RUNTIME_RESULTS"),
-        runtime_artifacts=_disabled_by_default_flag("SP_FEATURE_CHAT_RUNTIME_ARTIFACTS"),
-        dataset_refs=_disabled_by_default_flag("SP_FEATURE_CHAT_DATASET_REFS"),
-        mcp_connectors=_enabled_by_default_flag("SP_FEATURE_CHAT_MCP_CONNECTORS"),
+        sandbox_runtime=_kill_switch_on("SP_FEATURE_CHAT_SANDBOX_RUNTIME"),
+        query_approval=_kill_switch_on("SP_FEATURE_CHAT_QUERY_APPROVAL"),
+        structured_results=_kill_switch_on("SP_FEATURE_CHAT_STRUCTURED_RESULTS"),
+        organization_sharing=_kill_switch_on("SP_FEATURE_CHAT_ORG_SHARING"),
+        forking=_kill_switch_on("SP_FEATURE_CHAT_FORKING"),
+        size_router=size_router,
+        size_router_shadow=size_router_shadow,
+        runtime_results=_kill_switch_on("SP_FEATURE_CHAT_RUNTIME_RESULTS"),
+        runtime_artifacts=_kill_switch_on("SP_FEATURE_CHAT_RUNTIME_ARTIFACTS"),
+        dataset_refs=_kill_switch_on("SP_FEATURE_CHAT_DATASET_REFS"),
+        mcp_connectors=_kill_switch_on("SP_FEATURE_CHAT_MCP_CONNECTORS"),
     )
 
 

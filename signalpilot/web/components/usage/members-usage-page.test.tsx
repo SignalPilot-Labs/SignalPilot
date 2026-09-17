@@ -8,11 +8,20 @@ import { MembersUsagePage } from "./members-usage-page";
 const mocks = vi.hoisted(() => ({
   getOrgUsage: vi.fn(),
   auth: { isCloudMode: true, isLoaded: true },
-  org: { membership: { role: "org:admin" } as { role: string } | undefined, memberships: { data: [] as unknown[] } },
+  perms: { isAdmin: true },
+  org: { memberships: { data: [] as unknown[] } },
 }));
 vi.mock("~/lib/api/usage", () => ({ getOrgUsage: mocks.getOrgUsage }));
 vi.mock("~/lib/auth-context", () => ({ useAppAuth: () => mocks.auth }));
 vi.mock("@clerk/nextjs", () => ({ useOrganization: () => mocks.org }));
+vi.mock("~/lib/hooks/use-permissions", () => ({
+  usePermissions: () => ({
+    role: mocks.perms.isAdmin ? "admin" : "member",
+    isAdmin: mocks.perms.isAdmin,
+    loaded: true,
+    can: (p: string) => mocks.perms.isAdmin || p === "usage.self",
+  }),
+}));
 // jsdom has no ResizeObserver, which recharts' ResponsiveContainer needs.
 vi.mock("./daily-usage-charts", () => ({
   DailyUsageCharts: ({ daily }: { daily: unknown[] }) => <div data-testid="usage-daily-charts" data-points={daily.length} />,
@@ -41,7 +50,7 @@ describe("MembersUsagePage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.auth.isCloudMode = true;
-    mocks.org.membership = { role: "org:admin" };
+    mocks.perms.isAdmin = true;
     mocks.org.memberships.data = [
       { publicUserData: { userId: "user_a", firstName: "Ada", lastName: "Lovelace", identifier: "ada@example.com" } },
     ];
@@ -79,12 +88,12 @@ describe("MembersUsagePage", () => {
   });
 
   it("shows the admins-only notice for members and on a 403", async () => {
-    mocks.org.membership = { role: "org:member" };
+    mocks.perms.isAdmin = false;
     await render();
     expect(container.querySelector('[data-testid="usage-admins-only"]')).not.toBeNull();
     expect(mocks.getOrgUsage).not.toHaveBeenCalled();
 
-    mocks.org.membership = { role: "org:admin" };
+    mocks.perms.isAdmin = true;
     mocks.getOrgUsage.mockRejectedValueOnce(new ApiRequestError(403, "forbidden"));
     await render();
     expect(container.querySelector('[data-testid="usage-admins-only"]')).not.toBeNull();

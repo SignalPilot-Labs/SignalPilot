@@ -20,13 +20,13 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from gateway.db.models import GatewayBase
-from gateway.governance import query_executor, query_failures, query_planner
+from gateway.governance import query_executor_route, query_executor_run, query_planner
 from gateway.governance.query_executor import (
     GovernedQueryContext,
     GovernedQueryError,
     GovernedQueryExecutor,
 )
-from gateway.governance.query_types import encode_value, logical_type
+from gateway.governance.query_executor_types import encode_value, logical_type
 from gateway.store import standalone_chat as chat_store
 
 _SQL = "SELECT order_id, total, ordered_on FROM orders"
@@ -102,9 +102,6 @@ def harness(monkeypatch: pytest.MonkeyPatch):
     async def connection(*_args: Any, **_kwargs: Any):
         yield state["connector"]
 
-    async def get_org_limits(_org_id: str):
-        return SimpleNamespace(max_queries_per_day=None)
-
     async def require_execution_plan(*_args: Any, **_kwargs: Any):
         return SimpleNamespace(
             scout_row_limit=None,
@@ -120,16 +117,16 @@ def harness(monkeypatch: pytest.MonkeyPatch):
             expires_at=datetime.now(UTC) + timedelta(hours=1),
         )
 
-    monkeypatch.delenv("SP_FEATURE_CHAT_SIZE_ROUTER", raising=False)
-    monkeypatch.delenv("SP_FEATURE_CHAT_QUERY_APPROVAL", raising=False)
-    monkeypatch.delenv("SP_FEATURE_CHAT_RUNTIME_RESULTS", raising=False)
+    # The SP_FEATURE_CHAT_* variables are kill switches (unset means on), so
+    # the harness turns them off explicitly; a test re-enables what it needs.
+    monkeypatch.setenv("SP_FEATURE_CHAT_SIZE_ROUTER", "0")
+    monkeypatch.setenv("SP_FEATURE_CHAT_QUERY_APPROVAL", "0")
+    monkeypatch.setenv("SP_FEATURE_CHAT_RUNTIME_RESULTS", "0")
     monkeypatch.setattr(chat_store, "append_event", append_event)
-    monkeypatch.setattr(query_executor.pool_manager, "connection", connection)
-    monkeypatch.setattr(query_executor, "get_org_limits", get_org_limits)
-    monkeypatch.setattr(query_executor, "check_query_limit", lambda _org, _plan: None)
-    monkeypatch.setattr(query_executor, "record_query", lambda _org: None)
-    monkeypatch.setattr(query_failures, "record_query", lambda _org: None)
-    monkeypatch.setattr(query_executor, "load_annotations", lambda _o, _c: SimpleNamespace(blocked_tables=[], pii_columns={}))
+    monkeypatch.setattr(query_executor_run.pool_manager, "connection", connection)
+    monkeypatch.setattr(
+        query_executor_route, "load_annotations", lambda _o, _c: SimpleNamespace(blocked_tables=[], pii_columns={})
+    )
     monkeypatch.setattr(query_planner, "require_execution_plan", require_execution_plan)
 
     def set_connector(connector: _Connector) -> None:

@@ -10,7 +10,7 @@ from fastapi import HTTPException, Request
 from gateway.api.connections._hints import _connection_error_hint
 from gateway.api.connections._router import router
 from gateway.api.deps import StoreD, sanitize_db_error
-from gateway.auth import UserID
+from gateway.auth import OrgAdmin, UserID
 from gateway.connectors.pool_manager import pool_manager
 from gateway.connectors.schema_cache import schema_cache
 from gateway.models import ConnectionCreate
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 @router.post("/connections/test-credentials", dependencies=[RequireScope("write")])
-async def test_credentials(_: UserID, request: Request):
+async def test_credentials(_: UserID, _role: OrgAdmin, request: Request):
     """Test connection credentials without saving."""
     body = await request.json()
     t0 = time.monotonic()

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel

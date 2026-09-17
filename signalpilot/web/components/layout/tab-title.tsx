@@ -32,7 +32,7 @@ export function TabTitle() {
   const label = b.enabled ? b.brand.label : null;
 
   useEffect(() => {
-    if (!enabled || tier === "free") {
+    if (!enabled || tier === null) {
       // No-op for free tier and local mode.
       return;
     }

@@ -1,0 +1,96 @@
+---
+sidebar_position: 0
+title: Chat with your data
+description: Ask questions in plain English and get answers backed by governed queries, charts, and downloadable files.
+hide_title: true
+sidebar_label: Chat with your data
+---
+
+import PageHero from '@site/src/components/PageHero';
+import Callout from '@site/src/components/Callout';
+import { LinkTiles, LinkTile } from '@site/src/components/LinkTiles';
+import { Chat, Governance } from '@site/src/components/illustrations';
+
+<PageHero
+  eyebrow="Product · Chat"
+  title="Chat with your data"
+  lede="Open a chat, pick a project, and ask. SignalPilot inspects your models, runs governed read-only queries, and answers with the numbers, the charts, and the SQL behind them."
+  illustration={<Chat />}
+/>
+
+## Start a chat
+
+1. Open **Chats** and choose **New chat**.
+2. Pick a **project** from the pill in the message box. A project already knows its warehouse connection and branch, so there is nothing else to configure. A green dot means it is ready.
+3. Type your question, or choose one of the four **starter questions** SignalPilot suggests from your project.
+
+Questions that work well are the ones you would ask an analyst:
+
+- What changed most in net revenue last month, and what drove it?
+- Summarise the key trends in orders over the last 12 months, with a chart per finding.
+- Are there unusual patterns in customer retention that need attention?
+- Build a dashboard of monthly revenue, gross margin, and active customers by region.
+
+<Callout kind="tip" title="Start with a number you already know">
+The first question in a new workspace should be one you can verify. If the answer matches, you have confirmed the connection, the model, and the definitions all line up. If it does not, add the missing definition to the [knowledge base](/docs/product/knowledge-base) and ask again.
+</Callout>
+
+## What you see while it works
+
+SignalPilot shows its work rather than a spinner.
+
+- **Plan.** A short checklist docks above the message box and ticks off as the agent moves through it.
+- **Activity.** Each query, code run, file, and lookup appears in the timeline as it happens. Finished groups fold into a compact summary such as "7 steps · 3 queries · 1 file" that you can expand later.
+- **Artifacts panel.** On the right, three tabs: **Notebook** (the live analysis), **Files** (anything the agent saved), and **Queries** (every SQL statement it ran, with duration, rows, and cost).
+
+You can keep typing while a run is in progress. Follow-ups queue and run when the current step finishes, and **Stop** halts the run at any time.
+
+## How answers are written
+
+Every answer leads with the business answer in a few sentences, then the findings, then a bottom line. Each number comes with an evidence dropdown holding the reasoning, the full SQL, and links to the models it used, so anyone can check the work without re-running it. Assumptions are called out in their own dropdown. Charts sit inline next to the finding they support.
+
+## Files, dashboards, and reports
+
+Anything the agent saves shows up in the **Files** tab and as a card in the chat. CSVs preview as tables, images open full size, and every file has a **Download** button.
+
+Ask for a dashboard and the agent builds one you can open, refine, and **Publish** to the dashboards gallery, with an optional refresh schedule. See [Dashboards](/docs/product/dashboards) and [Chat files](/docs/product/chat-files).
+
+## Governance you can see
+
+<figure className="sp-screenshot sp-figure-illustration">
+  <Governance />
+  <figcaption>Every query passes through the same checks before it reaches your warehouse.</figcaption>
+</figure>
+
+- **Read-only.** Anything that would change data is blocked before it runs. Results are capped, and the cap is visible on every table.
+- **Budgets.** Each chat has a spend limit per query and overall. If a query would exceed it, the chat pauses and asks you to run it once, raise the budget, or decline.
+- **Sensitive columns.** Columns marked as personal data are masked or hidden before the agent sees them. A lock notice on the table tells you which ones.
+- **Audit.** Every query is recorded in the [audit log](/docs/product/audit) with who asked, what ran, and what it cost.
+
+## Share, fork, and replay
+
+- **Share with team** creates a private link for people in your organization. They see the whole chat, the timeline, and the files, and can **fork** it into their own chats to continue from there. Revoke the link at any time from the chat menu.
+- **Replay** plays a finished chat back as it happened, which is a good way to show a colleague how an answer was reached. Turn it on under **Chat settings**.
+
+## Chat settings
+
+Open the gear in the message box to change:
+
+| Setting | What it does |
+|---|---|
+| **Model** and **Thinking level** | Which model answers, and how long it reasons before acting. Medium is the default. |
+| **Connectors** | Which outside tool servers the agent may use in your next chat. See [Add MCP servers](/docs/settings/connectors). |
+| **Query budgets** | The per-query and whole-chat spend limits for your next chat. |
+| **Replay** and **Diagnostics** | Per-browser toggles for the replay button and live timing details. |
+
+## Automated runs
+
+Some chats are started by SignalPilot rather than a person, such as a scheduled dashboard refresh or a daily cost-optimisation review. They carry an **Automated** badge and open with a banner saying so. They follow the same governance as any other chat.
+
+## Next
+
+<LinkTiles>
+  <LinkTile title="Knowledge base" description="Teach SignalPilot your definitions so answers match how your team thinks." to="/docs/product/knowledge-base" />
+  <LinkTile title="Dashboards" description="Publish what the agent built and keep it fresh on a schedule." to="/docs/product/dashboards" />
+  <LinkTile title="Use SignalPilot in Claude" description="Prefer to ask from Claude? Add SignalPilot as a connector." to="/docs/clients/claude" />
+</LinkTiles>

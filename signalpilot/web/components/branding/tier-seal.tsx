@@ -8,9 +8,8 @@ import { useTierBranding } from "~/lib/hooks/use-tier-branding";
  * TierSeal — sidebar footer brand mark. Branches by tier so inner components
  * can call hooks unconditionally (rules-of-hooks).
  *
- * - enterprise → EnterpriseSealInner (calls useOrganization, renders org name)
- * - team       → TeamSealInner      (no useOrganization, no org line)
- * - else       → null
+ * - enterprise    → EnterpriseSealInner (calls useOrganization, renders org name)
+ * - team / scale  → PlanSealInner       (no useOrganization, no org line)
  */
 export function TierSeal() {
   const b = useTierBranding();
@@ -21,11 +20,7 @@ export function TierSeal() {
     return <EnterpriseSealInner brand={b.brand} />;
   }
 
-  if (b.tier === "team") {
-    return <TeamSealInner brand={b.brand} />;
-  }
-
-  return null;
+  return <PlanSealInner brand={b.brand} />;
 }
 
 interface InnerProps {
@@ -36,8 +31,6 @@ function EnterpriseSealInner({ brand }: InnerProps) {
   const { organization } = useOrganization();
   const orgName = organization?.name ?? null;
 
-  if (!brand.accentHex) return null;
-
   return (
     <div className="flex flex-col gap-0.5">
       <div className="flex items-center gap-1.5">
@@ -47,7 +40,7 @@ function EnterpriseSealInner({ brand }: InnerProps) {
           aria-hidden="true"
         />
         <span className={`text-[10px] leading-none tracking-[0.2em] uppercase ${brand.accentText}`}>
-          Enterprise
+          {brand.label}
         </span>
       </div>
       {orgName && (
@@ -59,9 +52,7 @@ function EnterpriseSealInner({ brand }: InnerProps) {
   );
 }
 
-function TeamSealInner({ brand }: InnerProps) {
-  if (!brand.accentHex) return null;
-
+function PlanSealInner({ brand }: InnerProps) {
   return (
     <div className="flex items-center gap-1.5">
       <span
@@ -70,7 +61,7 @@ function TeamSealInner({ brand }: InnerProps) {
         aria-hidden="true"
       />
       <span className={`text-[10px] leading-none tracking-[0.2em] uppercase ${brand.accentText}`}>
-        Team
+        {brand.label}
       </span>
     </div>
   );

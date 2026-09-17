@@ -24,3 +24,4 @@ export * from "./api/platform";
 export * from "./api/knowledge";
 export * from "./api/mcp-connectors";
 export * from "./api/usage";
+export * from "./api/me";

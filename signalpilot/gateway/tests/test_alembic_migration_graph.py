@@ -55,7 +55,7 @@ def test_real_migration_chain_is_the_tracked_head() -> None:
     assert revision_0032 is not None
     assert revision_0032.down_revision == "0031"
 
-    # 0031 adds single-use artifact download grants.
+    # 0031 adds single-use private artifact download grants.
     revision_0031 = scripts.get_revision("0031")
     assert revision_0031 is not None
     assert revision_0031.down_revision == "0030"

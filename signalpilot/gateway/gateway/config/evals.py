@@ -31,15 +31,8 @@ from ._base import _GatewaySettingsBase
 class EvalRunSettings(_GatewaySettingsBase):
     """Typed eval-run configuration read from process environment at instantiation."""
 
-    # Comma-separated Clerk org ids allowed to reach the eval feature.
-    #
-    # Empty means DENY ALL in cloud mode: an unset allowlist is the state a fresh
-    # deployment is in, and there is no org id it could safely stand for. Empty in
-    # local mode allows the caller, because a local deployment is single-tenant
-    # with a synthetic org id ("local") that nobody would think to enumerate here
-    # requiring it would break development for no tenancy gained. Deployment
-    # mode is read at call time so the allowlist follows the mode, not import order.
-
+    # Who may use evals is the org's plan (RequireBillablePlan), never a list
+    # here. These settings only say whether this deployment can run them.
     runner_image: str = Field("", alias="SP_EVAL_RUNNER_IMAGE")
     setup_image: str = Field("", alias="SP_EVAL_SETUP_IMAGE")
     # "" = docker in local mode; unusable in cloud mode (the run fails with a
@@ -143,7 +136,22 @@ class EvalRunSettings(_GatewaySettingsBase):
 
     @property
     def enabled(self) -> bool:
+        """A runner image is configured (the feature is switched on)."""
         return bool(self.runner_image)
+
+    @property
+    def capable(self) -> bool:
+        """This deployment can execute a run: image, evidence store and backend are all wired.
+
+        This is the ``evals`` deployment capability. It never depends on who is
+        asking; the org's plan is checked separately by RequireBillablePlan.
+        """
+        if not self.runner_image or not self.s3_bucket:
+            return False
+        if self.execution_backend == "vercel":
+            return True
+        # Docker on the host is only reachable in local mode.
+        return os.environ.get("SP_DEPLOYMENT_MODE", "").lower() != "cloud"
 
     @property
     def claude_token(self) -> str:

@@ -11,6 +11,7 @@ import { Info } from "lucide-react";
 import { PageHeader } from "~/components/ui/page-header";
 import { DashboardSkeleton } from "~/components/ui/skeleton";
 import { useAppAuth } from "~/lib/auth-context";
+import { AdminGate } from "~/components/settings/admin-gate";
 
 const TeamClient = dynamic(
   () => import("./team-client"),
@@ -54,5 +55,9 @@ export default function TeamPage() {
     );
   }
 
-  return <TeamClient />;
+  return (
+    <AdminGate permission="team.manage" title="team" what="team members and invitations">
+      <TeamClient />
+    </AdminGate>
+  );
 }

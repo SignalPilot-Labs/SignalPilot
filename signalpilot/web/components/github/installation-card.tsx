@@ -2,6 +2,7 @@
 
 import { GitBranch, Loader2, RefreshCw, Unplug, Link as LinkIcon } from "lucide-react";
 import type { GitHubInstallation } from "~/lib/types";
+import { AdminOnlyControl } from "~/components/access/admin-only-control";
 
 interface InstallationCardProps {
   installation: GitHubInstallation;
@@ -19,7 +20,7 @@ function repoCountLabel(count: number): string {
   return `${count} repositories`;
 }
 
-/** One connected GitHub App installation row with its per-row actions. */
+/** One connected GitHub App installation row; its actions are admin-only. */
 export function InstallationCard({
   installation: inst,
   refreshing,
@@ -49,6 +50,7 @@ export function InstallationCard({
           )}
         </div>
       </div>
+      <AdminOnlyControl permission="github.write">
       <div className="flex items-center gap-2">
         <button
           type="button"
@@ -75,6 +77,7 @@ export function InstallationCard({
           <Unplug className="w-3 h-3" /> disconnect
         </button>
       </div>
+      </AdminOnlyControl>
     </div>
   );
 }

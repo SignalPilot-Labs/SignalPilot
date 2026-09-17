@@ -1,14 +1,12 @@
 "use client";
 
 /**
- * Derives permissions from the active organization membership role.
- * All permissions are role-based for R3.
- * TODO (R5): Switch to membership.permissions[] granular checks when
- * custom role split-permission support is needed.
+ * Team-page permissions, derived from the org permission set the gateway
+ * reports (`usePermissions`). Clerk's own membership role is no longer read
+ * here: one source decides for every page.
  */
 
-import { useOrganization } from "@clerk/nextjs";
-import { isAdminRole } from "./roles";
+import { usePermissions } from "~/lib/hooks/use-permissions";
 
 export interface TeamPermissions {
   isAdmin: boolean;
@@ -19,13 +17,13 @@ export interface TeamPermissions {
 }
 
 export function useTeamPermissions(): TeamPermissions {
-  const { membership } = useOrganization();
-  const isAdmin = isAdminRole(membership?.role);
+  const { isAdmin, can } = usePermissions();
+  const manage = can("team.manage");
   return {
     isAdmin,
-    canInvite: isAdmin,
-    canRemove: isAdmin,
-    canUpdate: isAdmin,
-    canDelete: isAdmin,
+    canInvite: manage,
+    canRemove: manage,
+    canUpdate: manage,
+    canDelete: manage,
   };
 }

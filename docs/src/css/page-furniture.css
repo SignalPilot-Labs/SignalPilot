@@ -1,0 +1,168 @@
+/* SignalPilot docs — page furniture.
+   Holds: breadcrumbs, pagination, doc footer (tags/edit link), site footer,
+   search (DocSearch). */
+
+/* ── Breadcrumbs ───────────────────────────────────────────────────────── */
+.breadcrumbs {
+  margin-bottom: 1.25rem;
+}
+
+.breadcrumbs__item {
+  font-family: var(--sp-font-mono);
+}
+
+.breadcrumbs__link {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: var(--sp-track-wider);
+  color: var(--sp-dim);
+  background: transparent;
+  border-radius: var(--sp-radius-pill);
+  padding: 0.25rem 0.5rem;
+}
+
+.breadcrumbs__item--active .breadcrumbs__link {
+  background: var(--sp-card);
+  color: var(--sp-muted);
+}
+
+.breadcrumbs__link:hover {
+  background: var(--sp-card);
+  color: var(--sp-text);
+}
+
+.breadcrumbs__item:not(:last-child)::after {
+  opacity: 0.35;
+}
+
+/* ── Pagination ────────────────────────────────────────────────────────── */
+.pagination-nav__link {
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-radius-card);
+  background: var(--sp-card);
+  padding: 1.1rem 1.35rem;
+  transition: border-color 200ms var(--sp-ease),
+              background 200ms var(--sp-ease),
+              transform 200ms var(--sp-ease);
+}
+
+.pagination-nav__link:hover {
+  border-color: var(--sp-line-2);
+  background: var(--sp-card-hover);
+  transform: translateY(-2px);
+}
+
+.pagination-nav__sublabel {
+  font-family: var(--sp-font-mono);
+  font-size: 10px;
+  letter-spacing: var(--sp-track-eyebrow);
+  text-transform: uppercase;
+  color: var(--sp-dim);
+  margin-bottom: 0.4rem;
+}
+
+.pagination-nav__label {
+  font-family: var(--sp-font-sans);
+  font-size: 14.5px;
+  font-weight: 500;
+  letter-spacing: var(--sp-track-tight);
+  color: var(--sp-text);
+}
+
+/* ── Doc footer (tags + edit link) ─────────────────────────────────────── */
+.theme-doc-footer {
+  border-top: 1px solid var(--sp-line);
+  margin-top: 3rem;
+  padding-top: 1.5rem;
+}
+
+.theme-doc-footer a,
+.theme-edit-this-page {
+  font-family: var(--sp-font-mono);
+  font-size: 11px;
+  letter-spacing: var(--sp-track-wide);
+  color: var(--sp-dim);
+}
+
+.theme-doc-version-badge,
+.theme-doc-footer .badge {
+  font-family: var(--sp-font-mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: var(--sp-track-wider);
+  border-radius: var(--sp-radius-pill);
+  border-color: var(--sp-line);
+  background: var(--sp-card);
+  color: var(--sp-muted);
+}
+
+/* ── Site footer ───────────────────────────────────────────────────────── */
+/* Infima's .footer--dark sets its own slate --ifm-footer-background-color on
+   the element, which beats the theme-level token. Re-declare on the element. */
+.footer,
+.footer.footer--dark {
+  --ifm-footer-background-color: var(--sp-footer);
+  --ifm-footer-link-color: var(--sp-muted);
+  --ifm-footer-link-hover-color: var(--sp-text);
+  --ifm-footer-color: var(--sp-muted);
+  --ifm-footer-title-color: var(--sp-dim);
+  background: var(--sp-footer);
+  color: var(--sp-muted);
+  border-top: 1px solid var(--sp-line);
+  padding: 3.5rem 0 2.5rem;
+}
+
+.footer__title {
+  font-family: var(--sp-font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: var(--sp-track-eyebrow);
+  text-transform: uppercase;
+  color: var(--sp-dim);
+  margin-bottom: 0.9rem;
+}
+
+.footer__link-item {
+  font-family: var(--sp-font-sans);
+  font-size: 13.5px;
+  letter-spacing: -0.005em;
+  transition: color var(--ifm-transition-fast) var(--sp-ease);
+}
+
+.footer__copyright {
+  font-family: var(--sp-font-mono);
+  font-size: 10.5px;
+  letter-spacing: var(--sp-track-wide);
+  color: var(--sp-dim);
+}
+
+.footer__bottom {
+  margin-top: 2.5rem;
+  padding-top: 1.75rem;
+  border-top: 1px solid var(--sp-line);
+}
+
+/* ── Search ────────────────────────────────────────────────────────────── */
+.DocSearch-Button {
+  border-radius: var(--sp-radius-pill);
+  border: 1px solid var(--sp-line);
+  background: var(--sp-card);
+  font-family: var(--sp-font-sans);
+  --docsearch-searchbox-background: transparent;
+  --docsearch-text-color: var(--sp-muted);
+  --docsearch-muted-color: var(--sp-dim);
+}
+
+.DocSearch-Button:hover {
+  border-color: var(--sp-line-2);
+  background: var(--sp-card-hover);
+  box-shadow: none;
+}
+
+.DocSearch-Button-Key {
+  font-family: var(--sp-font-mono);
+  border-radius: var(--sp-radius-xs);
+  background: var(--sp-card);
+  box-shadow: none;
+  color: var(--sp-dim);
+}

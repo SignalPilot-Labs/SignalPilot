@@ -1,0 +1,98 @@
+---
+sidebar_position: 2
+title: Use SignalPilot with ChatGPT and OpenAI
+description: Connect SignalPilot to ChatGPT, Codex, or the OpenAI Agents SDK.
+hide_title: true
+sidebar_label: ChatGPT and OpenAI
+---
+
+import PageHero from '@site/src/components/PageHero';
+import { Steps, Step } from '@site/src/components/Steps';
+import FieldTable from '@site/src/components/FieldTable';
+import Callout from '@site/src/components/Callout';
+import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+import { Connect } from '@site/src/components/illustrations';
+
+<PageHero
+  eyebrow="Connect · ChatGPT and OpenAI"
+  title="Use SignalPilot with ChatGPT and OpenAI"
+  lede="SignalPilot speaks the same MCP standard OpenAI uses, so ChatGPT, Codex, and agents built on the OpenAI SDK can all talk to your data through the same governed endpoint."
+  illustration={<Connect />}
+/>
+
+All three paths use the same endpoint and the same API key. Create the key once under **Settings → API Keys** in [SignalPilot](https://app.signalpilot.ai); it starts with `sp_` and is shown only when created.
+
+<FieldTable
+  rows={[
+    { label: 'Endpoint', value: 'https://gateway.signalpilot.ai/mcp', mono: true, copy: true },
+    { label: 'Header', value: 'x-api-key: sp_your_key_here', mono: true, note: 'Bearer tokens work too: Authorization: Bearer sp_…' },
+  ]}
+/>
+
+<Tabs groupId="openai-client">
+<TabItem value="chatgpt" label="ChatGPT" default>
+
+ChatGPT adds MCP servers as **connectors** in developer mode.
+
+<Steps>
+  <Step title="Turn on developer mode">
+    In ChatGPT, open **Settings → Connectors → Advanced settings** and switch on **Developer mode**. A workspace admin may need to enable this for you.
+  </Step>
+  <Step title="Create the connector">
+    Back on **Connectors**, choose **Create**. Enter **SignalPilot** as the name, paste the endpoint above as the **MCP server URL**, and confirm.
+  </Step>
+  <Step title="Sign in when asked">
+    ChatGPT connectors cannot send a custom API key header. Instead, choose the sign-in option when ChatGPT offers it and log in with your SignalPilot account. The connector then acts as you, with your workspace's permissions.
+  </Step>
+  <Step title="Use it in a chat">
+    Start a new chat, open the tools menu, and select **SignalPilot**. Ask a question you can verify, such as how many orders shipped last week.
+  </Step>
+</Steps>
+
+<Callout kind="note" title="Sign-in availability">
+If your ChatGPT workspace only offers "No authentication" for custom connectors, contact your SignalPilot admin: the workspace needs sign-in enabled on the gateway before ChatGPT can connect. Codex and the Agents SDK below work with a plain API key today.
+</Callout>
+
+</TabItem>
+<TabItem value="codex" label="Codex">
+
+Codex has a SignalPilot plugin with the same skills and verifier agents as the Claude Code plugin. Install it, then point it at the cloud endpoint.
+
+<MiniCopyBlock
+  label="install the codex plugin"
+  code={`codex plugin marketplace add SignalPilot-Labs/codex-signalpilot-plugin\ncodex plugin add signalpilot@signalpilot`}
+/>
+
+Add the server to `~/.codex/config.toml`:
+
+<MiniCopyBlock
+  label="~/.codex/config.toml"
+  plain
+  code={`[mcp_servers.signalpilot]\nurl = "https://gateway.signalpilot.ai/mcp"\nhttp_headers = { "x-api-key" = "sp_your_key_here" }`}
+/>
+
+Restart Codex. Ask it to list the SignalPilot tools to confirm the connection. The full plugin guide is on the [Codex page](/docs/plugin/codex).
+
+</TabItem>
+<TabItem value="sdk" label="OpenAI Agents SDK">
+
+Register SignalPilot as a hosted MCP tool. The OpenAI platform calls the endpoint for you, so no local process is needed.
+
+<MiniCopyBlock
+  label="python"
+  plain
+  code={`from agents import Agent, HostedMCPTool\n\nagent = Agent(\n    name="analyst",\n    instructions="Answer questions using SignalPilot. Show the SQL you ran.",\n    tools=[\n        HostedMCPTool(\n            tool_config={\n                "type": "mcp",\n                "server_label": "signalpilot",\n                "server_url": "https://gateway.signalpilot.ai/mcp",\n                "headers": {"x-api-key": "sp_your_key_here"},\n                "require_approval": "never",\n            }\n        )\n    ],\n)`}
+/>
+
+Keep the key in an environment variable rather than in source. Governance runs on SignalPilot's side, so the agent can only read what the workspace allows regardless of what the prompt asks for.
+
+</TabItem>
+</Tabs>
+
+## Next
+
+- [Connect a database](/docs/connect-database) if the workspace has none yet.
+- [API keys and permissions](/docs/clients/api-keys) for scopes, rotation, and rate limits.
+- [Claude](/docs/clients/claude) and [Claude Code](/docs/clients/claude-code) setup, if your team uses both.

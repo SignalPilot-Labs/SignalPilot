@@ -19,28 +19,35 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import PlainTextResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from ..billing.entitlements import get_entitlement
 from ..config.evals import get_eval_run_settings
-from ..evals import runner, sandboxes
+from ..evals import runner
 from ..evals.object_store import EvidenceStoreDisabled, get_object_store
 from ..security.scope_guard import RequireScope
-from .deps import EvalsGate, StoreD
+from .deps import RequireBillablePlan, RequireDeploymentCapability, StoreD, deployment_capabilities
+from .eval_sandboxes import router as sandbox_router
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api")
 
-
 # The routes use three access tiers because each tier has different risks.
 # Assign each new route to one of these lists.
 # tests/test_eval_org_allowlist.py verifies that each route has an access tier.
 #
+# Every tier requires a billable plan (402 otherwise). There is no staff list
+# and no org allowlist: evals are on for every paying org.
+#
 # READ permits access to configuration metadata, task lists, run status, and progress.
 # EVIDENCE permits access to transcripts, captures, artifacts, and exports.
 # This evidence can contain warehouse data and agent output.
-# EXECUTE permits operations that incur costs, change configuration, or select a repository.
-EVAL_GUARDS = [RequireScope("read"), EvalsGate]
-EVAL_EVIDENCE_GUARDS = [RequireScope("query"), EvalsGate]
-EVAL_EXECUTE_GUARDS = [RequireScope("admin"), EvalsGate]
+# EXECUTE permits operations that incur costs, change configuration, or select a
+# repository. It also requires the deployment to be able to run evals (503 otherwise).
+EVAL_GUARDS = [RequireScope("read"), RequireBillablePlan]
+EVAL_EVIDENCE_GUARDS = [RequireScope("query"), RequireBillablePlan]
+EVAL_EXECUTE_GUARDS = [RequireScope("admin"), RequireBillablePlan, RequireDeploymentCapability("evals")]
+
+router.include_router(sandbox_router, dependencies=EVAL_GUARDS)
 
 # In-process registry so a second trigger doesn't stack runs unboundedly.
 _active_tasks: dict[str, asyncio.Task] = {}
@@ -101,16 +108,16 @@ class EvalRunRequest(BaseModel):
 
 @router.get("/evals/availability", dependencies=[RequireScope("read")])
 async def get_eval_availability(store: StoreD):
-    """Return whether the organization plan includes evaluations.
+    """Report the two questions separately so the page can say which one is missing.
 
-    Any authenticated user can read this; every other eval route is plan-gated.
+    ``billable``: the caller's org is on a billable plan. ``capable``: this
+    deployment is wired to run evals. ``enabled`` is both. This route carries
+    no plan gate on purpose; a free org must be able to read its own answer.
     """
-    from ..governance.plan_limits import get_org_limits
-
-    limits = await get_org_limits(store.org_id or "local")
-    if not limits.evals:
-        return {"enabled": False, "reason": "plan"}
-    return {"enabled": True, "reason": "ok"}
+    entitlement = await get_entitlement(store.org_id)
+    billable = entitlement.is_billable
+    capable = deployment_capabilities()["evals"]
+    return {"billable": billable, "capable": capable, "enabled": billable and capable}
 
 
 @router.get("/evals/config", dependencies=EVAL_GUARDS)
@@ -356,12 +363,11 @@ async def maybe_autorun_after_knowledge_change(store, doc) -> None:
         if getattr(status, "value", status) != "active":
             return
 
-        settings = get_eval_run_settings()
-        if not settings.enabled:
+        # The route guards are bypassed on this path, so re-check the same two
+        # questions: can this deployment run evals, and is the org billable.
+        if not deployment_capabilities()["evals"]:
             return
-        from ..governance.plan_limits import get_org_limits
-
-        if not (await get_org_limits(store.org_id or "local")).evals:
+        if not (await get_entitlement(store.org_id)).is_billable:
             return
 
         cfg = await store.get_eval_config()
@@ -559,115 +565,6 @@ def _safe_id(run_id: str) -> str:
     if not re.fullmatch(r"run-[0-9]{8}-[0-9]{6}-[a-f0-9]{6}", run_id):
         raise HTTPException(status_code=400, detail="Invalid run id")
     return run_id
-
-
-# Sandbox panel for the containers that execute a run.
-#
-# The routes provide read-only access within one organization.
-# The view layer does not return pod or container specifications.
-# The view layer also redacts free text to prevent credential disclosure.
-
-MAX_LOG_STREAMS: int = 8
-_LOG_HEARTBEAT_SECONDS: float = 10.0
-_log_stream_semaphore = asyncio.Semaphore(MAX_LOG_STREAMS)
-
-
-def _safe_sandbox_name(name: str) -> str:
-    if not sandboxes.is_valid_sandbox_name(name):
-        raise HTTPException(status_code=400, detail="Invalid sandbox name")
-    return name
-
-
-@router.get("/evals/sandboxes", dependencies=EVAL_GUARDS)
-async def list_eval_sandboxes(store: StoreD):
-    """Eval containers alive right now for the caller's org."""
-    view = sandboxes.get_sandbox_view(store.org_id)
-    try:
-        return await view.inventory()
-    finally:
-        await view.aclose()
-
-
-@router.get("/evals/sandboxes/{name}/events", dependencies=EVAL_GUARDS)
-async def get_eval_sandbox_events(store: StoreD, name: str):
-    """Recent Kubernetes events for a sandbox pod: what makes a stuck pod
-    diagnosable (unschedulable, image pull failure, sandbox runtime error)."""
-    view = sandboxes.get_sandbox_view(store.org_id)
-    try:
-        return await view.events(_safe_sandbox_name(name))
-    finally:
-        await view.aclose()
-
-
-@router.get("/evals/sandboxes/{name}/logs/stream", dependencies=EVAL_GUARDS)
-async def stream_eval_sandbox_logs(
-    store: StoreD, name: str, tail: int = Query(200, ge=1, le=2000)
-) -> StreamingResponse:
-    """SSE tail of a live sandbox.
-
-    Terminates on its own when the sandbox exits, when the byte cap or the
-    wall-clock deadline is hit, or when the viewer disconnects.
-    """
-    safe_name = _safe_sandbox_name(name)
-    if _log_stream_semaphore.locked():
-        raise HTTPException(
-            status_code=429,
-            detail="Too many sandbox log streams open. Close one and retry.",
-            headers={"Retry-After": "15"},
-        )
-    view = sandboxes.get_sandbox_view(store.org_id)
-
-    async def generate():
-        await _log_stream_semaphore.acquire()
-        queue: asyncio.Queue = asyncio.Queue(maxsize=256)
-
-        async def pump() -> None:
-            try:
-                async for kind, payload in view.stream_logs(safe_name, tail_lines=tail):
-                    await queue.put((kind, payload))
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                logger.warning("Eval sandbox log stream for %s failed: %s", safe_name, exc)
-                await queue.put(("error", f"log stream failed: {type(exc).__name__}"))
-                await queue.put(("end", "stream-error"))
-            finally:
-                await queue.put(None)
-
-        task = asyncio.create_task(pump())
-        try:
-            yield _sse({"type": "open", "sandbox": safe_name, "at": time.time()})
-            while True:
-                try:
-                    item = await asyncio.wait_for(queue.get(), timeout=_LOG_HEARTBEAT_SECONDS)
-                except TimeoutError:
-                    yield _sse({"type": "heartbeat", "at": time.time()})
-                    continue
-                if item is None:
-                    return
-                kind, payload = item
-                if kind == "end":
-                    yield _sse({"type": "end", "reason": payload, "at": time.time()})
-                    return
-                yield _sse({"type": kind, "text": sandboxes.redact(payload), "at": time.time()})
-        finally:
-            task.cancel()
-            try:
-                await task
-            except (asyncio.CancelledError, Exception):
-                pass
-            await view.aclose()
-            _log_stream_semaphore.release()
-
-    return StreamingResponse(
-        generate(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
-def _sse(payload: dict) -> str:
-    return f"data: {json.dumps(payload)}\n\n"
 
 
 @router.get("/evals/runs/{run_id}/progress", dependencies=EVAL_GUARDS)

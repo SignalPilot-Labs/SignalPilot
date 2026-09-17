@@ -150,14 +150,6 @@ export type EvalRun = {
 /** The detail route returns tasks. The list route omits tasks. */
 export type EvalRunDetail = EvalRun & { tasks: EvalRunTask[] };
 
-/** Any authenticated user can read availability. Entitlement controls all other evaluation routes. */
-export type EvalAvailability = {
-  enabled: boolean;
-  reason: "ok" | "plan" | "not_enabled_for_org";
-};
-export const getEvalAvailability = () =>
-  request<EvalAvailability>("/api/evals/availability");
-
 export const getEvalConfig = () => request<EvalConfig>("/api/evals/config");
 export const putEvalConfig = (
   cfg: Omit<EvalConfig, "enabled" | "runner_image">,

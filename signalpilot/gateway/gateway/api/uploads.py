@@ -22,7 +22,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
-from ..auth import UserID
+from ..auth import OrgAdmin, UserID
 from ..config.uploads import EvalUploadsSettings, get_eval_uploads_settings
 from ..security.scope_guard import RequireScope
 from ..store.upload_sessions import QuotaExceeded
@@ -210,7 +210,9 @@ def _validate_key(key: str) -> None:
 
 
 @router.post("/evals/upload/initiate", dependencies=[RequireScope("write")])
-async def initiate_eval_upload(user_id: UserID, store: StoreD, req: InitiateRequest) -> InitiateResponse:
+async def initiate_eval_upload(
+    user_id: UserID, store: StoreD, req: InitiateRequest, _role: OrgAdmin = None
+) -> InitiateResponse:
     """Start a multipart upload and presign one PUT URL per part."""
     cfg = _require_enabled()
 
@@ -289,7 +291,7 @@ async def initiate_eval_upload(user_id: UserID, store: StoreD, req: InitiateRequ
 
 
 @router.post("/evals/upload/complete", dependencies=[RequireScope("write")])
-async def complete_eval_upload(user_id: UserID, store: StoreD, req: CompleteRequest):
+async def complete_eval_upload(user_id: UserID, store: StoreD, req: CompleteRequest, _role: OrgAdmin = None):
     """Finish the multipart upload, verify size, and email the team."""
     cfg = _require_enabled()
     _validate_key(req.key)
@@ -352,7 +354,7 @@ async def complete_eval_upload(user_id: UserID, store: StoreD, req: CompleteRequ
 
 
 @router.post("/evals/upload/abort", status_code=204, response_model=None, dependencies=[RequireScope("write")])
-async def abort_eval_upload(user_id: UserID, store: StoreD, req: AbortRequest) -> None:
+async def abort_eval_upload(user_id: UserID, store: StoreD, req: AbortRequest, _role: OrgAdmin = None) -> None:
     """Best-effort cleanup when the client gives up; lifecycle rules are the backstop."""
     cfg = _require_enabled()
     _validate_key(req.key)

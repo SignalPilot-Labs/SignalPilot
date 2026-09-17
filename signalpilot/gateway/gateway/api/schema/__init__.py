@@ -21,6 +21,8 @@ from gateway.api.schema import (  # noqa: F401  (side-effect: route registration
     compact,
     endorsements,
     exploration,
+    exploration_deep,
+    exploration_search,
     introspection,
     linking,
     refinement,

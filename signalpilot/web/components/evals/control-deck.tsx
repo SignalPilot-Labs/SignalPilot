@@ -25,6 +25,8 @@ import { AdminOnlyControl } from "~/components/access/admin-only-control";
 export type ControlDeckProps = {
   evalSet?: EvalSetInfo;
   repoUrl: string;
+  /** The dbt project repository. A run needs one; the deck blocks until it is selected. */
+  projectRepoUrl: string;
   model: string;
   runnerEnabled: boolean;
   activeRun?: EvalRun;
@@ -50,6 +52,7 @@ function setName(repoUrl: string): string {
 export function ControlDeck({
   evalSet,
   repoUrl,
+  projectRepoUrl,
   model,
   runnerEnabled,
   activeRun,
@@ -65,6 +68,7 @@ export function ControlDeck({
     () => getEvalRunProgress(activeRun!.id),
     { refreshInterval: 1500 },
   );
+  const ready = Boolean(repoUrl && projectRepoUrl);
   const tasks = evalSet?.tasks ?? [];
   const writes = tasks.filter((task) => task.class === "write").length;
   const done = progress?.done ?? 0;
@@ -119,7 +123,7 @@ export function ControlDeck({
           <AdminOnlyControl permission="evals.run">
             <button
               onClick={runSuite}
-              disabled={!runnerEnabled || !repoUrl || starting || live}
+              disabled={!runnerEnabled || !ready || starting || live}
               className="ev-primary-command"
               data-testid="eval-run-suite"
             >
@@ -179,7 +183,7 @@ export function ControlDeck({
             <AdminOnlyControl permission="evals.run">
               <button
                 onClick={runSuite}
-                disabled={!runnerEnabled || !repoUrl || starting}
+                disabled={!runnerEnabled || !ready || starting}
                 className="ev-progress-dial ev-progress-launch"
                 aria-label="Run the full evaluation suite"
                 title="Run the full evaluation suite"
@@ -193,6 +197,14 @@ export function ControlDeck({
       </div>
 
       {!runnerEnabled && <p className="ev-command-error">Runner disabled: SP_EVAL_RUNNER_IMAGE is not set on the gateway.</p>}
+      {!projectRepoUrl && (
+        <p className="ev-command-error" data-testid="eval-project-blocker">
+          Select the dbt project repository.{" "}
+          <button type="button" className="underline underline-offset-2" onClick={onConfigure}>
+            Open configuration
+          </button>
+        </p>
+      )}
     </section>
   );
 }

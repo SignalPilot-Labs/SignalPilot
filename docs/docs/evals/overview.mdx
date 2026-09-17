@@ -58,9 +58,11 @@ eval repo (git)            your warehouse
 ```
 
 1. **Fetch.** The gateway clones your eval repo and parses `eval.json`.
-2. **Ship the project.** If the manifest names a `project_repo`, the gateway
-   clones that dbt project, strips `.git`, and hands each sandbox a short-lived
-   presigned tarball. The sandbox never gets a git credential.
+2. **Ship the project.** The gateway clones the dbt project repository linked
+   in the eval configuration (at the configured branch, or the default branch),
+   strips `.git`, and hands each sandbox a short-lived presigned tarball. The
+   sandbox never gets a git credential. A run with no project repository
+   configured stops before it starts.
 3. **Fan out.** Tasks run concurrently, up to the configured parallelism.
    Each one is a short-lived, isolated sandbox (Docker locally, a hosted
    sandbox on Cloud) running the Claude CLI against the SignalPilot MCP server.

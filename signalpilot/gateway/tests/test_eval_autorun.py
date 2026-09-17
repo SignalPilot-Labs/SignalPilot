@@ -41,7 +41,11 @@ class FakeStore:
 
 
 def _store(org_id: str = BILLABLE_ORG, **overrides) -> FakeStore:
-    cfg = {"repo_url": "https://example.com/set.git", "autorun_on_knowledge_add": True}
+    cfg = {
+        "repo_url": "https://example.com/set.git",
+        "project_repo_url": "https://github.com/acme/dbt.git",
+        "autorun_on_knowledge_add": True,
+    }
     cfg.update(overrides)
     return FakeStore(org_id, cfg)
 
@@ -140,6 +144,10 @@ class TestItDoesNotFire:
 
     async def test_no_repo_configured(self, launched) -> None:
         await eval_runs.maybe_autorun_after_knowledge_change(_store(repo_url=""), FakeDoc())
+        assert launched == []
+
+    async def test_no_project_repo_configured(self, launched) -> None:
+        await eval_runs.maybe_autorun_after_knowledge_change(_store(project_repo_url=""), FakeDoc())
         assert launched == []
 
     async def test_runner_disabled(self, launched, monkeypatch: pytest.MonkeyPatch) -> None:

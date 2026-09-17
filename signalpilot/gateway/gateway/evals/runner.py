@@ -495,8 +495,15 @@ _RUNNER_SCRIPT = (
     # Project context, when the eval set ships a CLAUDE.md. Written after the
     # tarball unpack so the eval set's instructions win over the project's.
     '{ [ -n "$SP_CLAUDE_MD_B64" ] && echo "$SP_CLAUDE_MD_B64" | base64 -d > /work/CLAUDE.md; true; } && '
+    # The runner image ships dbt in a venv and the SignalPilot plugin (skills
+    # and verifier agents). Both are optional at the shell level so the eval
+    # stub image and older runner images keep working.
+    '{ [ -d /opt/sp-eval/.venv/bin ] && export PATH="/opt/sp-eval/.venv/bin:$PATH"; true; } && '
+    'SP_PLUGIN_ARGS=""; { [ -d "${SP_AGENT_PLUGIN_PATH:-/opt/signalpilot-plugin}" ] '
+    '&& SP_PLUGIN_ARGS="--plugin-dir ${SP_AGENT_PLUGIN_PATH:-/opt/signalpilot-plugin}"; true; } && '
     'claude -p "$SP_PROMPT" --mcp-config /work/.mcp.json --strict-mcp-config '
-    '--output-format stream-json --verbose --model "$SP_MODEL" --dangerously-skip-permissions'
+    '--output-format stream-json --verbose --model "$SP_MODEL" --dangerously-skip-permissions '
+    "$SP_PLUGIN_ARGS"
 )
 
 

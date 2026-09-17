@@ -33,6 +33,7 @@ from ..sandbox_runtime import SandboxRuntimeError, SandboxSpec, get_sandbox_runt
 from ..workspace_store import workspace_object_storage
 from ..workspace_store.dbt_detect import resolve_dbt_project_dir_detailed
 from ..workspace_store.store import WorkspaceStore
+from .dbt_tunnel import DbtTunnelError, ensure_tunnel_alive, plan_tunnel, start_tunnel
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,10 @@ _WORKSPACE = "/workspace"
 # release executors whose conversation has gone quiet.
 _executors: dict[str, str] = {}
 _executor_seen: dict[str, float] = {}
+# cache_key -> local port of the in-sandbox SSH forward, for executors whose
+# connection tunnels through a bastion. Holds no secrets; the material lives
+# only under /creds inside the sandbox.
+_executor_tunnels: dict[str, int] = {}
 _executor_lock = asyncio.Lock()
 
 # How long an executor sandbox stays warm after its last use before the reaper
@@ -295,6 +300,13 @@ async def ensure_executor(
             dbt_dir, _, _ = resolve_dbt_project_dir_detailed(
                 (project.settings if project else None) or {}, manifest
             )
+            tunnel_port = _executor_tunnels.get(cache_key)
+            if tunnel_port is not None:
+                # A resumed sandbox keeps /creds but not the forwarder process.
+                try:
+                    await ensure_tunnel_alive(get_sandbox_runtime(), existing, tunnel_port)
+                except DbtTunnelError as exc:
+                    raise DbtExecutorError(str(exc)) from exc
             return existing, dbt_dir or "", schema
 
         storage = workspace_object_storage()
@@ -320,6 +332,14 @@ async def ensure_executor(
             raise DbtExecutorError(f"connection '{connection_name}' is not available")
         info = await store.get_connection(connection_name)
         db_type = str(getattr(info, "db_type", "") or "").split(".")[-1]
+        # Bastion-fronted warehouses: the forwarder runs inside the sandbox and
+        # the profile targets its local port instead of the real host.
+        try:
+            tunnel = plan_tunnel(db_type, dsn, await store.get_credential_extras(connection_name))
+        except DbtTunnelError as exc:
+            raise DbtExecutorError(str(exc)) from exc
+        if tunnel is not None:
+            dsn = tunnel.dsn
 
         # Profile name must match dbt_project.yml's `profile:`; read it from the
         # manifest-backed file via the workspace store.
@@ -357,6 +377,11 @@ async def ensure_executor(
                 f"|| pip install --quiet {shlex.quote(emitted.adapter_package)}",
                 timeout_seconds=420,
             )
+            if tunnel is not None:
+                try:
+                    await start_tunnel(runtime, sandbox_id, tunnel)
+                except DbtTunnelError as exc:
+                    raise DbtExecutorError(str(exc)) from exc
             # Install dbt package deps (packages.yml) once per executor — the
             # snapshot carries source files but not the resolved dbt_packages/,
             # so `dbt run/build` would fail with "run dbt deps" without this.
@@ -372,9 +397,12 @@ async def ensure_executor(
             raise
         _executors[cache_key] = sandbox_id
         _executor_seen[cache_key] = time.monotonic()
+        if tunnel is not None:
+            _executor_tunnels[cache_key] = tunnel.local_port
         logger.info(
-            "dbt executor ready for %s (db_type=%s, database=%s, schema=%s)",
+            "dbt executor ready for %s (db_type=%s, database=%s, schema=%s, tunnel=%s)",
             cache_key, db_type, target_database or "<connection default>", schema,
+            tunnel is not None,
         )
         return sandbox_id, dbt_dir or "", schema
 
@@ -402,6 +430,7 @@ async def release_executor(identity: str) -> None:
         for key in (identity, f"{identity}::dev"):
             sandbox_ids.append(_executors.pop(key, None))
             _executor_seen.pop(key, None)
+            _executor_tunnels.pop(key, None)
     runtime = get_sandbox_runtime()
     for sandbox_id in sandbox_ids:
         if sandbox_id:
@@ -424,6 +453,7 @@ async def cleanup_idle_executors() -> int:
         for key in stale:
             sandbox_ids.append(_executors.pop(key, None))
             _executor_seen.pop(key, None)
+            _executor_tunnels.pop(key, None)
     runtime = get_sandbox_runtime()
     released = 0
     for sandbox_id in sandbox_ids:

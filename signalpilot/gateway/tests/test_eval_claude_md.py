@@ -112,6 +112,29 @@ class TestTheRunnerScript:
 
         assert _RUNNER_SCRIPT.index("SP_CLAUDE_MD_B64") < _RUNNER_SCRIPT.index("claude -p")
 
+    def test_plugin_dir_is_conditional_on_the_directory(self) -> None:
+        """The runner image ships the SignalPilot plugin; the stub image and
+        older images do not. The flag must only appear when the path exists."""
+        from gateway.evals.runner import _RUNNER_SCRIPT
+
+        assert '[ -d "${SP_AGENT_PLUGIN_PATH:-/opt/signalpilot-plugin}" ]' in _RUNNER_SCRIPT
+        assert "--plugin-dir ${SP_AGENT_PLUGIN_PATH:-/opt/signalpilot-plugin}" in _RUNNER_SCRIPT
+        assert _RUNNER_SCRIPT.rstrip().endswith("$SP_PLUGIN_ARGS")
+        assert _RUNNER_SCRIPT.index("SP_PLUGIN_ARGS=") < _RUNNER_SCRIPT.index("claude -p")
+
+    def test_dbt_venv_is_put_on_path_when_present(self) -> None:
+        from gateway.evals.runner import _RUNNER_SCRIPT
+
+        assert "[ -d /opt/sp-eval/.venv/bin ]" in _RUNNER_SCRIPT
+        assert 'export PATH="/opt/sp-eval/.venv/bin:$PATH"' in _RUNNER_SCRIPT
+        assert _RUNNER_SCRIPT.index("/opt/sp-eval/.venv/bin") < _RUNNER_SCRIPT.index("claude -p")
+
+    def test_task_spec_command_carries_the_conditional_flags(self) -> None:
+        spec = _spec()
+        assert spec.command[:2] == ["sh", "-lc"]
+        assert "--plugin-dir" in spec.command[2]
+        assert "/opt/sp-eval/.venv/bin" in spec.command[2]
+
     def test_claude_md_lands_after_the_tarball_unpack(self) -> None:
         """Verify that evaluation instructions replace project instructions."""
         from gateway.evals.runner import _RUNNER_SCRIPT

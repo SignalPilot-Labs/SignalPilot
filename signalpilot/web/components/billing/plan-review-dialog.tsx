@@ -3,13 +3,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, Loader2 } from "lucide-react";
 import type { PlanInfo, RateCard } from "~/lib/backend-client";
-import { DEFAULT_RATE_CARD, creditRatesFrom, creditsToUsd, formatCredits, formatUsd } from "~/lib/billing-rates";
+import { creditRatesFrom, creditsToUsd, formatCredits, formatUsd } from "~/lib/billing-rates";
 import {
+  TERM_LABEL,
+  TERM_NAME,
+  defaultPrice,
   dueToday,
   feeLine,
   formatPrice,
   includedLine,
-  monthlyPrice,
+  monthlyEquivalentCents,
+  offeredPrices,
   primaryButtonLabel,
   seatEstimate,
   seatLines,
@@ -41,9 +45,9 @@ function Step({ n, title, children }: { n: number; title: string; children: Reac
   );
 }
 
-function RateExpander({ rates, enterprise }: { rates: RateCard; enterprise: boolean }) {
+function RateExpander({ rates, seatMonthCredits }: { rates: RateCard; seatMonthCredits: number | null }) {
   const [open, setOpen] = useState(false);
-  const rows = creditRatesFrom(rates);
+  const rows = creditRatesFrom(rates, seatMonthCredits);
   return (
     <div>
       <button
@@ -58,21 +62,20 @@ function RateExpander({ rates, enterprise }: { rates: RateCard; enterprise: bool
       </button>
       {open && (
         <ul data-testid="review-rates" className="mt-2 space-y-1">
-          {rows.map((r) => {
-            const credits = enterprise && r.enterpriseCredits !== undefined ? r.enterpriseCredits : r.credits;
-            return (
-              <li key={r.unit} className="flex items-baseline justify-between gap-3 text-[11px]">
-                <span className="text-[var(--color-text-dim)]">
-                  {r.label} <span className="opacity-70">/ {r.per}</span>
-                </span>
-                <span className="font-mono tabular-nums text-[var(--color-text-muted)] whitespace-nowrap">
-                  {credits === null
+          {rows.map((r) => (
+            <li key={r.unit} className="flex items-baseline justify-between gap-3 text-[11px]">
+              <span className="text-[var(--color-text-dim)]">
+                {r.label} <span className="opacity-70">/ {r.per}</span>
+              </span>
+              <span className="font-mono tabular-nums text-[var(--color-text-muted)] whitespace-nowrap">
+                {r.credits === null
+                  ? r.unit === "tokens"
                     ? `cost × ${rates.token_credits_per_dollar}`
-                    : `${formatCredits(credits)} (${formatUsd(creditsToUsd(credits, rates))})`}
-                </span>
-              </li>
-            );
-          })}
+                    : "by contract"
+                  : `${formatCredits(r.credits)} (${formatUsd(creditsToUsd(r.credits, rates))})`}
+              </span>
+            </li>
+          ))}
         </ul>
       )}
     </div>
@@ -85,9 +88,9 @@ function RateExpander({ rates, enterprise }: { rates: RateCard; enterprise: bool
 
 /**
  * "Review your plan": everything the customer will pay, in order, before any
- * checkout or plan change. The monthly fee, seats, included allowances,
- * credit rates, due today, then one primary action. Billing is monthly only;
- * the plan's `month` price is the one that is bought.
+ * checkout or plan change. The term and its fee, seats, included allowances,
+ * credit rates, due today, then one primary action. The terms on offer are
+ * the plan's active prices in Stripe; yearly is picked by default.
  */
 export function PlanReviewDialog({
   review,
@@ -117,18 +120,22 @@ export function PlanReviewDialog({
 
   const [previews, setPreviews] = useState<Record<string, ProrationPreview | null>>({});
   const [loadingPreview, setLoadingPreview] = useState(false);
+  const [chosenPriceId, setChosenPriceId] = useState<string | null>(null);
 
-  // A fresh review starts with no cached preview.
+  // A fresh review starts with no cached preview and the default term.
   const planKey = review ? `${review.plan.tier}:${review.mode}` : null;
   useEffect(() => {
     setPreviews({});
+    setChosenPriceId(null);
   }, [planKey]);
 
   useEffect(() => {
     if (open) primaryRef.current?.focus();
   }, [open, planKey]);
 
-  const price = review ? monthlyPrice(review.plan) : null;
+  const terms = review ? offeredPrices(review.plan) : [];
+  const chosen = chosenPriceId ? terms.find((p) => p.price_id === chosenPriceId) : undefined;
+  const price = chosen ?? (review ? defaultPrice(review.plan) : null);
   const priceId = price?.price_id ?? null;
   const needsPreview = review !== null && review.mode !== "checkout" && previewProration !== undefined;
 
@@ -163,8 +170,7 @@ export function PlanReviewDialog({
 
   if (!review) return null;
 
-  const card = rates ?? DEFAULT_RATE_CARD;
-  const seats = seatEstimate(review.plan, members, card);
+  const seats = seatEstimate(review.plan, members, rates);
   const previewLoading = needsPreview && priceId !== null && !(priceId in previews);
   const due = dueToday({
     mode: review.mode,
@@ -203,8 +209,34 @@ export function PlanReviewDialog({
         <div className="px-5">
           <Step n={1} title="plan">
             <p data-testid="review-fee" className="text-[12px] text-[var(--color-text)] font-mono tabular-nums">
-              {planName} · {feeLine(review.plan)}
+              {planName}
+              {price ? ` · ${feeLine(price)}` : ""}
             </p>
+            {terms.length > 1 && (
+              <div data-testid="review-terms" role="radiogroup" aria-label="billing term" className="mt-2 flex flex-wrap gap-2">
+                {terms.map((t) => {
+                  const selected = t.price_id === priceId;
+                  return (
+                    <button
+                      key={t.price_id}
+                      type="button"
+                      role="radio"
+                      aria-checked={selected}
+                      data-testid={`review-term-${t.interval}`}
+                      onClick={() => setChosenPriceId(t.price_id)}
+                      className="rounded-[8px] border px-2.5 py-1 text-[11px] transition-colors"
+                      style={{
+                        borderColor: selected ? "var(--color-text)" : "var(--color-border)",
+                        color: selected ? "var(--color-text)" : "var(--color-text-dim)",
+                      }}
+                    >
+                      {TERM_NAME[t.interval]} · {formatPrice(monthlyEquivalentCents(t), t.currency)}/mo
+                      <span className="opacity-70"> · {TERM_LABEL[t.interval].replace("billed ", "")}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
             {price === null && (
               <p className="mt-1 text-[11px] text-[var(--color-error)]">this plan has no published price yet.</p>
             )}
@@ -230,7 +262,11 @@ export function PlanReviewDialog({
             <p className="text-[12px] text-[var(--color-text-muted)] leading-relaxed mb-1">
               Beyond that, usage is paid in credits at fixed rates.
             </p>
-            <RateExpander rates={card} enterprise={review.plan.tier === "enterprise"} />
+            {rates ? (
+              <RateExpander rates={rates} seatMonthCredits={review.plan.seat_month_credits} />
+            ) : (
+              <span className="text-[11px] text-[var(--color-text-dim)]">loading rates...</span>
+            )}
           </Step>
 
           <Step n={5} title={due.label}>
@@ -248,7 +284,9 @@ export function PlanReviewDialog({
                   <span className="text-[12px] text-[var(--color-text-dim)]">
                     {due.kind === "prorated" && due.creditCents > 0
                       ? `after a ${formatPrice(due.creditCents, due.currency)} credit from your current plan`
-                      : "the monthly flat fee"}
+                      : price
+                        ? `the flat fee, ${TERM_LABEL[price.interval]}`
+                        : "the flat fee"}
                   </span>
                   <span className="text-[15px] font-medium font-mono tabular-nums text-[var(--color-text)]">
                     {formatPrice(due.amountCents, due.currency)}

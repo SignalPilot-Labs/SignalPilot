@@ -11,46 +11,7 @@ import { PlanGrid } from "~/components/billing/plan-grid";
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
-const TEAM: PlanInfo = {
-  tier: "team",
-  name: "Team",
-  description: "for one data team",
-  monthly_fee_cents: 100_00,
-  included_seats: 10,
-  included_models: 30,
-  included_eval_runs: 30,
-  included_credits: 5_000,
-  seat_month_credits: 1000,
-  managed_from_cents: 1_500_00,
-  prices: [{ price_id: "price_team_month", lookup_key: "plan_team_month", amount: 100_00, currency: "usd", interval: "month" }],
-};
-
-const SCALE: PlanInfo = {
-  ...TEAM,
-  tier: "scale",
-  name: "Scale",
-  monthly_fee_cents: 250_00,
-  included_seats: 25,
-  included_models: 50,
-  included_credits: 12_500,
-  prices: [
-    // A stale annual price the API may still return; it must be ignored.
-    { price_id: "price_scale_year", lookup_key: "plan_scale_year", amount: 3_000_00, currency: "usd", interval: "year" },
-    { price_id: "price_scale_month", lookup_key: "plan_scale_month", amount: 250_00, currency: "usd", interval: "month" },
-  ],
-};
-
-const ENTERPRISE: PlanInfo = {
-  ...TEAM,
-  tier: "enterprise",
-  name: "Enterprise",
-  monthly_fee_cents: 1_500_00,
-  included_seats: 100,
-  included_models: 100,
-  included_credits: 75_000,
-  seat_month_credits: 1500,
-  prices: [],
-};
+import { ENTERPRISE, SCALE, TEAM } from "~/lib/billing-plan-review.test";
 
 describe("plan cards", () => {
   let container: HTMLDivElement;
@@ -67,7 +28,7 @@ describe("plan cards", () => {
     container.remove();
   });
 
-  it("shows the monthly price, the allowances and no interval toggle", async () => {
+  it("shows the published fee per month, the yearly term, the 3-month option and the allowances from Stripe", async () => {
     await act(async () =>
       root.render(
         <PlanGrid plans={[TEAM, SCALE, ENTERPRISE]} currentTier="free" onSelect={() => {}} />,
@@ -77,17 +38,19 @@ describe("plan cards", () => {
     const scale = container.querySelector('[data-testid="plan-card-scale"]')!;
     expect(team.querySelector('[data-testid="plan-price"]')?.textContent).toBe("$100");
     expect(scale.querySelector('[data-testid="plan-price"]')?.textContent).toBe("$250");
-    expect(scale.textContent).toContain("25 seats");
+    expect(scale.querySelector('[data-testid="plan-term"]')?.textContent).toBe("$3,000 billed yearly");
+    expect(scale.textContent).toContain("or $900 every 3 months");
+    expect(scale.textContent).toContain("15 seats");
     expect(scale.textContent).toContain("50 covered models");
     expect(scale.textContent).toContain("30 eval runs per month");
-    expect(scale.textContent).toContain("12,500 credits per month");
-    expect(scale.textContent).toContain("billed monthly");
-    // Monthly only: no toggle, no annual price, no premium anywhere in the row.
-    expect(container.textContent).not.toMatch(/annual|month-to-month|\+25%|\$3,000/i);
+    expect(scale.textContent).toContain("10,000 credits per month");
+    expect(container.textContent).not.toMatch(/billed monthly|month-to-month/i);
     expect(container.querySelectorAll("button").length).toBe(2);
-    expect(container.querySelector('[data-testid="plan-card-enterprise"] [data-testid="plan-price"]')?.textContent).toBe(
-      "from $1,500",
-    );
+    const enterprise = container.querySelector('[data-testid="plan-card-enterprise"]')!;
+    expect(enterprise.querySelector('[data-testid="plan-price"]')?.textContent).toBe("Custom");
+    expect(enterprise.textContent).toContain("one purchase order");
+    expect(enterprise.textContent).toContain("100 seats");
+    expect(enterprise.textContent).toContain("100,000 credits per month");
   });
 
   it("marks the current plan and labels higher and lower tiers", async () => {
@@ -133,8 +96,15 @@ describe("plan cards", () => {
     const contact = container.querySelector<HTMLAnchorElement>('[data-testid="enterprise-contact"]')!;
     expect(contact.textContent).toContain("Contact us");
     expect(contact.getAttribute("href")).toMatch(/^mailto:/);
-    expect(container.textContent).toContain("Priced to your estate, one purchase order");
-    expect(container.textContent).toContain("from $1,500");
+    expect(container.textContent).toContain("one purchase order");
+    expect(container.textContent).not.toMatch(/from \$|billed monthly/);
+  });
+
+  it("enterprise card without a published plan still offers contact and no numbers", async () => {
+    await act(async () => root.render(<EnterpriseCard plan={null} isCurrent={false} />));
+    expect(container.querySelector('[data-testid="plan-price"]')?.textContent).toBe("Custom");
+    expect(container.textContent).toContain("allowances are set in the contract");
+    expect(container.querySelector('[data-testid="enterprise-contact"]')).not.toBeNull();
   });
 
   it("an enterprise org sees only the enterprise card", async () => {

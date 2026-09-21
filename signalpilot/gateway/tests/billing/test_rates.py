@@ -1,4 +1,4 @@
-"""Rate constants, plan allowances, period helpers, and the daily share carry."""
+"""Period helpers and the daily share carry (rates themselves come from Stripe)."""
 
 from __future__ import annotations
 
@@ -11,46 +11,12 @@ from gateway.billing.identity import is_service_identity, service_identity
 
 
 class TestRates:
-    def test_rate_card(self) -> None:
-        assert rates.THREAD_CREDITS == 50
-        assert rates.QUERY_CREDITS == 1
-        assert rates.MODEL_MONTH_CREDITS == 600
-        assert rates.EVAL_RUN_CREDITS == 50
-        assert rates.SEAT_MONTH_CREDITS == 1000
-        assert rates.ENTERPRISE_SEAT_MONTH_CREDITS == 1500
-        assert rates.TOKEN_CREDITS_PER_USD == 100
+    def test_only_calendar_and_tier_facts_remain(self) -> None:
+        """Every number a pricing change touches lives in Stripe, not here."""
         assert rates.GRACE_DAYS == 14
-        assert rates.RATES["thread"] == 50 and rates.RATES["query"] == 1
-
-    def test_rates_are_read_only(self) -> None:
-        with pytest.raises(TypeError):
-            rates.RATES["thread"] = 1  # type: ignore[index]
-
-    @pytest.mark.parametrize(
-        ("tier", "seats", "models", "eval_runs", "credits"),
-        [
-            ("team", 10, 30, 30, 5000),
-            ("scale", 25, 50, 30, 12500),
-            ("enterprise", 100, 100, 30, 75000),
-            ("free", 0, 0, 0, 0),
-        ],
-    )
-    def test_plan_allowances(self, tier: str, seats: int, models: int, eval_runs: int, credits: int) -> None:
-        allowance = rates.PLAN_ALLOWANCES[tier]
-        assert (allowance["seats"], allowance["models"], allowance["eval_runs"], allowance["credits"]) == (
-            seats,
-            models,
-            eval_runs,
-            credits,
-        )
-
-    def test_seat_rate_by_tier(self) -> None:
-        assert rates.seat_month_credits("enterprise") == 1500
-        assert rates.seat_month_credits("team") == 1000
-        assert rates.seat_month_credits("scale") == 1000
-
-    def test_billable_tiers(self) -> None:
         assert rates.BILLABLE_TIERS == {"team", "scale", "enterprise"}
+        for name in ("THREAD_CREDITS", "QUERY_CREDITS", "MODEL_MONTH_CREDITS", "SEAT_MONTH_CREDITS", "PLAN_ALLOWANCES"):
+            assert not hasattr(rates, name)
 
 
 class TestPeriods:

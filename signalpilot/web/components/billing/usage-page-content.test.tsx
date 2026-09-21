@@ -79,6 +79,7 @@ const client = vi.hoisted(() => ({
   getUsageSummary: vi.fn(),
   getUsageDaily: vi.fn(),
   getUsageByUser: vi.fn(),
+  getPlans: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({ usePathname: () => "/settings/usage" }));
@@ -107,6 +108,14 @@ describe("usage page content", () => {
     client.getUsageSummary.mockReset().mockResolvedValue(SUMMARY);
     client.getUsageDaily.mockReset().mockResolvedValue(DAILY);
     client.getUsageByUser.mockReset().mockResolvedValue(BY_USER);
+    client.getPlans.mockReset().mockResolvedValue({
+      plans: [],
+      publishable_key: "",
+      rates: {
+        credit_cents: 1, thread_credits: 50, query_credits: 1, model_month_credits: 600,
+        eval_run_credits: 50, token_credits_per_dollar: 100, overage_cents_per_credit: 1, version: "2",
+      },
+    });
   });
 
   afterEach(async () => {

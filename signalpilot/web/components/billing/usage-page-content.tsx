@@ -6,14 +6,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, BarChart3, Coins, Gauge, RefreshCw, Users } from "lucide-react";
 import { useBackendClient } from "~/lib/backend-client";
-import type { DailyUsagePoint, UsageByUserRow, UsageSummaryResponse } from "~/lib/backend-client";
-import {
-  DEFAULT_RATE_CARD,
-  centsToUsd,
-  creditsToUsd,
-  formatCredits,
-  formatUsd,
-} from "~/lib/billing-rates";
+import type { DailyUsagePoint, RateCard, UsageByUserRow, UsageSummaryResponse } from "~/lib/backend-client";
+import { centsToUsd, creditsToUsd, formatCredits, formatUsd } from "~/lib/billing-rates";
 import { PageHeader, TerminalBar } from "~/components/ui/page-header";
 import { SectionHeader } from "~/components/ui/section-header";
 import { StatusDot } from "~/components/ui/data-viz";
@@ -150,6 +144,8 @@ export function OrgUsageContent({ tabs }: { tabs?: UsageTab[] }) {
   const client = useBackendClient();
   const [summary, setSummary] = useState<UsageSummaryResponse | null>(null);
   const [daily, setDaily] = useState<DailyUsagePoint[] | null>(null);
+  /** The live rate card from Stripe via the backend; notes that quote a rate wait for it. */
+  const [rates, setRates] = useState<RateCard | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
 
@@ -162,6 +158,14 @@ export function OrgUsageContent({ tabs }: { tabs?: UsageTab[] }) {
 
   useEffect(() => {
     let cancelled = false;
+    // The rate card is decoration on this page: a failed fetch leaves the
+    // notes generic instead of failing the whole page.
+    client
+      .getPlans()
+      .then((res) => {
+        if (!cancelled) setRates(res.rates);
+      })
+      .catch(() => {});
     Promise.all([client.getUsageSummary(), client.getUsageDaily(31)])
       .then(([summaryData, dailyData]) => {
         if (cancelled) return;
@@ -217,7 +221,11 @@ export function OrgUsageContent({ tabs }: { tabs?: UsageTab[] }) {
         <SectionHeader icon={Coins} title="credits" />
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
           <StatTile label="granted" value={formatCredits(summary.granted)} sub="included this period" />
-          <StatTile label="consumed" value={formatCredits(consumed)} sub={formatUsd(creditsToUsd(consumed))} />
+          <StatTile
+            label="consumed"
+            value={formatCredits(consumed)}
+            sub={rates ? formatUsd(creditsToUsd(consumed, rates)) : undefined}
+          />
           <StatTile
             label="returned"
             value={formatCredits(summary.returned)}
@@ -240,12 +248,12 @@ export function OrgUsageContent({ tabs }: { tabs?: UsageTab[] }) {
           <AllowanceMeter
             label="covered models"
             use={summary.allowances.models}
-            beyondNote={`${formatCredits(DEFAULT_RATE_CARD.model_month_credits)} credits per model-month`}
+            beyondNote={rates ? `${formatCredits(rates.model_month_credits)} credits per model-month` : "metered monthly in credits"}
           />
           <AllowanceMeter
             label="eval runs"
             use={summary.allowances.eval_runs}
-            beyondNote={`${formatCredits(DEFAULT_RATE_CARD.eval_run_credits)} credits per run`}
+            beyondNote={rates ? `${formatCredits(rates.eval_run_credits)} credits per run` : "metered per run in credits"}
           />
         </div>
       </section>

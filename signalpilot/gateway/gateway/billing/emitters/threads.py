@@ -47,8 +47,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..ledger import LedgerEntry
 from ..models import GatewayCreditLedger
-from ..rates import THREAD_CREDITS
-from ._base import json_safe_payload, metered_entitlement, never_raises, write_in_savepoint
+from ._base import json_safe_payload, metered, never_raises, write_in_savepoint
 
 EVIDENCE_THRESHOLD = 0.8
 REPEAT_WINDOW = timedelta(hours=24)
@@ -184,8 +183,10 @@ async def emit_thread_credit(
     run_id = str(getattr(run, "id", "") or "")
     if not org_id or not run_id:
         return None
-    if await metered_entitlement(org_id, entitlement) is None:
+    pair = await metered(org_id, entitlement)
+    if pair is None:
         return None
+    _, card = pair
 
     now = now or datetime.now(UTC)
     user_id = str(getattr(run, "user_id", "") or "")
@@ -215,7 +216,7 @@ async def emit_thread_credit(
             else:
                 reason = REASON_OK
 
-    credits = -THREAD_CREDITS if reason == REASON_OK else 0
+    credits = -card.thread_credits if reason == REASON_OK else 0
     payload = json_safe_payload(
         {
             "run_id": run_id,

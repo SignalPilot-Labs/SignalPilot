@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
+import { useEffect, useState } from "react";
 import useSWR, { mutate } from "swr";
 import {
   ArrowLeft,
@@ -9,98 +8,39 @@ import {
   BellRing,
   Check,
   Database,
-  ExternalLink,
   FolderGit2,
-  Github,
+  GitBranch,
   Globe2,
   HardDrive,
   LockKeyhole,
   Loader2,
 } from "lucide-react";
-import {
-  getConnections,
-  getGitHubInstallations,
-  getGitHubInstallUrl,
-  getGitHubRepos,
-  putEvalConfig,
-  type EvalConfig,
-} from "~/lib/api";
+import { getConnections, getGitHubInstallations, putEvalConfig, type EvalConfig } from "~/lib/api";
 import { useToast } from "~/components/ui/toast";
 import { usePermissions } from "~/lib/hooks/use-permissions";
+import { useAppAuth } from "~/lib/auth-context";
 import { ReadOnlyNote } from "~/components/access/read-only-note";
-
-type Draft = {
-  repo_url: string;
-  repo_installation_id: string | null;
-  repo_id: number | null;
-  model: string;
-  max_tasks: number;
-  prompt_preamble: string;
-  connection: string;
-  notify_emails: string;
-  autorun_on_knowledge_add: boolean;
-};
-
-type SourceKind = "public" | "private" | "mounted";
+import { RepoPicker, useGitHubConnect } from "./RepoPicker";
+import { ProjectRepoFields, projectRepoError } from "./ProjectRepoFields";
+import { PolicyStep, RuntimeStep } from "./OnboardingStepPanels";
+import {
+  draftError,
+  draftPayload,
+  emailError,
+  initialDraft,
+  initialSourceKind,
+  runtimeStepError,
+  sourceStepError,
+  type Draft,
+  type SourceKind,
+} from "./onboardingDraft";
 
 const STEPS = [
   { label: "Eval set", icon: FolderGit2 },
+  { label: "dbt project", icon: GitBranch },
   { label: "Runtime", icon: Database },
   { label: "Automation", icon: BellRing },
 ] as const;
-
-function initialDraft(config: EvalConfig): Draft {
-  return {
-    repo_url: config.repo_url ?? "",
-    repo_installation_id: config.repo_installation_id ?? null,
-    repo_id: config.repo_id ?? null,
-    model: config.model || "sonnet",
-    max_tasks: config.max_tasks ?? 0,
-    prompt_preamble: config.prompt_preamble ?? "",
-    connection: config.connection ?? "",
-    notify_emails: (config.notify_emails ?? []).join(", "),
-    autorun_on_knowledge_add: config.autorun_on_knowledge_add ?? false,
-  };
-}
-
-function initialSourceKind(config: EvalConfig): SourceKind {
-  if (config.repo_installation_id) return "private";
-  if (config.repo_url?.startsWith("/eval-projects/")) return "mounted";
-  return "public";
-}
-
-function sourceError(value: string): string | null {
-  const source = value.trim();
-  if (!source) return "Enter an eval repository.";
-  if (source.startsWith("/eval-projects/")) {
-    const segments = source.slice("/eval-projects/".length).split("/");
-    if (segments.every((segment) => segment && segment !== "." && segment !== "..")) return null;
-    return "Use a project path without empty, current-directory, or parent-directory segments.";
-  }
-
-  try {
-    const url = new URL(source);
-    if (url.protocol === "https:" && url.hostname === "github.com" && !url.username && !url.password) return null;
-  } catch {
-    // The mounted-path format is checked before URL parsing.
-  }
-  return "Use a GitHub HTTPS URL or a path under /eval-projects.";
-}
-
-function emailError(value: string): string | null {
-  const addresses = value.split(",").map((email) => email.trim()).filter(Boolean);
-  const invalid = addresses.find((email) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email));
-  return invalid ? `Check the email address: ${invalid}` : null;
-}
-
-function draftError(draft: Draft, sourceKind: SourceKind): string | null {
-  return (sourceKind === "private" && (!draft.repo_installation_id || !draft.repo_id)
-    ? "Select a repository from a connected GitHub account."
-    : sourceError(draft.repo_url))
-    || (!draft.connection ? "Select the warehouse connection used for grading." : null)
-    || (draft.max_tasks < 0 || draft.max_tasks > 200 ? "Max tasks must be between 0 and 200." : null)
-    || emailError(draft.notify_emails);
-}
 
 /**
  * With no eval set configured, an admin gets the setup wizard and a member
@@ -137,6 +77,7 @@ function EvalOnboardingWizard({
   onComplete: () => void;
 }) {
   const { toast } = useToast();
+  const { isCloudMode } = useAppAuth();
   const { data: connections, error: connectionsError, isLoading: connectionsLoading } = useSWR(
     "connections",
     getConnections,
@@ -151,36 +92,23 @@ function EvalOnboardingWizard({
   const [sourceKind, setSourceKind] = useState<SourceKind>(() => initialSourceKind(config));
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [connectingGitHub, setConnectingGitHub] = useState(false);
-  const { data: githubRepos, isLoading: reposLoading } = useSWR(
-    sourceKind === "private" && draft.repo_installation_id
-      ? `github-repos-${draft.repo_installation_id}`
-      : null,
-    () => getGitHubRepos(draft.repo_installation_id as string),
-  );
+  const { connectGitHub, connecting: connectingGitHub } = useGitHubConnect("/evals", setError);
 
   useEffect(() => {
     setDraft(initialDraft(config));
     setSourceKind(initialSourceKind(config));
   }, [config]);
 
-  const selectedConnection = useMemo(
-    () => connections?.find((connection) => connection.name === draft.connection),
-    [connections, draft.connection],
-  );
+  function update(patch: Partial<Draft>) {
+    setDraft((current) => ({ ...current, ...patch }));
+    setError(null);
+  }
 
   function validateCurrentStep(): string | null {
-    if (step === 0) {
-      if (sourceKind === "private" && (!draft.repo_installation_id || !draft.repo_id)) {
-        return "Select a repository from a connected GitHub account.";
-      }
-      return sourceError(draft.repo_url);
-    }
-    if (step === 1) {
-      if (!draft.connection) return "Select the warehouse connection used for grading.";
-      if (draft.max_tasks < 0 || draft.max_tasks > 200) return "Max tasks must be between 0 and 200.";
-    }
-    if (step === 2) return emailError(draft.notify_emails);
+    if (step === 0) return sourceStepError(draft, sourceKind);
+    if (step === 1) return projectRepoError(draft.project, isCloudMode);
+    if (step === 2) return runtimeStepError(draft);
+    if (step === 3) return emailError(draft.notify_emails);
     return null;
   }
 
@@ -197,7 +125,7 @@ function EvalOnboardingWizard({
   }
 
   async function finish() {
-    const message = draftError(draft, sourceKind);
+    const message = draftError(draft, sourceKind, isCloudMode);
     if (message) {
       setError(message);
       return;
@@ -206,17 +134,7 @@ function EvalOnboardingWizard({
     setSaving(true);
     setError(null);
     try {
-      await putEvalConfig({
-        repo_url: draft.repo_url.trim(),
-        repo_installation_id: sourceKind === "private" ? draft.repo_installation_id : null,
-        repo_id: sourceKind === "private" ? draft.repo_id : null,
-        model: draft.model,
-        max_tasks: draft.max_tasks,
-        prompt_preamble: draft.prompt_preamble.trim(),
-        connection: draft.connection,
-        autorun_on_knowledge_add: draft.autorun_on_knowledge_add,
-        notify_emails: draft.notify_emails.split(",").map((email) => email.trim()).filter(Boolean),
-      });
+      await putEvalConfig(draftPayload(draft, sourceKind));
       await mutate("eval-config");
       toast("eval set connected", "success");
       onComplete();
@@ -230,27 +148,7 @@ function EvalOnboardingWizard({
   function chooseSourceKind(kind: SourceKind) {
     if (kind === sourceKind) return;
     setSourceKind(kind);
-    setDraft({
-      ...draft,
-      repo_url: "",
-      repo_installation_id: null,
-      repo_id: null,
-    });
-    setError(null);
-  }
-
-  async function connectGitHub() {
-    setConnectingGitHub(true);
-    setError(null);
-    try {
-      sessionStorage.setItem("sp_github_return_to", "/evals");
-      const { install_url } = await getGitHubInstallUrl();
-      window.location.assign(install_url);
-    } catch (err) {
-      sessionStorage.removeItem("sp_github_return_to");
-      setError(err instanceof Error ? err.message : "Could not start the GitHub connection.");
-      setConnectingGitHub(false);
-    }
+    update({ repo_url: "", repo_installation_id: null, repo_id: null });
   }
 
   return (
@@ -259,7 +157,7 @@ function EvalOnboardingWizard({
         <div>
           <p className="ev-onboarding-kicker">Evaluation workspace</p>
           <h1 id="eval-onboarding-title">Connect your eval set</h1>
-          <p>Pin the task repository, warehouse, and run policy.</p>
+          <p>Pin the task repository, dbt project, warehouse, and run policy.</p>
         </div>
         <span className="ev-onboarding-count">{step + 1} / {STEPS.length}</span>
       </header>
@@ -290,7 +188,7 @@ function EvalOnboardingWizard({
 
       <div className="ev-onboarding-body">
         {step === 0 && (
-          <div className="ev-onboarding-panel">
+          <div className="ev-onboarding-panel" data-testid="onboarding-step-source">
             <div className="ev-onboarding-heading">
               <span>01</span>
               <div>
@@ -302,7 +200,7 @@ function EvalOnboardingWizard({
               <button type="button" className={sourceKind === "public" ? "is-selected" : ""} onClick={() => chooseSourceKind("public")}>
                 <Globe2 /> <span><strong>Public GitHub</strong><small>Clone over HTTPS</small></span>
               </button>
-              <button type="button" className={sourceKind === "private" ? "is-selected" : ""} onClick={() => chooseSourceKind("private")}>
+              <button type="button" className={sourceKind === "private" ? "is-selected" : ""} onClick={() => chooseSourceKind("private")} data-testid="source-kind-private">
                 <LockKeyhole /> <span><strong>Private GitHub</strong><small>Use the GitHub App</small></span>
               </button>
               <button type="button" className={sourceKind === "mounted" ? "is-selected" : ""} onClick={() => chooseSourceKind("mounted")}>
@@ -316,10 +214,7 @@ function EvalOnboardingWizard({
                 <input
                   autoFocus
                   value={draft.repo_url}
-                  onChange={(event) => {
-                    setDraft({ ...draft, repo_url: event.target.value });
-                    setError(null);
-                  }}
+                  onChange={(event) => update({ repo_url: event.target.value })}
                   placeholder="https://github.com/org/eval-set.git"
                 />
               </label>
@@ -331,10 +226,7 @@ function EvalOnboardingWizard({
                 <input
                   autoFocus
                   value={draft.repo_url}
-                  onChange={(event) => {
-                    setDraft({ ...draft, repo_url: event.target.value });
-                    setError(null);
-                  }}
+                  onChange={(event) => update({ repo_url: event.target.value })}
                   placeholder="/eval-projects/northwind"
                 />
                 <small>The path must remain under /eval-projects.</small>
@@ -342,64 +234,17 @@ function EvalOnboardingWizard({
             )}
 
             {sourceKind === "private" && (
-              <div className="ev-private-source">
-                {installationsLoading ? (
-                  <div className="ev-private-loading"><Loader2 className="animate-spin" /> Loading GitHub accounts...</div>
-                ) : installations?.length ? (
-                  <>
-                    <div className="ev-private-grid">
-                      <label className="ev-onboarding-field">
-                        <span>GitHub account</span>
-                        <select
-                          value={draft.repo_installation_id ?? ""}
-                          onChange={(event) => {
-                            setDraft({ ...draft, repo_installation_id: event.target.value || null, repo_id: null, repo_url: "" });
-                            setError(null);
-                          }}
-                        >
-                          <option value="">Select an account</option>
-                          {installations.map((installation) => (
-                            <option key={installation.id} value={installation.id}>{installation.github_account_login}</option>
-                          ))}
-                        </select>
-                      </label>
-                      <label className="ev-onboarding-field">
-                        <span>Repository</span>
-                        <select
-                          value={draft.repo_id ?? ""}
-                          disabled={!draft.repo_installation_id || reposLoading}
-                          onChange={(event) => {
-                            const repo = githubRepos?.find((item) => item.id === Number(event.target.value));
-                            setDraft({
-                              ...draft,
-                              repo_id: repo?.id ?? null,
-                              repo_url: repo ? `https://github.com/${repo.full_name}.git` : "",
-                            });
-                            setError(null);
-                          }}
-                        >
-                          <option value="">{reposLoading ? "Loading repositories..." : "Select a repository"}</option>
-                          {githubRepos?.map((repo) => (
-                            <option key={repo.id} value={repo.id}>{repo.full_name}{repo.private ? " (private)" : ""}</option>
-                          ))}
-                        </select>
-                      </label>
-                    </div>
-                    <button type="button" className="ev-connect-github-secondary" disabled={connectingGitHub} onClick={connectGitHub}>
-                      <Github /> Connect another GitHub account
-                    </button>
-                  </>
-                ) : (
-                  <div className="ev-connect-github">
-                    <Github />
-                    <div><strong>Connect GitHub</strong><p>Choose the account and grant access to the repository that contains this eval set.</p></div>
-                    <button type="button" disabled={connectingGitHub} onClick={connectGitHub}>
-                      {connectingGitHub ? <Loader2 className="animate-spin" /> : <Github />}
-                      Connect GitHub
-                    </button>
-                  </div>
-                )}
-              </div>
+              <RepoPicker
+                value={{ url: draft.repo_url, installationId: draft.repo_installation_id, repoId: draft.repo_id }}
+                onChange={(next) => update({ repo_url: next.url, repo_installation_id: next.installationId, repo_id: next.repoId })}
+                installations={installations}
+                installationsLoading={installationsLoading}
+                onConnectGitHub={connectGitHub}
+                connectingGitHub={connectingGitHub}
+                gitSuffix
+                connectPrompt="Choose the account and grant access to the repository that contains this eval set."
+                testId="eval-repo"
+              />
             )}
             <div className="ev-onboarding-manifest">
               <span><Check /> manifest</span>
@@ -410,114 +255,37 @@ function EvalOnboardingWizard({
         )}
 
         {step === 1 && (
-          <div className="ev-onboarding-panel">
+          <div className="ev-onboarding-panel" data-testid="onboarding-step-project">
             <div className="ev-onboarding-heading">
               <span>02</span>
               <div>
-                <h2>Grading runtime</h2>
-                <p>Choose the warehouse and execution limits for every run.</p>
+                <h2>dbt project repository</h2>
+                <p>The eval set runs against this dbt project. SignalPilot clones it for every run.</p>
               </div>
             </div>
-            <div className="ev-onboarding-grid">
-              <label className="ev-onboarding-field">
-                <span>Warehouse connection</span>
-                <select
-                  value={draft.connection}
-                  disabled={connectionsLoading || !connections?.length}
-                  onChange={(event) => {
-                    setDraft({ ...draft, connection: event.target.value });
-                    setError(null);
-                  }}
-                >
-                  <option value="">{connectionsLoading ? "Loading connections..." : "Select a connection"}</option>
-                  {connections?.map((connection) => (
-                    <option key={connection.id} value={connection.name}>
-                      {connection.name} ({connection.db_type})
-                    </option>
-                  ))}
-                </select>
-                {selectedConnection && (
-                  <small>{selectedConnection.database || selectedConnection.host || selectedConnection.db_type}</small>
-                )}
-              </label>
-              <label className="ev-onboarding-field">
-                <span>Model</span>
-                <select value={draft.model} onChange={(event) => setDraft({ ...draft, model: event.target.value })}>
-                  <option value="sonnet">Sonnet</option>
-                  <option value="opus">Opus</option>
-                  <option value="haiku">Haiku</option>
-                </select>
-              </label>
-              <label className="ev-onboarding-field">
-                <span>Max tasks per run</span>
-                <input
-                  type="number"
-                  min={0}
-                  max={200}
-                  value={draft.max_tasks}
-                  onChange={(event) => setDraft({ ...draft, max_tasks: Number(event.target.value) || 0 })}
-                />
-                <small>Use 0 to run the complete set.</small>
-              </label>
-              <label className="ev-onboarding-field ev-onboarding-field-wide">
-                <span>Prompt preamble</span>
-                <textarea
-                  rows={3}
-                  value={draft.prompt_preamble}
-                  onChange={(event) => setDraft({ ...draft, prompt_preamble: event.target.value })}
-                  placeholder="Use the SignalPilot MCP tools with connection northwind_ro_conn."
-                />
-              </label>
-            </div>
-            {!connectionsLoading && !connections?.length && (
-              <div className="ev-onboarding-notice">
-                <span>{connectionsError ? "Connections could not be loaded." : "Add a warehouse connection before continuing."}</span>
-                <Link href="/connections">Open connections <ExternalLink /></Link>
-              </div>
-            )}
+            <ProjectRepoFields
+              value={draft.project}
+              onChange={(project) => update({ project })}
+              installations={installations}
+              installationsLoading={installationsLoading}
+              onConnectGitHub={connectGitHub}
+              connectingGitHub={connectingGitHub}
+              isCloudMode={isCloudMode}
+            />
           </div>
         )}
 
         {step === 2 && (
-          <div className="ev-onboarding-panel">
-            <div className="ev-onboarding-heading">
-              <span>03</span>
-              <div>
-                <h2>Run policy</h2>
-                <p>Set regression alerts and knowledge-triggered runs.</p>
-              </div>
-            </div>
-            <label className="ev-onboarding-field">
-              <span>Notify emails</span>
-              <input
-                value={draft.notify_emails}
-                onChange={(event) => {
-                  setDraft({ ...draft, notify_emails: event.target.value });
-                  setError(null);
-                }}
-                placeholder="data-team@acme.com, oncall@acme.com"
-              />
-              <small>Separate multiple addresses with commas.</small>
-            </label>
-            <label className="ev-onboarding-toggle">
-              <input
-                type="checkbox"
-                checked={draft.autorun_on_knowledge_add}
-                onChange={(event) => setDraft({ ...draft, autorun_on_knowledge_add: event.target.checked })}
-              />
-              <span aria-hidden="true" />
-              <div>
-                <strong>Autorun after knowledge changes</strong>
-                <small>Run the complete set after an entry is added. Changes coalesce for two minutes.</small>
-              </div>
-            </label>
-            <dl className="ev-onboarding-review">
-              <div><dt>Source</dt><dd>{draft.repo_url}</dd></div>
-              <div><dt>Connection</dt><dd>{draft.connection}</dd></div>
-              <div><dt>Runtime</dt><dd>{draft.model} / {draft.max_tasks === 0 ? "all tasks" : `${draft.max_tasks} tasks`}</dd></div>
-            </dl>
-          </div>
+          <RuntimeStep
+            draft={draft}
+            update={update}
+            connections={connections}
+            connectionsLoading={connectionsLoading}
+            connectionsError={connectionsError}
+          />
         )}
+
+        {step === 3 && <PolicyStep draft={draft} update={update} />}
       </div>
 
       <footer className="ev-onboarding-footer">
@@ -532,11 +300,11 @@ function EvalOnboardingWizard({
             </button>
           )}
           {step < STEPS.length - 1 ? (
-            <button type="button" className="ev-onboarding-next" onClick={advance}>
+            <button type="button" className="ev-onboarding-next" onClick={advance} data-testid="onboarding-continue">
               Continue <ArrowRight />
             </button>
           ) : (
-            <button type="button" className="ev-onboarding-next" disabled={saving} onClick={finish}>
+            <button type="button" className="ev-onboarding-next" disabled={saving} onClick={finish} data-testid="onboarding-finish">
               {saving ? <Loader2 className="animate-spin" /> : <Check />}
               Connect eval set
             </button>

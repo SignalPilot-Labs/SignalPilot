@@ -63,6 +63,10 @@ class TestConfig:
             "repo_url": "",
             "repo_installation_id": None,
             "repo_id": None,
+            "project_repo_url": "",
+            "project_repo_installation_id": None,
+            "project_repo_id": None,
+            "project_ref": "",
             "model": "sonnet",
             "max_tasks": 0,
             "prompt_preamble": "",
@@ -101,6 +105,24 @@ class TestConfig:
         )
         assert saved["repo_installation_id"] == "installation-1"
         assert saved["repo_id"] == 42
+
+    async def test_project_repo_binding_roundtrip(self, session) -> None:
+        saved = await evals_store.save_config(
+            session,
+            org_id=ORG,
+            cfg={
+                "project_repo_url": "https://github.com/acme/dbt.git",
+                "project_repo_installation_id": "installation-1",
+                "project_repo_id": 7,
+                "project_ref": "release/2026-09",
+            },
+        )
+        assert saved["project_repo_url"] == "https://github.com/acme/dbt.git"
+        assert saved["project_repo_installation_id"] == "installation-1"
+        assert saved["project_repo_id"] == 7
+        assert saved["project_ref"] == "release/2026-09"
+        cfg = await evals_store.get_config(session, org_id=ORG)
+        assert cfg["project_ref"] == "release/2026-09"
 
     async def test_partial_update_keeps_other_fields(self, session) -> None:
         await evals_store.save_config(

@@ -244,6 +244,10 @@ class GatewayDbtManifest(GatewayBase):
     # Per-node raw/compiled SQL artifact; null for maps compiled before 0025.
     sql_key: Mapped[str | None] = mapped_column(String(500))
     manifest_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    # Which directory the compile built (project-relative, "" = repo root) and,
+    # while running, the step it is on: snapshot | sandbox | dbt | store.
+    dbt_project_dir: Mapped[str | None] = mapped_column(String(500))
+    phase: Mapped[str | None] = mapped_column(String(40))
     # A live compile refreshes the lease; the reaper fails runs whose gateway
     # process died mid-compile so the UI never shows an eternal "running".
     lease_expires_at: Mapped[float | None] = mapped_column(Float)

@@ -251,6 +251,19 @@ a:focus-visible {
   color: #fff;
 }
 
+/* Native selects: the popup list is drawn by the browser with the system
+   colour scheme, so without color-scheme: dark it is white with our white
+   text. Keep the control and its options on the app's dark tokens. */
+select {
+  color-scheme: dark;
+  background-color: var(--color-bg-input);
+  color: var(--color-text);
+}
+select option {
+  background-color: var(--color-bg-input);
+  color: var(--color-text);
+}
+
 /* Custom select arrow */
 select {
   background-image: url("data:image/svg+xml,%3Csvg width='8' height='5' viewBox='0 0 8 5' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L4 4L7 1' stroke='%23444' stroke-width='1' stroke-linecap='round'/%3E%3C/svg%3E");

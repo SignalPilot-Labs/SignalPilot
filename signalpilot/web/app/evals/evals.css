@@ -650,6 +650,7 @@
 .ev-source-kinds small { display: block; margin-top: 0.2rem; overflow: hidden; color: var(--color-text-dim); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 
 .ev-private-source { min-height: 85px; }
+.ev-project-repo { display: grid; gap: 1rem; }
 .ev-private-grid { display: grid; grid-template-columns: 1fr 1.5fr; gap: 1rem; }
 .ev-private-loading { display: flex; align-items: center; gap: 0.5rem; min-height: 85px; color: var(--color-text-dim); font-size: 11px; }
 .ev-private-loading svg { width: 14px; height: 14px; }

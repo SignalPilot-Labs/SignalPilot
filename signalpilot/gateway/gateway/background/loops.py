@@ -377,6 +377,40 @@ async def dashboard_refresh_loop(session_factory: SessionFactory) -> None:
             logger.warning("Dashboard refresh loop error: %s", e)
 
 
+def _repo_sync_interval_seconds() -> int:
+    """SP_REPO_SYNC_INTERVAL_SECONDS: how often watched branches are pulled
+    from GitHub without a webhook. Default 15 minutes; 0 disables the loop."""
+    import os
+
+    raw = os.environ.get("SP_REPO_SYNC_INTERVAL_SECONDS", "900").strip()
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        logger.warning("SP_REPO_SYNC_INTERVAL_SECONDS=%r is not an integer; using 900", raw)
+        return 900
+
+
+async def repo_sync_loop() -> None:
+    """Webhook fallback: pull + import every watched branch of every linked
+    project on an interval, so a lost or misconfigured GitHub webhook can only
+    leave a workspace stale for one interval, never indefinitely."""
+    interval = _repo_sync_interval_seconds()
+    if interval == 0:
+        logger.info("repo sync loop disabled (SP_REPO_SYNC_INTERVAL_SECONDS=0)")
+        return
+    from ..dbt_map.triggers import reconcile_watched_branches
+
+    await asyncio.sleep(60)  # let the startup mirror reconcile finish first
+    while True:
+        try:
+            summary = await reconcile_watched_branches()
+            if summary.get("imported") or summary.get("failed"):
+                logger.info("repo sync: %s", summary)
+        except Exception as e:
+            logger.warning("repo sync loop error: %s", e)
+        await asyncio.sleep(interval)
+
+
 async def repo_mirror_reconcile_startup() -> None:
     """One-shot: heal GitHub-linked projects whose bare mirror is missing.
 
@@ -411,6 +445,7 @@ BACKGROUND_TASK_NAMES: tuple[str, ...] = (
     "dbt_map_reaper",
     "dashboard_refresh",
     "repo_mirror_reconcile",
+    "repo_sync",
 )
 
 
@@ -436,6 +471,7 @@ def start_background_tasks(
         dbt_map_reaper_loop(),
         dashboard_refresh_loop(session_factory),
         repo_mirror_reconcile_startup(),
+        repo_sync_loop(),
     )
     return [
         asyncio.create_task(coro, name=name)

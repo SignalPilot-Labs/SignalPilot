@@ -1,19 +1,31 @@
 "use client";
 
-/** Eval configuration form: repo, model, connection, notifications, autorun. */
+/** Eval configuration form: eval repo, dbt project repo, model, connection, notifications, autorun. */
 
 import { useEffect, useState } from "react";
 import useSWR from "swr";
 import { Loader2, Save } from "lucide-react";
-import { getEvalConfig, putEvalConfig, type EvalConfig } from "~/lib/api";
+import { getEvalConfig, getGitHubInstallations, putEvalConfig, type EvalConfig } from "~/lib/api";
 import { useToast } from "~/components/ui/toast";
 import { usePermissions } from "~/lib/hooks/use-permissions";
+import { useAppAuth } from "~/lib/auth-context";
 import { ReadOnlyNote } from "~/components/access/read-only-note";
+import { useGitHubConnect, type RepoPickerStyles } from "./RepoPicker";
+import {
+  EMPTY_PROJECT_REPO,
+  ProjectRepoFields,
+  projectRepoError,
+  projectRepoFromConfig,
+  projectRepoPayload,
+  type ProjectRepoValue,
+} from "./ProjectRepoFields";
 
 /** The config as values only: what a member sees where the admin form is. */
 function ConfigValues({ config }: { config?: EvalConfig }) {
   const rows: [string, string][] = [
     ["Repo", config?.repo_url || "—"],
+    ["dbt project", config?.project_repo_url || "not set"],
+    ["Project branch", config?.project_ref || "repository default"],
     ["Model", config?.model || "sonnet"],
     ["Max tasks per run", String(config?.max_tasks ?? 0) + ((config?.max_tasks ?? 0) === 0 ? " (all)" : "")],
     ["Connection", config?.connection || "—"],
@@ -23,7 +35,7 @@ function ConfigValues({ config }: { config?: EvalConfig }) {
   ];
   return (
     <div className="mt-4 pt-4 border-t border-[var(--color-border)] space-y-3" data-testid="eval-config-values">
-      <ReadOnlyNote block>eval repo, model, connection, and run policy</ReadOnlyNote>
+      <ReadOnlyNote block>eval repo, dbt project, model, connection, and run policy</ReadOnlyNote>
       <dl className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2 text-sm">
         {rows.map(([label, value]) => (
           <div key={label} className="min-w-0">
@@ -47,13 +59,24 @@ function ConfigValuesLoader() {
   return <ConfigValues config={data} />;
 }
 
+const inputCls =
+  "w-full bg-transparent border border-[var(--color-border)] rounded-[10px] px-3 py-2 text-sm text-[var(--color-text)] placeholder:text-[var(--color-text-dim)] focus:border-[var(--color-border-hover)] focus:outline-none";
+const labelCls = "block text-xs text-[var(--color-text-muted)] mb-1.5";
+const pickerStyles: RepoPickerStyles = { field: "block", label: labelCls, control: inputCls };
+
 function ConfigEditor({ onSaved }: { onSaved: () => void }) {
   const { toast } = useToast();
+  const { isCloudMode } = useAppAuth();
   const { data, mutate } = useSWR("eval-config", getEvalConfig);
+  const { data: installations, isLoading: installationsLoading } = useSWR(
+    "github-installations",
+    getGitHubInstallations,
+  );
   const [form, setForm] = useState({
     repo_url: "",
     repo_installation_id: null as string | null,
     repo_id: null as number | null,
+    project: EMPTY_PROJECT_REPO as ProjectRepoValue,
     model: "sonnet",
     max_tasks: 0,
     prompt_preamble: "",
@@ -63,6 +86,10 @@ function ConfigEditor({ onSaved }: { onSaved: () => void }) {
   });
   const [savingCfg, setSavingCfg] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const { connectGitHub, connecting: connectingGitHub } = useGitHubConnect(
+    "/evals",
+    (message) => toast(message, "error"),
+  );
 
   useEffect(() => {
     if (data && !loaded) {
@@ -70,6 +97,7 @@ function ConfigEditor({ onSaved }: { onSaved: () => void }) {
         repo_url: data.repo_url ?? "",
         repo_installation_id: data.repo_installation_id ?? null,
         repo_id: data.repo_id ?? null,
+        project: projectRepoFromConfig(data),
         model: data.model ?? "sonnet",
         max_tasks: data.max_tasks ?? 0,
         prompt_preamble: data.prompt_preamble ?? "",
@@ -82,12 +110,18 @@ function ConfigEditor({ onSaved }: { onSaved: () => void }) {
   }, [data, loaded]);
 
   async function save() {
+    const projectMessage = projectRepoError(form.project, isCloudMode);
+    if (projectMessage) {
+      toast(projectMessage, "error");
+      return;
+    }
     setSavingCfg(true);
     try {
       await putEvalConfig({
         repo_url: form.repo_url,
         repo_installation_id: form.repo_installation_id,
         repo_id: form.repo_id,
+        ...projectRepoPayload(form.project),
         model: form.model,
         max_tasks: form.max_tasks,
         prompt_preamble: form.prompt_preamble,
@@ -108,35 +142,58 @@ function ConfigEditor({ onSaved }: { onSaved: () => void }) {
     }
   }
 
-  const inputCls =
-    "w-full bg-transparent border border-[var(--color-border)] rounded-[10px] px-3 py-2 text-sm text-[var(--color-text)] placeholder:text-[var(--color-text-dim)] focus:border-[var(--color-border-hover)] focus:outline-none";
-
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4 pt-4 border-t border-[var(--color-border)]">
       <div className="md:col-span-2">
-        <label className="block text-xs text-[var(--color-text-muted)] mb-1.5">
-          Repo — public git URL, or a local path under /eval-projects (format: eval-format.md)
+        <label className={labelCls}>
+          {isCloudMode
+            ? "Eval repo: public git URL (format: eval-format.md)"
+            : "Eval repo: public git URL, or a local path under /eval-projects (format: eval-format.md)"}
         </label>
-        <input className={inputCls} value={form.repo_url} onChange={(e) => setForm({ ...form, repo_url: e.target.value, repo_installation_id: null, repo_id: null })} placeholder="https://github.com/org/eval-set.git  ·  /eval-projects/northwind" />
+        <input
+          className={inputCls}
+          data-testid="eval-repo-url"
+          value={form.repo_url}
+          onChange={(e) => setForm({ ...form, repo_url: e.target.value, repo_installation_id: null, repo_id: null })}
+          placeholder={isCloudMode ? "https://github.com/org/eval-set" : "https://github.com/org/eval-set.git  ·  /eval-projects/northwind"}
+        />
+      </div>
+      <div className="md:col-span-2 space-y-3">
+        <div>
+          <p className="text-xs text-[var(--color-text-muted)]">dbt project repository</p>
+          <p className="text-xs text-[var(--color-text-dim)] mt-0.5">
+            The eval set runs against this dbt project. SignalPilot clones it for every run.
+          </p>
+        </div>
+        <ProjectRepoFields
+          value={form.project}
+          onChange={(project) => setForm({ ...form, project })}
+          installations={installations}
+          installationsLoading={installationsLoading}
+          onConnectGitHub={connectGitHub}
+          connectingGitHub={connectingGitHub}
+          isCloudMode={isCloudMode}
+          styles={pickerStyles}
+        />
       </div>
       <div>
-        <label className="block text-xs text-[var(--color-text-muted)] mb-1.5">Model</label>
+        <label className={labelCls}>Model</label>
         <input className={inputCls} value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} placeholder="sonnet" />
       </div>
       <div>
-        <label className="block text-xs text-[var(--color-text-muted)] mb-1.5">Max tasks per run (0 = all)</label>
+        <label className={labelCls}>Max tasks per run (0 = all)</label>
         <input className={inputCls} type="number" min={0} max={200} value={form.max_tasks} onChange={(e) => setForm({ ...form, max_tasks: Number(e.target.value) || 0 })} />
       </div>
       <div>
-        <label className="block text-xs text-[var(--color-text-muted)] mb-1.5">Connection — warehouse connection the graded agent must use</label>
+        <label className={labelCls}>Connection — warehouse connection the graded agent must use</label>
         <input required className={inputCls} value={form.connection} onChange={(e) => setForm({ ...form, connection: e.target.value })} placeholder="northwind_ro_conn" />
       </div>
       <div>
-        <label className="block text-xs text-[var(--color-text-muted)] mb-1.5">Notify emails — comma-separated, alerted on accuracy regressions</label>
+        <label className={labelCls}>Notify emails — comma-separated, alerted on accuracy regressions</label>
         <input className={inputCls} value={form.notify_emails} onChange={(e) => setForm({ ...form, notify_emails: e.target.value })} placeholder="data-team@acme.com, oncall@acme.com" />
       </div>
       <div className="md:col-span-2">
-        <label className="block text-xs text-[var(--color-text-muted)] mb-1.5">Prompt preamble — prepended to every task (connection to use, output rules)</label>
+        <label className={labelCls}>Prompt preamble — prepended to every task (connection to use, output rules)</label>
         <textarea className={`${inputCls} resize-none`} rows={2} value={form.prompt_preamble} onChange={(e) => setForm({ ...form, prompt_preamble: e.target.value })} placeholder='e.g. "Use the SignalPilot MCP tools with connection northwind_ro_conn."' />
       </div>
       <div className="md:col-span-2">
@@ -160,7 +217,7 @@ function ConfigEditor({ onSaved }: { onSaved: () => void }) {
         </label>
       </div>
       <div>
-        <button onClick={save} disabled={savingCfg} className="inline-flex items-center gap-2 px-4 py-2 rounded-[10px] text-sm border border-[var(--color-border-hover)] text-[var(--color-text)] hover:bg-[var(--color-bg)] disabled:opacity-40 transition-colors">
+        <button onClick={save} disabled={savingCfg} data-testid="eval-config-save" className="inline-flex items-center gap-2 px-4 py-2 rounded-[10px] text-sm border border-[var(--color-border-hover)] text-[var(--color-text)] hover:bg-[var(--color-bg)] disabled:opacity-40 transition-colors">
           {savingCfg ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" strokeWidth={1.5} />}
           Save config
         </button>

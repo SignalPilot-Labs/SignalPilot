@@ -129,6 +129,13 @@ class _FakeObjectStore:
     async def delete_prefix(self, prefix: str) -> int:
         return 0
 
+    async def upload_file(self, key: str, path: str, content_type: str = "") -> int:
+        self.blobs[key] = Path(path).read_bytes()
+        return len(self.blobs[key])
+
+    async def presign_get(self, key: str, expires_s: int) -> str:
+        return f"https://evidence.test/{key}"
+
 
 class TestProgressDuringARun:
     """Exercise execute_run with a backend test double and SQLite.
@@ -153,6 +160,11 @@ class TestProgressDuringARun:
             ),
             encoding="utf-8",
         )
+        # The dbt project a run evaluates comes from the configuration (a local
+        # path under projects_dir when self-hosting), never from eval.json.
+        project = tmp_path / "projects" / "dbt-1" / "models"
+        project.mkdir(parents=True)
+        (project / "fct_orders.sql").write_text("select 1", encoding="utf-8")
         monkeypatch.setenv("SP_EVAL_PROJECTS_DIR", str(tmp_path / "projects"))
         monkeypatch.setenv("SP_EVAL_RUNNER_IMAGE", "sp-eval-runner:latest")
         monkeypatch.setenv("SP_EVAL_S3_BUCKET", "eval-evidence")
@@ -179,7 +191,11 @@ class TestProgressDuringARun:
             await evals_store.save_config(
                 session,
                 org_id=org,
-                cfg={"repo_url": str(repo), "connection": "eval-warehouse"},
+                cfg={
+                    "repo_url": str(repo),
+                    "project_repo_url": str(repo.parent / "dbt-1"),
+                    "connection": "eval-warehouse",
+                },
             )
             await evals_store.create_run(
                 session,

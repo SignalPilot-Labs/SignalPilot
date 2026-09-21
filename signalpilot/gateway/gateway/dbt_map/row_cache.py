@@ -36,6 +36,8 @@ class RowSnapshot:
     dbt_version: str | None
     node_count: int
     manifest_bytes: int
+    dbt_project_dir: str | None
+    phase: str | None
     created_at: float
     updated_at: float
     graph_key: str | None
@@ -55,6 +57,8 @@ class RowSnapshot:
             dbt_version=row.dbt_version,
             node_count=row.node_count or 0,
             manifest_bytes=row.manifest_bytes or 0,
+            dbt_project_dir=getattr(row, "dbt_project_dir", None),
+            phase=getattr(row, "phase", None),
             created_at=row.created_at,
             updated_at=row.updated_at,
             graph_key=row.graph_key,

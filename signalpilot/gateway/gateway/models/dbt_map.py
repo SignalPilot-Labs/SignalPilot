@@ -16,6 +16,8 @@ class DbtMapInfo(BaseModel):
     dbt_version: str | None = None
     node_count: int = 0
     manifest_bytes: int = 0
+    dbt_project_dir: str | None = None
+    phase: str | None = None
     created_at: float
     updated_at: float
 

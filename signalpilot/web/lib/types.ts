@@ -473,6 +473,10 @@ export interface DbtMapInfo {
   dbt_version: string | null;
   node_count: number;
   manifest_bytes: number;
+  /** Directory the compile built ("" = repo root); null on rows from before it was recorded. */
+  dbt_project_dir: string | null;
+  /** While running: snapshot | sandbox | dbt | store. Null once finished. */
+  phase: string | null;
   created_at: number;
   updated_at: number;
 }

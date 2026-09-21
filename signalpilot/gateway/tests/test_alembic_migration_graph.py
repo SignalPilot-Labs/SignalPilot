@@ -35,7 +35,7 @@ def test_real_migration_chain_is_the_tracked_head() -> None:
     config = build_alembic_config("postgresql://unused:unused@localhost/unused")
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_current_head() == "0036"
+    assert scripts.get_current_head() == "0037"
 
     # 0036 links the dbt project repository and branch to the eval configuration.
     revision_0036 = scripts.get_revision("0036")

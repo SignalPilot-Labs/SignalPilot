@@ -75,6 +75,13 @@ There is also a bot path — `SP_GITHUB_BOT_TOKEN`, `SP_GITHUB_WEBHOOK_SECRET`,
 `SP_GITHUB_BOT_CONNECTION` — used for webhook-driven automation. The webhook
 endpoint refuses requests with `503` until the webhook secret is set.
 
+Point the App's webhook at `<gateway>/api/github/webhook`, give it the same
+secret, and subscribe it to **Push** and **Pull request** events. A push to a
+watched branch is imported and the dbt map recompiled within seconds. If the
+webhook is missing or misconfigured, a background sweep pulls every watched
+branch on an interval (`SP_REPO_SYNC_INTERVAL_SECONDS`, 15 minutes by default),
+so a linked project can be stale for at most one interval.
+
 ## Troubleshooting
 
 | Symptom | Cause |

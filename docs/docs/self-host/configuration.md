@@ -176,7 +176,8 @@ variables. See [What each plan includes](/docs/product/plans).
 | `SP_GITHUB_APP_PRIVATE_KEY` | unset | App private key (PEM) used to mint short-lived installation tokens. |
 | `SP_GITHUB_APP_SLUG` | `signalpilot` | App slug, used to build install URLs. |
 | `SP_GITHUB_BOT_TOKEN` | unset | Token used to comment on pull requests and set statuses when no App is configured. |
-| `SP_GITHUB_WEBHOOK_SECRET` | unset | HMAC secret for `/api/github/webhook`. |
+| `SP_GITHUB_WEBHOOK_SECRET` | unset | HMAC secret for `/api/github/webhook`. Set it to the same value as the App's webhook secret; unset, the route answers `503` and pushes are not picked up. |
+| `SP_REPO_SYNC_INTERVAL_SECONDS` | `900` | How often watched branches of linked repositories are pulled from GitHub without a webhook, as a fallback. `0` disables the sweep. |
 | `SP_GITHUB_BOT_CONNECTION` | unset | Default connection the pull request verification battery runs against. |
 | `NOTION_OAUTH_CLIENT_ID`, `NOTION_OAUTH_CLIENT_SECRET` | unset | Notion integration credentials. |
 | `NOTION_OAUTH_REDIRECT_URI` | unset | Redirect URI registered with the Notion integration. |

@@ -28,6 +28,7 @@ EXPECTED_LOOPS = {
     "dbt_map_reaper": loops_module.dbt_map_reaper_loop,
     "dashboard_refresh": loops_module.dashboard_refresh_loop,
     "repo_mirror_reconcile": loops_module.repo_mirror_reconcile_startup,
+    "repo_sync": loops_module.repo_sync_loop,
 }
 
 
@@ -55,7 +56,7 @@ def test_registry_names_match_expected_loops() -> None:
 async def test_start_registers_every_loop_by_name() -> None:
     tasks = start_background_tasks(_unused_session_factory)
     try:
-        assert len(tasks) == len(EXPECTED_LOOPS) == 15
+        assert len(tasks) == len(EXPECTED_LOOPS) == 16
         assert [t.get_name() for t in tasks] == list(EXPECTED_LOOPS)
         for task, fn in zip(tasks, EXPECTED_LOOPS.values(), strict=True):
             assert isinstance(task, asyncio.Task)

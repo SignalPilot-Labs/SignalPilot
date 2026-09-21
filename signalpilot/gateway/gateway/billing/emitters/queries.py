@@ -54,8 +54,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..identity import is_service_identity
 from ..ledger import LedgerEntry
-from ..rates import QUERY_CREDITS
-from ._base import json_safe_payload, metered_entitlement, never_raises, write_in_savepoint
+from ._base import json_safe_payload, metered, never_raises, write_in_savepoint
 
 # Every query_path a GatewayGovernedQueryExecution row can carry.
 COUNTED_QUERY_PATHS: frozenset[str] = frozenset({"direct_api", "mcp", "sdk", "dashboard", "dataset_ref"})
@@ -104,12 +103,12 @@ def derive_source(execution: Any) -> str:
     return "system"
 
 
-def query_outcome(execution: Any) -> tuple[int, str]:
+def query_outcome(execution: Any, query_credits: int) -> tuple[int, str]:
     """Return ``(credits, reason)`` for a terminal execution row."""
     status = str(getattr(execution, "status", "") or "")
     code = getattr(execution, "public_error_code", None)
     if status == "completed" or (status == "failed" and code in WAREHOUSE_EXECUTED_ERROR_CODES):
-        return -QUERY_CREDITS, REASON_OK
+        return -query_credits, REASON_OK
     return 0, REASON_BLOCKED
 
 
@@ -139,13 +138,15 @@ async def emit_query_credit(
         return None
     if str(getattr(execution, "query_path", "") or "") not in COUNTED_QUERY_PATHS:
         return None
-    if await metered_entitlement(org_id, entitlement) is None:
+    pair = await metered(org_id, entitlement)
+    if pair is None:
         return None
+    _, card = pair
 
     if is_service_identity(getattr(execution, "user_id", None)):
         credits, reason = 0, REASON_SERVICE
     else:
-        credits, reason = query_outcome(execution)
+        credits, reason = query_outcome(execution, card.query_credits)
 
     ref_type, ref_id = _ref(execution)
     occurred_at = getattr(execution, "terminal_at", None) or datetime.now(UTC)

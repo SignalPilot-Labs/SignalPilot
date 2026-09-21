@@ -20,7 +20,9 @@ import { useBackendClient } from "~/lib/backend-client";
 import type { PlanInfo, RateCard } from "~/lib/backend-client";
 import { useSubscription } from "~/lib/subscription-context";
 import { TIER_RANK, tierLabel, type EntitlementTier } from "~/lib/entitlement";
-import { formatCredits } from "~/lib/billing-rates";
+import { formatCredits, planForTier } from "~/lib/billing-rates";
+
+const TERM_WORD: Record<string, string> = { year: "yearly", quarter: "every 3 months", month: "monthly" };
 import { PageHeader, TerminalBar } from "~/components/ui/page-header";
 import { StatusDot } from "~/components/ui/data-viz";
 import { SectionHeader } from "~/components/ui/section-header";
@@ -36,7 +38,6 @@ import { CreditRateTable } from "~/components/billing/credit-rate-table";
 import { PlanReviewDialog, type PlanReview } from "~/components/billing/plan-review-dialog";
 import { AdminGate } from "~/components/settings/admin-gate";
 
-const PLAN_ORDER: Record<string, number> = { team: 0, scale: 1, enterprise: 2 };
 
 function rank(tier: string): number {
   return TIER_RANK[tier as EntitlementTier] ?? 0;
@@ -111,23 +112,22 @@ function BillingContent() {
   const [managingPortal, setManagingPortal] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [plans, setPlans] = useState<PlanInfo[] | null>(null);
-  /** The live rate card; the rate table falls back to the local constants until it arrives. */
+  /** The live rate card from Stripe via the backend; the rate table waits for it. */
   const [rates, setRates] = useState<RateCard | null>(null);
   const [plansError, setPlansError] = useState(false);
   const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false);
   const [canceling, setCanceling] = useState(false);
   const [review, setReview] = useState<PlanReview | null>(null);
 
-  // Fetch plans from the backend (Stripe products plus the static allowance table)
+  // Fetch plans from the backend: Stripe is the source of truth for fees,
+  // allowances, seat rates and the order the plans are shown in.
   useEffect(() => {
     let cancelled = false;
     client
       .getPlans()
       .then((res) => {
         if (cancelled) return;
-        const sorted = [...res.plans].sort(
-          (a, b) => (PLAN_ORDER[a.tier] ?? 99) - (PLAN_ORDER[b.tier] ?? 99),
-        );
+        const sorted = [...res.plans].sort((a, b) => a.rank - b.rank);
         setPlans(sorted);
         setRates(res.rates);
       })
@@ -234,6 +234,7 @@ function BillingContent() {
 
   const isFreeTier = tier === "free";
   const isEnterprise = tier === "enterprise";
+  const currentPlan = planForTier(plans, tier);
   const statusLabel = status === "past_due" ? "past due" : status;
   const statusTone = status === "active" || status === "trialing" ? "healthy" : status === "past_due" ? "warning" : "error";
   const statusClass =
@@ -261,7 +262,7 @@ function BillingContent() {
             <code className="text-[12px] text-[var(--color-text)]">{formatCredits(entitlement.includedCredits)}</code>
           </span>
           <span className="text-[var(--color-text-dim)]">
-            billed: <code className="text-[12px] text-[var(--color-text)]">monthly</code>
+            billed: <code className="text-[12px] text-[var(--color-text)]">{TERM_WORD[entitlement.billingInterval] ?? entitlement.billingInterval}</code>
           </span>
         </div>
       </TerminalBar>
@@ -390,7 +391,7 @@ function BillingContent() {
             <p className="mt-3 text-[11px] text-[var(--color-text-dim)]">
               {isEnterprise
                 ? "your contract sets the fee, allowances and credit block; changes go through your account team."
-                : "one flat fee per month; credits are granted and settled monthly. cancel anytime. prices in usd. self-hosted is always free."}
+                : "one flat fee per term, yearly or every 3 months; credits are granted and settled monthly. cancel anytime. prices in usd. self-hosted is always free."}
             </p>
           </>
         )}
@@ -404,7 +405,7 @@ function BillingContent() {
             <ChevronRight className="w-3 h-3 transition-transform duration-150 group-open:rotate-90" />
             what usage beyond the allowances costs
           </summary>
-          <CreditRateTable enterprise={isEnterprise} rates={rates} />
+          <CreditRateTable rates={rates} seatMonthCredits={currentPlan ? currentPlan.seat_month_credits : undefined} />
         </details>
       </section>
 

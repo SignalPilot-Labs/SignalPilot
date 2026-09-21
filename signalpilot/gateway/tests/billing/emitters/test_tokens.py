@@ -34,7 +34,7 @@ class TestRounding:
         [(None, 0), (0.0, 0), (0.004, 0), (0.005, 1), (0.1234, 12), (0.125, 13), (1.0, 100), (2.499, 250)],
     )
     def test_cost_to_credits(self, cost, credits) -> None:
-        assert token_credits(cost) == credits
+        assert token_credits(cost, 100) == credits
 
     def test_usage_counts_keeps_only_token_integers(self) -> None:
         assert usage_counts(USAGE) == {

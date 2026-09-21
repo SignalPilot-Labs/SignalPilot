@@ -31,8 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..identity import is_service_identity
 from ..ledger import LedgerEntry
-from ..rates import TOKEN_CREDITS_PER_USD
-from ._base import json_safe_payload, metered_entitlement, never_raises, write_in_savepoint
+from ._base import json_safe_payload, metered, never_raises, write_in_savepoint
 
 KEY_SOURCE_ORG = "org"
 KEY_SOURCE_PLATFORM = "platform"
@@ -52,11 +51,12 @@ TOKEN_COUNT_KEYS = (
 )
 
 
-def token_credits(cost_usd: float | None) -> int:
-    """Credits for a platform-key run: round half away from zero of cost x 100."""
+def token_credits(cost_usd: float | None, credits_per_usd: int) -> int:
+    """Credits for a platform-key run: round half away from zero of cost x the
+    rate card's token_credits_per_dollar."""
     if cost_usd is None or cost_usd <= 0:
         return 0
-    return int(cost_usd * TOKEN_CREDITS_PER_USD + 0.5)
+    return int(cost_usd * credits_per_usd + 0.5)
 
 
 def usage_counts(usage: dict[str, Any] | None) -> dict[str, int]:
@@ -99,15 +99,17 @@ async def emit_token_credit(
     run_id = str(getattr(run, "id", "") or "")
     if not org_id or not run_id:
         return None
-    if await metered_entitlement(org_id, entitlement) is None:
+    pair = await metered(org_id, entitlement)
+    if pair is None:
         return None
+    _, card = pair
     source_key = key_source if key_source in KEY_SOURCES else KEY_SOURCE_NONE
     if source_key == KEY_SOURCE_ORG:
         credits, reason = 0, REASON_BYOK
     elif source_key == KEY_SOURCE_IMPROVEMENT or is_service_identity(getattr(run, "user_id", None)):
         credits, reason = 0, REASON_SERVICE
     else:
-        credits, reason = -token_credits(cost_usd), REASON_OK
+        credits, reason = -token_credits(cost_usd, card.token_credits_per_usd), REASON_OK
     payload = json_safe_payload(
         {
             **usage_counts(usage),

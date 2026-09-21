@@ -2,9 +2,9 @@
 
 import { Building2, CheckCircle2, Mail } from "lucide-react";
 import type { PlanInfo } from "~/lib/backend-client";
-import { PLAN_ALLOWANCES, formatCredits } from "~/lib/billing-rates";
+import { formatCredits } from "~/lib/billing-rates";
 import type { Entitlement } from "~/lib/entitlement";
-import { AllowanceList, formatPrice } from "~/components/billing/plan-card";
+import { AllowanceList } from "~/components/billing/plan-card";
 
 /** The one contact route for Enterprise; there is no self-serve path. */
 export const ENTERPRISE_CONTACT = "mailto:daniel@signalpilot.ai?subject=SignalPilot%20Enterprise";
@@ -20,9 +20,11 @@ const ENTERPRISE_FEATURES = [
 const ACCENT = "var(--color-text-muted)";
 
 /**
- * Enterprise is priced to the estate and never self-served: the card has no
- * buy button, only "Contact us". When the org is already on Enterprise the
- * card is marked current and the contact link is the route for changes.
+ * Enterprise is custom and never self-served: one purchase order, no public
+ * seat price, no buy button, only "Contact us". Its allowances (the contract's
+ * starting point) come from the Stripe plan product like every other plan.
+ * When the org is already on Enterprise the card is marked current and the
+ * contact link is the route for changes.
  */
 export function EnterpriseCard({
   plan,
@@ -32,15 +34,6 @@ export function EnterpriseCard({
   plan: PlanInfo | null;
   isCurrent: boolean;
 }) {
-  const fallback = PLAN_ALLOWANCES.enterprise;
-  const allowances = plan ?? {
-    included_seats: fallback.seats,
-    included_models: fallback.models,
-    included_eval_runs: fallback.evalRuns,
-    included_credits: fallback.credits,
-  };
-  const fromCents = plan?.monthly_fee_cents ?? fallback.monthlyFeeCents;
-
   return (
     <div
       data-testid="plan-card-enterprise"
@@ -60,19 +53,22 @@ export function EnterpriseCard({
               data-testid="plan-price"
               className="text-xl font-bold font-mono tracking-tight tabular-nums text-[var(--color-text-muted)]"
             >
-              from {formatPrice(fromCents, "usd")}
+              Custom
             </span>
-            <span className="text-[12px] text-[var(--color-text-dim)]">/mo</span>
           </div>
-          <span className="text-[11px] text-[var(--color-text-dim)] font-mono">billed monthly</span>
+          <span className="text-[11px] text-[var(--color-text-dim)] font-mono">one purchase order</span>
         </div>
       </div>
 
       <p className="text-[12px] text-[var(--color-text-dim)] leading-relaxed mb-4">
-        Priced to your estate, one purchase order
+        {plan?.description || "Priced to your estate; seats and allowances set in the contract"}
       </p>
 
-      <AllowanceList plan={allowances} color={ACCENT} moreByAgreement />
+      {plan ? (
+        <AllowanceList plan={plan} color={ACCENT} moreByAgreement />
+      ) : (
+        <p className="text-[12px] text-[var(--color-text-dim)] mb-4">allowances are set in the contract</p>
+      )}
 
       <ul className="space-y-2 mb-5">
         {ENTERPRISE_FEATURES.map((f) => (

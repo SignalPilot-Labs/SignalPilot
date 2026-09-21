@@ -23,8 +23,10 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .. import rate_card
 from ..entitlements import OrgEntitlement, get_entitlement
 from ..ledger import LedgerEntry, write_entry
+from ..rate_card import RateCard
 
 logger = logging.getLogger("gateway.billing.emitters")
 
@@ -50,6 +52,19 @@ async def metered_entitlement(org_id: str, entitlement: OrgEntitlement | None = 
         logger.debug("credit emitter skipped: org %s is not metered (tier %s)", org_id, resolved.tier)
         return None
     return resolved
+
+
+async def metered(org_id: str, entitlement: OrgEntitlement | None = None) -> tuple[OrgEntitlement, RateCard] | None:
+    """The (entitlement, rate card) pair an emitter prices with, or None when
+    the org is not metered or no rate card is available (logged by
+    ``rate_card.require``; nothing is written rather than something guessed)."""
+    resolved = await metered_entitlement(org_id, entitlement)
+    if resolved is None:
+        return None
+    card = await rate_card.require()
+    if card is None:
+        return None
+    return resolved, card
 
 
 async def write_in_savepoint(session: AsyncSession, entry: LedgerEntry) -> int | None:

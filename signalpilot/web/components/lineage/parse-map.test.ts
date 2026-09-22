@@ -80,6 +80,14 @@ describe("parseMap", () => {
     expect(p.layerCounts.fact).toBe(1);
   });
 
+  it("keeps dbt sources in the map but out of the legend counts", () => {
+    // The canvas never draws dbt sources; the Raw Tables panel still reads
+    // them from the parsed map, so they stay in `models`.
+    const p = parseMap(full);
+    expect(p.models.has(SRC)).toBe(true);
+    expect(p.layerCounts.source).toBe(0);
+  });
+
   it("yields the same topology for skeleton and full graphs", () => {
     const a = parseMap(full);
     const b = parseMap(skeleton);

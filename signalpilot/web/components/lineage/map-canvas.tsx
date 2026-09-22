@@ -178,6 +178,10 @@ export function MapCanvas({
     const q = query.trim().toLowerCase();
     const ids = new Set<string>();
     for (const m of parsed.models.values()) {
+      // dbt sources are never drawn: they swamp the layout. They stay in the
+      // parsed map for the Raw Tables panel; a source that is itself the
+      // focus still shows so its deep link lands somewhere.
+      if (m.resourceType === "source" && m.id !== focusId) continue;
       // Focus mode tells the whole staged story of the cone: layer toggles
       // (full-map chrome) never silently delete a stage column here.
       if (!focusCone && !visibleLayers.has(m.layer)) continue;
@@ -186,7 +190,7 @@ export function MapCanvas({
       ids.add(m.id);
     }
     return ids;
-  }, [parsed, visibleLayers, query, focusCone]);
+  }, [parsed, visibleLayers, query, focusCone, focusId]);
 
   const visibleEdges = useMemo(
     () => parsed.edges.filter((e) => visible.has(e.source) && visible.has(e.target)),

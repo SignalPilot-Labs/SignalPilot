@@ -31,11 +31,12 @@ test.describe("chat settings panel (fixture harness)", () => {
     await expect(gear).toHaveAttribute("aria-expanded", "true");
     await expect(panel).toContainText("Chat settings");
     const model = panel.getByTestId("chat-settings-model-select");
-    await expect(model).toHaveValue("claude-opus-5");
+    await expect(model).toHaveValue("claude-opus-5-5");
     await expect(model.locator("option")).toHaveText([
       "Opus 4.6",
       "Sonnet 4.6",
       "Opus 5",
+      "Opus 5.5",
       "Fable 5.1",
     ]);
     await model.selectOption("claude-fable-5-1");

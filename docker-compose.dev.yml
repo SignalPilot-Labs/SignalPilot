@@ -18,7 +18,7 @@ services:
       SP_ALLOW_PRIVATE_CONNECTIONS: "true"
       # Match the staging Data Chat runtime while retaining local endpoints,
       # storage, and credentials.
-      SP_CHAT_AGENT_MODEL: "claude-opus-5"
+      SP_CHAT_AGENT_MODEL: "claude-opus-5-5"
       SP_AGENT_EFFORT: "medium"
       SP_FEATURE_CHAT_SIZE_ROUTER: "shadow"
       SP_FEATURE_CHAT_ORG_SHARING: "true"
@@ -141,7 +141,7 @@ services:
 
   gateway-chat-worker:
     environment:
-      SP_CHAT_AGENT_MODEL: "claude-opus-5"
+      SP_CHAT_AGENT_MODEL: "claude-opus-5-5"
       SP_AGENT_EFFORT: "medium"
       SP_FEATURE_CHAT_SIZE_ROUTER: "shadow"
       SP_FEATURE_CHAT_ORG_SHARING: "true"

@@ -95,6 +95,26 @@ def _build_agent_env(
     return agent_env
 
 
+def claude_code_cli_path() -> str | None:
+    """The pinned Claude Code CLI to run, or None for the SDK's bundled one.
+
+    The SDK always prefers the CLI bundled in its wheel, which can lag the
+    newest Claude Code; a new model can require a newer CLI than the SDK
+    ships. The notebook image installs a pinned CLI and names it in
+    SP_CLAUDE_CODE_CLI; a missing file falls back to the bundled CLI.
+    """
+    configured = os.getenv("SP_CLAUDE_CODE_CLI", "").strip()
+    if not configured:
+        return None
+    if not Path(configured).is_file():
+        LOGGER.warning(
+            "SP_CLAUDE_CODE_CLI does not exist: %s; using the SDK's bundled CLI",
+            configured,
+        )
+        return None
+    return configured
+
+
 def _build_agent_options_kwargs(
     *,
     model: str,
@@ -155,6 +175,9 @@ def _build_agent_options_kwargs(
         # SP_AGENT_EFFORT (low|medium|high|xhigh|max).
         "effort": _agent_effort(effort),
     }
+    cli_path = claude_code_cli_path()
+    if cli_path:
+        agent_options_kwargs["cli_path"] = cli_path
     plugin_path = os.getenv("SP_AGENT_PLUGIN_PATH", "").strip()
     if plugin_path:
         if Path(plugin_path).is_dir():

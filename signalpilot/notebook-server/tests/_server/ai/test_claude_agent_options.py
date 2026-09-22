@@ -144,3 +144,25 @@ def test_agent_env_overrides_without_project_dir_is_unchanged(tmp_path: Path) ->
         "SP_CHAT_SCRATCH_DIRECTORY",
         "SP_CHAT_ARTIFACTS_DIRECTORY",
     }
+
+
+def test_pinned_claude_code_cli_is_passed_to_the_sdk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A new model can need a newer Claude Code than the SDK bundles, so the
+    image's pinned CLI (SP_CLAUDE_CODE_CLI) must reach ClaudeAgentOptions."""
+    cli = tmp_path / "claude"
+    cli.write_text("", encoding="utf-8")
+    monkeypatch.setenv("SP_CLAUDE_CODE_CLI", str(cli))
+    assert _kwargs(_workspace(tmp_path, []))["cli_path"] == str(cli)
+
+
+def test_missing_or_unset_cli_keeps_the_bundled_cli(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("SP_CLAUDE_CODE_CLI", raising=False)
+    assert "cli_path" not in _kwargs(_workspace(tmp_path, []))
+    monkeypatch.setenv("SP_CLAUDE_CODE_CLI", str(tmp_path / "absent"))
+    workspace = tmp_path / "second"
+    workspace.mkdir()
+    assert "cli_path" not in _kwargs(workspace)

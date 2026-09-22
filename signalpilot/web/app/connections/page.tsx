@@ -7,6 +7,7 @@ import { ConnectionList } from "~/components/connections/connection-list";
 import { useConnectionsController } from "~/components/connections/hooks/use-connections-controller";
 import { PageLoader } from "~/components/ui/page-loader";
 import { CONNECTIONS_TABS, PageHeader } from "~/components/ui/page-header";
+import { usePermissions } from "~/lib/hooks/use-permissions";
 
 import "./connections.css";
 
@@ -25,18 +26,23 @@ export default function ConnectionsPage() {
     handleExport,
     handleImportFile,
   } = controller;
+  const { can } = usePermissions();
+  // Members see the list read-only: no add, import, or export.
+  const canWrite = can("connections.write");
 
   if (connectionsLoading) return <PageLoader label="loading connections" />;
 
   return (
     <div className="connections-page animate-fade-in">
-      <input
-        ref={importFileRef}
-        type="file"
-        accept=".json"
-        className="hidden"
-        onChange={handleImportFile}
-      />
+      {canWrite && (
+        <input
+          ref={importFileRef}
+          type="file"
+          accept=".json"
+          className="hidden"
+          onChange={handleImportFile}
+        />
+      )}
       <PageHeader
         title="Connections"
         subtitle="Data access"
@@ -51,26 +57,30 @@ export default function ConnectionsPage() {
             >
               query console
             </a>
-            <button
-              onClick={handleExport}
-              className="flex items-center gap-1.5 px-3 py-2 border border-[var(--color-border)] rounded-[10px] text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-border-hover)] transition-colors duration-150"
-              title="Export connections"
-            >
-              <Download className="w-3 h-3" /> Export
-            </button>
-            <button
-              onClick={() => importFileRef.current?.click()}
-              className="flex items-center gap-1.5 px-3 py-2 border border-[var(--color-border)] rounded-[10px] text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-border-hover)] transition-colors duration-150"
-              title="Import connections from JSON"
-            >
-              <Upload className="w-3 h-3" /> Import
-            </button>
-            <button
-              onClick={() => setShowForm(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium rounded-[10px] transition-opacity duration-150 hover:opacity-90"
-            >
-              <Plus className="w-3.5 h-3.5" /> Add connection
-            </button>
+            {canWrite && (
+              <>
+                <button
+                  onClick={handleExport}
+                  className="flex items-center gap-1.5 px-3 py-2 border border-[var(--color-border)] rounded-[10px] text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-border-hover)] transition-colors duration-150"
+                  title="Export connections"
+                >
+                  <Download className="w-3 h-3" /> Export
+                </button>
+                <button
+                  onClick={() => importFileRef.current?.click()}
+                  className="flex items-center gap-1.5 px-3 py-2 border border-[var(--color-border)] rounded-[10px] text-[12px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] hover:border-[var(--color-border-hover)] transition-colors duration-150"
+                  title="Import connections from JSON"
+                >
+                  <Upload className="w-3 h-3" /> Import
+                </button>
+                <button
+                  onClick={() => setShowForm(true)}
+                  className="flex items-center gap-2 px-4 py-2 bg-[var(--color-text)] text-[var(--color-bg)] text-xs font-medium rounded-[10px] transition-opacity duration-150 hover:opacity-90"
+                >
+                  <Plus className="w-3.5 h-3.5" /> Add connection
+                </button>
+              </>
+            )}
           </div>
         }
       />

@@ -94,6 +94,23 @@ async def get_project(
     return _to_info(row) if row else None
 
 
+def merge_project_settings(existing: dict | None, patch: dict) -> dict:
+    """Key-level shallow merge of a settings patch into the stored dict.
+
+    Keys absent from ``patch`` are kept; a key whose value is ``None`` is
+    removed. This is what makes PUT /workspace-projects safe for callers that
+    send a single key (for example ``dbt_project_dir``): they no longer wipe
+    watched branches, triggers or metadata bindings.
+    """
+    merged = dict(existing or {})
+    for key, value in patch.items():
+        if value is None:
+            merged.pop(key, None)
+        else:
+            merged[key] = value
+    return merged
+
+
 async def update_project(
     session: AsyncSession,
     *,
@@ -101,6 +118,11 @@ async def update_project(
     project_id: str,
     updates: dict,
 ) -> WorkspaceProjectInfo | None:
+    """Apply ``updates`` to a project row.
+
+    ``settings`` is merged with :func:`merge_project_settings`; every other
+    key replaces the column. ``None`` values are ignored (not a reset).
+    """
     q = select(GatewayWorkspaceProject).where(
         GatewayWorkspaceProject.org_id == org_id,
         GatewayWorkspaceProject.id == project_id,
@@ -109,7 +131,11 @@ async def update_project(
     if not row:
         return None
     for k, v in updates.items():
-        if v is not None and hasattr(row, k):
+        if v is None or not hasattr(row, k):
+            continue
+        if k == "settings":
+            row.settings = merge_project_settings(row.settings, dict(v))
+        else:
             setattr(row, k, v)
     row.updated_at = time.time()
     await session.commit()

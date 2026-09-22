@@ -36,6 +36,13 @@ class GatewayEvalConfig(GatewayBase):
     repo_url: Mapped[str] = mapped_column(String(2048), nullable=False, default="")
     repo_installation_id: Mapped[str | None] = mapped_column(String(64))
     repo_id: Mapped[int | None] = mapped_column(BigInteger)
+    # The dbt project every run evaluates. Linked here, never in eval.json,
+    # because an eval grades the current project (later: a pull request branch).
+    project_repo_url: Mapped[str] = mapped_column(String(2048), nullable=False, default="")
+    project_repo_installation_id: Mapped[str | None] = mapped_column(String(64))
+    project_repo_id: Mapped[int | None] = mapped_column(BigInteger)
+    # Branch to clone. Empty selects the repository default branch.
+    project_ref: Mapped[str] = mapped_column(String(200), nullable=False, default="")
     model: Mapped[str] = mapped_column(String(64), nullable=False, default="sonnet")
     max_tasks: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     prompt_preamble: Mapped[str] = mapped_column(Text, nullable=False, default="")

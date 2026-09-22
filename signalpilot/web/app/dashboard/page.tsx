@@ -34,7 +34,6 @@ import {
 } from "recharts";
 import {
   getEvalAccuracy,
-  getEvalAvailability,
   getProjects,
   listStandaloneConversations,
   subscribeMetrics,
@@ -54,6 +53,7 @@ import {
 } from "~/lib/hooks/use-gateway-data";
 import type { AuditEntry, MetricsSnapshot } from "~/lib/types";
 import { useAppAuth } from "~/lib/auth-context";
+import { useSubscription } from "~/lib/subscription-context";
 import { DashboardSkeleton } from "~/components/ui/skeleton";
 import { TimeAgo } from "~/components/ui/time-ago";
 import { useOnboardingStatus } from "~/lib/onboarding";
@@ -252,9 +252,10 @@ function DashboardContent() {
     listStandaloneConversations,
     { refreshInterval: 30_000, shouldRetryOnError: false },
   );
-  const { data: evalAvailability } = useSWR("dashboard-eval-availability", getEvalAvailability, { dedupingInterval: 60_000 });
+  const { isBillable, capabilities } = useSubscription();
+  const evalsEnabled = isBillable && capabilities?.evals === true;
   const { data: evalAccuracy } = useSWR(
-    evalAvailability?.enabled ? "dashboard-eval-accuracy" : null,
+    evalsEnabled ? "dashboard-eval-accuracy" : null,
     getEvalAccuracy,
     { refreshInterval: 30_000 },
   );
@@ -294,9 +295,9 @@ function DashboardContent() {
   const allTimeEvents = auditTotals?.total ?? auditData?.total ?? entries.length;
   const blockedEvents = auditTotals?.blocked ?? entries.filter((entry) => entry.blocked).length;
   const blockRate = allTimeEvents ? blockedEvents / allTimeEvents * 100 : 0;
-  const requestsToday = plan?.usage.queries_today ?? 0;
-  const dailyLimit = plan?.limits.queries_per_day;
-  const dailyUsagePct = typeof dailyLimit === "number" && dailyLimit > 0 ? requestsToday / dailyLimit * 100 : null;
+  const connectionsUsed = plan?.usage.connections ?? connections.length;
+  const connectionCeiling = plan?.limits.connections;
+  const connectionUsagePct = typeof connectionCeiling === "number" && connectionCeiling > 0 ? connectionsUsed / connectionCeiling * 100 : null;
   const storagePct = knowledgeUsage?.storage_limit_bytes
     ? knowledgeUsage.active_bytes / knowledgeUsage.storage_limit_bytes * 100
     : 0;
@@ -335,16 +336,16 @@ function DashboardContent() {
         tone: "warning",
       });
     }
-    if (dailyUsagePct != null && dailyUsagePct >= 80 && dailyLimit != null) {
+    if (connectionUsagePct != null && connectionUsagePct >= 80 && typeof connectionCeiling === "number") {
       items.push({
-        title: `${dailyUsagePct.toFixed(0)}% of daily query allowance used`,
-        detail: `${requestsToday.toLocaleString()} of ${dailyLimit.toLocaleString()} queries used today.`,
-        href: "/settings/usage",
+        title: `${connectionUsagePct.toFixed(0)}% of the connection ceiling used`,
+        detail: `${connectionsUsed.toLocaleString()} of ${connectionCeiling.toLocaleString()} governed connections on the ${plan?.tier ?? "current"} plan.`,
+        href: "/connections",
         tone: "warning",
       });
     }
     return items.slice(0, 4);
-  }, [budgetUtilization, dailyLimit, dailyUsagePct, latestAccuracy, latestRegression, requestsToday, unhealthyConnections]);
+  }, [budgetUtilization, connectionCeiling, connectionUsagePct, connectionsUsed, latestAccuracy, latestRegression, plan?.tier, unhealthyConnections]);
 
   const state = attentionItems.length
     ? { label: "Attention required", tone: "warning", title: "Operating signals need review" }
@@ -362,7 +363,7 @@ function DashboardContent() {
         </div>
         <div className="dash-actions">
           <Link href="/chats" className="dash-action is-secondary"><MessageSquareText /> Ask data</Link>
-          {evalAvailability?.enabled && <Link href="/evals" className="dash-action is-primary"><Play /> Run eval</Link>}
+          {evalsEnabled && <Link href="/evals" className="dash-action is-primary"><Play /> Run eval</Link>}
         </div>
       </header>
 
@@ -377,7 +378,7 @@ function DashboardContent() {
           </p>
         </div>
         <div className="dash-command-metrics">
-          <Metric label="Queries today" value={requestsToday.toLocaleString()} note={typeof dailyLimit === "number" ? `${dailyLimit.toLocaleString()} daily allowance` : "Unlimited plan"} icon={Zap} tone="good" />
+          <Metric label="Connections" value={connectionsUsed.toLocaleString()} note={typeof connectionCeiling === "number" ? `${connectionCeiling.toLocaleString()} ceiling on the ${plan?.tier ?? "current"} plan` : "No ceiling"} icon={Zap} tone={connectionUsagePct != null && connectionUsagePct >= 80 ? "warning" : "good"} />
           <Metric label="Tracked spend" value={formatMoney(trackedSpend)} note={`${budgetSessions.length} active session budgets`} icon={CircleDollarSign} tone={budgetUtilization >= 80 ? "warning" : "neutral"} />
           <Metric label="Eval accuracy" value={latestAccuracy ? `${latestAccuracy.accuracy_pct.toFixed(0)}%` : "--"} note={latestAccuracy ? `${latestAccuracy.tasks_passed}/${latestAccuracy.tasks_total} tasks passed` : "No completed eval run"} icon={Gauge} tone={latestAccuracy && latestAccuracy.accuracy_pct >= 85 ? "good" : latestAccuracy ? "warning" : "neutral"} />
           <Metric label="Policy blocks" value={blockedEvents.toLocaleString()} note={`${blockRate.toFixed(1)}% of governed events`} icon={ShieldX} tone={blockedEvents ? "warning" : "good"} />

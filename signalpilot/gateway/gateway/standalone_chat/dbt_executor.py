@@ -33,22 +33,72 @@ from ..sandbox_runtime import SandboxRuntimeError, SandboxSpec, get_sandbox_runt
 from ..workspace_store import workspace_object_storage
 from ..workspace_store.dbt_detect import resolve_dbt_project_dir_detailed
 from ..workspace_store.store import WorkspaceStore
+from .dbt_tunnel import DbtTunnelError, ensure_tunnel_alive, plan_tunnel, start_tunnel
 
 logger = logging.getLogger(__name__)
 
 DBT_EXECUTE_CAPABILITY = "dbt:execute"
 
-# The shared dev database the agent materializes refreshes into (e.g.
-# "Analytics_dev"). Prod stays read-only; refreshes land here, in the project's
-# normal schemas. Unset => refresh_mart is disabled and the executor falls back
-# to the per-chat scratch schema.
+# ── refresh_mart target ──────────────────────────────────────────────────────
+#
+# refresh_mart is the agent's only warehouse write. It writes through the same
+# connection the chat reads from (the session's bound connection), into that
+# connection's own database by default. The agent may name a different
+# database on the same server (e.g. "Analytics_dev" next to "Analytics"); the
+# executor re-points the connection's DSN at it. SP_CHAT_DEV_DATABASE is the
+# deployment-wide default for that database when the agent names none.
 _DEV_DATABASE_ENV = "SP_CHAT_DEV_DATABASE"
-_DEV_DEFAULT_SCHEMA = "dbo"
+_DEFAULT_SCHEMAS = {"mssql": "dbo", "snowflake": "PUBLIC"}
+_FALLBACK_SCHEMA = "public"
+# Database identifiers only: a value here lands in a DSN path and a profiles
+# entry, so nothing that could smuggle in a slash, quote or query string.
+_DATABASE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_$\-]*$")
 
 
 def dev_database() -> str | None:
+    """The deployment-wide default refresh database (SP_CHAT_DEV_DATABASE), or None."""
     value = (os.getenv(_DEV_DATABASE_ENV) or "").strip()
     return value or None
+
+
+@dataclass(frozen=True)
+class RefreshTarget:
+    """Where a refresh materializes: the chat connection, optionally re-pointed
+    at another database on the same server."""
+
+    connection_name: str
+    database_override: str | None = None
+    schema: str | None = None
+
+
+def resolve_refresh_target(
+    session_connection_name: str | None, database: str | None = None
+) -> RefreshTarget:
+    """Build the refresh target for a chat session.
+
+    The connection is always the session's bound connection. The database is,
+    in order: the one the agent named, else SP_CHAT_DEV_DATABASE, else the
+    connection's own. Raises DbtExecutorError for a malformed database name
+    or an unbound session.
+    """
+    connection = (session_connection_name or "").strip()
+    if not connection:
+        raise DbtExecutorError("this session has no project/connection binding")
+    requested = (database or "").strip()
+    if requested and not _DATABASE_RE.match(requested):
+        raise DbtExecutorError(
+            "database must be a bare database name (letters, digits, underscore)"
+        )
+    return RefreshTarget(
+        connection_name=connection,
+        database_override=requested or dev_database(),
+    )
+
+
+def default_schema_for(db_type: str) -> str:
+    """The warehouse's conventional default schema, used when the project's
+    refresh target names no schema."""
+    return _DEFAULT_SCHEMAS.get(db_type, _FALLBACK_SCHEMA)
 
 _ALLOWED_COMMANDS = {"run", "test", "build", "seed", "snapshot", "compile", "docs"}
 # Node-selector syntax only. A leading dash would let a value masquerade as a
@@ -66,6 +116,13 @@ _WORKSPACE = "/workspace"
 # release executors whose conversation has gone quiet.
 _executors: dict[str, str] = {}
 _executor_seen: dict[str, float] = {}
+# cache_key -> local port of the in-sandbox SSH forward, for executors whose
+# connection tunnels through a bastion. Holds no secrets; the material lives
+# only under /creds inside the sandbox.
+_executor_tunnels: dict[str, int] = {}
+# cache_key -> materialization schema, so a reused refresh executor reports
+# the schema its profile was written with (it depends on the warehouse type).
+_executor_schemas: dict[str, str] = {}
 _executor_lock = asyncio.Lock()
 
 # How long an executor sandbox stays warm after its last use before the reaper
@@ -268,25 +325,26 @@ async def ensure_executor(
     branch: str,
     connection_name: str,
     store,
-    target_database: str | None = None,
-    target_schema: str | None = None,
+    refresh: RefreshTarget | None = None,
 ) -> tuple[str, str, str]:
     """Create (or reuse) the executor sandbox. Returns
     (sandbox_id, dbt_project_dir, materialization_schema). Credentials are
     written inside this function and never returned.
 
-    Default mode materializes into the per-chat scratch schema. When
-    ``target_database`` is set (the shared dev database), the emitted profile
-    targets that database with a normal default schema so the project's own
-    schema config (staging/intermediate/marts) applies — this is the
-    refresh-into-Analytics_dev path. Dev and scratch executors are cached under
-    distinct keys so they never share one profiles.yml."""
-    schema = (target_schema or _DEV_DEFAULT_SCHEMA) if target_database else scratch_schema_for(identity)
-    cache_key = f"{identity}::dev" if target_database else identity
+    Default mode materializes into the per-chat scratch schema through
+    ``connection_name``. With ``refresh`` set (the refresh_mart path) the
+    executor connects through the refresh target's connection instead and the
+    emitted profile uses a normal default schema, so the project's own schema
+    config (staging/intermediate/marts) applies. Refresh and scratch executors
+    are cached under distinct keys so they never share one profiles.yml."""
+    if refresh is not None:
+        connection_name = refresh.connection_name
+    cache_key = f"{identity}::refresh" if refresh else identity
     async with _executor_lock:
         existing = _executors.get(cache_key)
         if existing:
             _executor_seen[cache_key] = time.monotonic()
+            schema = _executor_schemas.get(cache_key) or scratch_schema_for(identity)
             # Project dir/schema are deterministic; recompute cheaply.
             storage = workspace_object_storage()
             ws = WorkspaceStore(storage)
@@ -295,6 +353,13 @@ async def ensure_executor(
             dbt_dir, _, _ = resolve_dbt_project_dir_detailed(
                 (project.settings if project else None) or {}, manifest
             )
+            tunnel_port = _executor_tunnels.get(cache_key)
+            if tunnel_port is not None:
+                # A resumed sandbox keeps /creds but not the forwarder process.
+                try:
+                    await ensure_tunnel_alive(get_sandbox_runtime(), existing, tunnel_port)
+                except DbtTunnelError as exc:
+                    raise DbtExecutorError(str(exc)) from exc
             return existing, dbt_dir or "", schema
 
         storage = workspace_object_storage()
@@ -320,6 +385,19 @@ async def ensure_executor(
             raise DbtExecutorError(f"connection '{connection_name}' is not available")
         info = await store.get_connection(connection_name)
         db_type = str(getattr(info, "db_type", "") or "").split(".")[-1]
+        schema = (
+            (refresh.schema or default_schema_for(db_type))
+            if refresh
+            else scratch_schema_for(identity)
+        )
+        # Bastion-fronted warehouses: the forwarder runs inside the sandbox and
+        # the profile targets its local port instead of the real host.
+        try:
+            tunnel = plan_tunnel(db_type, dsn, await store.get_credential_extras(connection_name))
+        except DbtTunnelError as exc:
+            raise DbtExecutorError(str(exc)) from exc
+        if tunnel is not None:
+            dsn = tunnel.dsn
 
         # Profile name must match dbt_project.yml's `profile:`; read it from the
         # manifest-backed file via the workspace store.
@@ -328,7 +406,8 @@ async def ensure_executor(
             revision=revision, dbt_dir=dbt_dir or "",
         )
         emitted = emit_profile(
-            db_type, profile_name, dsn, schema, database_override=target_database
+            db_type, profile_name, dsn, schema,
+            database_override=refresh.database_override if refresh else None,
         )
 
         runtime = get_sandbox_runtime()
@@ -357,6 +436,11 @@ async def ensure_executor(
                 f"|| pip install --quiet {shlex.quote(emitted.adapter_package)}",
                 timeout_seconds=420,
             )
+            if tunnel is not None:
+                try:
+                    await start_tunnel(runtime, sandbox_id, tunnel)
+                except DbtTunnelError as exc:
+                    raise DbtExecutorError(str(exc)) from exc
             # Install dbt package deps (packages.yml) once per executor — the
             # snapshot carries source files but not the resolved dbt_packages/,
             # so `dbt run/build` would fail with "run dbt deps" without this.
@@ -372,9 +456,14 @@ async def ensure_executor(
             raise
         _executors[cache_key] = sandbox_id
         _executor_seen[cache_key] = time.monotonic()
+        _executor_schemas[cache_key] = schema
+        if tunnel is not None:
+            _executor_tunnels[cache_key] = tunnel.local_port
         logger.info(
-            "dbt executor ready for %s (db_type=%s, database=%s, schema=%s)",
-            cache_key, db_type, target_database or "<connection default>", schema,
+            "dbt executor ready for %s (connection=%s, db_type=%s, database=%s, schema=%s, tunnel=%s)",
+            cache_key, connection_name, db_type,
+            (refresh.database_override if refresh else None) or "<connection default>",
+            schema, tunnel is not None,
         )
         return sandbox_id, dbt_dir or "", schema
 
@@ -399,9 +488,11 @@ async def _read_profile_name(
 async def release_executor(identity: str) -> None:
     async with _executor_lock:
         sandbox_ids = []
-        for key in (identity, f"{identity}::dev"):
+        for key in (identity, f"{identity}::refresh"):
             sandbox_ids.append(_executors.pop(key, None))
             _executor_seen.pop(key, None)
+            _executor_tunnels.pop(key, None)
+            _executor_schemas.pop(key, None)
     runtime = get_sandbox_runtime()
     for sandbox_id in sandbox_ids:
         if sandbox_id:
@@ -424,6 +515,8 @@ async def cleanup_idle_executors() -> int:
         for key in stale:
             sandbox_ids.append(_executors.pop(key, None))
             _executor_seen.pop(key, None)
+            _executor_tunnels.pop(key, None)
+            _executor_schemas.pop(key, None)
     runtime = get_sandbox_runtime()
     released = 0
     for sandbox_id in sandbox_ids:

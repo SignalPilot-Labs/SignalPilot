@@ -1,8 +1,12 @@
 # This image runs the Claude CLI for evaluation tasks.
-# The gateway starts one container for each task.
+# The gateway starts one container (or one Vercel sandbox) for each task.
 # The gateway connects each container to MCP.
 # The gateway transfers the dbt project in a tar file through a presigned URL.
 # The container does not receive Git credentials.
+#
+# The image also ships the SignalPilot plugin (skills + verifier agents) and a
+# dbt toolchain, so an eval repo does not need to vendor .claude/skills or
+# install dbt in a setup script.
 #
 # Build this image with the following command:
 # docker build -f Dockerfile.eval-runner -t sp-eval-runner:latest .
@@ -10,14 +14,49 @@ FROM node:22-slim
 
 # postgresql-client is here because per-task setup/teardown scripts run in
 # this image by default (a manifest may override setup.image) and their whole
-# job is to mutate the task's warehouse branch — without psql every such
+# job is to mutate the task's warehouse branch. Without psql every such
 # script dies with "psql: not found" after the branch has already been forked.
+#
+# msodbcsql18 + unixodbc back dbt-sqlserver (SQL Server customers), mirroring
+# Dockerfile.notebook: node:22-slim is Debian bookworm, so the same apt repo
+# applies.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      git ca-certificates curl postgresql-client && \
+      git ca-certificates curl gnupg postgresql-client \
+      python3 python3-venv libstdc++6 && \
+    curl -fsSL https://packages.microsoft.com/keys/microsoft.asc -o /usr/share/keyrings/microsoft.asc && \
+    echo "deb [signed-by=/usr/share/keyrings/microsoft.asc] https://packages.microsoft.com/debian/12/prod bookworm main" \
+      > /etc/apt/sources.list.d/mssql-release.list && \
+    apt-get update && ACCEPT_EULA=Y apt-get install -y --no-install-recommends msodbcsql18 unixodbc && \
     rm -rf /var/lib/apt/lists/* && \
     npm install -g @anthropic-ai/claude-code
 
-RUN useradd -m -u 10002 evalrunner
+# dbt toolchain in its own venv. Same adapter set as Dockerfile.notebook so an
+# eval task can `dbt run` against any warehouse the chat sandbox can. Installed
+# as root with the default umask so the files stay world-readable: the Docker
+# backend runs the container as uid 65532, not as evalrunner.
+ENV UV_LINK_MODE=copy
+RUN python3 -m venv /opt/sp-eval/.venv && \
+    /opt/sp-eval/.venv/bin/pip install --no-cache-dir uv && \
+    /opt/sp-eval/.venv/bin/uv pip install --no-cache --python /opt/sp-eval/.venv/bin/python \
+      dbt-core dbt-duckdb dbt-postgres dbt-snowflake dbt-sqlserver dbt-redshift && \
+    # Bake dependency .pyc once. The Docker backend mounts the root filesystem
+    # read-only, so imports should read precompiled bytecode instead of trying
+    # to write it at startup.
+    /opt/sp-eval/.venv/bin/python -m compileall -q -j 0 /opt/sp-eval/.venv/lib 2>/dev/null || true
+ENV PATH="/opt/sp-eval/.venv/bin:$PATH"
+
+RUN useradd -m -u 10002 evalrunner && \
+    mkdir -p /work && chown evalrunner:evalrunner /work
+
+# The Claude CLI loads the production SignalPilot skills and verifier agents
+# as a local plugin (runner.py passes --plugin-dir when this path exists).
+# Keep it in the immutable image: a Vercel sandbox has no repository checkout
+# at boot, and MCP registration alone does not install skills.
+COPY --chown=evalrunner:evalrunner signalpilot-plugin/.claude-plugin/ /opt/signalpilot-plugin/.claude-plugin/
+COPY --chown=evalrunner:evalrunner signalpilot-plugin/skills/ /opt/signalpilot-plugin/skills/
+COPY --chown=evalrunner:evalrunner signalpilot-plugin/agents/ /opt/signalpilot-plugin/agents/
+ENV SP_AGENT_PLUGIN_PATH=/opt/signalpilot-plugin
+
 USER evalrunner
 WORKDIR /work
 

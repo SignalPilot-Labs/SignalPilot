@@ -95,9 +95,7 @@ export function foldRunSteps(
         status: "running",
         title: isSpawn
           ? (text(input?.description) ?? "Subagent")
-          : tool === "upsert_dashboard_chart"
-            ? `Validating ${text(asRecord(input?.chart)?.title) ?? text(input?.chart_id) ?? "dashboard chart"}`
-            : (queryDescription(tool, input) ?? humanizeTool(tool)),
+          : (queryDescription(tool, input) ?? humanizeTool(tool)),
         tool,
         toolOrigin: origin,
         input,
@@ -146,10 +144,6 @@ export function foldRunSteps(
       step.durationMs = durationBetween(step.startedAt, event.created_at);
       if (step.category === "subagent") {
         step.report = text(event.payload.report);
-      }
-      const dashboard = asRecord(event.payload.dashboard_authoring);
-      if (step.category === "dashboard" && dashboard) {
-        step.detail = text(dashboard.label);
       }
       // Structured output (table / schema / dbt run ...) for the tool card;
       // legacy events fold to `kind: "legacy"` with no summary.
@@ -237,15 +231,6 @@ export function foldRunSteps(
     if (event.type === "progress") {
       const label = text(event.payload.label);
       if (!label) continue;
-      if (text(event.payload.scope) === "dashboard_authoring") {
-        const dashboardStep = [...open]
-          .reverse()
-          .find((step) => step.tool === "create_dashboard_preview");
-        if (dashboardStep) {
-          dashboardStep.detail = label;
-          continue;
-        }
-      }
       steps.push({
         key,
         sequence: event.sequence,

@@ -14,6 +14,13 @@ export type EvalConfig = {
   repo_url: string;
   repo_installation_id?: string | null;
   repo_id?: number | null;
+  /** The dbt project the eval set runs against. Canonical https://github.com/<owner>/<repo>; a local path in self-host mode. */
+  project_repo_url: string;
+  /** Set together with project_repo_id, or both null. */
+  project_repo_installation_id: string | null;
+  project_repo_id: number | null;
+  /** Branch name. Empty means the repository's default branch. */
+  project_ref: string;
   model: string;
   max_tasks: number;
   prompt_preamble: string;
@@ -149,14 +156,6 @@ export type EvalRun = {
 };
 /** The detail route returns tasks. The list route omits tasks. */
 export type EvalRunDetail = EvalRun & { tasks: EvalRunTask[] };
-
-/** Any authenticated user can read availability. Entitlement controls all other evaluation routes. */
-export type EvalAvailability = {
-  enabled: boolean;
-  reason: "ok" | "not_enabled_for_org";
-};
-export const getEvalAvailability = () =>
-  request<EvalAvailability>("/api/evals/availability");
 
 export const getEvalConfig = () => request<EvalConfig>("/api/evals/config");
 export const putEvalConfig = (

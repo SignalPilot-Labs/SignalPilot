@@ -8,9 +8,9 @@ import MiniCopyBlock from '@site/src/components/MiniCopyBlock';
 
 Who does what:
 
-- **On SignalPilot Cloud**, the harness is already deployed. Evals are opt-in per
-  workspace. Ask us to enable yours, then everything you need is on the Evals
-  page. Skip to [Running evals on Cloud](#running-evals-on-cloud).
+- **On SignalPilot Cloud**, the harness is already deployed. Evals are included
+  on every paid plan; everything you need is on the Evals page. Skip to
+  [Running evals on Cloud](#running-evals-on-cloud).
 - **Self-hosting?** You supply the runner image, the evidence bucket, an agent
   credential, and, for write tasks, a branch provider. That is the rest of this
   page.
@@ -19,10 +19,10 @@ Who does what:
 
 | Requirement | Why |
 |---|---|
-| Runner image with the Claude CLI | Executes each task. `psql`, `git`, and `curl` must be present for setup scripts and project delivery. |
+| Runner image | Executes each task. Ships the Claude CLI, the SignalPilot plugin (skills and verifier agents) and a dbt toolchain; `psql`, `git`, and `curl` must be present for setup scripts and project delivery. |
 | Agent credential | `SP_EVAL_CLAUDE_TOKEN` (OAuth) or `SP_EVAL_ANTHROPIC_KEY`. |
 | Evidence bucket (S3 or MinIO) | Transcripts, logs, captures. A run refuses to start without one. |
-| An execution backend | Docker Engine locally, or the hosted sandbox backend (`SP_EVAL_EXECUTION_BACKEND=vercel`). |
+| An execution backend | Docker Engine locally; Vercel sandboxes (`SP_EVAL_EXECUTION_BACKEND=vercel`) in cloud mode. |
 | A pinned warehouse connection | Chosen per workspace on the Evals page. |
 | A branch provider *(write tasks only)* | Xata connection, or Postgres admin DSN + parent database. |
 
@@ -84,13 +84,44 @@ branches is the configuration this was designed for.
 <MiniCopyBlock
   label="Dockerfile.eval-runner"
   plain
-  code={`FROM node:22-slim\nRUN apt-get update && apt-get install -y --no-install-recommends \\\n      git ca-certificates curl postgresql-client && \\\n    rm -rf /var/lib/apt/lists/* && \\\n    npm install -g @anthropic-ai/claude-code\nRUN useradd -m -u 10002 evalrunner\nUSER evalrunner\nWORKDIR /work\nCMD ["claude", "--version"]`}
+  code={`FROM node:22-slim
+# Claude CLI, psql/git/curl for setup scripts, msodbcsql18 for dbt-sqlserver
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      git ca-certificates curl gnupg postgresql-client python3 python3-venv libstdc++6 && \
+    ... msodbcsql18 unixodbc from packages.microsoft.com ... && \
+    npm install -g @anthropic-ai/claude-code
+# dbt toolchain, same adapter set as the notebook image
+RUN python3 -m venv /opt/sp-eval/.venv && \
+    /opt/sp-eval/.venv/bin/pip install --no-cache-dir uv && \
+    /opt/sp-eval/.venv/bin/uv pip install --python /opt/sp-eval/.venv/bin/python \
+      dbt-core dbt-duckdb dbt-postgres dbt-snowflake dbt-sqlserver dbt-redshift
+ENV PATH="/opt/sp-eval/.venv/bin:$PATH"
+RUN useradd -m -u 10002 evalrunner && mkdir -p /work && chown evalrunner:evalrunner /work
+# SignalPilot plugin: skills + verifier agents, loaded with --plugin-dir
+COPY --chown=evalrunner:evalrunner signalpilot-plugin/.claude-plugin/ /opt/signalpilot-plugin/.claude-plugin/
+COPY --chown=evalrunner:evalrunner signalpilot-plugin/skills/ /opt/signalpilot-plugin/skills/
+COPY --chown=evalrunner:evalrunner signalpilot-plugin/agents/ /opt/signalpilot-plugin/agents/
+ENV SP_AGENT_PLUGIN_PATH=/opt/signalpilot-plugin
+USER evalrunner
+WORKDIR /work
+CMD ["claude", "--version"]`}
 />
+
+The full file is `Dockerfile.eval-runner` at the repository root; build it from
+there with `docker build -f Dockerfile.eval-runner -t sp-eval-runner:latest .`.
+The runner passes `--plugin-dir $SP_AGENT_PLUGIN_PATH` to the Claude CLI when
+that directory exists and puts the dbt venv on `PATH`, so an eval repo no longer
+has to vendor `.claude/skills` or install dbt in a setup script. Older images
+without either still work; the flags are skipped.
 
 `postgresql-client` is not optional if any task ships a setup script: those
 scripts exist to mutate the branch, and without `psql` every one of them dies
 after the branch has already been forked. Use `SP_EVAL_SETUP_IMAGE` if you would
 rather keep script tooling in a separate image.
+
+For cloud mode, push the image to Vercel Container Registry with
+`VERCEL_REGISTRY=registry.vercel.com/<team> bash scripts/build-eval-runner-image-vercel.sh`;
+it prints the digest-pinned `SP_EVAL_RUNNER_IMAGE=...@sha256:...` line to set.
 
 ## Local (Docker) mode
 
@@ -114,33 +145,45 @@ CPUs, a setup or teardown container gets 4 GiB and 4 CPUs, and `/work`, `/tmp` a
 `/repo` are 512 MB tmpfs mounts. The dbt project tarball unpacks into that 512 MB
 `/work`. A very large project is the one thing likely to hit it.
 
-## Cloud mode
+## Cloud (Vercel) mode
 
 When `SP_DEPLOYMENT_MODE=cloud`, the Docker path is unreachable by construction:
 the backend selector raises rather than falling back, so a misconfigured
-deployment can never hand eval workloads the host daemon. Set
-`SP_EVAL_EXECUTION_BACKEND=vercel` to run each task on the hosted sandbox
-backend. Every task becomes a short-lived, isolated microVM with fixed CPU and
+deployment can never hand eval workloads the host daemon. Cloud mode requires
+`SP_EVAL_EXECUTION_BACKEND=vercel` (plus `VERCEL_TOKEN`, `VERCEL_TEAM_ID` and
+`VERCEL_PROJECT_ID`). Each task becomes a short-lived, isolated Vercel sandbox
+microVM booted from the digest-pinned `SP_EVAL_RUNNER_IMAGE`, pushed with
+`scripts/build-eval-runner-image-vercel.sh`. The microVM has fixed CPU and
 memory, restricted egress, and no access to the gateway's database or object
-storage networks. Two rules apply:
+storage networks. The harness enforces:
 
 - **Digest-pinned images.** `SP_EVAL_RUNNER_IMAGE` and `SP_EVAL_SETUP_IMAGE` must
   end in `@sha256:<64 hex>`. A floating tag would let what runs in the sandbox
   change without the configuration changing. Look one up with
   `crane digest <image>` or `docker buildx imagetools inspect <image>`.
+- **Secrets ride the exec environment only.** Credentials never enter the
+  sandbox creation spec, which is readable back from the provider API.
+- **A public MCP URL.** Sandboxes run in Vercel's network, not next to the
+  gateway, so `SP_EVAL_MCP_URL` must be reachable from the internet.
+- **Bounded lifetime.** The sandbox is destroyed when the task ends, with the
+  provider's execution time limit as backstop.
 - **GitHub HTTPS repositories only.** Cloud mode refuses local paths and SSH
-  URLs for the eval repo and the manifest's `project_repo`.
+  URLs for both the eval repo and the project repository.
+
+Local-path eval sets and host bind mounts are refused on this backend; use a
+git eval repo with a self-contained setup script.
 
 ## Running evals on Cloud
 
 Nothing to deploy. What you control:
 
-1. **Enablement.** Evals are allow-listed per workspace, and every eval route
-   additionally requires platform-staff access. If the page reports evals are not
-   enabled for your workspace, that is what it means.
-2. **The eval repo.** Cloud mode accepts `https://github.com/…` only, no other
-   host, no local paths, no SSH URLs. The same rule applies to the manifest's
-   `project_repo`.
+1. **Enablement.** Evals are on for every organization on a paid plan. If the
+   page shows a plan prompt, your organization is on the free plan; if it shows
+   a deployment notice, the deployment is not wired to run evals.
+2. **The eval repo and the project repository.** Cloud mode accepts
+   `https://github.com/…` only, no other host, no local paths, no SSH URLs.
+   The same rule applies to both repositories. The project repository can pin
+   a branch; leave it empty for the repository default branch.
 3. **Private repos.** Connect GitHub from **Settings → GitHub** and install the
    app on the repositories you want to use. The gateway then clones them with a
    short-lived installation token scoped to your organization; a repository that
@@ -167,7 +210,6 @@ Every variable the eval harness reads. See the
 | `SP_EVAL_MCP_URL` | `http://gateway:3300/mcp` | MCP endpoint the sandboxes call back on. |
 | `SP_EVAL_CLAUDE_TOKEN` | unset | `CLAUDE_CODE_OAUTH_TOKEN` passed to task containers. Falls back to `CLAUDE_KEY_1` if unset. |
 | `SP_EVAL_ANTHROPIC_KEY` | unset | Alternative: `ANTHROPIC_API_KEY` for task containers. |
-| `SP_EVAL_ALLOWED_ORGS` | `""` | Comma-separated org ids allowed to use evals. **Empty denies everyone in cloud mode** and allows the single local tenant in local mode. |
 | `SP_EVAL_TIMEOUT_SECONDS` | `600` | Per-task agent container timeout. |
 | `SP_EVAL_PROJECT_ENV` | `""` | Extra `KEY=VALUE` entries (newline- or comma-separated) injected into **agent** containers, for example read-only warehouse credentials a `profiles.yml` reads via `env_var`. Gateway-controlled variables always win. Setup and teardown containers do *not* receive these; give those what they need through the manifest's `setup.env_file`. |
 
@@ -179,7 +221,14 @@ Every variable the eval harness reads. See the
 | `SP_EVAL_DOCKER_NETWORK` | `signalpilot_eval_runtime` | Network eval containers join; must reach the gateway. |
 | `SP_EVAL_PROJECTS_DIR` | `/eval-projects` | Root for local-path eval sets, mounted read-only. |
 | `SP_EVAL_PROJECTS_HOST_DIR` | unset | Host path of the above; required to bind-mount local eval repos into script containers. |
-| `SP_EVAL_SETUP_HOST_ROOT` | unset | Host directory that a manifest's `setup.mounts` paths resolve under. Required when a set mounts files into its setup container. |
+| `SP_EVAL_SETUP_HOST_ROOT` | unset | Declared but not currently used by any code path. Leave unset. |
+
+### Execution: cloud Vercel
+
+| Variable | Default | Description |
+|---|---|---|
+| `SP_EVAL_EXECUTION_BACKEND` | unset | `vercel` runs each task on an ephemeral Vercel sandbox. Required in cloud mode; also honoured locally. |
+| `VERCEL_TOKEN` / `VERCEL_TEAM_ID` / `VERCEL_PROJECT_ID` | unset | Sandbox provider credentials. The backend refuses to start without all three. |
 
 ### Evidence store
 
@@ -242,8 +291,8 @@ Optional intake path for customers mailing in an eval set as a zip
 
 | Variable | Relevance |
 |---|---|
-| `SP_DEPLOYMENT_MODE` | `cloud` requires the hosted sandbox backend, digest-pinned images, and GitHub HTTPS repos. |
-| `SP_ADMIN_USER_IDS` | Only these users pass the platform-staff check on eval routes. |
+| `SP_DEPLOYMENT_MODE` | `cloud` requires `SP_EVAL_EXECUTION_BACKEND=vercel` (the Vercel backend runs the digest-pinned `SP_EVAL_RUNNER_IMAGE`), requires digest-pinned images, and restricts repos to GitHub HTTPS. |
+| `SP_BACKEND_URL` | When set, the organization's plan decides access to evals (paid plans only). When unset, the local organization is unlimited. |
 | `SP_GITHUB_APP_*` | Needed to clone private eval or project repositories. |
 
 ## Isolation and data handling
@@ -274,8 +323,8 @@ Worth knowing before you point this at production data:
 | `runner disabled — SP_EVAL_RUNNER_IMAGE unset on gateway` | The feature is off. |
 | `Eval evidence bucket is not configured (SP_EVAL_S3_BUCKET)` | No evidence store. |
 | `An eval connection pin is required` / `does not exist in this workspace` | Set **Connection** on the Evals page to a real connection name. |
-| `Evals are not enabled for this workspace` | The org is not in `SP_EVAL_ALLOWED_ORGS`. |
-| `Platform staff access required` | The caller is not in `SP_ADMIN_USER_IDS`. |
+| `402 {"error": "plan_required"}` | The organization is on the free plan. |
+| `503 {"error": "not_available_in_deployment", "capability": "evals"}` | The runner image, evidence bucket, or (in cloud mode) the `vercel` backend is not configured. |
 | `only https://github.com/ repositories are allowed` | Cloud mode; use a GitHub HTTPS URL. |
 | `local paths must live under /eval-projects` | Move the set under `SP_EVAL_PROJECTS_DIR`. |
 | `no branch provider: pin a Xata connection …` | The set has write tasks but no provider is configured. |

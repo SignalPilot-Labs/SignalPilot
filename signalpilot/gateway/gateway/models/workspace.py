@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 # ─── Workspace Projects ─────────────────────────────────────────────────────
 
@@ -21,12 +21,43 @@ class WorkspaceProjectCreate(BaseModel):
     settings: dict | None = None
 
 
+class WorkspaceProjectSettings(BaseModel):
+    """Typed view of the workspace project ``settings`` JSON column.
+
+    Known keys are validated; unknown keys are kept verbatim (``extra="allow"``)
+    so existing rows and callers keep working. On PUT the settings are merged
+    key-by-key into the stored dict: a key that is absent from the payload is
+    left untouched, a key sent as ``null`` is removed. Use
+    ``model_dump(exclude_unset=True)`` to keep that distinction.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    # dbt map automation (gateway/dbt_map/triggers.py, web project-automation-settings.tsx)
+    watched_branches: list[str] | None = None
+    auto_compile_on_push: bool | None = None
+    compile_on_pr: bool | None = None
+    pr_agent_trigger: bool | None = None
+    # dbt project location inside the repo (workspace_store/dbt_detect.py)
+    dbt_project_dir: str | None = Field(None, max_length=500)
+    # dbt metadata snapshot consumed by chat (standalone_chat/projects.py)
+    dbt_metadata_checksum: str | None = Field(None, max_length=200)
+    manifest: dict[str, Any] | None = None
+    model_names: list[str] | None = None
+    metric_names: list[str] | None = None
+    source_names: list[str] | None = None
+
+    def patch(self) -> dict[str, Any]:
+        """Return only the keys the caller sent, keeping explicit nulls."""
+        return self.model_dump(exclude_unset=True)
+
+
 class WorkspaceProjectUpdate(BaseModel):
     display_name: str | None = Field(None, max_length=200)
     description: str | None = Field(None, max_length=2000)
     connection_name: str | None = None
     tags: list[str] | None = None
-    settings: dict | None = None
+    settings: WorkspaceProjectSettings | None = None
     status: str | None = Field(None, pattern=r"^(active|archived)$")
 
 

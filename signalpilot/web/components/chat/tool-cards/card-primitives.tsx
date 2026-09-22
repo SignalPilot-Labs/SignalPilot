@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertCircle, Check, ChevronRight, type LucideIcon } from "lucide-react";
+import { Check, ChevronRight, TriangleAlert, type LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ChatCode } from "~/components/chat/chat-code";
 import {
@@ -13,9 +13,32 @@ import type { ToolCardAccent, ToolCardSummary } from "./registry";
 /**
  * Shared building blocks for every tool card: the frame with its header,
  * stat pills, the animated counter, the indeterminate rail, skeleton rows,
- * the raw-output toggle and the error banner. Dark, mono, restrained —
- * `--color-success` is reserved for live and success accents.
+ * the raw-output toggle and the error banner. Dark, mono, restrained:
+ * `--color-success` is reserved for live and success accents and
+ * `--color-warning` (amber) is the only failure marker. A failed call keeps
+ * the neutral frame; only the badge and the status dot say it failed.
  */
+
+/** Amber text class shared by every "this call failed" marker. */
+export const FAILED_TONE_CLASS = "text-[var(--color-warning)]";
+
+/** Small amber "Failed" pill with a warning icon, for card and row headers. */
+export function FailedBadge({ className }: { className?: string }) {
+  return (
+    <span
+      data-testid="chat-tool-failed-badge"
+      className={`inline-flex flex-none items-center gap-1 rounded-full border border-[var(--color-warning)]/30 bg-[rgba(255,170,0,0.08)] px-1.5 py-0.5 text-[9.5px] font-medium uppercase leading-none tracking-[0.12em] ${FAILED_TONE_CLASS} ${className ?? ""}`}
+    >
+      <TriangleAlert className="h-2.5 w-2.5" aria-hidden />
+      Failed
+    </span>
+  );
+}
+
+/** "3 charts", "1 issue": a count with its noun. */
+export function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
 
 /** True when the viewer asked for reduced motion (false in jsdom). */
 export function prefersReducedMotion(): boolean {
@@ -53,22 +76,16 @@ export function KindIcon({
     <span className="relative h-7 w-7 flex-none" aria-hidden>
       <span
         className={`absolute inset-0 rounded-lg border bg-[var(--color-bg-input)] ${
-          failed
-            ? "border-[var(--color-error)]/30"
-            : running
-              ? "border-[var(--color-success)]/25"
-              : "border-[var(--color-border)]"
+          running && !failed
+            ? "border-[var(--color-success)]/25"
+            : "border-[var(--color-border)]"
         }`}
       />
       {running && <span className="chat-boot-orbit absolute inset-0 rounded-lg" />}
       <span className="absolute inset-0 flex items-center justify-center">
         <Icon
           className={`h-3.5 w-3.5 ${
-            failed
-              ? "text-[var(--color-error)]"
-              : running
-                ? "text-[var(--color-success)]"
-                : "chat-tool-accent-text"
+            running && !failed ? "text-[var(--color-success)]" : "chat-tool-accent-text"
           }`}
         />
       </span>
@@ -219,15 +236,15 @@ export function InputPills({
   );
 }
 
-/** Failure headline in the error tint. */
+/** Failure message in the normal muted style, marked by an amber icon. */
 export function ErrorBanner({ message }: { message: string | null }) {
   return (
     <div
       role="alert"
       data-testid="chat-tool-error"
-      className="chat-tool-shake flex items-start gap-2 border-t border-[var(--color-error)]/25 bg-[rgba(255,68,68,0.05)] px-3.5 py-2 text-[11px] leading-4 text-[var(--color-error)]/90"
+      className="flex items-start gap-2 border-t border-[var(--color-border)] px-3.5 py-2 text-[11px] leading-4 text-[var(--color-text-muted)]"
     >
-      <AlertCircle className="mt-0.5 h-3 w-3 flex-none" />
+      <TriangleAlert className={`mt-0.5 h-3 w-3 flex-none ${FAILED_TONE_CLASS}`} aria-hidden />
       <span className="min-w-0 break-words">{message ?? "The tool returned an error."}</span>
     </div>
   );
@@ -271,7 +288,7 @@ export function RawResultTab({ result }: { result: ToolResult | null }) {
 /**
  * The expanded card frame: kind icon, title, mono stat, duration, chevron.
  * `data-accent` selects the accent variable; the frame breathes while
- * running and tints red on failure.
+ * running and stays neutral on failure (the amber badge carries the state).
  */
 export function CardFrame({
   Icon,
@@ -302,11 +319,9 @@ export function CardFrame({
       data-testid={testId}
       data-accent={accent}
       className={`overflow-hidden rounded-lg border bg-[var(--color-bg-input)] ${
-        failed
-          ? "border-[var(--color-error)]/30"
-          : running
-            ? "chat-tool-glow border-[var(--color-success)]/20"
-            : "border-[var(--color-border)]"
+        running && !failed
+          ? "chat-tool-glow border-[var(--color-success)]/20"
+          : "border-[var(--color-border)]"
       }`}
     >
       <button
@@ -319,11 +334,7 @@ export function CardFrame({
         <span className="flex min-w-0 flex-1 items-baseline gap-2">
           <span
             className={`truncate text-[12px] font-medium ${
-              running
-                ? "chat-live-label"
-                : failed
-                  ? "text-[var(--color-error)]"
-                  : "text-[var(--color-text)]"
+              running && !failed ? "chat-live-label" : "text-[var(--color-text)]"
             }`}
           >
             {summary.title}
@@ -338,7 +349,7 @@ export function CardFrame({
           {!running && !failed && (
             <Check className="chat-boot-check h-3 w-3 text-[var(--color-success)]/80" />
           )}
-          {failed && <AlertCircle className="h-3 w-3 text-[var(--color-error)]" />}
+          {failed && <FailedBadge />}
           {duration && <span className="tabular-nums">{duration}</span>}
           <ChevronRight
             className={`h-3 w-3 transition-transform ${open ? "rotate-90" : ""}`}

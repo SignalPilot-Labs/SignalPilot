@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import HTTPException, Request
+from fastapi import Depends, HTTPException, Request
 from sqlalchemy import select
 
 from gateway.db.models import GatewayChatRun
@@ -10,12 +10,17 @@ from gateway.standalone_chat.config import enterprise_chat_feature_flags, standa
 from gateway.standalone_chat.projects import authorize_chat_project, evaluate_project_readiness
 from gateway.store import standalone_chat as chat_store
 
-from ..deps import StoreD
+from ..deps import StoreD, not_available_error
 
 
 def require_enabled() -> None:
+    """Kill switch only: 503 when SP_FEATURE_STANDALONE_CHAT is off.
+
+    Plan access is the router-level ``RequireBillablePlan`` dependency in
+    ``api/standalone_chat.py``; this guard never looks at the org.
+    """
     if not standalone_chat_enabled():
-        raise HTTPException(status_code=404, detail="Standalone chat is not enabled")
+        raise not_available_error("chat")
 
 
 async def owned_conversation_or_404(store: StoreD, conversation_id: str):
@@ -59,9 +64,25 @@ async def running_run_for_execution_identity(store: StoreD, request: Request) ->
     return run
 
 
+def reject_execution_identity(request: Request) -> None:
+    """Refuse sandbox tokens: a token that carries an execution identity.
+
+    The chat sandbox authenticates with a run-scoped token whose subject is
+    the run's user. Read routes may serve it on the user's behalf; routes
+    that change state require the user to act from the browser.
+    """
+    claims = getattr(request.state, "_jwt_claims", {}) or {}
+    if claims.get("execution_identity"):
+        raise HTTPException(status_code=403, detail="This action requires an interactive user")
+
+
+RequireInteractiveUser = Depends(reject_execution_identity)
+
+
 def require_enterprise_feature(name: str) -> None:
+    """Kill switch for one chat capability: 503 when its SP_FEATURE_CHAT_* switch is off."""
     if not getattr(enterprise_chat_feature_flags(), name):
-        raise HTTPException(status_code=404, detail="Chat capability is not enabled")
+        raise not_available_error(f"chat.{name}")
 
 
 def is_admin(role: str) -> bool:

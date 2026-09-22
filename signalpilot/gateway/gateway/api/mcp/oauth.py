@@ -49,7 +49,10 @@ def safe_return_url(redirect_after: str | None, *, connector_id: str, signin: st
     target = (redirect_after or "").strip()
     web = _web_base()
     fallback = f"{web}{_DEFAULT_RETURN_PATH}" if web else _DEFAULT_RETURN_PATH
-    if target.startswith("/") and not target.startswith("//"):
+    if "\\" in target:
+        # Browsers read "/\evil" as "//evil": never a same-origin path.
+        target = fallback
+    elif target.startswith("/") and not target.startswith("//") and urlsplit(target)[:2] == ("", ""):
         target = f"{web}{target}" if web else target
     elif not (web and target.startswith(web + "/")):
         target = fallback

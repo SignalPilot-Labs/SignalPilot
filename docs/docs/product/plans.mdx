@@ -1,0 +1,98 @@
+---
+sidebar_position: 11
+sidebar_label: What each plan includes
+---
+
+# What each plan includes
+
+SignalPilot Cloud has three plans: **Team**, **Scale** and **Enterprise**. Each is one
+flat fee that includes a set of **allowances** (seats, covered data models, eval runs)
+and a block of **credits** every month. Everything you use beyond what is included is
+paid in credits at fixed rates. There are no feature tiers: every paid plan has every
+feature.
+
+The current fees, allowances, seat rates and credit rates are published in one place
+and read from there everywhere they appear: the [pricing page](https://signalpilot.ai/pricing),
+the plan cards and rate table under **Settings → Billing**, and the `GET /api/v1/billing/plans`
+endpoint (public, no auth). This page explains how the plans work; the numbers live there.
+
+## The one rule
+
+**If your organization is on a paid plan, every feature is on.** Team, Scale
+and Enterprise all qualify, as does a plan in its first 14 days past due.
+
+There are no per-feature flags, no allowlists and no hidden features. Inside a
+paid organization, org admins manage org-wide things (connections, connectors,
+settings, API keys) and members use them; that is the only other distinction.
+
+## Plans and terms
+
+| | Team | Scale | Enterprise |
+|---|---|---|---|
+| Who it is for | one data team | several teams, or a large dbt project | a company-wide estate |
+| How it is bought | self-serve | self-serve | one purchase order, custom terms |
+| Included seats | published | published | 100, more by contract |
+| Added seats | per seat-month, in credits | per seat-month, in credits | priced in the contract |
+| Included covered models, eval runs, credits | published | published | published starting point, raised by contract |
+| Managed (optional) | flat monthly add-on | flat monthly add-on | flat monthly add-on |
+
+Billing is **annual**. A **three-month** term is available at a premium; the plan cards
+show both. The flat fee is charged for the term up front; credit overage is added to a
+monthly invoice. Enterprise allowances above the published starting point, custom credit
+grants, SSO, SCIM, PrivateLink and customer-managed keys are agreed in the contract and
+set on your entitlement by the SignalPilot team.
+
+Included credits and allowances reset each calendar month and do not roll over,
+whatever the billing term. Allowances are separate counters; they are never pooled
+with credits.
+
+## Credits and rates
+
+1 credit = $0.01. Credits pay for per-use work and for anything beyond an
+allowance. Rates are fixed; there are no brackets. The rate table lists a
+credit price for:
+
+| Item | Metered |
+|---|---|
+| Successful chat thread | per thread |
+| Governed query | per query, everywhere (thread, Claude Code, notebook, schedule, eval run) |
+| Covered model beyond the allowance | per model-month, metered daily |
+| Eval run beyond the monthly allowance | per run (queries inside the run bill as queries) |
+| Added seat beyond the allowance | per seat-month, metered daily; Enterprise seats are contracted instead |
+| Model tokens on the SignalPilot key | provider list price times a published multiplier, per run |
+
+Bring your own model key (BYOK) and the token line is 0.
+
+A thread that fails, runs no queries, or cites no evidence is not charged.
+Repeated questions in the same thread and threads flagged wrong by a reviewer
+are returned. Work SignalPilot starts on its own behalf (readiness checks,
+schema refreshes, dbt map compiles) never consumes credits.
+
+When you have used your included credits, usage continues and the overage is
+billed at $0.01 per credit on your next invoice. You are alerted at 80% and
+100% of your included block. Nothing is ever blocked for running out of
+credits.
+
+## What a free organization sees
+
+A free organization sees every page in the navigation. Where a paid
+organization would see the working surface, a free organization sees a plan
+prompt instead. Nothing is hidden, and nothing runs, so nothing is metered.
+
+Requests from a free organization to a gated route answer `402` with the body
+`{"error": "plan_required", "tier": "free"}`.
+
+## What "not available in this deployment" means
+
+Some features depend on infrastructure the deployment must be wired for:
+evals need a runner image and an evidence store, and sandbox runtimes need
+credentials for the sandbox provider. When that wiring is missing, the page
+says so and the route answers `503` with
+`{"error": "not_available_in_deployment", "capability": "evals"}`. This is
+about the deployment, not your plan; on SignalPilot Cloud everything is
+wired.
+
+## Self-hosted deployments
+
+A self-hosted gateway without a backend (`SP_BACKEND_URL` unset) treats its
+single organization as unlimited: every feature is on and nothing is metered.

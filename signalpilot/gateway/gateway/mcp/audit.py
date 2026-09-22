@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import inspect
 import logging as _logging
@@ -15,7 +16,6 @@ from gateway.mcp.context import (
     mcp_audit_id_var,
     mcp_client_ip_var,
     mcp_execution_identity_var,
-    mcp_org_id_var,
     mcp_user_agent_var,
 )
 from gateway.models import AuditEntry
@@ -26,13 +26,23 @@ _mcp_logger = _logging.getLogger("gateway.mcp_audit")
 # the registration boundary makes a newly added tool fail closed until its
 # capability is reviewed and classified here.
 MCP_TOOL_SCOPES: dict[str, str] = {
+    "list_artifacts": "agent:run",
+    "download_artifacts": "agent:run",
+    "run_signalpilot_agent": "agent:run",
+    "continue_signalpilot_agent": "agent:run",
+    "get_signalpilot_agent": "agent:run",
+    "cancel_signalpilot_agent": "agent:run",
+    "wait_signalpilot_agent": "agent:run",
+    "get_signalpilot_agent_event": "agent:run",
+    "get_signalpilot_agent_context": "agent:run",
+    "read_signalpilot_chat_view": "agent:run",
     "list_database_connections": "read",
     "connection_health": "query",
     "connector_capabilities": "read",
     "get_knowledge": "read",
     "search_knowledge": "read",
     "read_knowledge": "read",
-    "propose_knowledge": "admin",
+    "propose_knowledge": "write",
     "archive_knowledge": "admin",
     "map_columns": "query",
     "find_column_producers": "query",
@@ -45,10 +55,9 @@ MCP_TOOL_SCOPES: dict[str, str] = {
     "audit_model_sources": "query",
     "compare_join_types": "query",
     "verify_model_values": "query",
-    # Disabled with the reports MCP registration. Durable reports and dashboards
-    # require explicit user creation or approval.
+    # Disabled with the reports MCP registration. Durable reports require
+    # explicit user creation or approval.
     # "manage_report": "admin",
-    # "manage_dashboard": "admin",
     "list_semantic_metrics": "query",
     "verify_metric_conformance": "query",
     "plan_query": "query",
@@ -72,6 +81,10 @@ MCP_TOOL_SCOPES: dict[str, str] = {
     "sandbox_write_file": "execute",
     "sandbox_read_file": "execute",
     "dbt_execute": "execute",
+    # Pull request lifecycle for pushed chat branches; chat run tokens carry write.
+    "open_pull_request": "write",
+    "update_pull_request": "write",
+    "comment_on_pull_request": "write",
     "refresh_mart": "execute",
     "describe_table": "query",
     "list_tables": "query",
@@ -146,8 +159,17 @@ EVAL_ALLOWED_MCP_TOOLS: frozenset[str] = frozenset(
 # a second, stale chat-only denylist. Xata branch control remains excluded:
 # chat runs use a frozen project/branch and must not create or delete database
 # branches as a side effect of analysis.
+
 STANDALONE_CHAT_BLOCKED_TOOLS = frozenset(
     {
+        "run_signalpilot_agent",
+        "continue_signalpilot_agent",
+        "get_signalpilot_agent",
+        "cancel_signalpilot_agent",
+        "wait_signalpilot_agent",
+        "get_signalpilot_agent_event",
+        "get_signalpilot_agent_context",
+        "read_signalpilot_chat_view",
         "schema_diff_branches",
         "xata_branch_diff",
         "xata_list_branches",
@@ -182,15 +204,7 @@ async def _audit_tool_call(
     sql: str | None = None,
     audit_id: str | None = None,
 ):
-    """Log an MCP tool call to the gateway audit log and increment usage counter."""
-    from gateway.governance.plan_limits import daily_query_counter
-
-    org_id = mcp_org_id_var.get(None)
-
-    # Increment daily usage counter for every tool call
-    if org_id:
-        daily_query_counter.increment(org_id)
-
+    """Log an MCP tool call to the gateway audit log."""
     client_ip = mcp_client_ip_var.get(None)
     user_agent = mcp_user_agent_var.get(None)
 
@@ -229,6 +243,28 @@ async def _audit_tool_call(
         _mcp_logger.debug("Failed to audit MCP tool call %s", tool_name, exc_info=True)
 
 
+# Generic result budget. Tool results above this size are spilled to a file by
+# the sandbox CLI and never reach the model, so the wrapper truncates first
+# and tells the agent how to narrow the call. Tools whose contract is a whole
+# file body keep their own limits.
+RESULT_BUDGET_CHARS = 40_000
+RESULT_BUDGET_EXEMPT_TOOLS: frozenset[str] = frozenset(
+    {"sandbox_read_file", "read_notebook", "download_artifacts"}
+)
+
+
+def apply_result_budget(tool_name: str, result: object) -> object:
+    """Truncate an oversized string result and append a narrowing hint."""
+    if not isinstance(result, str) or tool_name in RESULT_BUDGET_EXEMPT_TOOLS:
+        return result
+    if len(result) <= RESULT_BUDGET_CHARS:
+        return result
+    return (
+        result[:RESULT_BUDGET_CHARS]
+        + f"\n[truncated: result was {len(result)} chars; narrow the request with the tool's filter parameters]"
+    )
+
+
 def _audited_tool(fn):
     """Decorator that wraps an MCP tool function with audit logging."""
 
@@ -247,6 +283,9 @@ def _audited_tool(fn):
             bound_args = dict(kwargs)
         conn = bound_args.get("connection_name")
         sql_arg = bound_args.get("sql")
+        is_agent = MCP_TOOL_SCOPES.get(tool_name) == "agent:run"
+        safe_args = ({k: bound_args[k] for k in ("project_id", "thread_id") if k in bound_args}
+                     if is_agent else {k: v for k, v in bound_args.items() if k != "ctx"})
         try:
             from gateway.mcp.context import mcp_eval_run_var
 
@@ -263,37 +302,35 @@ def _audited_tool(fn):
                 elif denial:
                     result = denial
                 else:
-                    result = await fn(*args, **kwargs)
+                    result = apply_result_budget(tool_name, await fn(*args, **kwargs))
             duration_ms = (time.time() - t0) * 1000
             # Detect blocked queries from return value
-            result_str = str(result) if result else ""
-            is_blocked = result_str.startswith(("Query blocked:", "Error:"))
-            import asyncio
-
+            result_str = result if isinstance(result, str) else (str(result) if result and not is_agent else "")
+            is_blocked = result_str.startswith(("Query blocked:", "Error:")) or bool(
+                getattr(result, "is_error", False) or getattr(result, "isError", False)
+            )
             asyncio.create_task(
                 _audit_tool_call(
                     tool_name=tool_name,
-                    args=bound_args,
-                    result=result_str[:200],
+                    args=safe_args,
+                    result=None if is_agent else result_str[:200],
                     duration_ms=duration_ms,
                     connection_name=conn,
                     sql=sql_arg,
                     audit_id=audit_id,
-                    error=result_str[:200] if is_blocked else None,
+                    error=("Agent request failed" if is_agent else result_str[:200]) if is_blocked else None,
                 )
             )
             return result
-        except Exception as exc:
+        except (Exception, asyncio.CancelledError) as exc:
             duration_ms = (time.time() - t0) * 1000
-            import asyncio
-
             asyncio.create_task(
                 _audit_tool_call(
                     tool_name=tool_name,
-                    args=bound_args,
+                    args=safe_args,
                     result=None,
                     duration_ms=duration_ms,
-                    error=str(exc)[:200],
+                    error=("Agent request cancelled" if isinstance(exc, asyncio.CancelledError) else "Agent request failed") if is_agent else str(exc)[:200],
                     connection_name=conn,
                     sql=sql_arg,
                     audit_id=audit_id,

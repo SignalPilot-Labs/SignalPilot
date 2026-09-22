@@ -13,8 +13,9 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 import pytest
 from sqlalchemy.exc import IntegrityError
 
+from gateway.billing.entitlements import OrgEntitlement, local_entitlement
 from gateway.governance.knowledge_limits import MAX_DOC_BYTES, check_doc_size, check_org_storage
-from gateway.governance.plan_limits import PLAN_TIERS
+from gateway.governance.org_limits import limits_for
 from gateway.models.knowledge import (
     KnowledgeCategory,
     KnowledgeDoc,
@@ -31,56 +32,12 @@ from gateway.store.knowledge import (
     _row_to_doc,
     approve_knowledge_doc,
     archive_knowledge_doc,
-    get_knowledge_usage,
-    increment_knowledge_view,
     insert_knowledge_doc,
     upsert_knowledge_doc,
 )
+from gateway.store.knowledge_usage import get_knowledge_usage, increment_knowledge_view
 
-
-def _make_doc_row(
-    *,
-    doc_id: str | None = None,
-    org_id: str = "test-org",
-    scope: str = "org",
-    scope_ref: str | None = None,
-    category: str = "rules",
-    title: str = "test-doc",
-    body: str = "hello world",
-    status: str = "active",
-    bytes_val: int | None = None,
-    view_count: int = 0,
-) -> MagicMock:
-    row = MagicMock()
-    row.id = doc_id or str(uuid.uuid4())
-    row.org_id = org_id
-    row.scope = scope
-    row.scope_ref = scope_ref
-    row.category = category
-    row.title = title
-    row.body = body
-    row.status = status
-    row.bytes = bytes_val if bytes_val is not None else len(body.encode("utf-8"))
-    row.view_count = view_count
-    row.created_at = time.time()
-    row.updated_at = time.time()
-    row.created_by = None
-    row.updated_by = None
-    row.proposed_by_agent = None
-    return row
-
-
-def _make_limits(storage_mb: int = 0, history_versions: int = 5):
-    limits = MagicMock()
-    limits.knowledge_storage_mb = storage_mb
-    limits.knowledge_history_versions = history_versions
-    return limits
-
-
-def _make_settings(override: int | None = None):
-    settings = MagicMock()
-    settings.knowledge_history_versions_override = override
-    return settings
+from ._knowledge_store_helpers import _make_doc_row, _make_limits, _make_settings
 
 
 class TestKnowledgeGovernance:
@@ -251,27 +208,29 @@ class TestIncrementKnowledgeView:
         session.execute.assert_awaited_once()
 
 
-class TestPlanLimitsTiersUpdated:
-    """Verify all 5 tier literals have the new knowledge fields."""
+class TestKnowledgeCeilingsFromEntitlement:
+    """The knowledge ceilings come from the entitlement: billable, free, or local."""
 
-    def test_all_tiers_have_knowledge_storage_mb(self):
-        for tier_name, limits in PLAN_TIERS.items():
-            assert hasattr(limits, "knowledge_storage_mb"), f"{tier_name} missing knowledge_storage_mb"
-            assert isinstance(limits.knowledge_storage_mb, int)
+    def test_billable_org_ceilings(self):
+        limits = limits_for(OrgEntitlement(org_id="o", tier="scale", status="active"))
+        assert limits.knowledge_storage_mb == 500
+        assert limits.knowledge_history_versions == 50
 
-    def test_all_tiers_have_knowledge_history_versions(self):
-        for tier_name, limits in PLAN_TIERS.items():
-            assert hasattr(limits, "knowledge_history_versions"), f"{tier_name} missing knowledge_history_versions"
-            assert isinstance(limits.knowledge_history_versions, int)
+    def test_free_org_ceilings(self):
+        limits = limits_for(OrgEntitlement(org_id="o", tier="free", status="none"))
+        assert limits.knowledge_storage_mb == 25
+        assert limits.knowledge_history_versions == 5
 
-    def test_free_tier_storage_mb(self):
-        assert PLAN_TIERS["free"].knowledge_storage_mb == 50
+    def test_local_mode_is_unlimited(self):
+        limits = limits_for(local_entitlement("local"))
+        assert limits.knowledge_storage_mb == 0
+        assert limits.knowledge_history_versions == 0
 
-    def test_unlimited_tier_storage_mb(self):
-        assert PLAN_TIERS["unlimited"].knowledge_storage_mb == 0
-
-    def test_unlimited_tier_history_versions(self):
-        assert PLAN_TIERS["unlimited"].knowledge_history_versions == 100
+    def test_org_storage_check_honours_the_free_ceiling(self):
+        limits = limits_for(OrgEntitlement(org_id="o", tier="free", status="none"))
+        check_org_storage(0, 24 * 1024 * 1024, 0, limits)
+        with pytest.raises(KnowledgeOrgQuotaExceeded):
+            check_org_storage(0, 26 * 1024 * 1024, 0, limits)
 
 
 class TestKnowledgeDocCreateValidation:
@@ -385,264 +344,3 @@ class TestGatewaySettingsKnowledgeOverride:
 
         with pytest.raises(pydantic.ValidationError):
             GatewaySettings(knowledge_history_versions_override="not-an-int")  # type: ignore[arg-type]
-
-
-def _make_insert_session(existing_bytes: int = 0) -> AsyncMock:
-    """Build a session mock suitable for insert_knowledge_doc."""
-    session = AsyncMock()
-    row = MagicMock()
-    row.id = str(uuid.uuid4())
-    row.org_id = "test-org"
-    row.scope = "org"
-    row.scope_ref = None
-    row.category = "rules"
-    row.title = "test-doc"
-    row.body = "content"
-    row.status = "active"
-    row.bytes = len(b"content")
-    row.view_count = 0
-    row.created_at = time.time()
-    row.updated_at = time.time()
-    row.created_by = None
-    row.updated_by = None
-    row.proposed_by_agent = None
-
-    scalar_result = MagicMock()
-    scalar_result.scalar.return_value = existing_bytes
-    session.execute = AsyncMock(return_value=scalar_result)
-    session.add = MagicMock()
-    session.flush = AsyncMock()
-    session.commit = AsyncMock()
-    session.refresh = AsyncMock(side_effect=lambda r: None)
-
-    return session, row
-
-
-class TestAgentProposalCloudGating:
-    """Cloud-mode gating for agent-proposed knowledge docs."""
-
-    @pytest.mark.asyncio
-    async def test_agent_proposal_active_in_localhost(self, monkeypatch):
-        """In localhost mode, agent-proposed docs are auto-accepted (status=active)."""
-        monkeypatch.setenv("SP_DEPLOYMENT_MODE", "local")
-
-        session, row = _make_insert_session()
-        captured_rows: list = []
-
-        def capture_add(r):
-            captured_rows.append(r)
-
-        session.add = MagicMock(side_effect=capture_add)
-
-        payload = KnowledgeDocCreate(
-            scope=KnowledgeScope.org,
-            scope_ref=None,
-            category=KnowledgeCategory.rules,
-            title="test-doc",
-            body="content",
-        )
-        limits = _make_limits()
-        settings = _make_settings()
-
-        await insert_knowledge_doc(
-            session,
-            org_id="test-org",
-            payload=payload,
-            user_id=None,
-            agent="propose_knowledge",
-            limits=limits,
-            settings=settings,
-        )
-        assert len(captured_rows) == 1
-        assert captured_rows[0].status == "active"
-
-    @pytest.mark.asyncio
-    async def test_agent_proposal_pending_in_cloud(self, monkeypatch):
-        """In cloud mode, agent-proposed docs are forced to pending regardless of category."""
-        monkeypatch.setenv("SP_DEPLOYMENT_MODE", "cloud")
-
-        session, row = _make_insert_session()
-        captured_rows: list = []
-
-        def capture_add(r):
-            captured_rows.append(r)
-
-        session.add = MagicMock(side_effect=capture_add)
-
-        payload = KnowledgeDocCreate(
-            scope=KnowledgeScope.org,
-            scope_ref=None,
-            category=KnowledgeCategory.rules,
-            title="test-doc",
-            body="content",
-        )
-        limits = _make_limits()
-        settings = _make_settings()
-
-        await insert_knowledge_doc(
-            session,
-            org_id="test-org",
-            payload=payload,
-            user_id=None,
-            agent="propose_knowledge",
-            limits=limits,
-            settings=settings,
-        )
-        assert len(captured_rows) == 1
-        assert captured_rows[0].status == "pending"
-
-    @pytest.mark.asyncio
-    async def test_agent_upsert_update_pending_in_cloud(self, monkeypatch):
-        """In cloud mode, agent update of an active doc forces status=pending."""
-        monkeypatch.setenv("SP_DEPLOYMENT_MODE", "cloud")
-
-        session = AsyncMock()
-        existing = _make_doc_row(status="active", body="old content")
-
-        call_count = 0
-
-        async def execute_side_effect(stmt, *args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            result = MagicMock()
-            if call_count == 1:
-                # _find_doc_by_key: returns existing row
-                result.scalar_one_or_none.return_value = existing
-            elif call_count == 2:
-                # current_bytes query
-                result.scalar.return_value = 100
-            else:
-                result.scalar_one_or_none.return_value = existing
-                result.scalar_one.return_value = existing
-            return result
-
-        session.execute = AsyncMock(side_effect=execute_side_effect)
-        session.add = MagicMock()
-        session.flush = AsyncMock()
-        session.commit = AsyncMock()
-
-        payload = KnowledgeDocCreate(
-            scope=KnowledgeScope.org,
-            scope_ref=None,
-            category=KnowledgeCategory.rules,
-            title=existing.title,
-            body="new content",
-        )
-        limits = _make_limits()
-        settings = _make_settings()
-
-        await upsert_knowledge_doc(
-            session,
-            org_id="test-org",
-            payload=payload,
-            user_id=None,
-            agent="propose_knowledge",
-            limits=limits,
-            settings=settings,
-        )
-        assert existing.status == "pending"
-
-    @pytest.mark.asyncio
-    async def test_human_upsert_update_keeps_active_in_cloud(self, monkeypatch):
-        """In cloud mode, human update of an active doc does NOT change status."""
-        monkeypatch.setenv("SP_DEPLOYMENT_MODE", "cloud")
-
-        session = AsyncMock()
-        existing = _make_doc_row(status="active", body="old content")
-
-        call_count = 0
-
-        async def execute_side_effect(stmt, *args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            result = MagicMock()
-            if call_count == 1:
-                result.scalar_one_or_none.return_value = existing
-            elif call_count == 2:
-                result.scalar.return_value = 100
-            else:
-                result.scalar_one_or_none.return_value = existing
-                result.scalar_one.return_value = existing
-            return result
-
-        session.execute = AsyncMock(side_effect=execute_side_effect)
-        session.add = MagicMock()
-        session.flush = AsyncMock()
-        session.commit = AsyncMock()
-
-        payload = KnowledgeDocCreate(
-            scope=KnowledgeScope.org,
-            scope_ref=None,
-            category=KnowledgeCategory.rules,
-            title=existing.title,
-            body="new content",
-        )
-        limits = _make_limits()
-        settings = _make_settings()
-
-        await upsert_knowledge_doc(
-            session,
-            org_id="test-org",
-            payload=payload,
-            user_id="admin-user",
-            agent=None,
-            limits=limits,
-            settings=settings,
-        )
-        assert existing.status == "active"
-
-    @pytest.mark.asyncio
-    async def test_upsert_update_leaves_archived_doc_archived(self, monkeypatch):
-        """An overwrite must not resurrect a tombstoned doc.
-
-        Archived is a tombstone: reviving it on upsert let a guessed
-        (scope, scope_ref, category, title) key silently bring back deleted
-        knowledge via overwrite=True. Unarchiving is now explicit only.
-        """
-        """Editing an archived doc (local mode) revives it to active, not hidden."""
-        monkeypatch.delenv("SP_DEPLOYMENT_MODE", raising=False)
-
-        session = AsyncMock()
-        existing = _make_doc_row(status="archived", body="old content")
-
-        call_count = 0
-
-        async def execute_side_effect(stmt, *args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            result = MagicMock()
-            if call_count == 1:
-                result.scalar_one_or_none.return_value = existing
-            elif call_count == 2:
-                result.scalar.return_value = 100
-            else:
-                result.scalar_one_or_none.return_value = existing
-                result.scalar_one.return_value = existing
-            return result
-
-        session.execute = AsyncMock(side_effect=execute_side_effect)
-        session.add = MagicMock()
-        session.flush = AsyncMock()
-        session.commit = AsyncMock()
-
-        payload = KnowledgeDocCreate(
-            scope=KnowledgeScope.org,
-            scope_ref=None,
-            category=KnowledgeCategory.rules,
-            title=existing.title,
-            body="new content",
-        )
-        limits = _make_limits()
-        settings = _make_settings()
-
-        await upsert_knowledge_doc(
-            session,
-            org_id="test-org",
-            payload=payload,
-            user_id=None,
-            agent="propose_knowledge",
-            limits=limits,
-            settings=settings,
-        )
-        assert existing.status == "archived"
-        assert existing.body == "new content"

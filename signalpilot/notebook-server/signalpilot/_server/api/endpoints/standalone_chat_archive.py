@@ -17,6 +17,9 @@ from signalpilot._server.ai.chat_runtime_output import (
 from signalpilot._utils.requests import RequestError
 
 LOGGER = _loggers.sp_logger()
+# Archive payloads reach tens of megabytes (HTML + outputs snapshot); a
+# 60 s client timeout dropped the whole answer on a slow upload.
+ARCHIVE_UPLOAD_TIMEOUT_SECONDS = 180.0
 
 
 async def _archive_analysis_notebook(
@@ -131,19 +134,29 @@ async def _archive_analysis_notebook(
             run_id,
             exc_info=True,
         )
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    payload = {
+        "notebook_name": notebook_name,
+        "source_base64": base64.b64encode(source).decode("ascii"),
+        "html_base64": base64.b64encode(html.encode("utf-8")).decode("ascii"),
+        "manifest_base64": base64.b64encode(manifest).decode("ascii"),
+        **session_payload,
+    }
+    payload_bytes = sum(len(value) for value in payload.values())
+    LOGGER.info(
+        "Uploading notebook archive run_id=%s notebook=%s payload_bytes=%s "
+        "timeout_s=%s",
+        run_id,
+        notebook_name,
+        payload_bytes,
+        ARCHIVE_UPLOAD_TIMEOUT_SECONDS,
+    )
+    async with httpx.AsyncClient(
+        timeout=ARCHIVE_UPLOAD_TIMEOUT_SECONDS
+    ) as client:
         response = await client.post(
             f"{gateway_api_url}/api/chat/runtime-archives",
             headers={"Authorization": f"Bearer {scoped_token}"},
-            json={
-                "notebook_name": notebook_name,
-                "source_base64": base64.b64encode(source).decode("ascii"),
-                "html_base64": base64.b64encode(html.encode("utf-8")).decode(
-                    "ascii"
-                ),
-                "manifest_base64": base64.b64encode(manifest).decode("ascii"),
-                **session_payload,
-            },
+            json=payload,
         )
     response.raise_for_status()
     return str(response.json()["archive_id"])

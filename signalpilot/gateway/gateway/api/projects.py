@@ -8,6 +8,7 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from ..auth import OrgAdmin
 from ..models import ProjectCreate, ProjectUpdate
 from ..network.validation import validate_connection_host
 from ..runtime.mode import is_cloud_mode
@@ -24,7 +25,7 @@ async def get_projects(store: StoreD):
 
 
 @router.post("/projects", status_code=201, dependencies=[RequireScope("write")])
-async def add_project(proj: ProjectCreate, store: StoreD):
+async def add_project(proj: ProjectCreate, store: StoreD, _role: OrgAdmin):
     """Create a new dbt project."""
     try:
         info = await store.create_project(proj)
@@ -43,7 +44,7 @@ async def get_project_detail(name: str, store: StoreD):
 
 
 @router.put("/projects/{name}", dependencies=[RequireScope("write")])
-async def edit_project(name: str, update: ProjectUpdate, store: StoreD):
+async def edit_project(name: str, update: ProjectUpdate, store: StoreD, _role: OrgAdmin):
     """Update an existing dbt project."""
     result = await store.update_project(name, update)
     if not result:
@@ -52,14 +53,14 @@ async def edit_project(name: str, update: ProjectUpdate, store: StoreD):
 
 
 @router.delete("/projects/{name}", status_code=204, response_model=None, dependencies=[RequireScope("write")])
-async def remove_project(name: str, store: StoreD):
+async def remove_project(name: str, store: StoreD, _role: OrgAdmin):
     """Delete a dbt project."""
     if not await store.delete_project(name):
         raise HTTPException(status_code=404, detail=f"Project '{name}' not found")
 
 
 @router.post("/projects/{name}/scan", dependencies=[RequireScope("write")])
-async def scan_project(name: str, store: StoreD):
+async def scan_project(name: str, store: StoreD, _role: OrgAdmin):
     """Re-scan a dbt project: count models, update metadata."""
     from ..dbt.inventory import scan_project as dbt_scan
 

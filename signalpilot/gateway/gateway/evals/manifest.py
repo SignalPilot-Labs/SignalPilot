@@ -24,6 +24,11 @@ class ManifestError(RuntimeError):
     """The eval repo's manifest is malformed. Message is user-facing."""
 
 
+# The dbt project comes from the eval configuration. A manifest that still
+# names one keeps working; the key is ignored and the run log says so.
+PROJECT_REPO_IGNORED = "eval.json project_repo is ignored; the dbt project comes from the eval configuration"
+
+
 @dataclass
 class EvalTask:
     id: str
@@ -49,9 +54,10 @@ class EvalSet:
     description: str
     tasks: list[EvalTask]
     setup: dict[str, Any]  # script defaults: env_file, timeout_seconds
-    project_repo: str = ""
     build_fingerprint: str = ""  # when set, runs refuse a mismatched warehouse
     ref: str = ""  # git commit of the eval repo checkout, stamped by the loader
+    # Non-fatal notes for the run log, for example an ignored legacy key.
+    warnings: list[str] = field(default_factory=list)
 
 
 def read_confined(repo_dir: Path, rel: str) -> str:
@@ -276,13 +282,17 @@ def load_eval_set(repo_dir: Path) -> EvalSet:
             "unsupported setup keys: " + ", ".join(unknown_setup_keys)
         )
 
+    warnings: list[str] = []
+    if "project_repo" in raw:
+        warnings.append(PROJECT_REPO_IGNORED)
+
     return EvalSet(
         name=str(raw.get("name") or repo_dir.name),
         description=str(raw.get("description", "")),
         tasks=tasks,
         setup=setup,
-        project_repo=str(raw.get("project_repo", "") or ""),
         build_fingerprint=str(raw.get("build_fingerprint", "") or ""),
+        warnings=warnings,
     )
 
 

@@ -4,229 +4,29 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, useMemo } from "react";
 import dynamic from "next/dynamic";
-import { KeyRound, CreditCard, Plug, PlugZap, BarChart3, Shield, Lock, Users, GitBranch, BookOpen, Menu, X } from "lucide-react";
+import { KeyRound, Menu, X } from "lucide-react";
 import { Tooltip } from "~/components/ui/tooltip";
 import { useAppAuth } from "~/lib/auth-context";
+import { usePermissions } from "~/lib/hooks/use-permissions";
 import { getProjects, getWorkspaceProjects } from "~/lib/api";
 import { useConnectionsHealth, useKnowledgeDocs } from "~/lib/hooks/use-gateway-data";
 import { TierWordmark } from "~/components/branding/tier-wordmark";
 import { TierAccent } from "~/components/branding/tier-accent";
 import { TierSeal } from "~/components/branding/tier-seal";
 import { useTierBranding } from "~/lib/hooks/use-tier-branding";
-
-/* Custom SVG nav icons — geometric, minimal, brutalism-lite */
-function NavIconDashboard({ active }: { active: boolean }) {
-  const s = active ? "currentColor" : "currentColor";
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <rect x="1" y="1" width="5" height="5" stroke={s} strokeWidth="1" />
-      <rect x="8" y="1" width="5" height="3" stroke={s} strokeWidth="1" />
-      <rect x="8" y="6" width="5" height="7" stroke={s} strokeWidth="1" />
-      <rect x="1" y="8" width="5" height="5" stroke={s} strokeWidth="1" />
-    </svg>
-  );
-}
-function NavIconLineage({ active }: { active: boolean }) {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <rect x="1" y="5.5" width="3" height="3" stroke="currentColor" strokeWidth="1" />
-      <rect x="10" y="1.5" width="3" height="3" stroke="currentColor" strokeWidth="1" />
-      <rect x="10" y="9.5" width="3" height="3" stroke="currentColor" strokeWidth="1" />
-      <path d="M4 7H6.5C7.5 7 7.5 3 8.5 3H10M4 7H6.5C7.5 7 7.5 11 8.5 11H10" stroke="currentColor" strokeWidth="1" fill="none" />
-      {active && <rect x="1.75" y="6.25" width="1.5" height="1.5" fill="var(--color-success)" />}
-    </svg>
-  );
-}
-function NavIconIntegrations({ active }: { active: boolean }) {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <circle cx="4" cy="4" r="2.5" stroke="currentColor" strokeWidth="1" />
-      <circle cx="10" cy="10" r="2.5" stroke="currentColor" strokeWidth="1" />
-      <path d="M6 5.5L8 8.5" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
-      {active && <circle cx="7" cy="7" r="1" fill="var(--color-success)" />}
-    </svg>
-  );
-}
-function NavIconSchema({ active }: { active: boolean }) {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <rect x="1" y="1" width="12" height="12" stroke="currentColor" strokeWidth="1" />
-      <line x1="1" y1="5" x2="13" y2="5" stroke="currentColor" strokeWidth="0.75" />
-      <line x1="5" y1="1" x2="5" y2="13" stroke="currentColor" strokeWidth="0.75" />
-    </svg>
-  );
-}
-function NavIconProject({ active }: { active: boolean }) {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <path d="M1 3L1 12H13V3H7L5 1H1V3Z" stroke="currentColor" strokeWidth="1" strokeLinejoin="miter" fill="none" />
-      {active && <rect x="5" y="6" width="4" height="3" fill="var(--color-success)" />}
-    </svg>
-  );
-}
-function NavIconSandbox({ active }: { active: boolean }) {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <rect x="1" y="1" width="12" height="12" stroke="currentColor" strokeWidth="1" />
-      <path d="M4 5L6 7L4 9" stroke="currentColor" strokeWidth="1" strokeLinecap="square" />
-      <line x1="7" y1="9" x2="10" y2="9" stroke="currentColor" strokeWidth="1" strokeLinecap="square" />
-      {active && <rect x="10" y="2" width="2" height="2" fill="var(--color-success)" />}
-    </svg>
-  );
-}
-function NavIconDatabase({ active }: { active: boolean }) {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <ellipse cx="7" cy="3" rx="5" ry="2" stroke="currentColor" strokeWidth="1" />
-      <path d="M2 3V11C2 12.1 4.24 13 7 13C9.76 13 12 12.1 12 11V3" stroke="currentColor" strokeWidth="1" />
-      <path d="M2 7C2 8.1 4.24 9 7 9C9.76 9 12 8.1 12 7" stroke="currentColor" strokeWidth="0.75" />
-    </svg>
-  );
-}
-function NavIconHealth({ active }: { active: boolean }) {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <path d="M1 7H3L5 3L7 11L9 5L11 7H13" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" />
-      {active && <circle cx="7" cy="7" r="1" fill="var(--color-success)" />}
-    </svg>
-  );
-}
-function NavIconAudit({ active }: { active: boolean }) {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <rect x="2" y="1" width="10" height="12" stroke="currentColor" strokeWidth="1" />
-      <line x1="4" y1="4" x2="10" y2="4" stroke="currentColor" strokeWidth="0.75" />
-      <line x1="4" y1="6.5" x2="10" y2="6.5" stroke="currentColor" strokeWidth="0.75" />
-      <line x1="4" y1="9" x2="8" y2="9" stroke="currentColor" strokeWidth="0.75" />
-    </svg>
-  );
-}
-function NavIconSettings({ active }: { active: boolean }) {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <circle cx="7" cy="7" r="2.5" stroke="currentColor" strokeWidth="1" />
-      <path d="M7 1V3M7 11V13M1 7H3M11 7H13M2.5 2.5L4 4M10 10L11.5 11.5M11.5 2.5L10 4M4 10L2.5 11.5" stroke="currentColor" strokeWidth="0.75" strokeLinecap="square" />
-    </svg>
-  );
-}
-function NavIconKnowledge({ active }: { active: boolean }) {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <rect x="1" y="3" width="10" height="10" stroke="currentColor" strokeWidth="1" />
-      <rect x="3" y="1" width="10" height="10" stroke="currentColor" strokeWidth="1" />
-      <line x1="5" y1="5" x2="11" y2="5" stroke="currentColor" strokeWidth="0.75" />
-      <line x1="5" y1="7.5" x2="11" y2="7.5" stroke="currentColor" strokeWidth="0.75" />
-      <line x1="5" y1="10" x2="9" y2="10" stroke="currentColor" strokeWidth="0.75" />
-      {active && <rect x="10" y="2" width="2" height="2" fill="var(--color-success)" />}
-    </svg>
-  );
-}
-
-function NavIconReports({ active }: { active: boolean }) {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <path d="M3 1h5l3 3v9H3z" stroke="currentColor" strokeWidth="1" />
-      <path d="M8 1v3h3" stroke="currentColor" strokeWidth="1" />
-      <line x1="5" y1="8" x2="9" y2="8" stroke="currentColor" strokeWidth="0.75" />
-      <line x1="5" y1="10.5" x2="8.5" y2="10.5" stroke="currentColor" strokeWidth="0.75" />
-      {active && <rect x="9.5" y="9.5" width="2" height="2" fill="var(--color-success)" />}
-    </svg>
-  );
-}
-
-function NavIconEvals({ active }: { active: boolean }) {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <path d="M5 1H9M6 1V5L2.5 11.5C2 12.4 2.6 13 3.4 13H10.6C11.4 13 12 12.4 11.5 11.5L8 5V1" stroke="currentColor" strokeWidth="1" strokeLinejoin="round" />
-      <line x1="4" y1="9.5" x2="10" y2="9.5" stroke="currentColor" strokeWidth="0.75" />
-      {active && <circle cx="7" cy="11" r="1" fill="var(--color-success)" />}
-    </svg>
-  );
-}
-
-function NavIconAccuracy({ active }: { active: boolean }) {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <path d="M2 11V8M5.3 11V5M8.7 11V7M12 11V2" stroke="currentColor" strokeWidth="1" />
-      <path d="M1 12.5H13" stroke="currentColor" strokeWidth="1" />
-      {active && <circle cx="12" cy="2" r="1.25" fill="var(--color-success)" />}
-    </svg>
-  );
-}
-
-function NavIconChats({ active }: { active: boolean }) {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <path d="M1 2h12v8H5l-3 3v-3H1z" stroke="currentColor" strokeWidth="1" />
-      <line x1="3.5" y1="5" x2="10.5" y2="5" stroke="currentColor" strokeWidth="0.75" />
-      <line x1="3.5" y1="7.5" x2="8.5" y2="7.5" stroke="currentColor" strokeWidth="0.75" />
-      {active && <rect x="10" y="7" width="2" height="2" fill="var(--color-success)" />}
-    </svg>
-  );
-}
-
-function NavIconGitHub({ active }: { active: boolean }) {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <path d="M7 1C3.7 1 1 3.7 1 7c0 2.7 1.7 4.9 4.1 5.7.3.1.4-.1.4-.3v-1c-1.7.4-2-.8-2-.8-.3-.7-.7-.9-.7-.9-.5-.4 0-.4 0-.4.6 0 .9.6.9.6.5.9 1.4.6 1.7.5.1-.4.2-.6.4-.8-1.3-.1-2.7-.7-2.7-3 0-.7.2-1.2.6-1.7-.1-.1-.3-.8.1-1.6 0 0 .5-.2 1.7.6.5-.1 1-.2 1.5-.2s1 .1 1.5.2c1.2-.8 1.7-.6 1.7-.6.3.8.1 1.5.1 1.6.4.4.6 1 .6 1.7 0 2.3-1.4 2.8-2.7 3 .2.2.4.5.4 1.1v1.6c0 .2.1.4.4.3C11.3 11.9 13 9.7 13 7c0-3.3-2.7-6-6-6z" stroke="currentColor" strokeWidth="0.5" fill={active ? "currentColor" : "none"} />
-    </svg>
-  );
-}
-
-type NavIconComponent = React.FC<{ active: boolean }>;
-
-type NavItem = { href: string; label: string; icon: NavIconComponent; shortcut: string };
-
-/* Grouped IA (see UX.md): trust loop first, then the data plane, then
-   workspace curation. Health merged into Connections — a sick database is a
-   property of a connection, not a place. */
-const navGroups: { label: string | null; items: NavItem[] }[] = [
-  {
-    label: null,
-    items: [{ href: "/dashboard", label: "Dashboard", icon: NavIconDashboard, shortcut: "1" }],
-  },
-  {
-    label: "Activity",
-    items: [
-      { href: "/chats", label: "Chats", icon: NavIconChats, shortcut: "" },
-      { href: "/reports", label: "Reports", icon: NavIconReports, shortcut: "9" },
-      { href: "/dashboards", label: "Dashboards", icon: NavIconDashboard, shortcut: "" },
-      { href: "/audit", label: "Audit", icon: NavIconAudit, shortcut: "7" },
-    ],
-  },
-  {
-    label: "Data",
-    items: [
-      { href: "/connections", label: "Connections", icon: NavIconDatabase, shortcut: "2" },
-      { href: "/schema", label: "Schema", icon: NavIconSchema, shortcut: "4" },
-      { href: "/lineage", label: "Lineage", icon: NavIconLineage, shortcut: "6" },
-    ],
-  },
-  {
-    label: "Workspace",
-    items: [
-      { href: "/projects", label: "Projects", icon: NavIconProject, shortcut: "5" },
-      { href: "/notebooks", label: "Notebooks", icon: NavIconSandbox, shortcut: "" },
-      { href: "/knowledge", label: "Knowledge Base", icon: NavIconKnowledge, shortcut: "8" },
-      { href: "/evals", label: "Evals", icon: NavIconEvals, shortcut: "" },
-      { href: "/evals/accuracy", label: "Accuracy", icon: NavIconAccuracy, shortcut: "" },
-      { href: "/integrations", label: "Integrations", icon: NavIconIntegrations, shortcut: "3" },
-    ],
-  },
-  {
-    label: null,
-    items: [{ href: "/settings", label: "Settings", icon: NavIconSettings, shortcut: "0" }],
-  },
-];
-
-const nav: NavItem[] = navGroups.flatMap((g) => g.items);
-
-/** Routes where the sidebar should be hidden (auth + onboarding = locked flow) */
-const HIDDEN_SIDEBAR_PREFIXES = ["/sign-in", "/sign-up", "/onboarding", "/notebook"];
-
-function matchesRoutePrefix(pathname: string, prefix: string) {
-  return pathname === prefix || pathname.startsWith(`${prefix}/`);
-}
+import { isChromelessRoute, matchesRoutePrefix } from "~/lib/route-chrome";
+import { nav, navGroups } from "~/components/layout/nav-groups";
+import {
+  AccountSecurityNavLink,
+  ApiKeysNavLink,
+  BillingNavLink,
+  ByokNavLink,
+  ConnectorsNavLink,
+  GitHubNavLink,
+  McpConnectNavLink,
+  TeamNavLink,
+  UsageNavLink,
+} from "./sidebar-settings-links";
 
 function SignalPilotLogo() {
   return (
@@ -309,233 +109,13 @@ const TeamSwitcher = dynamic(
   { ssr: false }
 );
 
-/** API Keys nav link — available in both local and cloud mode */
-function ApiKeysNavLink({ pathname }: { pathname: string }) {
-  const active = pathname.startsWith("/settings/api-keys");
-
-  return (
-    <Link
-      href="/settings/api-keys"
-      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 rounded-[10px] text-[12.5px] transition-colors duration-150 ${
-        active
-          ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
-          : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
-      }`}
-    >
-      <KeyRound size={11} className="flex-shrink-0 text-[var(--color-text-dim)]" />
-      <span className="flex-1 tracking-wide text-[12px]">api keys</span>
-    </Link>
-  );
-}
-
-/** Billing nav link — only rendered in cloud mode, nested under /settings */
-function BillingNavLink({ pathname }: { pathname: string }) {
-  const { isCloudMode } = useAppAuth();
-
-  if (!isCloudMode) return null;
-
-  const active = pathname.startsWith("/settings/billing");
-
-  return (
-    <Link
-      href="/settings/billing"
-      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 rounded-[10px] text-[12.5px] transition-colors duration-150 ${
-        active
-          ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
-          : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
-      }`}
-    >
-      <CreditCard size={11} className="flex-shrink-0 text-[var(--color-text-dim)]" />
-      <span className="flex-1 tracking-wide text-[12px]">plans</span>
-    </Link>
-  );
-}
-
-/** Usage nav link — only rendered in cloud mode, nested under /settings */
-function UsageNavLink({ pathname }: { pathname: string }) {
-  const { isCloudMode } = useAppAuth();
-
-  if (!isCloudMode) return null;
-
-  const active = pathname.startsWith("/settings/usage");
-
-  return (
-    <Link
-      href="/settings/usage"
-      aria-label="view usage analytics"
-      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 rounded-[10px] text-[12.5px] transition-colors duration-150 ${
-        active
-          ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
-          : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
-      }`}
-    >
-      <BarChart3 size={11} className="flex-shrink-0 text-[var(--color-text-dim)]" />
-      <span className="flex-1 tracking-wide text-[12px]">usage</span>
-    </Link>
-  );
-}
-
-/** Connectors nav link — external tool servers for the chat agent */
-function ConnectorsNavLink({ pathname }: { pathname: string }) {
-  const active = pathname.startsWith("/settings/connectors");
-
-  return (
-    <Link
-      href="/settings/connectors"
-      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 rounded-[10px] text-[12.5px] transition-colors duration-150 ${
-        active
-          ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
-          : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
-      }`}
-    >
-      <PlugZap size={11} className="flex-shrink-0 text-[var(--color-text-dim)]" />
-      <span className="flex-1 tracking-wide text-[12px]">Connectors</span>
-    </Link>
-  );
-}
-
-/** MCP Connect nav link — available in both local and cloud mode */
-function McpConnectNavLink({ pathname }: { pathname: string }) {
-  const active = pathname.startsWith("/settings/mcp-connect");
-
-  return (
-    <Link
-      href="/settings/mcp-connect"
-      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 rounded-[10px] text-[12.5px] transition-colors duration-150 ${
-        active
-          ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
-          : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
-      }`}
-    >
-      <Plug size={11} className="flex-shrink-0 text-[var(--color-text-dim)]" />
-      <span className="flex-1 tracking-wide text-[12px]">mcp connect</span>
-    </Link>
-  );
-}
-
-/** Notion Connect nav link — available in both local and cloud mode */
-function NotionConnectNavLink({ pathname }: { pathname: string }) {
-  const active = pathname.startsWith("/settings/notion-connect");
-
-  return (
-    <Link
-      href="/settings/notion-connect"
-      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 rounded-[10px] text-[12.5px] transition-colors duration-150 ${
-        active
-          ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
-          : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
-      }`}
-    >
-      <BookOpen size={11} className="flex-shrink-0 text-[var(--color-text-dim)]" />
-      <span className="flex-1 tracking-wide text-[12px]">notion connect</span>
-    </Link>
-  );
-}
-
-function ByokNavLink({ pathname }: { pathname: string }) {
-  const branding = useTierBranding();
-  // BYOK is team/enterprise only; hidden until tier branding is resolved (cloud + loaded)
-  if (!branding.enabled) return null;
-  if (branding.tier !== "team" && branding.tier !== "enterprise") return null;
-
-  const active = pathname.startsWith("/settings/byok");
-
-  return (
-    <Link
-      href="/settings/byok"
-      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 rounded-[10px] text-[12.5px] transition-colors duration-150 ${
-        active
-          ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
-          : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
-      }`}
-    >
-      <Shield size={11} className="flex-shrink-0 text-[var(--color-text-dim)]" />
-      <span className="flex-1 tracking-wide text-[12px]">security</span>
-    </Link>
-  );
-}
-
-/** Team nav link — cloud-mode only */
-function TeamNavLink({ pathname }: { pathname: string }) {
-  const { isCloudMode } = useAppAuth();
-
-  if (!isCloudMode) return null;
-
-  const active = pathname.startsWith("/settings/team");
-
-  return (
-    <Link
-      href="/settings/team"
-      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 rounded-[10px] text-[12.5px] transition-colors duration-150 ${
-        active
-          ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
-          : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
-      }`}
-    >
-      <Users size={11} className="flex-shrink-0 text-[var(--color-text-dim)]" />
-      <span className="flex-1 tracking-wide text-[12px]">team</span>
-    </Link>
-  );
-}
-
-/** Account Security nav link — cloud-mode only */
-function AccountSecurityNavLink({ pathname }: { pathname: string }) {
-  const { isCloudMode } = useAppAuth();
-
-  if (!isCloudMode) return null;
-
-  const active = pathname.startsWith("/settings/account-security");
-
-  return (
-    <Link
-      href="/settings/account-security"
-      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 rounded-[10px] text-[12.5px] transition-colors duration-150 ${
-        active
-          ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
-          : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
-      }`}
-    >
-      <Lock size={11} className="flex-shrink-0 text-[var(--color-text-dim)]" />
-      <span className="flex-1 tracking-wide text-[12px]">account security</span>
-    </Link>
-  );
-}
-
-/** GitHub nav link — nested under settings */
-function GitHubNavLink({ pathname }: { pathname: string }) {
-  const active = pathname.startsWith("/settings/github");
-
-  return (
-    <Link
-      href="/settings/github"
-      className={`group flex items-center gap-3 pl-9 pr-3 py-1.5 rounded-[10px] text-[12.5px] transition-colors duration-150 ${
-        active
-          ? "nav-active text-[var(--color-text)] bg-[var(--color-bg-hover)]"
-          : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
-      }`}
-    >
-      <GitBranch size={11} className="flex-shrink-0 text-[var(--color-text-dim)]" />
-      <span className="flex-1 tracking-wide text-[12px]">github</span>
-    </Link>
-  );
-}
-
 export default function Sidebar() {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
   const router = useRouter();
   const { isCloudMode, isAuthenticated } = useAppAuth();
+  const { can } = usePermissions();
   const [projectCount, setProjectCount] = useState(0);
-  // Evals nav item only shows for workspaces evals are enabled for. The
-  // availability probe is readable by everyone, so this is a 200 either way.
-  const [evalsEnabled, setEvalsEnabled] = useState(false);
-  useEffect(() => {
-    if (!isAuthenticated) return;
-    import("~/lib/api")
-      .then(({ getEvalAvailability }) => getEvalAvailability())
-      .then((a) => setEvalsEnabled(a.enabled))
-      .catch(() => setEvalsEnabled(false));
-  }, [isAuthenticated]);
 
   // Connection health from shared SWR cache (auto-refreshes every 15s)
   // Only fetch when authenticated (prevents 401s on login page)
@@ -557,7 +137,15 @@ export default function Sidebar() {
     return () => clearInterval(i);
   }, [isCloudMode]);
 
-  const filteredNav = nav.filter(({ href }) => !(isCloudMode && href === "/settings"));
+  // Admin-only destinations: org settings (local mode's /settings) and the
+  // org-wide audit log. Members never see them in the nav.
+  const hiddenHrefs = useMemo(() => {
+    const hidden = new Set<string>();
+    if (isCloudMode || !can("settings.write")) hidden.add("/settings");
+    if (!can("audit.read")) hidden.add("/audit");
+    return hidden;
+  }, [isCloudMode, can]);
+  const filteredNav = useMemo(() => nav.filter(({ href }) => !hiddenHrefs.has(href)), [hiddenHrefs]);
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -578,11 +166,11 @@ export default function Sidebar() {
 
   // Hide sidebar on auth pages — checked after all hooks are called
   const tierBranding = useTierBranding();
-  const showWordmark = tierBranding.enabled && tierBranding.tier !== "free";
+  const showWordmark = tierBranding.enabled;
 
   useEffect(() => setMobileOpen(false), [pathname]);
 
-  if (HIDDEN_SIDEBAR_PREFIXES.some((prefix) => matchesRoutePrefix(pathname, prefix))) {
+  if (isChromelessRoute(pathname)) {
     return null;
   }
 
@@ -649,10 +237,7 @@ export default function Sidebar() {
       {/* Navigation — grouped IA */}
       <nav className="flex-1 overflow-y-auto px-3 py-2">
         {navGroups.map((group, gi) => {
-          const items = group.items.filter(
-            ({ href }) =>
-              !(isCloudMode && href === "/settings") && !(href.startsWith("/evals") && !evalsEnabled)
-          );
+          const items = group.items.filter(({ href }) => !hiddenHrefs.has(href));
           if (items.length === 0) return null;
           return (
             <div key={group.label ?? `g${gi}`} className={gi > 0 ? "mt-4" : undefined}>
@@ -663,7 +248,8 @@ export default function Sidebar() {
               )}
               <div className="space-y-0.5">
                 {items.map(({ href, label, icon: Icon, shortcut }) => {
-                  const active = href === "/evals" ? pathname === href : pathname.startsWith(href);
+                  // Exact-or-child match: "/dashboard" must not light up on "/dashboards".
+                  const active = href === "/evals" ? pathname === href : matchesRoutePrefix(pathname, href);
                   const showHealthDot =
                     href === "/connections" && connHealth.total > 0 && connHealth.healthy < connHealth.total;
                   return (

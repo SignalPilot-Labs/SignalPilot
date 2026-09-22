@@ -15,6 +15,12 @@ logger = logging.getLogger(__name__)
 
 
 def _installation_to_info(row: GatewayGitHubInstallation) -> GitHubInstallationInfo:
+    repos = [
+        str(r.get("full_name"))
+        for r in (row.authorized_repositories or [])
+        if isinstance(r, dict) and r.get("full_name")
+    ]
+    ids = row.authorized_repository_ids or []
     return GitHubInstallationInfo(
         id=row.id,
         org_id=row.org_id,
@@ -23,6 +29,8 @@ def _installation_to_info(row: GatewayGitHubInstallation) -> GitHubInstallationI
         github_account_type=row.github_account_type,
         permissions=row.permissions,
         status=row.status,
+        authorized_repository_count=max(len(ids), len(repos)),
+        repositories=repos,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -51,11 +59,12 @@ async def upsert_installation(
     github_installation_id: int,
     github_account_login: str,
     github_account_type: str,
-    access_token_enc: bytes,
-    token_expires_at: float,
+    access_token_enc: bytes | None,
+    token_expires_at: float | None,
     permissions: dict | None = None,
     created_by: str | None = None,
     authorized_repository_ids: list[int] | None = None,
+    authorized_repositories: list[dict] | None = None,
 ) -> GitHubInstallationInfo:
     now = time.time()
     result = await session.execute(
@@ -73,6 +82,7 @@ async def upsert_installation(
         existing.token_expires_at = token_expires_at
         existing.permissions = permissions
         existing.authorized_repository_ids = authorized_repository_ids
+        existing.authorized_repositories = authorized_repositories
         existing.status = "active"
         existing.updated_at = now
         await session.commit()
@@ -87,6 +97,7 @@ async def upsert_installation(
         token_expires_at=token_expires_at,
         permissions=permissions,
         authorized_repository_ids=authorized_repository_ids,
+        authorized_repositories=authorized_repositories,
         status="active",
         created_by=created_by,
         created_at=now,
@@ -144,12 +155,24 @@ async def _refresh_repository_scope(session: AsyncSession, row: GatewayGitHubIns
     stored = row.authorized_repository_ids
     if stored:
         return [int(i) for i in stored]
-    logger.warning(
-        "Installation %s has no captured repository authorization — reconnect the "
-        "GitHub App for this org; tokens will not be minted for it",
-        row.id,
-    )
-    return None
+    # Nothing recorded: re-list the installation's repositories live through
+    # the app (never inferred from linked projects). Returns None when the
+    # installation grants no repositories at all.
+    from .github_installs import refresh_installation_repositories
+
+    try:
+        repos = await refresh_installation_repositories(session, row)
+    except Exception as exc:
+        logger.warning(
+            "Installation %s: repository scope refresh failed (%s); no token minted",
+            row.id, type(exc).__name__,
+        )
+        return None
+    ids = [int(r["id"]) for r in repos if r.get("id") is not None]
+    if not ids:
+        logger.warning("Installation %s grants no repositories; no token minted", row.id)
+        return None
+    return ids
 
 
 async def get_valid_token(session: AsyncSession, row: GatewayGitHubInstallation) -> str:
@@ -162,16 +185,16 @@ async def get_valid_token(session: AsyncSession, row: GatewayGitHubInstallation)
     from ..runtime.mode import is_cloud_mode
     from ..store.crypto import _decrypt_with_migration, _encrypt
 
-    if not row.access_token_enc:
-        raise ValueError("Installation has no stored token")
-
-    token, needs_migration = _decrypt_with_migration(row.access_token_enc)
-    if needs_migration:
-        row.access_token_enc = _encrypt(token)
-        row.updated_at = time.time()
-        await session.commit()
-    if row.token_expires_at and row.token_expires_at > time.time() + 300:
-        return token
+    # A row may carry no token yet (installed while the installation granted
+    # no repositories); one is minted on first use once repositories exist.
+    if row.access_token_enc:
+        token, needs_migration = _decrypt_with_migration(row.access_token_enc)
+        if needs_migration:
+            row.access_token_enc = _encrypt(token)
+            row.updated_at = time.time()
+            await session.commit()
+        if row.token_expires_at and row.token_expires_at > time.time() + 300:
+            return token
 
     settings = get_github_settings()
     app_jwt = generate_app_jwt(settings.sp_github_app_id, settings.sp_github_app_private_key)
@@ -180,8 +203,8 @@ async def get_valid_token(session: AsyncSession, row: GatewayGitHubInstallation)
         result = await create_installation_token(app_jwt, row.github_installation_id, repository_ids=repository_ids)
     elif is_cloud_mode():
         raise ValueError(
-            "Cannot refresh this GitHub installation token: no repository scope is recorded for it. "
-            "Reconnect the GitHub App from Settings → GitHub to re-authorize."
+            "Cannot mint a GitHub installation token: the installation grants no repositories. "
+            "Add repositories to the SignalPilot GitHub App installation, then refresh it from Settings > GitHub."
         )
     else:
         result = await create_unrestricted_installation_token(app_jwt, row.github_installation_id)
@@ -361,10 +384,33 @@ async def delete_repo_link(session: AsyncSession, *, org_id: str, link_id: str) 
     return True
 
 
-async def _resolve_repo_link(session: AsyncSession, repo_full_name: str) -> GatewayGitHubRepoLink | None:
+async def _resolve_repo_link(
+    session: AsyncSession, repo_full_name: str, installation_id: int | None = None
+) -> GatewayGitHubRepoLink | None:
     """Oldest active link for a repo. repo_full_name is not unique across
     orgs/projects: the oldest-link tie-break keeps webhook attribution
-    deterministic and lives only here."""
+    deterministic and lives only here.
+
+    When the webhook delivery's GitHub ``installation.id`` is known, links
+    whose installation row carries that id win (SP-26): a repo linked in two
+    orgs is attributed to the org that owns the delivering installation. Links
+    sharing that installation keep the oldest-first tie-break; with no match
+    (or no id) the deployment-wide oldest link is used as before.
+    """
+    if installation_id is not None:
+        scoped = await session.execute(
+            select(GatewayGitHubRepoLink)
+            .join(GatewayGitHubInstallation, GatewayGitHubInstallation.id == GatewayGitHubRepoLink.installation_id)
+            .where(
+                GatewayGitHubRepoLink.repo_full_name == repo_full_name,
+                GatewayGitHubRepoLink.status == "active",
+                GatewayGitHubInstallation.github_installation_id == installation_id,
+            )
+            .order_by(GatewayGitHubRepoLink.created_at)
+        )
+        link = scoped.scalars().first()
+        if link is not None:
+            return link
     result = await session.execute(
         select(GatewayGitHubRepoLink)
         .where(
@@ -376,14 +422,17 @@ async def _resolve_repo_link(session: AsyncSession, repo_full_name: str) -> Gate
     return result.scalars().first()
 
 
-async def get_token_for_repo(session: AsyncSession, *, repo_full_name: str) -> str | None:
+async def get_token_for_repo(
+    session: AsyncSession, *, repo_full_name: str, installation_id: int | None = None
+) -> str | None:
     """Installation token for a repo linked anywhere in the deployment.
 
     Used by the PR bot webhook path, where the org is derived from the repo
-    link rather than from request auth. Returns None when no active link or
-    installation covers the repo.
+    link rather than from request auth. ``installation_id`` (the delivery's
+    GitHub installation id) picks the owning org when the repo is linked in
+    several. Returns None when no active link or installation covers the repo.
     """
-    link = await _resolve_repo_link(session, repo_full_name)
+    link = await _resolve_repo_link(session, repo_full_name, installation_id)
     if link is None:
         return None
     inst_result = await session.execute(
@@ -437,7 +486,13 @@ async def get_org_token_for_repo(session: AsyncSession, *, org_id: str, repo_ful
     return await get_valid_token(session, inst)
 
 
-async def get_org_for_repo(session: AsyncSession, *, repo_full_name: str) -> str | None:
-    """Org that owns the active link for a repo (webhook org resolution)."""
-    link = await _resolve_repo_link(session, repo_full_name)
+async def get_org_for_repo(
+    session: AsyncSession, *, repo_full_name: str, installation_id: int | None = None
+) -> str | None:
+    """Org that owns the active link for a repo (webhook org resolution).
+
+    ``installation_id`` is the delivery's GitHub installation id; see
+    ``_resolve_repo_link`` for how it disambiguates multi-org links.
+    """
+    link = await _resolve_repo_link(session, repo_full_name, installation_id)
     return link.org_id if link else None

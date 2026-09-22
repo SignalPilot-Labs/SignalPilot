@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from datetime import datetime
+import re
 from typing import Annotated, Literal
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from sqlalchemy import select
 
+from gateway.auth import OrgRole
 from gateway.db.models import GatewayChatArtifact, GatewayChatRun
 from gateway.models.chat_reports import (
     ChatLibraryResponse,
@@ -28,14 +31,17 @@ from gateway.security.scope_guard import RequireScope
 from gateway.standalone_chat.config import enterprise_chat_feature_flags, standalone_chat_enabled
 from gateway.store import chat_reports as report_store
 
-from .deps import StoreD
+from .chat_report_access import report_actor, version_actor
+from .deps import RequireBillablePlan, StoreD, not_available_error
 
-router = APIRouter(prefix="/api/chat")
+# Reports are a chat surface: every route needs a billable plan (402 otherwise).
+router = APIRouter(prefix="/api/chat", dependencies=[RequireBillablePlan])
 
 
 def _require_enabled() -> None:
+    """Kill switch only: 503 when SP_FEATURE_STANDALONE_CHAT is off."""
     if not standalone_chat_enabled():
-        raise HTTPException(status_code=404, detail="Data Chat reports are not available")
+        raise not_available_error("chat")
 
 
 def _require_browser_principal(request: Request) -> None:
@@ -315,16 +321,18 @@ async def publish_version(
     report_id: str,
     body: PublishReportVersionRequest,
     store: StoreD,
+    role: OrgRole,
     request: Request,
     response: Response,
 ):
     _require_enabled()
     _require_browser_principal(request)
+    actor = await report_actor(store, role, report_id=report_id)
     try:
         status, report, version = await report_store.publish_version(
             store.session,
             org_id=store._require_org_id(),
-            user_id=store.user_id or "local",
+            user_id=actor,
             report_id=report_id,
             artifact_id=body.artifact_id,
             expected_current_version_id=body.expected_current_version_id,
@@ -407,15 +415,16 @@ async def create_refresh(report_id: str, store: StoreD, request: Request):
     status_code=201,
     dependencies=[RequireScope("write")],
 )
-async def share_version(version_id: str, store: StoreD, request: Request, response: Response):
+async def share_version(version_id: str, store: StoreD, role: OrgRole, request: Request, response: Response):
     _require_enabled()
     _require_sharing()
     _require_browser_principal(request)
+    actor = await version_actor(store, role, version_id=version_id)
     try:
         grant, token = await report_store.create_share_grant(
             store.session,
             org_id=store._require_org_id(),
-            user_id=store.user_id or "local",
+            user_id=actor,
             version_id=version_id,
         )
     except report_store.ReportNotFoundError as exc:
@@ -431,14 +440,15 @@ async def share_version(version_id: str, store: StoreD, request: Request, respon
     status_code=204,
     dependencies=[RequireScope("write")],
 )
-async def revoke_version_share(version_id: str, store: StoreD, request: Request):
+async def revoke_version_share(version_id: str, store: StoreD, role: OrgRole, request: Request):
     _require_enabled()
     _require_sharing()
     _require_browser_principal(request)
+    actor = await version_actor(store, role, version_id=version_id)
     found = await report_store.revoke_share_grant(
         store.session,
         org_id=store._require_org_id(),
-        user_id=store.user_id or "local",
+        user_id=actor,
         version_id=version_id,
     )
     if not found:
@@ -507,7 +517,10 @@ async def download_version(
         content=content,
         media_type=media_type,
         headers={
-            "Content-Disposition": f'attachment; filename="{base}.{selected_format}"',
+            "Content-Disposition": (
+                f'attachment; filename="{re.sub(r"[^ -~]|[\"\;]", "_", base)}.{selected_format}"; '
+                f"filename*=UTF-8''{quote(f'{base}.{selected_format}', safe='')}"
+            ),
             "Cache-Control": "private, no-store",
             "X-Content-Type-Options": "nosniff",
         },

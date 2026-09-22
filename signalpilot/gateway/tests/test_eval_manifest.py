@@ -13,6 +13,7 @@ import pytest
 
 from gateway.evals.manifest import (
     DEFAULT_TOLERANCE,
+    PROJECT_REPO_IGNORED,
     ManifestError,
     load_eval_set,
     read_claude_md,
@@ -74,7 +75,8 @@ class TestHappyPath:
         )
         es = load_eval_set(repo)
         assert es.name == "northwind"
-        assert es.project_repo == "https://github.com/acme/dbt.git"
+        # The dbt project comes from the eval configuration; the legacy key only warns.
+        assert es.warnings == [PROJECT_REPO_IGNORED]
         assert es.build_fingerprint == "fp-abc"
         assert es.setup["timeout_seconds"] == 900
         assert [t.id for t in es.tasks] == ["read-1", "write-1"]

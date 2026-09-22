@@ -38,7 +38,6 @@ const artifact = (overrides: Partial<ArtifactResult> = {}): ArtifactResult => ({
   sessionId: "gw-1",
   notebookPath: NOTEBOOK_PATH,
   notebook: "analysis",
-  dashboardSessionId: null,
   ...overrides,
 });
 
@@ -87,7 +86,7 @@ function step(overrides: Partial<RunStep> = {}): RunStep {
 const q = (root: ParentNode, selector: string) => root.querySelector(selector);
 
 describe("summarizeArtifact", () => {
-  it("titles notebook and dashboard steps by kind and uses the name as the stat", () => {
+  it("titles notebook steps by kind and uses the name as the stat", () => {
     expect(summarizeArtifact(step({ result: artifact() }))).toEqual({
       title: "Notebook started",
       stat: "analysis",
@@ -98,9 +97,6 @@ describe("summarizeArtifact", () => {
       title: "Notebook started",
       stat: "analysis",
     });
-    expect(
-      summarizeArtifact(step({ tool: "create_dashboard_preview", input: {} })).title,
-    ).toBe("Dashboard preview");
   });
   it("keeps the step title for an unknown artifact kind", () => {
     expect(
@@ -137,7 +133,6 @@ describe("runtime card", () => {
       openArtifact,
       onStop: async () => undefined,
       onRetry: async () => undefined,
-      onOpenDashboardPreview: () => undefined,
     } as ChatUiContextValue;
     await act(async () => {
       root.render(
@@ -177,29 +172,6 @@ describe("runtime card", () => {
     expect(open).not.toBeNull();
     await act(async () => open.click());
     expect(openArtifact).toHaveBeenCalledWith("file-7");
-  });
-
-  it("delegates dashboard previews to the existing details body", async () => {
-    await render(
-      step({
-        tool: "create_dashboard_preview",
-        title: "Creating dashboard preview",
-        input: { request: "Regional revenue by quarter", timezone: "America/New_York" },
-        result: artifact({
-          artifactKind: "dashboard",
-          notebook: null,
-          notebookPath: null,
-          dashboardSessionId: "dash-1",
-        }),
-      }),
-    );
-    const chip = q(container, '[data-testid="chat-tool-chip"]') as HTMLButtonElement;
-    expect(chip.textContent).toContain("Dashboard preview");
-    await act(async () => chip.click());
-    const body = q(container, '[data-testid="chat-runtime-card"]');
-    expect(body?.textContent).toContain("Regional revenue by quarter");
-    expect(body?.textContent).toContain("America/New_York");
-    expect(q(body!, '[data-testid="chat-runtime-kind"]')).toBeNull();
   });
 
   it("degrades a legacy completion to the name from the input", async () => {

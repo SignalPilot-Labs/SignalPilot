@@ -28,7 +28,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     Auth requests that pass tier 1 still fall through to the general tier.
     """
 
-    AUTH_PATHS = frozenset({"/api/keys"})
+    AUTH_PATHS = frozenset({"/api/keys", "/api/artifact-download"})
 
     EXPENSIVE_PATHS = frozenset(
         {

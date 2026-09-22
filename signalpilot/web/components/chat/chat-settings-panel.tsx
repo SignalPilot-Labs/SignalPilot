@@ -16,6 +16,8 @@ import {
   describeToolCount,
 } from "~/lib/mcp-connectors-state";
 import { Skeleton } from "~/components/ui/skeleton";
+import { ReadOnlyNote } from "~/components/access/read-only-note";
+import { usePermissions } from "~/lib/hooks/use-permissions";
 import { Switch } from "~/components/ui/switch";
 import { ConnectorGlyph } from "~/components/connectors/connector-glyph";
 import { ConnectorStatusPill } from "~/components/connectors/connector-status-pill";
@@ -40,6 +42,8 @@ export type ChatBudgetSettings = {
   setPerQueryBudgetUsd: Dispatch<SetStateAction<number>>;
   chatBudgetUsd: number;
   setChatBudgetUsd: Dispatch<SetStateAction<number>>;
+  /** The org-level defaults these fields start from; admins change them in settings. */
+  orgDefaults?: { perQueryBudgetUsd: number; chatBudgetUsd: number };
 };
 
 export type ChatModelSettings = {
@@ -210,6 +214,10 @@ function ConnectorRows({ manageHref }: { manageHref: string }) {
 function BudgetsSection({ budgets }: { budgets: ChatBudgetSettings }) {
   const perId = useId();
   const chatId = useId();
+  // The fields are this member's choice for their next chat; the org
+  // defaults they start from are admin-managed.
+  const { can } = usePermissions();
+  const canWriteOrgBudgets = can("budgets.write");
   const input =
     "min-h-[36px] w-full rounded-[var(--radius-ctl)] border border-[var(--color-border)] bg-[var(--color-bg-input)] px-2.5 text-[12.5px] tabular-nums text-[var(--color-text)] focus:border-[var(--color-border-active)] focus:!shadow-none focus:outline-none";
   return (
@@ -246,6 +254,18 @@ function BudgetsSection({ budgets }: { budgets: ChatBudgetSettings }) {
           />
         </label>
       </div>
+      {budgets.orgDefaults && (
+        <p data-testid="chat-settings-budget-defaults" className="text-[11.5px] text-[var(--color-text-dim)]">
+          Org defaults: ${budgets.orgDefaults.perQueryBudgetUsd.toFixed(2)} per query, $
+          {budgets.orgDefaults.chatBudgetUsd.toFixed(2)} per chat.
+          {!canWriteOrgBudgets && (
+            <>
+              {" "}
+              <ReadOnlyNote />
+            </>
+          )}
+        </p>
+      )}
     </section>
   );
 }

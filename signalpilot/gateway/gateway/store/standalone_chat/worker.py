@@ -8,11 +8,11 @@ from typing import Any
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from gateway.billing.emitters.tokens import emit_token_credit
 from gateway.db.models import (
     GatewayChatConversation,
     GatewayChatMessage,
     GatewayChatRun,
-    GatewayDashboardAuthoringSession,
     GatewayGovernedQueryExecution,
     GatewayQueryApproval,
     GatewayQueryProposal,
@@ -208,18 +208,6 @@ async def worker_context(db: AsyncSession, *, run: GatewayChatRun) -> dict[str, 
             )
         ).scalars()
     )
-    dashboard_authoring_session = (
-        await db.execute(
-            select(GatewayDashboardAuthoringSession)
-            .where(
-                GatewayDashboardAuthoringSession.org_id == run.org_id,
-                GatewayDashboardAuthoringSession.owner_user_id == run.user_id,
-                GatewayDashboardAuthoringSession.conversation_id == run.conversation_id,
-            )
-            .order_by(GatewayDashboardAuthoringSession.updated_at.desc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
     return {
         "conversation": conversation,
         "project": project,
@@ -228,7 +216,6 @@ async def worker_context(db: AsyncSession, *, run: GatewayChatRun) -> dict[str, 
         "query_approvals": approvals,
         "query_executions": executions,
         "query_results": results,
-        "dashboard_authoring_session": dashboard_authoring_session,
     }
 
 
@@ -261,10 +248,11 @@ async def record_run_usage(
     worker_id: str,
     cost_usd: float | None,
     usage: dict[str, Any] | None,
+    key_source: str = "none",
 ) -> bool:
     """Persist the agent's reported cost and token usage on the run row.
 
-    Operator accounting only (never surfaced in the chat UX). Written as soon
+    Accounting and owner-scoped MCP usage reporting. Written as soon
     as the runtime reports it, so the numbers survive even when the run later
     fails validation or cancels."""
     if cost_usd is None and not usage:
@@ -283,5 +271,6 @@ async def record_run_usage(
         run.cost_usd = float(cost_usd)
     if usage:
         run.usage_json = usage
+    await emit_token_credit(db, run, cost_usd=cost_usd, usage=usage, key_source=key_source)
     await db.commit()
     return True

@@ -15,6 +15,61 @@ def _ndjson(payload: dict[str, Any]) -> bytes:
     return (json.dumps(payload) + "\n").encode("utf-8")
 
 
+def error_line(content: str) -> bytes:
+    """One terminal error NDJSON line with a plain sentence."""
+    return _ndjson({"type": "error", "content": content, "is_error": True})
+
+
+def gateway_unavailable_line(run_key: str, *, run_id: str) -> bytes | None:
+    """Terminal error line when the run's gateway transport breaker tripped.
+
+    The breaker hooks (transport_breaker.py) stop the agent after three
+    consecutive transport failures; the run must then end with
+    ``public_error_code="gateway_unavailable"`` instead of a final answer.
+    Captured artifacts are kept by the caller.
+    """
+    from signalpilot import _loggers
+    from signalpilot._server.ai.transport_breaker import (
+        gateway_unavailable_error,
+    )
+
+    failure = gateway_unavailable_error(run_key)
+    if failure is None:
+        return None
+    _loggers.sp_logger().warning(
+        "Run ended by the gateway transport breaker run_id=%s "
+        "consecutive_failures=%s",
+        run_id,
+        failure.get("consecutive_failures"),
+    )
+    return _ndjson(
+        {
+            "type": "error",
+            "content": str(failure["public_error_message"]),
+            "public_error_code": str(failure["public_error_code"]),
+            "public_error_message": str(failure["public_error_message"]),
+            "is_error": True,
+            "diagnostic_context": {
+                "error_type": "GatewayUnavailable",
+                "operation": "gateway_tool_call",
+                "consecutive_failures": failure.get("consecutive_failures"),
+                "last_failure": failure.get("last_failure"),
+            },
+        }
+    )
+
+
+def error_text(exc: BaseException, *, operation: str) -> str:
+    """Plain error text: ``<ExceptionType> during <operation>[: message]``.
+
+    Never the repr: an httpx.ReadTimeout has an empty str() and its repr
+    (``ReadTimeout('')``) was reaching users as the assistant's reply.
+    """
+    text = f"{type(exc).__name__} during {operation}"
+    message = str(exc).strip()
+    return f"{text}: {message}" if message else text
+
+
 @dataclass
 class AgentRunState:
     """Mutable per-attempt bookkeeping shared with the execution route."""
@@ -30,7 +85,13 @@ class AgentRunState:
     ran_sessions: set[str] = field(default_factory=set)
     agent_cost_usd: float | None = None
     agent_usage: dict[str, Any] | None = None
+    # The SDK ResultMessage's subtype / stop reason / turn count: forwarded
+    # on the final event so an empty answer can be explained gateway-side.
+    agent_result: dict[str, Any] | None = None
     agent_failed: bool = False
+    # Set by the archive step; None when the upload failed (a warning, not
+    # a run failure).
+    archive_id: str | None = None
 
     def notebook_cells_edited(self, analysis_session_id: str | None) -> bool:
         return (
@@ -173,7 +234,9 @@ async def start_recovery_analysis(
         yield _ndjson(
             {
                 "type": "error",
-                "content": str(exc) if str(exc) else repr(exc),
+                "content": error_text(
+                    exc, operation="start_recovery_notebook_kernel"
+                ),
                 "full_trace": traceback.format_exc(),
                 "diagnostic_context": {
                     "error_type": type(exc).__name__,
@@ -293,6 +356,14 @@ async def forward_agent_events(
                 state.agent_cost_usd = event.cost_usd
             if getattr(event, "usage", None):
                 state.agent_usage = event.usage
+            state.agent_result = {
+                "result_subtype": getattr(event, "result_subtype", "") or "",
+                "stop_reason": getattr(event, "stop_reason", "") or "",
+                "num_turns": getattr(event, "num_turns", 0) or 0,
+                "api_error_status": (event.diagnostic_context or {}).get(
+                    "api_error_status"
+                ),
+            }
         if event.type == "tool_use" and event.tool_call_id:
             state.tool_names_by_id[event.tool_call_id] = event.tool_name
             tool_input = (

@@ -228,16 +228,38 @@ def _stage_run_event(
 ) -> GatewayChatRunEvent:
     """Add an event to the run's current transaction without committing it."""
     sequence = run.last_event_sequence + 1
-    event = GatewayChatRunEvent(
-        id=str(uuid.uuid4()),
+    event = new_run_event(
         org_id=run.org_id,
         user_id=run.user_id,
         conversation_id=run.conversation_id,
         run_id=run.id,
         sequence=sequence,
         event_type=event_type,
-        payload_json=redact_public_payload(payload),
+        payload=payload,
     )
     db.add(event)
     run.last_event_sequence = sequence
     return event
+
+
+def new_run_event(
+    *,
+    org_id: str,
+    user_id: str,
+    conversation_id: str,
+    run_id: str,
+    sequence: int,
+    event_type: str,
+    payload: dict[str, Any],
+) -> GatewayChatRunEvent:
+    """A run event with a fresh id and a redacted public payload."""
+    return GatewayChatRunEvent(
+        id=str(uuid.uuid4()),
+        org_id=org_id,
+        user_id=user_id,
+        conversation_id=conversation_id,
+        run_id=run_id,
+        sequence=sequence,
+        event_type=event_type,
+        payload_json=redact_public_payload(payload),
+    )

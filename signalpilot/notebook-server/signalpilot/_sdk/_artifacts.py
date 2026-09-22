@@ -38,6 +38,19 @@ def artifacts_directory() -> Path:
     return Path("artifacts")
 
 
+def scratch_directory() -> Path:
+    """Resolve the chat scratch directory for the current process.
+
+    The artifacts directory is ``<scratch>/artifacts`` in a chat run, so the
+    parent of the artifacts directory is the fallback when only that one is
+    configured.
+    """
+    scratch = os.getenv("SP_CHAT_SCRATCH_DIRECTORY", "").strip()
+    if scratch:
+        return Path(scratch)
+    return artifacts_directory().parent
+
+
 def _validate_name(name: str) -> PurePosixPath:
     text = str(name or "").strip().replace("\\", "/")
     if not text:

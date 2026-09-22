@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field, field_validator
 
-VALID_API_KEY_SCOPES: frozenset[str] = frozenset({"read", "query", "execute", "write", "admin", "dbt_proxy"})
+VALID_API_KEY_SCOPES: frozenset[str] = frozenset({"read", "query", "execute", "write", "admin", "dbt_proxy", "agent:run"})
 
 
 class ApiKeyCreate(BaseModel):

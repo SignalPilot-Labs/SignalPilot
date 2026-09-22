@@ -40,7 +40,7 @@ from gateway.models.deliverable_theme import DeliverableTheme
 from gateway.models.reports import ReportCreate, ReportUpdate
 from gateway.notebooks.session_service import NotebookRuntime, ensure_analysis_notebook_session
 from gateway.notion import client as notion_client
-from gateway.notion import dashboards as notion_dashboards
+from gateway.notion import deliverables as notion_deliverables
 from gateway.notion import formatting as notion_formatting
 from gateway.notion.webhooks import RoutedNotionInstallation
 from gateway.store import analysis_trails, chat_traces, workspace_projects
@@ -1198,7 +1198,7 @@ async def _insert_html_deliverable(
         user_id=routed.installation.user_id,
         agent="notion_html_orchestrator",
     )
-    inserted = await notion_dashboards.insert_html_deliverable(
+    inserted = await notion_deliverables.insert_html_deliverable(
         token,
         page_id=page_id,
         anchor_block_id=anchor_block_id,
@@ -1765,7 +1765,7 @@ async def _process_deliverable_followup(
             fetch_snapshot=_snapshot_fetcher(runtime),
             theme=theme,
         )
-        replaced = await notion_dashboards.replace_html_deliverable(
+        replaced = await notion_deliverables.replace_html_deliverable(
             token,
             embed_block_id=embed_block_id,
             title=html_result.title,

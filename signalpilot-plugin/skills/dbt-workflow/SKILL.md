@@ -174,6 +174,10 @@ Record a macro output only when its definition returns an output expression and 
 ### Step 5 - Research (data exploration)
 Apply source-selection defaults to `CREATE` and `REWRITE STUB` work. For `MODIFY` and `VERIFY` work, preserve every binding recorded in `prebuild_state.md` unless the verbatim task authorizes its change because research defaults do not redefine an existing model.
 
+Call `describe_table` before you filter, group, or join on a column you have
+not seen in a result. On SQL Server, INFORMATION_SCHEMA column names are
+upper case.
+
 For EACH model that needs SQL, gather the facts to write it correctly:
 
 1. **Driving table** - the Step 1 scan's AGGREGATION DRIVING TABLE hint flags a

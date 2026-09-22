@@ -8,32 +8,29 @@ import { useEffect, useRef, useState } from "react";
 import useSWR from "swr";
 import {
   getSavedChatReport,
-  getStandaloneChatBootstrap,
   getStandaloneChatProjectReadiness,
-  getStandaloneConversation,
-  listStandaloneConversations,
-  setDefaultStandaloneChatProject,
   type ChatReportMention,
 } from "~/lib/api";
+import { usePermissions } from "~/lib/hooks/use-permissions";
 import { useToast } from "~/components/ui/toast";
+import { PlanRequired } from "~/components/billing/plan-required";
+import { useSubscription } from "~/lib/subscription-context";
+import { gatingError } from "~/lib/api/client";
 import {
   standaloneMessageKey,
   type OptimisticUserMessage,
 } from "~/lib/standalone-chat-state";
 import { projectSettingsHref } from "~/lib/project-settings-route";
 import { useConversationArtifacts } from "~/components/chat/use-conversation-notebook";
-import { pickDefaultNotebook } from "~/lib/chat-live-notebook";
 import { hasArtifactsContent } from "~/lib/chat-artifacts";
 import { ChatUiContext } from "~/components/chat/chat-ui-context";
+import { ChatPaywall } from "~/components/billing/chat-paywall";
 import { ChatMessage } from "~/components/chat/chat-message";
 import {
   ChatReplayView,
   useReplayMode,
 } from "~/components/chat/chat-replay-view";
-import {
-  isImprovementConversation,
-  isStreamingStatus,
-} from "~/components/chat/standalone-chat-helpers";
+import { isImprovementConversation } from "~/components/chat/standalone-chat-helpers";
 import {
   AttachedReportBanner,
   ChatBootstrapSpinner,
@@ -57,6 +54,7 @@ import {
   useStandaloneUiMessages,
 } from "~/components/chat/use-standalone-chat-run";
 import { useStandaloneChatActions } from "~/components/chat/use-standalone-chat-actions";
+import { useStandaloneChatData } from "~/components/chat/use-standalone-chat-data";
 import { ShareLinkDialog } from "~/components/chat/share-link-dialog";
 import { ChatEmptyHero } from "~/components/chat/chat-empty-hero";
 import {
@@ -69,10 +67,13 @@ import {
   ChatRightPanels,
 } from "~/components/chat/standalone-chat-panels";
 import { useChatRightSlot } from "~/components/chat/use-chat-right-slot";
+import { useArtifactNotices } from "~/components/chat/use-artifact-notices";
+import { ArtifactNotices } from "~/components/chat/artifact-notices";
 import { useDockScrollCompensation } from "~/components/chat/use-dock-scroll-compensation";
 import { ConnectorsProvider } from "~/components/connectors/connectors-context";
 import { useChatModelSettings } from "~/components/chat/use-chat-model-settings";
 import { useChatBudgetSettings } from "~/components/chat/use-chat-budget-settings";
+import { useDefaultChatProject } from "~/components/chat/use-default-chat-project";
 import { ChatTelemetryBoundary } from "~/components/chat/chat-telemetry-panel";
 
 export { ChatUiContext, useChatUi } from "~/components/chat/chat-ui-context";
@@ -89,40 +90,19 @@ export function StandaloneDataChat({
   const router = useRouter();
   const searchParams = useSearchParams();
   const { toast } = useToast();
+  const subscription = useSubscription();
   const {
-    data: bootstrap,
-    error: bootstrapError,
-    isLoading: bootstrapLoading,
-  } = useSWR("standalone-chat-bootstrap", getStandaloneChatBootstrap, {
-    revalidateOnFocus: false,
-  });
-  const {
-    data: historyData,
-    isLoading: historyLoading,
-    mutate: mutateHistory,
-  } = useSWR("standalone-chat-conversations", listStandaloneConversations, {
-    // Poll fast only while a run streams (the rail shows its status change).
-    // An idle page refreshes slowly; submit/stop paths mutate on demand.
-    refreshInterval: (latest) =>
-      latest?.conversations.some((conversation) =>
-        isStreamingStatus(conversation.run_status ?? undefined),
-      )
-        ? 4_000
-        : 30_000,
-  });
-  const {
-    data: detail,
-    error: detailError,
-    isLoading: detailLoading,
-    mutate: mutateDetail,
-  } = useSWR(
-    conversationId ? `standalone-chat-conversation:${conversationId}` : null,
-    () => getStandaloneConversation(conversationId!),
-    {
-      refreshInterval: (latestDetail) =>
-        isStreamingStatus(latestDetail?.current_run?.status) ? 1_000 : 0,
-    },
-  );
+    bootstrap,
+    bootstrapError,
+    bootstrapLoading,
+    historyData,
+    historyLoading,
+    mutateHistory,
+    detail,
+    detailError,
+    detailLoading,
+    mutateDetail,
+  } = useStandaloneChatData(conversationId);
   const requestedProject = searchParams.get("project");
   const requestedReportId = searchParams.get("report");
   const requestedPrompt = searchParams.get("prompt");
@@ -141,6 +121,9 @@ export function StandaloneDataChat({
   );
   const { perQueryBudgetUsd, chatBudgetUsd, budgetSettings } =
     useChatBudgetSettings(bootstrap, conversationId);
+  const { defaultProjectId, setDefaultProject } =
+    useDefaultChatProject(bootstrap);
+  const { can } = usePermissions();
   const [draft, setDraft] = useChatDraft(conversationId);
   const promptInitialized = useRef(false);
   const [isConversationRailOpen, setIsConversationRailOpen] =
@@ -199,13 +182,8 @@ export function StandaloneDataChat({
     executions: sqlTraceExecutions,
     loading: artifactsLoading,
   } = useConversationArtifacts(conversationId ?? null, events);
-  // Panel-open and auto-open follow the DEFAULT (analysis) notebook.
-  const defaultNotebook = pickDefaultNotebook(conversationNotebooks);
-  const [notebookPanelOpen, setNotebookPanelOpen] = useNotebookPanelState(
-    conversationId,
-    defaultNotebook?.status,
-    currentRun?.id,
-  );
+  const [notebookPanelOpen, setNotebookPanelOpen] =
+    useNotebookPanelState(conversationId);
   const conversationLoading = Boolean(
     conversationId && !detail && !detailError && detailLoading,
   );
@@ -233,20 +211,28 @@ export function StandaloneDataChat({
     pendingSubmission,
     setPendingSubmission,
   });
-  // Right-hand slot: artifacts, chat settings, or dashboard — one at a time.
+  // Right-hand slot: artifacts or chat settings — one at a time.
   const {
-    dashboard: dashboardPanel,
     settings: settingsPanel,
     openArtifacts: openArtifactsPanel,
     openFileRequest,
     openArtifact,
+    openNotebook,
   } = useChatRightSlot({
-    conversationId,
-    uiMessages,
-    events,
-    currentRun,
     artifactsOpen: notebookPanelOpen,
     setArtifactsOpen: setNotebookPanelOpen,
+  });
+  // New notebooks, charts, dashboards and reports raise a notice under the
+  // panel toggle instead of opening the panel by themselves.
+  const artifactNotices = useArtifactNotices({
+    conversationId,
+    notebooks: conversationNotebooks,
+    files: conversationFiles,
+    filesLoading: artifactsLoading,
+    currentRunId: currentRun?.id,
+    panelOpen: notebookPanelOpen || settingsPanel.open,
+    openArtifact,
+    openNotebook,
   });
 
   const { viewportRef, shouldStickToBottomRef, onViewportScroll } =
@@ -328,12 +314,31 @@ export function StandaloneDataChat({
     [];
   const empty = uiMessages.length === 0;
   const { message: unreadyMessage, showSetup: showSetupCta } =
-    readinessNotice(bootstrap, readiness);
+    readinessNotice(bootstrap, readiness, can("projects.write"));
 
   if (bootstrapLoading) {
     return <ChatBootstrapSpinner />;
   }
+  if (bootstrap?.plan_locked) {
+    return <ChatPaywall />;
+  }
   if (bootstrapError || !bootstrap?.enabled) {
+    // A free org gets 200 with `enabled: false` and its entitlement; a gated
+    // route answers 402 plan_required. Both are the plan prompt. Anything
+    // else (a kill switch, 503 not_available_in_deployment, an outage) is not
+    // something a plan change fixes.
+    const planRequired =
+      bootstrap?.entitlement?.is_billable === false ||
+      gatingError(bootstrapError)?.error === "plan_required" ||
+      (subscription.isLoaded && !subscription.isBillable);
+    if (planRequired) {
+      return (
+        <PlanRequired
+          feature="data chat"
+          description="Ask questions of your governed warehouse and get receipted answers with evidence."
+        />
+      );
+    }
     return <ChatUnavailableScreen />;
   }
   if (detailError) {
@@ -360,10 +365,13 @@ export function StandaloneDataChat({
       bootstrap={bootstrap}
       selectedProjectId={selectedProjectId}
       onSelectProject={(projectId) => {
+        // A pick is for this chat only; the org default is a separate,
+        // admin-only action.
         setSelectedProjectId(projectId);
-        void setDefaultStandaloneChatProject(projectId);
         router.replace(`/chats?project=${encodeURIComponent(projectId)}`);
       }}
+      defaultProjectId={defaultProjectId}
+      onSetDefaultProject={(projectId) => void setDefaultProject(projectId)}
       onOpenSettings={settingsPanel.toggle}
       settingsOpen={settingsPanel.open}
     />
@@ -387,14 +395,13 @@ export function StandaloneDataChat({
         openChatSettings: settingsPanel.openPanel,
         onStop,
         onRetry,
-        onOpenDashboardPreview: dashboardPanel.open,
       }}
     >
       <div
         className={chatShellClassName(
           embedded,
           settingsPanel.open,
-          notebookPanelOpen || Boolean(dashboardPanel.sessionId),
+          notebookPanelOpen,
         )}
       >
         <div className="relative flex h-full overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg)] shadow-2xl shadow-black/20">
@@ -548,9 +555,6 @@ export function StandaloneDataChat({
                 artifactsLoading={artifactsLoading}
                 artifactsOpen={notebookPanelOpen}
                 onOpenArtifacts={openArtifactsPanel}
-                dashboardSessionId={dashboardPanel.latestSessionId}
-                dashboardOpen={Boolean(dashboardPanel.sessionId)}
-                onOpenDashboard={dashboardPanel.open}
                 onShare={
                   !embedded &&
                   detail &&
@@ -560,6 +564,9 @@ export function StandaloneDataChat({
                 }
                 onReplay={canReplay ? enterReplay : undefined}
               />
+            )}
+            {conversationId && !replaying && (
+              <ArtifactNotices {...artifactNotices} />
             )}
           </main>
           {settingsPanel.open || conversationId ? (
@@ -580,13 +587,6 @@ export function StandaloneDataChat({
                 model: modelSettings,
                 budgets: budgetSettings,
                 onClose: settingsPanel.closePanel,
-              }}
-              dashboard={{
-                sessionId: conversationId ? dashboardPanel.sessionId : null,
-                updateLabel: dashboardPanel.updateLabel,
-                updateRevision: dashboardPanel.updateRevision,
-                queriesEnabled: currentRun?.status !== "cancelled",
-                onClose: dashboardPanel.close,
               }}
             />
           ) : null}

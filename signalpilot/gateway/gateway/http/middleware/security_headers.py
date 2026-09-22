@@ -89,6 +89,8 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-XSS-Protection"] = "0"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        if request.url.path == "/api/artifact-download":
+            response.headers["Referrer-Policy"] = "no-referrer"
         # Cache-Control: only set on non-proxy paths. For /notebook/* let upstream's
         # own headers pass through (or leave absent if upstream sets nothing).
         keeps_own_cache_control = bool(
@@ -109,9 +111,11 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         # CSP: SP_GATEWAY_CSP_POLICY overrides the default entirely when set.
         # The deployer owns the full policy — no merging or layering.
         # Proxy paths get a minimal policy: frame-ancestors 'self' only.
+        # A route that set its own policy (artifact download, agent-authored
+        # files) keeps it; the default is only applied when none is present.
         if is_proxy:
             response.headers["Content-Security-Policy"] = _build_proxy_csp()
-        else:
+        elif not response.headers.get("Content-Security-Policy"):
             csp_policy = os.environ.get("SP_GATEWAY_CSP_POLICY") or _CSP_DEFAULT_POLICY
             response.headers["Content-Security-Policy"] = csp_policy
         return response

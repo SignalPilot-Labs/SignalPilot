@@ -6,7 +6,12 @@ import json
 
 from gateway.errors.mcp import sanitize_mcp_error
 from gateway.mcp.audit import audited_tool
-from gateway.mcp.context import _require_mcp_admin_scope, _store_session, mcp_eval_doc_ids_var
+from gateway.mcp.context import (
+    _require_mcp_admin_scope,
+    _require_mcp_scope,
+    _store_session,
+    mcp_eval_doc_ids_var,
+)
 from gateway.mcp.server import mcp
 from gateway.models.knowledge import KnowledgeCategory, KnowledgeDoc, KnowledgeDocCreate, KnowledgeScope
 
@@ -325,7 +330,7 @@ async def propose_knowledge(
     To retire a doc under a different title, call archive_knowledge instead.
     """
     try:
-        err = _require_mcp_admin_scope()
+        err = _require_mcp_scope("write")
         if err:
             return err
         # Validate via DTO: raises pydantic.ValidationError on bad input

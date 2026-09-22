@@ -47,7 +47,6 @@ function ui(overrides: Partial<ChatUiContextValue>): ChatUiContextValue {
     getFileObjectUrl: vi.fn(async (id: string) => `blob:${id}`),
     onStop: async () => undefined,
     onRetry: async () => undefined,
-    onOpenDashboardPreview: () => undefined,
     ...overrides,
   };
 }

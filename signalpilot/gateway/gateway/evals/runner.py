@@ -27,6 +27,7 @@ from typing import Any
 
 from ..config.evals import EvalRunSettings, get_eval_run_settings
 from ..db.engine import get_session_factory
+from ..git.repos import github_token_remote_url
 from ..store import Store
 from ..store import evals as evals_store
 from .backends import ContainerRun, get_execution_backend
@@ -134,13 +135,15 @@ class ProgressBoard:
     one JSON blob on the run row. Serialized by a lock so concurrent tasks
     never interleave partial writes."""
 
-    def __init__(self, db: RunDB, total: int) -> None:
+    def __init__(self, db: RunDB, total: int, warnings: list[str] | None = None) -> None:
         self._db = db
         self._lock = asyncio.Lock()
         self._active: dict[str, dict[str, Any]] = {}
         self._done = 0
         self._total = total
         self._started_at = _now()
+        # Non-fatal notes from run preparation (for example an ignored manifest key).
+        self._warnings = list(warnings or [])
 
     async def task_phase(self, task: EvalTask, phase: str, sandbox: dict | None = None) -> None:
         async with self._lock:
@@ -173,6 +176,7 @@ class ProgressBoard:
                 "active": sorted(self._active.values(), key=lambda e: e["task_id"]),
                 "started_at": self._started_at,
                 "updated_at": _now(),
+                "warnings": self._warnings,
             }
         )
 
@@ -201,6 +205,7 @@ def derive_progress(run: dict) -> dict:
         "started_at": started,
         "elapsed_s": elapsed,
         "updated_at": progress.get("updated_at"),
+        "warnings": list(progress.get("warnings") or []),
         "error": run.get("error"),
     }
 
@@ -267,13 +272,16 @@ class RepoRefused(RuntimeError):
     """The configured repo is not one this org may acquire. User-facing."""
 
 
-_GITHUB_PREFIX = "https://github.com/"
+GITHUB_PREFIX = "https://github.com/"
+
+# Public precondition error: the dbt project comes from the eval configuration.
+PROJECT_REPO_REQUIRED = "Select the dbt project repository in the eval configuration"
 
 
-def _assert_repo_allowed(repo_url: str, *, settings: EvalRunSettings, what: str) -> None:
+def assert_repo_allowed(repo_url: str, *, settings: EvalRunSettings, what: str) -> None:
     """Gate every repo the gateway will fetch on behalf of a run.
 
-    The operator configuration and the evaluation manifest provide repository URLs.
+    The operator configuration provides both repository URLs.
     An unvalidated URL can read gateway files or access an unauthorized host.
     Cloud mode permits only a GitHub HTTPS URL linked to the organization installation.
     Self-hosted mode also permits local paths inside projects_dir.
@@ -283,7 +291,7 @@ def _assert_repo_allowed(repo_url: str, *, settings: EvalRunSettings, what: str)
     url = (repo_url or "").strip()
     if not url:
         raise RepoRefused(f"{what}: no repository configured")
-    if url.startswith(_GITHUB_PREFIX):
+    if url.startswith(GITHUB_PREFIX):
         return
     if is_cloud_mode():
         raise RepoRefused(f"{what}: only https://github.com/ repositories are allowed — refused {url[:120]!r}")
@@ -313,9 +321,9 @@ async def _authed_clone_url(
     The resolver rejects a repository that belongs to another organization.
     The credentialed URL remains in the gateway. Containers receive a tarball.
     """
-    if not repo_url.startswith(_GITHUB_PREFIX):
+    if not repo_url.startswith(GITHUB_PREFIX):
         return repo_url
-    full_name = repo_url.removeprefix(_GITHUB_PREFIX).removesuffix(".git").strip("/")
+    full_name = repo_url.removeprefix(GITHUB_PREFIX).removesuffix(".git").strip("/")
     from ..store import github as gh_store
 
     factory = get_session_factory()
@@ -335,7 +343,7 @@ async def _authed_clone_url(
         else:
             token = await gh_store.get_org_token_for_repo(session, org_id=org_id, repo_full_name=full_name)
     if token:
-        return f"https://x-access-token:{token}@github.com/{full_name}.git"
+        return github_token_remote_url(token, full_name)
     # Public repositories can clone without GitHub App authorization.
     logger.info("No GitHub App authorization for repository %s. Cloning anonymously.", full_name)
     return repo_url
@@ -351,7 +359,7 @@ async def fetch_eval_repo(
     repo_id: int | None = None,
 ) -> str:
     """Clone (or resolve) the eval set into dest. Returns the git ref."""
-    _assert_repo_allowed(repo_url, settings=settings, what="eval repo")
+    assert_repo_allowed(repo_url, settings=settings, what="eval repo")
     if repo_url.startswith(("http://", "https://", "git@")):
         url = await _authed_clone_url(
             org_id,
@@ -372,21 +380,24 @@ async def fetch_eval_repo(
         raise ValueError(f"local eval paths must live under {settings.projects_dir}")
     if not src.is_dir():
         raise FileNotFoundError(f"eval repo not found: {repo_url}")
-    def _copy_and_digest() -> str:
-        # One pass over `src`: a local path is usually a bind mount, where every
-        # file operation is a slow host round-trip. Hash the fast local copy in
-        # `dest` (the caller clears it first, so the trees are identical), and
-        # keep the whole walk off the event loop — it can take many seconds and
-        # would otherwise stall every concurrent request.
-        shutil.copytree(src, dest, dirs_exist_ok=True)
-        digest = hashlib.sha256()
-        for p in sorted(dest.rglob("*")):
-            if p.is_file():
-                digest.update(p.relative_to(dest).as_posix().encode())
-                digest.update(p.read_bytes())
-        return f"local-{digest.hexdigest()[:16]}"
+    return await asyncio.to_thread(_copy_local_tree, src, dest)
 
-    return await asyncio.to_thread(_copy_and_digest)
+
+def _copy_local_tree(src: Path, dest: Path) -> str:
+    """Copy a local checkout into dest and return a content digest as its ref.
+
+    One pass over `src`: a local path is usually a bind mount, where every
+    file operation is a slow host round-trip. Hash the fast local copy in
+    `dest` (the caller clears it first, so the trees are identical). Callers
+    run this off the event loop because the walk can take many seconds.
+    """
+    shutil.copytree(src, dest, dirs_exist_ok=True)
+    digest = hashlib.sha256()
+    for p in sorted(dest.rglob("*")):
+        if p.is_file():
+            digest.update(p.relative_to(dest).as_posix().encode())
+            digest.update(p.read_bytes())
+    return f"local-{digest.hexdigest()[:16]}"
 
 
 # Refresh the GET /api/evals/tasks repository cache at most every five minutes.
@@ -495,8 +506,15 @@ _RUNNER_SCRIPT = (
     # Project context, when the eval set ships a CLAUDE.md. Written after the
     # tarball unpack so the eval set's instructions win over the project's.
     '{ [ -n "$SP_CLAUDE_MD_B64" ] && echo "$SP_CLAUDE_MD_B64" | base64 -d > /work/CLAUDE.md; true; } && '
+    # The runner image ships dbt in a venv and the SignalPilot plugin (skills
+    # and verifier agents). Both are optional at the shell level so the eval
+    # stub image and older runner images keep working.
+    '{ [ -d /opt/sp-eval/.venv/bin ] && export PATH="/opt/sp-eval/.venv/bin:$PATH"; true; } && '
+    'SP_PLUGIN_ARGS=""; { [ -d "${SP_AGENT_PLUGIN_PATH:-/opt/signalpilot-plugin}" ] '
+    '&& SP_PLUGIN_ARGS="--plugin-dir ${SP_AGENT_PLUGIN_PATH:-/opt/signalpilot-plugin}"; true; } && '
     'claude -p "$SP_PROMPT" --mcp-config /work/.mcp.json --strict-mcp-config '
-    '--output-format stream-json --verbose --model "$SP_MODEL" --dangerously-skip-permissions'
+    '--output-format stream-json --verbose --model "$SP_MODEL" --dangerously-skip-permissions '
+    "$SP_PLUGIN_ARGS"
 )
 
 
@@ -623,28 +641,49 @@ def _extract_result_text(logs: str) -> str:
 async def _ship_project_tarball(
     org_id: str,
     run_id: str,
-    project_repo: str,
+    cfg: dict,
     obj: EvalObjectStore,
 ) -> tuple[str, str, list[dict]]:
-    """Clone the dbt project gateway-side, strip .git, upload as tgz, presign.
+    """Clone the configured dbt project gateway-side, strip .git, upload as tgz, presign.
 
-    Return the presigned URL, project reference, and model list.
+    The project repository and branch come from the eval configuration, never
+    from the manifest. Return the presigned URL, the resolved project reference
+    (commit sha, or a content digest for a local path), and the model list.
     The pod receives the time-limited presigned URL instead of a Git credential.
     Enumerate models before the function deletes the checkout.
     """
     from .coverage import enumerate_models
 
-    # Apply the repository access check to the project repository from the manifest.
-    _assert_repo_allowed(project_repo, settings=get_eval_run_settings(), what="dbt project repo")
+    project_repo = str(cfg.get("project_repo_url") or "").strip()
+    if not project_repo:
+        raise RepoRefused(PROJECT_REPO_REQUIRED)
+    branch = str(cfg.get("project_ref") or "").strip()
+    assert_repo_allowed(project_repo, settings=get_eval_run_settings(), what="dbt project repo")
 
     with tempfile.TemporaryDirectory(prefix="sp-eval-proj-") as tmp:
         dest = Path(tmp) / "proj"
-        url = await _authed_clone_url(org_id, project_repo)
-        code, out = await _git(["clone", "--depth", "1", url, str(dest)], timeout=300)
-        if code != 0:
-            raise RuntimeError(f"could not clone dbt project {project_repo}: {out[-400:]}")
-        code, ref_out = await _git(["rev-parse", "HEAD"], cwd=str(dest))
-        project_ref = ref_out.strip()[:40] if code == 0 else ""
+        if project_repo.startswith(("http://", "https://", "git@")):
+            url = await _authed_clone_url(
+                org_id,
+                project_repo,
+                repo_installation_id=cfg.get("project_repo_installation_id"),
+                repo_id=cfg.get("project_repo_id"),
+            )
+            args = ["clone", "--depth", "1"]
+            if branch:
+                args += ["--branch", branch]
+            code, out = await _git([*args, url, str(dest)], timeout=300)
+            if code != 0:
+                # Do not include `url` in output because it can contain a token.
+                where = f"{project_repo} at branch {branch}" if branch else project_repo
+                raise RuntimeError(f"could not clone dbt project {where}: {out[-400:]}")
+            code, ref_out = await _git(["rev-parse", "HEAD"], cwd=str(dest))
+            project_ref = ref_out.strip()[:40] if code == 0 else ""
+        else:
+            src = Path(project_repo)
+            if not src.is_dir():
+                raise RuntimeError(f"dbt project not found: {project_repo}")
+            project_ref = await asyncio.to_thread(_copy_local_tree, src, dest)
         models = enumerate_models(dest)
         # Remove Git history because the agent requires only the project files.
         shutil.rmtree(dest / ".git", ignore_errors=True)
@@ -860,6 +899,9 @@ async def _execute_run_inner(org_id: str, run_id: str, api_key: str | None) -> N
 
     if not settings.s3_bucket:
         return await fail("SP_EVAL_S3_BUCKET is not set — the harness has nowhere durable for evidence")
+    project_repo = str(cfg.get("project_repo_url") or "").strip()
+    if not project_repo:
+        return await fail(PROJECT_REPO_REQUIRED)
     obj = get_object_store()
 
     # 1. Eval set
@@ -879,6 +921,12 @@ async def _execute_run_inner(org_id: str, run_id: str, api_key: str | None) -> N
             eval_set.ref = eval_ref
         except (ManifestError, RuntimeError, ValueError, FileNotFoundError) as exc:
             return await fail(str(exc)[:500])
+        if eval_set.warnings:
+            for warning in eval_set.warnings:
+                logger.warning("eval run %s: %s", run_id, warning)
+            await db.update_run(
+                progress={"phase": "preparing", "warnings": list(eval_set.warnings), "updated_at": _now()}
+            )
 
         tasks = eval_set.tasks
         task_filter = run.get("task_filter")
@@ -926,24 +974,18 @@ async def _execute_run_inner(org_id: str, run_id: str, api_key: str | None) -> N
                 "grade against golds computed for a different build."
             )
 
-        # 3. dbt project tarball
-        project_tarball_url = ""
-        project_ref = ""
-        project_models: list[dict] = []
-        if eval_set.project_repo:
-            try:
-                project_tarball_url, project_ref, project_models = await _ship_project_tarball(
-                    org_id, run_id, eval_set.project_repo, obj
-                )
-            except RuntimeError as exc:
-                return await fail(str(exc)[:500])
+        # 3. dbt project tarball, from the configuration
+        try:
+            project_tarball_url, project_ref, project_models = await _ship_project_tarball(org_id, run_id, cfg, obj)
+        except RuntimeError as exc:
+            return await fail(str(exc)[:500])
 
         # 4. Persist run coordinates + seed task rows
         await db.update_run(
             status="running",
             eval_set_name=eval_set.name,
             eval_set_ref=eval_set.ref,
-            project_repo=eval_set.project_repo,
+            project_repo=project_repo,
             project_ref=project_ref,
             build_fingerprint=fingerprint,
             kb_doc_ids=kb_doc_ids,
@@ -968,7 +1010,7 @@ async def _execute_run_inner(org_id: str, run_id: str, api_key: str | None) -> N
 
         claude_md = read_claude_md(repo_dir)
         preamble = str(cfg.get("prompt_preamble", "") or "")
-        board = ProgressBoard(db, total=len(tasks))
+        board = ProgressBoard(db, total=len(tasks), warnings=eval_set.warnings)
         backend = get_execution_backend(settings, org_id=org_id)
         artifact_budget = ArtifactBudget(settings.artifact_bytes_per_run)
 

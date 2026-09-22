@@ -164,6 +164,7 @@ export function ConversationRail({
                   {isImprovementConversation(conversation) && (
                     <AutomatedBadge />
                   )}
+                  {conversation.origin === "mcp_agent" && <span className="flex-none rounded border border-[var(--color-border)] px-1 text-[9px] text-[var(--color-text-dim)]">MCP agent</span>}
                   {loadingConversationId === conversation.id && (
                     <Loader2 className="h-3 w-3 flex-none animate-spin text-[var(--color-text-dim)]" />
                   )}

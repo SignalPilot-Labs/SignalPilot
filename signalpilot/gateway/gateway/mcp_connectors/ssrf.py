@@ -13,7 +13,7 @@ import ipaddress
 import socket
 from urllib.parse import urlsplit
 
-import httpx
+import httpx2 as httpx
 
 from gateway.runtime.mode import is_cloud_mode
 

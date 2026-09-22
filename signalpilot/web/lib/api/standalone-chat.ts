@@ -2,6 +2,7 @@
 
 import type { ConversationFileInfo } from "./chat-files";
 import { GATEWAY_URL, getAuthHeaders, request } from "./client";
+import type { DeploymentCapabilities, EntitlementPayload } from "~/lib/entitlement";
 
 // The following functions support chat traces on the /chats page.
 export type ChatTraceThread = {
@@ -78,9 +79,14 @@ export type StandaloneChatEffortOption = {
 
 export type StandaloneChatBootstrap = {
   enabled: boolean;
+  /** True when the org's plan does not include chat (free tier). */
+  plan_locked?: boolean;
   projects: StandaloneChatProject[];
   selected_project_id: string | null;
   is_admin: boolean;
+  /** Org role and permission vocabulary (gateway/auth/permissions.py); absent on older gateways. */
+  role?: "admin" | "member";
+  permissions?: string[];
   starter_questions: string[];
   default_per_query_budget_usd: number;
   default_chat_budget_usd: number;
@@ -96,6 +102,10 @@ export type StandaloneChatBootstrap = {
     /** Connectors (external MCP servers) for the chat agent. */
     mcp_connectors?: boolean;
   };
+  /** The org's plan entitlement as the gateway sees it. */
+  entitlement: EntitlementPayload;
+  /** What this deployment is wired to run. */
+  capabilities: DeploymentCapabilities;
 };
 
 export type StandaloneChatRun = {
@@ -228,8 +238,11 @@ export type SharedConversationDetail = {
   shared_at: string;
 };
 
-export const getStandaloneChatBootstrap = () =>
-  request<StandaloneChatBootstrap>("/api/chat/bootstrap");
+/** `refresh` makes the gateway bypass its entitlement cache (once, after Stripe Checkout). */
+export const getStandaloneChatBootstrap = (options?: { refresh?: boolean }) =>
+  request<StandaloneChatBootstrap>(
+    options?.refresh ? "/api/chat/bootstrap?refresh=1" : "/api/chat/bootstrap",
+  );
 export const getStandaloneChatProjectReadiness = (projectId: string) =>
   request<{
     project_id: string;

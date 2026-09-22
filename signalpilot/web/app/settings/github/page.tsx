@@ -5,26 +5,28 @@ import { useSearchParams } from "next/navigation";
 import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
+  Clock,
   GitBranch,
   Loader2,
   Plug,
   Settings as SettingsIcon,
-  Unplug,
-  Link as LinkIcon,
   Unlink,
 } from "lucide-react";
 import {
   getGitHubInstallUrl,
   getGitHubInstallations,
   deleteGitHubInstallation,
+  refreshGitHubInstallation,
   getGitHubRepos,
   getGitHubRepoLinks,
   getGitHubImportStatus,
   importGitHubRepo,
+  listAgentPullRequests,
   deleteWorkspaceProject,
   getWorkspaceProjects,
 } from "~/lib/api";
 import type {
+  AgentPullRequest,
   GitHubInstallation,
   GitHubRepo,
   GitHubRepoLink,
@@ -33,11 +35,30 @@ import type {
 import { PageHeader, TerminalBar } from "~/components/ui/page-header";
 import { StatusDot } from "~/components/ui/data-viz";
 import { useToast } from "~/components/ui/toast";
+import { InstallationCard } from "~/components/github/installation-card";
+import { LinkExistingInstallation } from "~/components/github/link-existing-installation";
+import { AgentPullRequests } from "~/components/github/agent-pull-requests";
+import { AdminOnlyControl } from "~/components/access/admin-only-control";
+import { ReadOnlyNote } from "~/components/access/read-only-note";
+import { usePermissions } from "~/lib/hooks/use-permissions";
+
+const GITHUB_ERROR_MESSAGES: Record<string, string> = {
+  oauth_state_invalid: "GitHub connection expired. Please try again.",
+  github_app_not_configured: "GitHub App is not configured for this workspace.",
+  installation_not_found:
+    "GitHub reported no installation of the SignalPilot app for that account. Install the app and try again.",
+  installation_claimed:
+    "This GitHub installation is already connected to a different SignalPilot organization.",
+  repository_listing_failed:
+    "The installation was connected but its repositories could not be listed. Use refresh repositories to try again.",
+};
 
 export default function GitHubConnectionsPage() {
   const { toast } = useToast();
   const searchParams = useSearchParams();
   const router = useRouter();
+  const { can } = usePermissions();
+  const canWriteGitHub = can("github.write");
 
   const [installations, setInstallations] = useState<GitHubInstallation[]>([]);
   const [repoLinks, setRepoLinks] = useState<GitHubRepoLink[]>([]);
@@ -45,6 +66,9 @@ export default function GitHubConnectionsPage() {
   const [loading, setLoading] = useState(true);
 
   // Repo picker state
+  const [pullRequests, setPullRequests] = useState<AgentPullRequest[]>([]);
+  const [prsLoading, setPrsLoading] = useState(true);
+  const [refreshingInstall, setRefreshingInstall] = useState<string | null>(null);
   const [pickerInstallId, setPickerInstallId] = useState<string | null>(null);
   const [pickerRepos, setPickerRepos] = useState<GitHubRepo[]>([]);
   const [pickerLoading, setPickerLoading] = useState(false);
@@ -55,14 +79,20 @@ export default function GitHubConnectionsPage() {
   const [deletingLink, setDeletingLink] = useState<string | null>(null);
 
   const githubError = searchParams.get("error");
-  const githubErrorMessage =
-    githubError === "oauth_state_invalid"
-      ? "GitHub connection expired. Please try again."
-      : githubError === "github_app_not_configured"
-        ? "GitHub App is not configured for this workspace."
-        : githubError
-          ? "GitHub connection failed. Please try again."
-          : null;
+  const githubErrorMessage = githubError
+    ? (GITHUB_ERROR_MESSAGES[githubError] ?? "GitHub connection failed. Please try again.")
+    : null;
+  const installPending = searchParams.get("pending") === "true";
+
+  const loadPullRequests = useCallback(async () => {
+    setPrsLoading(true);
+    try {
+      setPullRequests(await listAgentPullRequests());
+    } catch {
+      // Older gateways have no pull-request endpoint; keep the list empty.
+    }
+    setPrsLoading(false);
+  }, []);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -76,10 +106,11 @@ export default function GitHubConnectionsPage() {
       setRepoLinks(links);
       setProjects(projs);
     } catch {
-      // GitHub not configured — show empty state
+      // GitHub not configured, show the empty state.
     }
     setLoading(false);
-  }, []);
+    void loadPullRequests();
+  }, [loadPullRequests]);
 
   useEffect(() => {
     refresh();
@@ -90,6 +121,9 @@ export default function GitHubConnectionsPage() {
         sessionStorage.removeItem("sp_github_return_to");
         router.replace(returnTo);
       }
+    }
+    if (searchParams.get("pending") === "true") {
+      toast("Installation requested. A GitHub organization owner must approve it.", "info");
     }
     if (githubErrorMessage) {
       toast(githubErrorMessage, "error");
@@ -114,6 +148,26 @@ export default function GitHubConnectionsPage() {
       refresh();
     } catch (e) {
       toast(String(e), "error");
+    }
+  }
+
+  async function handleRefreshInstallation(id: string) {
+    setRefreshingInstall(id);
+    try {
+      const updated = await refreshGitHubInstallation(id);
+      toast(
+        `${updated.github_account_login}: ${updated.authorized_repository_count} repositories`,
+        "success",
+      );
+      const installs = await getGitHubInstallations();
+      setInstallations(installs);
+      if (pickerInstallId === id) {
+        await openRepoPicker(id);
+      }
+    } catch (e) {
+      toast(`Failed to refresh repositories: ${e}`, "error");
+    } finally {
+      setRefreshingInstall(null);
     }
   }
 
@@ -165,7 +219,7 @@ export default function GitHubConnectionsPage() {
       });
       toast(
         result.created
-          ? `Linked ${repo.full_name} — project "${result.project.display_name}" created`
+          ? `Linked ${repo.full_name}: project "${result.project.display_name}" created`
           : `${repo.full_name} is already linked to "${result.project.display_name}"`,
         "success",
       );
@@ -198,6 +252,8 @@ export default function GitHubConnectionsPage() {
   }
 
   const linkedRepoNames = new Set(repoLinks.map((l) => l.repo_full_name));
+  const projectNames: Record<string, string> = {};
+  for (const p of projects) projectNames[p.id] = p.display_name;
 
   return (
     <div className="p-8 animate-fade-in">
@@ -234,7 +290,7 @@ export default function GitHubConnectionsPage() {
               </p>
             </div>
           </div>
-          {githubError !== "github_app_not_configured" && (
+          {githubError !== "github_app_not_configured" && canWriteGitHub && (
             <button
               type="button"
               onClick={handleConnectGitHub}
@@ -245,6 +301,22 @@ export default function GitHubConnectionsPage() {
               retry
             </button>
           )}
+        </div>
+      )}
+
+      {installPending && (
+        <div className="mb-6 border border-[var(--color-border)] bg-[var(--color-bg-card)] rounded-[14px] px-5 py-4 flex items-start gap-3">
+          <Clock className="w-4 h-4 mt-0.5 text-[var(--color-text-dim)]" />
+          <div>
+            <p className="text-xs font-bold text-[var(--color-text)]">
+              Installation requested
+            </p>
+            <p className="mt-1 text-xs text-[var(--color-text-dim)]">
+              A GitHub organization owner must approve the SignalPilot app before it appears
+              here. Once approved, reload this page or use &quot;Link an existing
+              installation&quot; below.
+            </p>
+          </div>
         </div>
       )}
 
@@ -260,48 +332,52 @@ export default function GitHubConnectionsPage() {
               <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em]">
                 connected accounts
               </span>
-              <button
-                type="button"
-                onClick={handleConnectGitHub}
-                disabled={connecting}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-[var(--color-text)] bg-[var(--color-bg-input)] border border-[var(--color-border)] rounded-[10px] hover:border-[var(--color-text-dim)] transition-colors duration-150 disabled:opacity-50"
-              >
-                {connecting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plug className="w-3 h-3" />}
-                connect github
-              </button>
+              {canWriteGitHub ? (
+                <button
+                  type="button"
+                  onClick={handleConnectGitHub}
+                  disabled={connecting}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-[var(--color-text)] bg-[var(--color-bg-input)] border border-[var(--color-border)] rounded-[10px] hover:border-[var(--color-text-dim)] transition-colors duration-150 disabled:opacity-50"
+                >
+                  {connecting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plug className="w-3 h-3" />}
+                  connect github
+                </button>
+              ) : (
+                <ReadOnlyNote>the GitHub App is installed by an org admin</ReadOnlyNote>
+              )}
             </div>
             {installations.length === 0 ? (
               <div className="p-8 text-center text-xs text-[var(--color-text-dim)]">
-                no GitHub accounts connected — click "Connect GitHub" to get started
+                {canWriteGitHub
+                  ? "no GitHub accounts connected. Click \"connect github\" to get started"
+                  : "no GitHub accounts connected"}
               </div>
             ) : (
               <div className="divide-y divide-[var(--color-border)]">
                 {installations.map((inst) => (
-                  <div key={inst.id} className="flex items-center justify-between px-5 py-3">
-                    <div className="flex items-center gap-3">
-                      <GitBranch className="w-4 h-4 text-[var(--color-text-dim)]" />
-                      <div>
-                        <span className="text-xs font-bold text-[var(--color-text)]">{inst.github_account_login}</span>
-                        <span className="ml-2 text-[11px] text-[var(--color-text-dim)]">{inst.github_account_type}</span>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => openRepoPicker(inst.id)}
-                        className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-[var(--color-text-dim)] border border-[var(--color-border)] rounded-[10px] hover:border-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors duration-150"
-                      >
-                        <LinkIcon className="w-3 h-3" /> link repo
-                      </button>
-                      <button
-                        onClick={() => handleDisconnect(inst.id)}
-                        className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-[var(--color-text-dim)] border border-[var(--color-border)] rounded-[10px] hover:border-[var(--color-error)] hover:text-[var(--color-error)] transition-colors duration-150"
-                      >
-                        <Unplug className="w-3 h-3" /> disconnect
-                      </button>
-                    </div>
-                  </div>
+                  <InstallationCard
+                    key={inst.id}
+                    installation={inst}
+                    refreshing={refreshingInstall === inst.id}
+                    onLinkRepo={openRepoPicker}
+                    onRefresh={handleRefreshInstallation}
+                    onDisconnect={handleDisconnect}
+                  />
                 ))}
               </div>
+            )}
+            {canWriteGitHub && (
+              <LinkExistingInstallation
+                onLinked={(linked) => {
+                  if (linked.length > 0) {
+                    toast(
+                      `Linked ${linked.length} GitHub installation${linked.length === 1 ? "" : "s"}`,
+                      "success",
+                    );
+                  }
+                  refresh();
+                }}
+              />
             )}
           </div>
 
@@ -310,7 +386,7 @@ export default function GitHubConnectionsPage() {
             <div className="border border-[var(--color-border)] bg-[var(--color-bg-card)] rounded-[14px] mb-6 animate-scale-in">
               <div className="px-5 py-3 border-b border-[var(--color-border)] flex items-center justify-between">
                 <span className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em]">
-                  link a repo — a project is created for it automatically
+                  link a repo. A project is created for it automatically
                 </span>
                 <button
                   onClick={() => { setPickerInstallId(null); setPickerRepos([]); }}
@@ -409,12 +485,14 @@ export default function GitHubConnectionsPage() {
                           >
                             <SettingsIcon className="w-3 h-3 text-[var(--color-text)]" /> settings
                           </a>
-                          <button
-                            onClick={() => setConfirmDeleteLink(link.id)}
-                            className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-[var(--color-text-dim)] border border-[var(--color-border)] rounded-[10px] hover:border-[var(--color-error)] hover:text-[var(--color-error)] transition-colors duration-150"
-                          >
-                            <Unlink className="w-3 h-3" /> unlink
-                          </button>
+                          <AdminOnlyControl permission="github.write">
+                            <button
+                              onClick={() => setConfirmDeleteLink(link.id)}
+                              className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-[var(--color-text-dim)] border border-[var(--color-border)] rounded-[10px] hover:border-[var(--color-error)] hover:text-[var(--color-error)] transition-colors duration-150"
+                            >
+                              <Unlink className="w-3 h-3" /> unlink
+                            </button>
+                          </AdminOnlyControl>
                         </div>
                       )}
                     </div>
@@ -423,6 +501,12 @@ export default function GitHubConnectionsPage() {
               </div>
             </div>
           )}
+
+          <AgentPullRequests
+            pullRequests={pullRequests}
+            loading={prsLoading}
+            projectNames={projectNames}
+          />
         </>
       )}
     </div>

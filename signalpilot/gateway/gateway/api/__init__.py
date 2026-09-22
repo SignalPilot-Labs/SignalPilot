@@ -2,7 +2,8 @@
 
 import logging
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
 from ..dbt_proxy.api import router as dbt_proxy_router
 from ..git.http_server import router as git_http_router
@@ -20,34 +21,38 @@ from .chat_reports import router as chat_reports_router
 from .chat_traces import router as chat_traces_router
 from .connections import router as connections_router
 from .dashboards import router as dashboards_router
+from .dbt_map import router as dbt_map_router
 from .demo import router as demo_router
+from .deps import GatingError
 from .eval_runs import router as eval_runs_router
 from .files import router as files_router
-from .dbt_map import router as dbt_map_router
 from .github import router as github_router
 from .github_bot import router as github_bot_router
 from .health import router as health_router
+from .improvements import router as improvements_router
 from .keys import router as keys_router
 from .knowledge import router as knowledge_router
 from .mcp import router as mcp_connectors_router
+from .me import router as me_router
 from .metrics import router as metrics_router
 from .notebook_files import router as notebook_files_router
 from .notebook_sessions import router as notebook_sessions_router
 from .notion import router as notion_router
 from .notion import webhook_router as notion_webhook_router
+from .oauth_metadata import router as oauth_metadata_router
 from .org_secrets import router as org_secrets_router
 from .projects import router as projects_router
 from .query import router as query_router
 from .reports import router as reports_router
 from .sandboxes import router as sandboxes_router
 from .schema import router as schema_router
-from .improvements import router as improvements_router
 from .schema_watches import router as schema_watches_router
 from .security import router as security_router
 from .settings import router as settings_router
 from .slack import router as slack_router
 from .standalone_chat import router as standalone_chat_router
 from .uploads import router as uploads_router
+from .usage import router as usage_router
 from .user_secrets import router as user_secrets_router
 from .workspace_files import router as workspace_files_router
 from .workspace_projects import router as workspace_projects_router
@@ -55,13 +60,27 @@ from .workspace_projects import router as workspace_projects_router
 logger = logging.getLogger(__name__)
 
 
+async def _gating_error_handler(_request: Request, exc: GatingError) -> JSONResponse:
+    """Render a plan or deployment refusal as ``{"error": ..., ..., "detail": {...}}``.
+
+    The machine-readable keys sit at the top level (the documented contract)
+    and are repeated under ``detail`` for clients that only read that field.
+    """
+    body = dict(exc.detail) if isinstance(exc.detail, dict) else {"error": str(exc.detail)}
+    body["detail"] = dict(body)
+    return JSONResponse(status_code=exc.status_code, content=body, headers=exc.headers)
+
+
 def register_routers(app: FastAPI) -> None:
     """Include all API routers into the application."""
+    app.add_exception_handler(GatingError, _gating_error_handler)
+    from .artifact_downloads import router as artifact_download_router
+    app.include_router(artifact_download_router)
     app.include_router(health_router)
+    app.include_router(oauth_metadata_router)
     app.include_router(settings_router)
     app.include_router(connections_router)
     app.include_router(demo_router)
-    app.include_router(dashboards_router)
     app.include_router(schema_router)
     if not is_cloud_mode():
         app.include_router(sandboxes_router)
@@ -75,6 +94,7 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(cache_router)
     app.include_router(metrics_router)
     app.include_router(keys_router)
+    app.include_router(me_router)
     app.include_router(security_router)
     app.include_router(byok_router)
     app.include_router(knowledge_router)
@@ -91,6 +111,7 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(chat_reports_router)
     app.include_router(chat_router)
     app.include_router(chat_traces_router)
+    app.include_router(dashboards_router)
     app.include_router(agent_runs_router)
     app.include_router(agent_notebooks_router, prefix="/api")
     app.include_router(analysis_trails_router)
@@ -102,6 +123,7 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(schema_watches_router)
     app.include_router(uploads_router)
     app.include_router(eval_runs_router)
+    app.include_router(usage_router)
     app.include_router(user_secrets_router)
     app.include_router(mcp_connectors_router)
     app.include_router(git_http_router)

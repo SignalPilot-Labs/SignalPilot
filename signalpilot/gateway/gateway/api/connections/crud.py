@@ -74,8 +74,8 @@ async def get_connections(store: StoreD):
 
 @router.post("/connections", status_code=201, dependencies=[RequireScope("write")])
 async def add_connection(conn: ConnectionCreate, store: StoreD, _role: OrgAdmin):
-    # Enforce connection limit based on org's plan tier
-    from gateway.governance.plan_limits import check_connection_limit, get_org_limits
+    # Abuse ceiling on connections, read from the org's entitlement.
+    from gateway.governance.org_limits import check_connection_limit, get_org_limits
 
     plan = await get_org_limits(store.org_id)
     current_connections = await store.list_connections()

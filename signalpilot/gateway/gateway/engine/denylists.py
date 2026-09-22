@@ -110,6 +110,19 @@ _DANGEROUS_FUNCTIONS: dict[str, frozenset[str]] = {
             "deltalake",
             "hudi",
             "iceberg",
+            # Cluster-fanout and additional object-store / external readers
+            # (names are compared lowercased: urlCluster -> urlcluster)
+            "urlcluster",
+            "filecluster",
+            "gcs",
+            "oss",
+            "cosn",
+            "mongodb",
+            "cluster",
+            "clusterallreplicas",
+            # Server-side sleep — denial of service
+            "sleep",
+            "sleepeachrow",
         }
     ),
     "bigquery": frozenset(
@@ -123,6 +136,31 @@ _DANGEROUS_FUNCTIONS: dict[str, frozenset[str]] = {
             "system$stream_get",
             "system$pipe_force_resume",
             "system$cancel_all_queries",
+            # Session / query control
+            "system$abort_session",
+            "system$abort_transaction",
+            "system$cancel_query",
+            "system$user_task_cancel_ongoing_executions",
+            "system$task_dependents_enable",
+            "system$set_return_value",
+            # Outbound messaging
+            "system$send_email",
+            "system$send_snowflake_notification",
+            # Account / network / auth configuration
+            "system$global_account_set_parameter",
+            "system$authorize_privatelink",
+            "system$revoke_privatelink",
+            "system$authorize_stage_privatelink_access",
+            "system$generate_scim_access_token",
+            "system$set_token",
+            "system$link_account_objects_by_name",
+            "system$migrate_saml_idp_registration",
+            "system$pipe_rebinding_with_notification_channel",
+            # Billing
+            "system$create_billing_event",
+            "system$create_billing_events",
+            # Stage file access via signed URL
+            "get_presigned_url",
         }
     ),
     "mysql": frozenset(
@@ -130,6 +168,10 @@ _DANGEROUS_FUNCTIONS: dict[str, frozenset[str]] = {
             "load_file",
             "sys_exec",
             "sys_eval",
+            # Denial of service
+            "sleep",
+            "benchmark",
+            "get_lock",
         }
     ),
     "duckdb": frozenset(
@@ -194,6 +236,10 @@ _DANGEROUS_FUNCTIONS: dict[str, frozenset[str]] = {
             "xp_fileexist",
             "xp_regread",
             "xp_regwrite",
+            # Server file readers (extended events, trace and audit files)
+            "fn_xe_file_target_read_file",
+            "fn_trace_gettable",
+            "fn_get_audit_file",
         }
     ),
     "databricks": frozenset(
@@ -215,6 +261,11 @@ _DANGEROUS_FUNCTIONS: dict[str, frozenset[str]] = {
             "query",
             "raw_query",
             "native_query",
+            # Connector table functions: `<catalog>.system.procedure(...)` resolves
+            # to its final identifier ("procedure") in _dangerous_function_name.
+            "procedure",
+            "vacuum",
+            "flush_metadata_cache",
         }
     ),
 }

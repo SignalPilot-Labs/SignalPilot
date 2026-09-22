@@ -22,7 +22,6 @@ import {
   ChevronDown,
   ChevronRight,
 } from "lucide-react";
-import DOMPurify, { type Config as DOMPurifyConfig } from "dompurify";
 import { getSandbox, executeSandbox, deleteSandbox } from "~/lib/api";
 import type { SandboxInfo } from "~/lib/types";
 import { StatusDot, MiniBar } from "~/components/ui/data-viz";
@@ -30,96 +29,9 @@ import { useToast } from "~/components/ui/toast";
 import { ConfirmDialog } from "~/components/ui/confirm-dialog";
 import { Breadcrumb } from "~/components/ui/breadcrumb";
 import { CodeBlock } from "~/components/ui/code-block";
-
-interface HistoryEntry {
-  type: "input" | "output" | "error" | "system" | "image" | "html";
-  text: string;
-  timestamp: number;
-  execution_ms?: number;
-  imageData?: string;
-  htmlContent?: string;
-}
-
-// Configure DOMPurify with strict allowlist
-const PURIFY_CONFIG: DOMPurifyConfig = {
-  ALLOWED_TAGS: ["table", "thead", "tbody", "tfoot", "tr", "th", "td", "caption", "colgroup", "col", "br", "span", "div", "p", "pre", "code"],
-  ALLOWED_ATTR: ["colspan", "rowspan", "class", "scope"],
-  FORBID_ATTR: ["style", "id", "onclick", "onerror", "onload", "onmouseover"],
-};
-
-function sanitizeTableHtml(html: string): string {
-  return DOMPurify.sanitize(html, PURIFY_CONFIG);
-}
-
-function extractRichOutput(output: string): {
-  text: string;
-  images: string[];
-  html: string | null;
-} {
-  const images: string[] = [];
-  let html: string | null = null;
-  let text = output;
-
-  const imgRegex = /data:image\/(png|jpeg|svg\+xml);base64,[A-Za-z0-9+/=]+/g;
-  let match;
-  while ((match = imgRegex.exec(output)) !== null) {
-    images.push(match[0]);
-    text = text.replace(match[0], `[Image ${images.length}]`);
-  }
-
-  const htmlTableMatch = output.match(/<table[\s\S]*?<\/table>/i);
-  if (htmlTableMatch) {
-    html = sanitizeTableHtml(htmlTableMatch[0]);
-    text = text.replace(htmlTableMatch[0], "[HTML Table]");
-  }
-
-  return { text: text.trim(), images, html };
-}
-
-const EXAMPLE_SNIPPETS = [
-  {
-    label: "data analysis",
-    code: `import pandas as pd
-import numpy as np
-
-# Create sample data
-df = pd.DataFrame({
-    'date': pd.date_range('2024-01-01', periods=30),
-    'revenue': np.random.uniform(1000, 5000, 30),
-    'users': np.random.randint(100, 1000, 30)
-})
-
-print(df.describe())`,
-  },
-  {
-    label: "chart",
-    code: `import matplotlib.pyplot as plt
-import numpy as np
-
-x = np.linspace(0, 10, 100)
-plt.figure(figsize=(8, 4))
-plt.plot(x, np.sin(x), label='sin(x)')
-plt.plot(x, np.cos(x), label='cos(x)')
-plt.legend()
-plt.title('Trigonometric Functions')
-plt.grid(True, alpha=0.3)
-plt.savefig('/tmp/chart.png', dpi=100, bbox_inches='tight')
-print("Chart saved to /tmp/chart.png")`,
-  },
-  {
-    label: "sql query",
-    code: `# Query through the governed gateway
-import requests
-import os
-
-resp = requests.post(f"{os.environ.get('SP_GATEWAY_URL', 'http://localhost:3300')}/api/query", json={
-    "connection_name": "default",
-    "sql": "SELECT * FROM users LIMIT 5",
-    "row_limit": 100
-})
-print(resp.json())`,
-  },
-];
+import { ALLOTMENT_BAR_COLOR, splitAllotment } from "~/lib/allotment";
+import { EXAMPLE_SNIPPETS } from "./_lib/example-snippets";
+import { extractRichOutput, type HistoryEntry } from "./_lib/rich-output";
 
 export default function SandboxDetailPage() {
   const params = useParams();
@@ -316,7 +228,7 @@ export default function SandboxDetailPage() {
     );
   }
 
-  const budgetPct = sandbox.budget_usd > 0 ? (sandbox.budget_used / sandbox.budget_usd) * 100 : 0;
+  const budget = splitAllotment(sandbox.budget_used, sandbox.budget_usd);
   const inputCount = history.filter(h => h.type === "input").length;
 
   return (
@@ -373,13 +285,18 @@ export default function SandboxDetailPage() {
                 <span>${sandbox.budget_usd.toFixed(2)}</span>
               </div>
               <MiniBar
-                value={budgetPct}
+                value={budget.fillPct}
                 max={100}
                 width={80}
                 height={4}
-                color={budgetPct > 80 ? "var(--color-error)" : budgetPct > 50 ? "var(--color-warning)" : "var(--color-success)"}
+                color={ALLOTMENT_BAR_COLOR}
               />
             </div>
+            {budget.over && (
+              <span className="text-[11px] tabular-nums text-[var(--color-text)]">
+                extra cost ${budget.extra.toFixed(4)}
+              </span>
+            )}
           </div>
 
           <div className="h-3 w-px bg-[var(--color-border)]" />

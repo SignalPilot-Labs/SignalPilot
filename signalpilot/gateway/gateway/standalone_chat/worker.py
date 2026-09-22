@@ -14,7 +14,6 @@ import httpx
 from gateway.db.engine import get_session_factory, init_db
 from gateway.standalone_chat.config import (
     lease_seconds,
-    standalone_chat_enabled,
     worker_concurrency,
     worker_poll_seconds,
 )
@@ -38,6 +37,7 @@ from gateway.standalone_chat.worker_context import (
 from gateway.standalone_chat.worker_context import (
     warm_context as _warm_context,
 )
+from gateway.standalone_chat.worker_deltas import DELTA_EVENT_TYPES, DeltaBatcher
 from gateway.standalone_chat.worker_errors import (
     AnalysisRuntimeError as _AnalysisRuntimeError,
 )
@@ -50,20 +50,25 @@ from gateway.standalone_chat.worker_errors import (
 from gateway.standalone_chat.worker_errors import (
     public_full_trace as _public_full_trace,
 )
+from gateway.standalone_chat.worker_errors import (
+    public_raw_error_fields as _public_raw_error_fields,
+)
 from gateway.standalone_chat.worker_events import (
+    _announce_notebook,
+    _cancel_previous_attempt,
     _cancellation_monitor,
     _lease_renewer,
     _notebook_started_payload,  # noqa: F401 — re-exported for tests
     _steering_monitor,
     _update_summary,
     _worker_id,
+    empty_answer_error,
+    touch_run_session,
 )
+from gateway.standalone_chat.worker_recovery import load_interrupted_tool_completions
 from gateway.standalone_chat.worker_tool_results import (
     cache_tool_input,
     handle_tool_result,
-)
-from gateway.standalone_chat.worker_tool_results import (
-    dashboard_authoring_completion as _dashboard_authoring_completion,  # noqa: F401
 )
 from gateway.store import standalone_chat as chat_store
 
@@ -71,7 +76,12 @@ logger = logging.getLogger(__name__)
 _CLARIFICATION_PREFIX = "CLARIFICATION_REQUESTED:"
 
 
-async def _append(run_id: str, event_type: str, payload: dict[str, Any]) -> None:
+# One batcher per run being executed by this worker. Deltas are coalesced;
+# every other event flushes them first so transcript order is preserved.
+_delta_batchers: dict[str, DeltaBatcher] = {}
+
+
+async def _write_event(run_id: str, event_type: str, payload: dict[str, Any]) -> None:
     factory = get_session_factory()
     async with factory() as db:
         await chat_store.append_event(
@@ -82,30 +92,24 @@ async def _append(run_id: str, event_type: str, payload: dict[str, Any]) -> None
         )
 
 
-async def _announce_notebook(run_id: str, payload: dict[str, Any]) -> None:
-    """Append the notebook_started event and persist the conversation pointer.
-
-    The pointer makes the conversation row the single source of truth for
-    where the notebook lives. Persist only a complete id set: a partial
-    payload cannot be attached to and must not clobber a good pointer.
-    """
-    await _append(run_id, "notebook_started", payload)
-    gateway_session_id = payload.get("gateway_session_id")
-    kernel_session_id = payload.get("kernel_session_id")
-    notebook_path = payload.get("notebook_path")
-    if not (gateway_session_id and kernel_session_id and notebook_path):
+async def _append(run_id: str, event_type: str, payload: dict[str, Any]) -> None:
+    batcher = _delta_batchers.get(run_id)
+    if batcher is None:
+        await _write_event(run_id, event_type, payload)
         return
-    with suppress(Exception):
-        factory = get_session_factory()
-        async with factory() as db:
-            await chat_store.set_conversation_notebook_for_run(
-                db,
-                run_id=run_id,
-                gateway_session_id=str(gateway_session_id),
-                kernel_session_id=str(kernel_session_id),
-                notebook_path=str(notebook_path),
-                name=str(payload.get("notebook") or "analysis"),
-            )
+    if event_type in DELTA_EVENT_TYPES:
+        await batcher.add(event_type, payload)
+        return
+    await batcher.flush()
+    await _write_event(run_id, event_type, payload)
+
+
+async def _flush_deltas(run_id: str) -> None:
+    """Persist buffered deltas before a store call that stages its own event
+    (complete_run, fail_run), so the status event sequences after them."""
+    batcher = _delta_batchers.get(run_id)
+    if batcher is not None:
+        await batcher.flush()
 
 
 async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
@@ -117,11 +121,14 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
     steering: asyncio.Task[None] | None = None
     final_text = ""
     streamed_text = ""
+    # The SDK's result diagnostics from the final event (subtype, stop
+    # reason, turn count): what an empty answer is explained with.
+    final_result: dict[str, Any] | None = None
     report_proposal: dict[str, Any] | None = None
-    dashboard_preview: dict[str, Any] | None = None
     starts_new_text_block = False
     tool_names_by_id: dict[str, str] = {}
     tool_inputs_by_id: dict[str, dict[str, Any]] = {}
+    _delta_batchers[run_id] = DeltaBatcher(lambda event_type, payload: _write_event(run_id, event_type, payload))
     try:
         factory = get_session_factory()
         async with factory() as db:
@@ -172,6 +179,13 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                 if report_context is not None:
                     warm_context["report_context"] = report_context.model_dump(mode="json")
 
+        if recovering:
+            # Tool calls left open by the previous attempt can never report
+            # back; close them before the resumed turn starts streaming.
+            async with factory() as db:
+                interrupted = await load_interrupted_tool_completions(db, run_id)
+            for closing in interrupted:
+                await _append(run_id, "tool_completed", closing)
         await _append(
             run_id,
             "status",
@@ -228,6 +242,19 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                                 stop,
                             )
                         )
+                # The session is in use from here; the lease renewer keeps
+                # pinging it until the run ends.
+                await touch_run_session(run_id, worker_id)
+                if recovering or notebook_attempt > 0:
+                    # A re-claimed run, or our own reconnect: the previous
+                    # attempt may still be running under this run id on the
+                    # notebook runtime. Stop it (keeping its kernels for
+                    # the resumed model) before executing again.
+                    await _cancel_previous_attempt(
+                        execution,
+                        run_id=run_id,
+                        reason="re-claimed" if recovering else "reconnect",
+                    )
                 async for event in stream_execution(execution):
                     if stop.is_set():
                         raise asyncio.CancelledError
@@ -365,9 +392,17 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                             content,
                             full_trace=str(event.get("full_trace") or content or ""),
                             diagnostic_context=event.get("diagnostic_context"),
+                            raw_error=event.get("raw_error"),
+                            stderr=event.get("stderr"),
+                            raw_error_truncated=event.get("raw_error_truncated") is True,
+                            stderr_truncated=event.get("stderr_truncated") is True,
+                            public_error_code=event.get("public_error_code"),
+                            public_error_message=event.get("public_error_message"),
                         )
                     elif event_type == "final":
                         final_text = content or final_text or streamed_text
+                        if isinstance(event.get("result"), dict):
+                            final_result = dict(event["result"])
                         # Operator accounting: cost + token usage reported by
                         # the agent SDK, persisted on the run row.
                         raw_usage = event.get("usage")
@@ -381,11 +416,10 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                                         worker_id=worker_id,
                                         cost_usd=(raw_cost if isinstance(raw_cost, (int, float)) else None),
                                         usage=(raw_usage if isinstance(raw_usage, dict) else None),
+                                        key_source=execution.key_source,
                                     )
                         raw_report_proposal = event.get("report_proposal")
                         report_proposal = raw_report_proposal if isinstance(raw_report_proposal, dict) else None
-                        raw_dashboard_preview = event.get("dashboard_preview")
-                        dashboard_preview = raw_dashboard_preview if isinstance(raw_dashboard_preview, dict) else None
                         if event.get("kernel_stopped"):
                             await _append(run_id, "kernel_stopped", {"status": "stopped"})
                 last_error = None
@@ -423,8 +457,14 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                 )
             return
         if not answer:
-            raise RuntimeError("The analysis runtime returned no answer")
+            raise await empty_answer_error(
+                run_id=run_id,
+                worker_id=worker_id,
+                execution=execution,
+                final_result=final_result,
+            )
 
+        await _flush_deltas(run_id)
         async with factory() as db:
             message = await chat_store.complete_run(
                 db,
@@ -432,11 +472,12 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                 worker_id=worker_id,
                 content=answer,
                 report_proposal=report_proposal,
-                dashboard_preview=dashboard_preview,
             )
         if message is not None:
             await _update_summary(run_id)
     except asyncio.CancelledError:
+        with suppress(Exception):
+            await _flush_deltas(run_id)
         async with get_session_factory()() as db:
             run = await chat_store.get_worker_run(
                 db,
@@ -459,7 +500,9 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
             type(exc).__name__,
             exc_info=True,
         )
-        public_message = _public_error_message(exc)
+        # A runtime-classified failure keeps its own code and sentence.
+        public_code = getattr(exc, "public_error_code", None) or "analysis_failed"
+        public_message = getattr(exc, "public_error_message", None) or _public_error_message(exc)
         full_trace = _public_full_trace(exc)
         diagnostic_context = _public_diagnostic_context(exc)
         diagnostic_context["run_id"] = run_id
@@ -468,21 +511,28 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                 run_id,
                 "error",
                 {
-                    "code": "analysis_failed",
+                    "code": public_code,
                     "message": public_message,
                     "full_trace": full_trace,
                     "diagnostic_context": diagnostic_context,
+                    **_public_raw_error_fields(exc),
                 },
             )
+        with suppress(Exception):
+            await _flush_deltas(run_id)
         async with get_session_factory()() as db:
             await chat_store.fail_run(
                 db,
                 run_id=run_id,
                 worker_id=worker_id,
-                code="analysis_failed",
+                code=public_code,
                 message=public_message,
             )
     finally:
+        batcher = _delta_batchers.pop(run_id, None)
+        if batcher is not None:
+            with suppress(Exception):
+                await batcher.close()
         stop.set()
         for task in (renewer, cancellation, steering):
             if task is None:
@@ -511,9 +561,6 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
 
 async def run_worker() -> None:
     await init_db()
-    if not standalone_chat_enabled():
-        logger.info("Standalone chat worker disabled by feature flag")
-        return
     worker_id = _worker_id()
     concurrency = worker_concurrency()
     active: set[asyncio.Task[None]] = set()

@@ -69,16 +69,6 @@
   animation: chat-tool-bar-grow 0.45s cubic-bezier(0.2, 0.8, 0.3, 1) both;
 }
 
-/* Error entry: one short shake, never repeated. */
-@keyframes chat-tool-shake {
-  0%, 100% { transform: translateX(0); }
-  20% { transform: translateX(-2px); }
-  40% { transform: translateX(2px); }
-  60% { transform: translateX(-1px); }
-  80% { transform: translateX(1px); }
-}
-.chat-tool-shake { animation: chat-tool-shake 0.32s ease-out 1 both; }
-
 /* Terminal prompt cursor. */
 @keyframes chat-tool-cursor-blink {
   0%, 49% { opacity: 1; }
@@ -100,7 +90,6 @@
   .chat-tool-cascade-in,
   .chat-tool-rows-in,
   .chat-tool-bar-grow,
-  .chat-tool-shake,
   .chat-tool-cursor-blink,
   .chat-tool-chip-flash {
     animation: none !important;

@@ -55,9 +55,14 @@ def _validate_connection_params(conn: ConnectionCreate) -> list[str]:
             errors.append("Snowflake requires an account identifier")
         if not conn.username:
             errors.append("Snowflake requires a username")
-        # SSRF: validate account identifier format
+        # SSRF: validate account identifier format and any host override
+        # (snowflake_host must stay on a Snowflake-operated domain).
         try:
-            validate_cloud_warehouse_params("snowflake", account=conn.account)
+            validate_cloud_warehouse_params(
+                "snowflake",
+                account=conn.account,
+                host=getattr(conn, "snowflake_host", None),
+            )
         except ValueError as e:
             errors.append(str(e))
 

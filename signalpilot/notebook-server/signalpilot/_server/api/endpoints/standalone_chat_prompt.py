@@ -24,6 +24,9 @@ STANDALONE_ALLOWED_TOOLS = [
     "mcp__signalpilot__connector_capabilities",
     "mcp__signalpilot__dbt_error_parser",
     "mcp__signalpilot__dbt_execute",
+    "mcp__signalpilot__open_pull_request",
+    "mcp__signalpilot__update_pull_request",
+    "mcp__signalpilot__comment_on_pull_request",
     "mcp__signalpilot__debug_cte_query",
     "mcp__signalpilot__describe_table",
     "mcp__signalpilot__estimate_query_cost",
@@ -67,11 +70,10 @@ STANDALONE_ALLOWED_TOOLS = [
     "mcp__signalpilot__validate_model_output",
     "mcp__signalpilot__verify_model_values",
     "mcp__signalpilot__verify_metric_conformance",
-    "mcp__standalone-chat__begin_dashboard_authoring",
-    "mcp__standalone-chat__set_dashboard_plan",
-    "mcp__standalone-chat__upsert_dashboard_chart",
-    "mcp__standalone-chat__apply_dashboard_operations",
-    "mcp__standalone-chat__create_dashboard_preview",
+    "mcp__standalone-chat__dashboard_list_published",
+    "mcp__standalone-chat__dashboard_load_published",
+    "mcp__standalone-chat__dashboard_sample_data",
+    "mcp__standalone-chat__dashboard_screenshot",
     "mcp__standalone-chat__inspect_dbt",
     "mcp__standalone-chat__start_analysis_notebook",
     "mcp__signalpilot-notebook__edit_notebook",
@@ -114,6 +116,13 @@ def _load_prompt(name: str) -> str:
 # Back-compat accessor (tests and older callers) â€” the content lives in the
 # .md file; this just materializes it at import time.
 STANDALONE_SYSTEM_PROMPT = _load_prompt("standalone_chat_system.md")
+
+
+def git_publish_section(base_branch: str) -> str:
+    """The 'Publish your work' section with the real base branch rendered."""
+    return _load_prompt("git_publish_suffix.md").replace(
+        "{base_branch}", base_branch or "the project branch"
+    )
 
 
 def _execution_prompt_values(
@@ -160,6 +169,10 @@ def _execution_prompt_values(
         prompt_parts.append(_load_prompt("improvement_suffix.md"))
     if connector_slugs:
         prompt_parts.append(_load_prompt("connectors_suffix.md"))
+    # Git publishing: /workspace is a checkout of the project mirror. The
+    # section always applies; the git server refuses pushes for projects
+    # that are not linked to GitHub, and the prompt says what to do then.
+    prompt_parts.append(git_publish_section(branch))
     connectors_line = ", ".join(connector_slugs) if connector_slugs else "none"
     system_prompt = (
         "\n\n".join(prompt_parts)

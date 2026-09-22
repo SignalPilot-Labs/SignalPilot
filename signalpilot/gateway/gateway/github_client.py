@@ -1,4 +1,4 @@
-"""GitHub App API client — JWT generation, token exchange, repo listing."""
+"""GitHub App API client: JWT generation, installation lookup, repo listing."""
 
 from __future__ import annotations
 
@@ -83,10 +83,19 @@ async def create_installation_token(
 async def create_unrestricted_installation_token(app_jwt: str, installation_id: int) -> dict:
     """Mint a token with the installation's FULL permissions on ALL its repos.
 
-    DANGEROUS — only legitimate where there is no tenant boundary to cross.
-    The single intended caller is the local/single-tenant install path, where
-    no user token exists to intersect against. Never call this on a cloud
-    (multi-tenant) code path; use ``create_installation_token`` instead.
+    DANGEROUS. Two callers are legitimate:
+
+    1. The local/single-tenant install path, where there is no tenant
+       boundary to cross.
+    2. ``store.github_installs.refresh_installation_repositories``, which uses
+       the token ONLY to enumerate the installation's repositories inside the
+       gateway process and discards it immediately. That enumeration is what
+       defines ``authorized_repository_ids``.
+
+    SP-SEC-005 still holds: a token that is stored on the installation row,
+    returned by the credentials endpoint, given to a sandbox, or used as a git
+    remote credential must come from ``create_installation_token`` with an
+    explicit repository scope. Never return this token to a caller.
     """
     async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.post(
@@ -161,3 +170,30 @@ async def list_installation_repos(token: str, per_page: int = 100) -> list[dict]
                 break
             page += 1
     return repos
+
+
+async def list_app_installations(app_jwt: str, per_page: int = 100) -> list[dict]:
+    """All installations of this GitHub App (GET /app/installations), paginated.
+
+    Authenticated with the app JWT, so this is a deployment-wide view. Callers
+    must apply their own tenancy filter (account login, unclaimed status)
+    before linking anything to an org.
+    """
+    installations: list[dict] = []
+    page = 1
+    async with httpx.AsyncClient(timeout=15) as client:
+        while True:
+            resp = await client.get(
+                f"{GITHUB_API}/app/installations",
+                params={"per_page": per_page, "page": page},
+                headers={"Authorization": f"Bearer {app_jwt}", "Accept": "application/vnd.github+json"},
+            )
+            resp.raise_for_status()
+            batch = resp.json()
+            if not isinstance(batch, list):
+                break
+            installations.extend(batch)
+            if len(batch) < per_page:
+                break
+            page += 1
+    return installations

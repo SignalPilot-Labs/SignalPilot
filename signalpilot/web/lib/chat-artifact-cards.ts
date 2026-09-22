@@ -94,6 +94,8 @@ export function guessKindFromPath(path: string): ConversationFileKind {
   if (["png", "jpg", "jpeg", "gif", "svg", "webp"].includes(ext))
     return "image";
   if (ext === "ipynb") return "notebook";
+  // `.dashboard.json` is a dashboard spec, not a data export: check first.
+  if (/\.dashboard\.json$/i.test(path)) return "dashboard";
   if (["csv", "tsv", "parquet", "json", "jsonl", "xlsx"].includes(ext))
     return "data";
   if (["py", "sql", "js", "ts", "sh", "r", "rs", "go", "yml", "yaml"].includes(ext))
@@ -330,6 +332,8 @@ export function cardKindLabel(kind: string, filename: string): string {
       return "Document";
     case "notebook":
       return "Notebook";
+    case "dashboard":
+      return "Dashboard";
     case "code":
       if (ext === "sql") return "SQL query";
       if (ext === "py") return "Script";
@@ -344,6 +348,7 @@ export function primaryActionLabel(kind: string): string {
   switch (kind) {
     case "html":
     case "image":
+    case "dashboard":
       return "Open";
     case "data":
       return "Preview";

@@ -41,11 +41,11 @@ from .dbt_map_responses import (
     json_response,
     not_modified,
 )
-from .deps import ProjectsGate, StoreD
+from .deps import RequireBillablePlan, StoreD
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api", dependencies=[ProjectsGate])
+router = APIRouter(prefix="/api", dependencies=[RequireBillablePlan])
 
 
 def _to_info(row: GatewayDbtManifest | RowSnapshot) -> DbtMapInfo:
@@ -60,6 +60,8 @@ def _to_info(row: GatewayDbtManifest | RowSnapshot) -> DbtMapInfo:
         dbt_version=row.dbt_version,
         node_count=row.node_count,
         manifest_bytes=row.manifest_bytes,
+        dbt_project_dir=row.dbt_project_dir,
+        phase=row.phase,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -192,7 +194,9 @@ def _parse_hops(hops: str) -> int | None:
 async def compile_dbt_map(project_id: str, store: StoreD, branch: str | None = Query(None)):
     org_id = store.org_id or "local"
     resolved = await _resolve_branch(store, project_id, branch)
-    schedule_compile(org_id, project_id, resolved, trigger="manual")
+    # A person clicking the button expects a compile to happen, even when the
+    # head revision was compiled before (e.g. after changing dbt_project_dir).
+    schedule_compile(org_id, project_id, resolved, trigger="manual", force=True)
     # Readers must see the new compile row on their next poll.
     row_cache.invalidate_project(org_id, project_id)
     row = await _latest_row(store.session, org_id, project_id, resolved)

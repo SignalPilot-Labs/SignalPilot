@@ -100,6 +100,14 @@ class TestQueryDatabase:
     def test_query_error_and_route_reply(self) -> None:
         error = project_tool_result(_TOOL + "query_database", "Query error: relation does not exist")
         assert error.result == {"kind": "text"} and error.summary == "Query error: relation does not exist"
+        # Belt and braces: the body is a failure even when the SDK said success.
+        assert error.error is True
+        prefixed = project_tool_result(
+            _TOOL + "query_database", "Error executing tool query_database: Query error: relation does not exist"
+        )
+        assert prefixed.error is True
+        assert project_tool_result(_TOOL + "query_database", _query_output([{"n": 1}], row_count=1)).error is None
+        assert project_tool_result(_TOOL + "plan_query", "Query error: scope mismatch").error is True
 
         route = project_tool_result(_TOOL + "query_database", json.dumps({"route": "approval", "approval_required": True}))
         assert route.result["kind"] == "json"
@@ -268,6 +276,58 @@ class TestOpsTools:
         failed = project_tool_result("Bash", "Exit code 2\nno such file", is_error=True)
         assert failed.result["exit_code"] == 2 and failed.result["stderr"] == "no such file"
         assert failed.summary == "Exit code 2"
+        assert failed.error is None and "probe" not in failed.result
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "ls models/optional.sql",
+            "test -f dbt_project.yml",
+            "[ -d target ]",
+            "grep -n revenue models/*.sql",
+            "find . -name '*.yml' | head -5",
+            "cat target/run_results.json 2>/dev/null | head -20",
+            "stat profiles.yml && cat profiles.yml",
+            "ls a; ls b",
+            "tail -n 5 logs/dbt.log || ls logs",
+        ],
+    )
+    def test_bash_probe_exit_1_or_2_is_not_an_error(self, command: str) -> None:
+        for code in (1, 2):
+            probe = project_tool_result(
+                "Bash", f"Exit code {code}\nls: cannot access 'x': No such file", is_error=True, tool_input={"command": command}
+            )
+            assert probe.error is False
+            assert probe.result["probe"] is True and probe.result["exit_code"] == code
+            assert probe.result["kind"] == "terminal" and probe.result["command"] == command
+            assert probe.summary.startswith(f"exit {code}")
+
+    @pytest.mark.parametrize(
+        ("command", "code"),
+        [
+            ("ls models", 127),
+            ("dbt run", 1),
+            ("ls models && dbt run", 2),
+            ("python -c 'import x'", 1),
+            ("cd models && ls", 1),
+            ("ls models || true", 1),
+            ("", 1),
+        ],
+    )
+    def test_bash_non_probe_failures_stay_errors(self, command: str, code: int) -> None:
+        failed = project_tool_result(
+            "Bash", f"Exit code {code}\nboom", is_error=True, tool_input={"command": command}
+        )
+        assert failed.error is None and "probe" not in failed.result
+        assert failed.summary == f"Exit code {code}"
+
+    def test_too_large_notice_is_an_error(self) -> None:
+        notice = (
+            "Error: result (72,412 characters) exceeds maximum allowed tokens. "
+            "Output has been saved to /home/notebook/.sp/tool-results/list_tables.txt."
+        )
+        projected = project_tool_result(_TOOL + "list_tables", notice)
+        assert projected.result["too_large"] is True and projected.error is True
 
     def test_search_knowledge(self) -> None:
         lines = ["Found 7 result(s) for 'revenue':\n"]
@@ -310,12 +370,6 @@ class TestOpsTools:
         )
         assert notebook.summary == "Notebook started"
         assert notebook.result["session_id"] == "s_1" and notebook.result["artifact_kind"] == "notebook"
-
-        dashboard = project_tool_result(
-            "mcp__signalpilot-notebook__create_dashboard_preview",
-            json.dumps({"status": "preview_ready", "authoring_session_id": "a1", "dashboard_name": "Exec", "chart_count": 3}),
-        )
-        assert dashboard.summary == "Exec · 3 charts" and dashboard.result["dashboard_session_id"] == "a1"
 
     def test_json_and_text_fallbacks(self) -> None:
         as_json = project_tool_result("mcp__notion__search", json.dumps({"results": [1, 2], "status": "ok"}))

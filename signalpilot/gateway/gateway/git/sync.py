@@ -15,7 +15,16 @@ from __future__ import annotations
 import logging
 import time
 
-from .repos import repo_path, repo_exists, _run_git, list_branches
+from .repos import (
+    _run_git,
+    _validate_branch_name,
+    github_token_remote_url,
+    list_branches,
+    repo_exists,
+    repo_path,
+    set_remote_url,
+    split_remote_credentials,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -23,22 +32,26 @@ GITHUB_REMOTE_NAME = "github"
 
 # Branch namespaces that are local-only working areas for agents. They are
 # never pushed to GitHub — reused by workspace_store/github_sync.py so the
-# exporter carries the same contract.
+# exporter carries the same contract. "signalpilot/" is deliberately NOT in
+# this list: it is the namespace chat agents publish to GitHub through
+# publish_agent_branch, driven by the git server's ref policy.
 AGENT_BRANCH_PREFIXES = ("signalpilot-agent/", "analysis/")
+CHAT_PUBLISH_PREFIX = "signalpilot/"
 
 
 def is_agent_branch(branch: str) -> bool:
     return branch.startswith(AGENT_BRANCH_PREFIXES)
 
 
-def configure_github_remote(project_id: str, remote_url: str) -> None:
-    """Add or update the 'github' remote on the bare repo."""
-    rp = repo_path(project_id)
-    rc, _, _ = _run_git("remote", "get-url", GITHUB_REMOTE_NAME, cwd=rp)
-    if rc == 0:
-        _run_git("remote", "set-url", GITHUB_REMOTE_NAME, remote_url, cwd=rp)
-    else:
-        _run_git("remote", "add", GITHUB_REMOTE_NAME, remote_url, cwd=rp)
+def configure_github_remote(project_id: str, remote_url: str) -> dict[str, str]:
+    """Add or update the 'github' remote on the bare repo.
+
+    Only the credential-free URL is written to the repo config (SP-11). The
+    returned env carries the credential for this invocation's git commands.
+    """
+    plain_url, auth_env = split_remote_credentials(remote_url)
+    set_remote_url(repo_path(project_id), GITHUB_REMOTE_NAME, plain_url)
+    return auth_env
 
 
 def push_branch(project_id: str, remote_url: str, branch: str) -> dict:
@@ -55,7 +68,7 @@ def push_branch(project_id: str, remote_url: str, branch: str) -> dict:
         return {"error": "Repo not found"}
 
     rp = repo_path(project_id)
-    configure_github_remote(project_id, remote_url)
+    auth_env = configure_github_remote(project_id, remote_url)
 
     rc, _, _ = _run_git("rev-parse", "--verify", f"refs/heads/{branch}", cwd=rp)
     if rc != 0:
@@ -64,7 +77,7 @@ def push_branch(project_id: str, remote_url: str, branch: str) -> dict:
     # Try fast-forward push
     rc, out, err = _run_git(
         "push", GITHUB_REMOTE_NAME, f"refs/heads/{branch}:refs/heads/{branch}",
-        cwd=rp, timeout=120,
+        cwd=rp, timeout=120, env=auth_env,
     )
     if rc == 0:
         return {"pushed": True, "branch": branch, "output": out.strip() or err.strip()}
@@ -73,7 +86,7 @@ def push_branch(project_id: str, remote_url: str, branch: str) -> dict:
     if "non-fast-forward" in err or "rejected" in err or "failed to push" in err:
         logger.info("Push rejected for %s, fetching + rebasing...", branch)
 
-        frc, _, ferr = _run_git("fetch", GITHUB_REMOTE_NAME, branch, cwd=rp, timeout=120)
+        frc, _, ferr = _run_git("fetch", GITHUB_REMOTE_NAME, branch, cwd=rp, timeout=120, env=auth_env)
         if frc != 0:
             return {"error": f"Fetch failed during rebase: {ferr.strip()}"}
 
@@ -100,7 +113,7 @@ def push_branch(project_id: str, remote_url: str, branch: str) -> dict:
             # Local is strictly ahead — force push should work
             rc2, out2, err2 = _run_git(
                 "push", "--force", GITHUB_REMOTE_NAME, f"{local_ref}:{local_ref}",
-                cwd=rp, timeout=120,
+                cwd=rp, timeout=120, env=auth_env,
             )
             if rc2 == 0:
                 return {"pushed": True, "branch": branch, "force": True,
@@ -118,6 +131,72 @@ def push_branch(project_id: str, remote_url: str, branch: str) -> dict:
     return {"error": f"Push failed: {err.strip()}"}
 
 
+def remote_branch_exists(project_id: str, remote_url: str, branch: str) -> bool | None:
+    """One ``ls-remote --heads`` against GitHub for ``refs/heads/<branch>``.
+
+    True/False when GitHub answered, None when the lookup failed (callers
+    treat None as "unknown" and let the push proceed).
+    """
+    _validate_branch_name(branch)
+    if not repo_exists(project_id):
+        return None
+    auth_env = configure_github_remote(project_id, remote_url)
+    rc, out, err = _run_git(
+        "ls-remote", "--heads", GITHUB_REMOTE_NAME, f"refs/heads/{branch}",
+        cwd=repo_path(project_id), timeout=60, env=auth_env,
+    )
+    if rc != 0:
+        logger.warning("remote_branch_exists: ls-remote failed for %s/%s: %s", project_id, branch, err.strip()[:200])
+        return None
+    return bool(out.strip())
+
+
+def publish_agent_branch(project_id: str, remote_url: str, branch: str, *, known_branch: bool) -> dict:
+    """Mirror one accepted chat-agent branch to GitHub under the same name.
+
+    Fast-forward only, never force. ``known_branch`` says whether our push
+    table already has a record for this branch (the caller checks, it holds
+    the session). When the branch exists on GitHub and we have no record, a
+    human or another tool created it and this path refuses to touch it:
+    ``{"error": ..., "exists": True}``.
+    """
+    _validate_branch_name(branch)
+    if not branch.startswith(CHAT_PUBLISH_PREFIX):
+        return {"error": f"Refusing to publish {branch!r}: not a {CHAT_PUBLISH_PREFIX} branch"}
+    if not repo_exists(project_id):
+        return {"error": "Repo not found"}
+
+    rp = repo_path(project_id)
+    local_ref = f"refs/heads/{branch}"
+    rc, out, _ = _run_git("rev-parse", "--verify", local_ref, cwd=rp)
+    if rc != 0 or not out.strip():
+        return {"error": f"Branch {branch} not found in bare repo"}
+    sha = out.strip()
+
+    auth_env = configure_github_remote(project_id, remote_url)
+    if not known_branch:
+        rc, out, err = _run_git(
+            "ls-remote", "--heads", GITHUB_REMOTE_NAME, local_ref, cwd=rp, timeout=60, env=auth_env,
+        )
+        if rc != 0:
+            return {"error": f"ls-remote failed: {err.strip()}"}
+        if out.strip():
+            return {
+                "error": f"Branch {branch!r} already exists on GitHub and was not created by SignalPilot",
+                "exists": True,
+            }
+
+    rc, out, err = _run_git(
+        "push", GITHUB_REMOTE_NAME, f"{local_ref}:{local_ref}", cwd=rp, timeout=120, env=auth_env,
+    )
+    if rc != 0:
+        result: dict = {"error": f"Push failed: {err.strip()}"}
+        if "non-fast-forward" in err or "fetch first" in err or "rejected" in err:
+            result["diverged"] = True
+        return result
+    return {"pushed": True, "branch": branch, "sha": sha, "output": out.strip() or err.strip()}
+
+
 def fetch_all(project_id: str, remote_url: str) -> dict:
     """Fetch all branches from GitHub into the bare repo.
 
@@ -128,9 +207,9 @@ def fetch_all(project_id: str, remote_url: str) -> dict:
         return {"error": "Repo not found"}
 
     rp = repo_path(project_id)
-    configure_github_remote(project_id, remote_url)
+    auth_env = configure_github_remote(project_id, remote_url)
 
-    rc, out, err = _run_git("fetch", GITHUB_REMOTE_NAME, "--prune", cwd=rp, timeout=120)
+    rc, out, err = _run_git("fetch", GITHUB_REMOTE_NAME, "--prune", cwd=rp, timeout=120, env=auth_env)
     if rc != 0:
         return {"error": f"Fetch failed: {err.strip()}"}
 
@@ -147,10 +226,10 @@ def pull_branch(project_id: str, remote_url: str, branch: str) -> dict:
         return {"error": "Repo not found"}
 
     rp = repo_path(project_id)
-    configure_github_remote(project_id, remote_url)
+    auth_env = configure_github_remote(project_id, remote_url)
 
     # Fetch the specific branch
-    rc, _, err = _run_git("fetch", GITHUB_REMOTE_NAME, branch, cwd=rp, timeout=120)
+    rc, _, err = _run_git("fetch", GITHUB_REMOTE_NAME, branch, cwd=rp, timeout=120, env=auth_env)
     if rc != 0:
         return {"error": f"Fetch failed: {err.strip()}"}
 
@@ -225,7 +304,7 @@ async def ensure_repo_mirror(session, *, org_id: str, project_id: str, default_b
         logger.warning("ensure_repo_mirror: installation missing for project %s", project_id)
         return False
     token = await gh_store.get_valid_token(session, installation)
-    remote_url = f"https://x-access-token:{token}@github.com/{link.repo_full_name}.git"
+    remote_url = github_token_remote_url(token, link.repo_full_name)
     try:
         await _asyncio.to_thread(clone_from_remote, project_id, remote_url)
         await _asyncio.to_thread(materialize_local_branches, project_id, branch)
@@ -236,6 +315,62 @@ async def ensure_repo_mirror(session, *, org_id: str, project_id: str, default_b
     if healed:
         logger.info("ensure_repo_mirror: re-cloned missing mirror for project %s (%s)", project_id, link.repo_full_name)
     return healed
+
+
+# Last successful on-demand fetch per (project, branch), in-process. The push
+# webhook stays the fast path; this only bounds how stale a chat can be when a
+# delivery is lost.
+_LAST_FETCH_AT: dict[tuple[str, str], float] = {}
+_LAST_FETCH_MAX = 2000
+
+
+def _note_fetch(project_id: str, branch: str) -> None:
+    _LAST_FETCH_AT[(project_id, branch)] = time.time()
+    while len(_LAST_FETCH_AT) > _LAST_FETCH_MAX:
+        oldest = min(_LAST_FETCH_AT, key=_LAST_FETCH_AT.get)
+        del _LAST_FETCH_AT[oldest]
+
+
+async def fetch_if_stale(
+    session, *, org_id: str, project_id: str, branch: str, max_age_seconds: float = 60.0
+) -> bool:
+    """Fetch + fast-forward ``branch`` from GitHub when the last fetch is old.
+
+    Returns True when a fetch ran and the local head may have moved. Never
+    raises: a fetch failure leaves the mirror as it was. Unlinked projects and
+    agent branches (local-only) are a no-op.
+    """
+    import asyncio as _asyncio
+
+    from ..store import github as gh_store
+
+    if is_agent_branch(branch):
+        return False
+    last = _LAST_FETCH_AT.get((project_id, branch))
+    if last is not None and time.time() - last < max_age_seconds:
+        return False
+
+    link = await gh_store.get_repo_link_for_project(session, org_id=org_id, project_id=project_id)
+    if not link or not repo_exists(project_id):
+        return False
+    installation = await gh_store.get_installation(session, org_id=org_id, installation_id=link.installation_id)
+    if not installation or installation.status != "active":
+        return False
+    try:
+        token = await gh_store.get_valid_token(session, installation)
+    except Exception as exc:
+        logger.warning("fetch_if_stale: GitHub access unavailable for project %s (%s)", project_id, type(exc).__name__)
+        return False
+    remote_url = github_token_remote_url(token, link.repo_full_name)
+
+    # Claim the slot before the network call so concurrent readiness checks
+    # do not all fetch at once.
+    _note_fetch(project_id, branch)
+    result = await _asyncio.to_thread(pull_branch, project_id, remote_url, branch)
+    if result.get("error"):
+        logger.info("fetch_if_stale: %s@%s: %s", project_id, branch, result["error"])
+        return False
+    return True
 
 
 async def reconcile_all_repo_mirrors() -> int:
@@ -294,7 +429,7 @@ async def sync_project_with_github(project_id: str, org_id: str) -> dict:
         )
 
         token = await gh_store.get_valid_token(session, installation)
-        remote_url = f"https://x-access-token:{token}@github.com/{link.repo_full_name}.git"
+        remote_url = github_token_remote_url(token, link.repo_full_name)
 
         # Push all non-agent local branches
         branches = list_branches(project_id)
@@ -318,6 +453,7 @@ async def sync_project_with_github(project_id: str, org_id: str) -> dict:
 
         # Update last_sync_at
         from sqlalchemy import update
+
         from ..db.models import GatewayGitHubRepoLink
         await session.execute(
             update(GatewayGitHubRepoLink)
@@ -362,11 +498,12 @@ async def mirror_push_to_github(project_id: str, org_id: str, branch: str) -> di
             logger.warning("Failed to get GitHub token for mirror push: %s", e)
             return None
 
-        remote_url = f"https://x-access-token:{token}@github.com/{link.repo_full_name}.git"
+        remote_url = github_token_remote_url(token, link.repo_full_name)
         result = push_branch(project_id, remote_url, branch)
 
         if not result.get("error") and not result.get("skipped"):
             from sqlalchemy import update
+
             from ..db.models import GatewayGitHubRepoLink
             await session.execute(
                 update(GatewayGitHubRepoLink)

@@ -41,7 +41,8 @@ Step 1 gives you all 30+ MCP tools. Step 2 adds skills and agents on top.
 | Skill | Description |
 |-------|-------------|
 | `/signalpilot-dbt:signalpilot` | MCP tool catalog |
-| `/signalpilot-dbt:dashboard-authoring` | Top-level governed dashboard creation, repair, and refinement |
+| `/signalpilot-dbt:notebook` | The chat notebook: tools, the `sp` SDK, governed queries, files, and charts |
+| `/signalpilot-dbt:dashboard` | Dashboard JSON file format, chart types, and the `dashboard_sample_data` / `dashboard_screenshot` check tools |
 | `/signalpilot-dbt:sql-workflow` | Structured SQL query building with verification |
 | `/signalpilot-dbt:dbt-workflow` | Full dbt project workflow (scan, map, validate, write, verify) |
 | `/signalpilot-dbt:dbt-write` | dbt model writing with column naming and type rules |

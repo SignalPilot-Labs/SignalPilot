@@ -222,9 +222,9 @@ export function stringifyUnknownValue(opts: {
 }
 
 function stripHtml(html: string): string {
-  const div = document.createElement("div");
-  div.innerHTML = html;
-  const text = (div.textContent || div.innerText || "").trim();
+  // Inert document: nothing loads or executes while extracting the text.
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  const text = (doc.body?.textContent || "").trim();
   return text || html;
 }
 

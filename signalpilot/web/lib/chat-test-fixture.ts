@@ -25,6 +25,10 @@ import {
   SUMMARY_MD_FILE,
   fixtureArtifactFiles,
 } from "./chat-test-fixture-artifact-files";
+import {
+  fixtureDashboardFileContent,
+  fixtureDashboardFiles,
+} from "./chat-test-fixture-dashboard";
 
 /**
  * Deterministic fixture for /chats/test: a scripted agent run replayed on a
@@ -118,11 +122,10 @@ export function fixtureConversationFiles(
 ): ConversationFileInfo[] {
   // Export files (HTML report, SVG chart, CSV) land later in the replay,
   // each gated on its files_changed mirror event.
-  const exportFiles = fixtureArtifactFiles(
-    events,
-    FIXTURE_RUN_ID,
-    fixtureEventCreatedAt,
-  );
+  const exportFiles = [
+    ...fixtureArtifactFiles(events, FIXTURE_RUN_ID, fixtureEventCreatedAt),
+    ...fixtureDashboardFiles(events, FIXTURE_RUN_ID, fixtureEventCreatedAt),
+  ];
   const written = events.some(
     (event) =>
       event.type === "tool_started" &&
@@ -246,7 +249,7 @@ export function fixtureFileContent(
     case "file-fixture-summary":
       return { body: SUMMARY_MD_FILE, mime: "text/markdown" };
     default:
-      return null;
+      return fixtureDashboardFileContent(fileId);
   }
 }
 

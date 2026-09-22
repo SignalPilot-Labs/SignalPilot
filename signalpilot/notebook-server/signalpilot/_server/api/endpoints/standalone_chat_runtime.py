@@ -98,7 +98,27 @@ def adopt_keepalive_analysis_session(
     entry = _KEEPALIVE_BY_CONVERSATION.get(conversation_id)
     if entry is None:
         return None
-    scratch, sessions = entry
+    adopted = adopt_live_sessions(
+        app, entry[0], entry[1], scoped_token=scoped_token
+    )
+    if adopted is None:
+        _KEEPALIVE_BY_CONVERSATION.pop(conversation_id, None)
+    return adopted
+
+
+def adopt_live_sessions(
+    app: Any,
+    scratch: Path,
+    sessions: dict[str, str],
+    *,
+    scoped_token: str,
+) -> tuple[Path, dict[str, str]] | None:
+    """Adopt the live subset of ``sessions`` in ``scratch`` for a run.
+
+    Dead kernels are closed and dropped. When none survives the scratch is
+    removed and None is returned. Otherwise the run's scoped token is written
+    where the notebooks' setup cells read it.
+    """
     alive: dict[str, str] = {}
     for name, session_id in sessions.items():
         session = None
@@ -114,7 +134,6 @@ def adopt_keepalive_analysis_session(
         except Exception:
             pass
     if not alive:
-        _KEEPALIVE_BY_CONVERSATION.pop(conversation_id, None)
         shutil.rmtree(scratch, ignore_errors=True)
         return None
     token_file = scratch / ".gateway-token"
@@ -164,26 +183,10 @@ def _seed_analysis_notebook(
 
 
 # Scaffold cells that only the analysis notebook receives.
-_ANALYSIS_SCAFFOLD_CELLS = """
-
-@app.cell(hide_code=True)
-def _(db):
-    analysis_summary = {"status": "pending", "preview": []}
-    return (analysis_summary,)
-
-
-@app.cell(hide_code=True)
-def _(analysis_summary):
-    analysis_checks = {"nulls": None, "duplicates": None, "freshness": None, "reconciled": False}
-    return (analysis_checks,)
-
-
-@app.cell(hide_code=True)
-def _(analysis_checks, analysis_summary, sp):
-    sp.md("## Analysis output\\n\\nPending governed notebook analysis.")
-"""
-
-# Minimal visible empty cell for every other named notebook.
+# Every notebook starts with one visible empty cell after the hidden setup
+# cells. The agent replaces it with a title cell (see the notebook skill).
+# Nothing is pre-populated, so an untouched notebook stays byte-identical to
+# this seed and is detected as unused.
 _NAMED_NOTEBOOK_CELLS = """
 
 @app.cell
@@ -231,17 +234,14 @@ def _():
 
 @app.cell(hide_code=True)
 def _(Path, sp):
+    import numpy as np
+    import pandas as pd
     sp.init(gateway_url={gateway_url!r}, session_token_file=Path({str(token_file)!r}))
     db = sp.connect({connection_name!r})
-    return (db,)
+    return db, np, pd
 """
-    cells = (
-        _ANALYSIS_SCAFFOLD_CELLS
-        if name == "analysis"
-        else _NAMED_NOTEBOOK_CELLS
-    )
     notebook_path.write_text(
-        setup + cells + '\n\nif __name__ == "__main__":\n    app.run()\n',
+        setup + _NAMED_NOTEBOOK_CELLS + '\n\nif __name__ == "__main__":\n    app.run()\n',
         encoding="utf-8",
     )
     return notebook_path

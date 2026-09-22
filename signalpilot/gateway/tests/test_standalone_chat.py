@@ -1444,6 +1444,29 @@ async def test_event_ordering_refreshes_a_stale_locked_run(db_session):
 
 
 @pytest.mark.asyncio
+async def test_append_event_keeps_the_loaded_run_sequence_current(db_session):
+    """Lifecycle writers stage events from the in-session run after append_event."""
+    _, run = await _conversation_and_run(db_session)
+    assert run.last_event_sequence == 0
+    appended = await chat_store.append_event(
+        db_session,
+        run_id=run.id,
+        event_type="progress",
+        payload={"label": "Started"},
+    )
+    assert appended.sequence == 1
+    assert run.last_event_sequence == 1
+    staged = chat_store._stage_run_event(
+        db_session,
+        run=run,
+        event_type="status",
+        payload={"status": "completed"},
+    )
+    await db_session.commit()
+    assert staged.sequence == 2
+
+
+@pytest.mark.asyncio
 async def test_claim_completion_and_final_message_are_idempotent(db_session):
     conversation_id, run = await _conversation_and_run(db_session)
     claimed = await chat_store.claim_runs(
@@ -1464,13 +1487,6 @@ async def test_claim_completion_and_final_message_are_idempotent(db_session):
         run_id=run.id,
         worker_id="worker-a",
         content="Revenue increased.",
-        dashboard_preview={
-            "authoring_session_id": "authoring-session-1",
-            "dashboard_name": "Executive Revenue",
-            "summary": "A governed executive dashboard.",
-            "chart_count": 4,
-            "chart_titles": ["must-not-be-exposed"],
-        },
     )
     second = await chat_store.complete_run(
         db_session,
@@ -1480,14 +1496,6 @@ async def test_claim_completion_and_final_message_are_idempotent(db_session):
     )
     assert first is not None
     assert "report_action_outcome" not in first.metadata_json
-    assert first.metadata_json["dashboard_preview"] == {
-        "authoring_session_id": "authoring-session-1",
-        "dashboard_name": "Executive Revenue",
-        "summary": "A governed executive dashboard.",
-        "chart_count": 4,
-        "requires_review": True,
-        "apply_required": True,
-    }
     assert second is None
     count = await db_session.scalar(
         select(func.count(GatewayChatMessage.id)).where(

@@ -1,226 +1,44 @@
-"""Verify the GitHub App OAuth installation callback.
+"""Verify the GitHub App installation callback (Vercel-style, no OAuth code).
 
-Unit tests replace ``gateway.github_client`` coroutines. Integration tests
-replace the GitHub HTTP transport. The integration tests exercise pagination,
-installation details, token creation, RS256 signing, and Fernet encryption.
+The callback binds an installation to the org named by the signed state,
+verifies the installation through the app JWT, lists the installation's own
+repositories, and stores a repository-scoped token. It never exchanges an
+OAuth code and never calls /user/installations.
 
-The callback must not request an installation token for a foreign installation.
-``test_github_live.py`` provides network coverage with configured credentials.
+Unit tests live in test_github_callback_unit.py. Integration tests here
+replace the GitHub HTTP transport and run against an aiosqlite DB, so
+pagination, installation details, token minting, RS256 signing, Fernet
+encryption, and the cross-org claim refusal are exercised for real.
 """
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from gateway.api import github
+from gateway.db.models import GatewayBase, GatewayGitHubInstallation
 
-
-def _client(monkeypatch, client_secret: str = "secret") -> TestClient:
-    monkeypatch.setattr(
-        github,
-        "get_github_settings",
-        lambda: SimpleNamespace(
-            is_configured=True,
-            sp_web_url="https://app.test",
-            sp_github_app_id="12345",
-            sp_github_app_client_id="Iv1.client",
-            sp_github_app_client_secret=client_secret,
-            sp_github_app_private_key="fake-pem",
-        ),
-    )
-    monkeypatch.setattr(github, "is_cloud_mode", lambda: True)
-
-    app = FastAPI()
-    app.include_router(github.router)
-    return TestClient(app, raise_server_exceptions=False)
-
-
-def test_github_callback_missing_state_redirects_to_settings_error(monkeypatch) -> None:
-    client = _client(monkeypatch)
-
-    response = client.get(
-        "/auth/github/callback?installation_id=123&setup_action=install",
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 302
-    assert response.headers["location"] == "https://app.test/settings/github?error=oauth_state_invalid"
-
-
-def test_github_callback_missing_code_rejected_in_cloud_mode(monkeypatch) -> None:
-    client = _client(monkeypatch)
-    monkeypatch.setattr(github, "verify_state", lambda s: "org_abc")
-
-    response = client.get(
-        "/auth/github/callback?installation_id=123&setup_action=install&state=good",
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 302
-    assert response.headers["location"] == "https://app.test/settings/github?error=oauth_code_missing"
-
-
-def test_github_callback_missing_client_secret_rejected_in_cloud_mode(monkeypatch) -> None:
-    client = _client(monkeypatch, client_secret="")
-    monkeypatch.setattr(github, "verify_state", lambda s: "org_abc")
-
-    response = client.get(
-        "/auth/github/callback?installation_id=123&setup_action=install&state=good&code=abc",
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 302
-    assert response.headers["location"] == "https://app.test/settings/github?error=github_app_not_configured"
-
-
-def test_github_callback_foreign_installation_rejected(monkeypatch) -> None:
-    from gateway import github_client
-
-    client = _client(monkeypatch)
-    monkeypatch.setattr(github, "verify_state", lambda s: "org_abc")
-
-    async def fake_exchange(client_id, client_secret, code):
-        return {"access_token": "user-token"}
-
-    async def fake_user_installations(user_token, per_page=100):
-        return [{"id": 456}, {"id": 789}]
-
-    monkeypatch.setattr(github_client, "exchange_code_for_token", fake_exchange)
-    monkeypatch.setattr(github_client, "list_user_installations", fake_user_installations)
-
-    response = client.get(
-        "/auth/github/callback?installation_id=123&setup_action=install&state=good&code=abc",
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 302
-    assert response.headers["location"] == "https://app.test/settings/github?error=installation_not_authorized"
-
-
-def test_github_callback_code_exchange_failure_rejected(monkeypatch) -> None:
-    from gateway import github_client
-
-    client = _client(monkeypatch)
-    monkeypatch.setattr(github, "verify_state", lambda s: "org_abc")
-
-    async def fake_exchange(client_id, client_secret, code):
-        return {"error": "bad_verification_code"}
-
-    monkeypatch.setattr(github_client, "exchange_code_for_token", fake_exchange)
-
-    response = client.get(
-        "/auth/github/callback?installation_id=123&setup_action=install&state=good&code=abc",
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 302
-    assert response.headers["location"] == "https://app.test/settings/github?error=oauth_verification_failed"
-
-
-def test_github_callback_owned_installation_succeeds(monkeypatch) -> None:
-    from gateway import github_client
-    from gateway.db import engine as db_engine
-    from gateway.store import crypto as store_crypto
-    from gateway.store import github as gh_store
-
-    client = _client(monkeypatch)
-    monkeypatch.setattr(github, "verify_state", lambda s: "org_abc")
-
-    async def fake_exchange(client_id, client_secret, code):
-        return {"access_token": "user-token"}
-
-    async def fake_user_installations(user_token, per_page=100):
-        return [{"id": 123}]
-
-    async def fake_details(app_jwt, installation_id):
-        return {"account": {"login": "acme", "type": "Organization"}, "permissions": {}}
-
-    async def fake_user_repos(user_token, installation_id, per_page=100):
-        return [{"id": 5001}]
-
-    async def fake_create_token(app_jwt, installation_id, *, repository_ids):
-        assert repository_ids == [5001]
-        return {"token": "ghs_installtoken", "expires_at": "2099-01-01T00:00:00Z"}
-
-    monkeypatch.setattr(github_client, "exchange_code_for_token", fake_exchange)
-    monkeypatch.setattr(github_client, "list_user_installations", fake_user_installations)
-    monkeypatch.setattr(github_client, "list_user_installation_repositories", fake_user_repos)
-    monkeypatch.setattr(github_client, "get_installation_details", fake_details)
-    monkeypatch.setattr(github_client, "create_installation_token", fake_create_token)
-    monkeypatch.setattr(github_client, "generate_app_jwt", lambda app_id, key: "fake-jwt")
-    monkeypatch.setattr(store_crypto, "_encrypt", lambda v: b"enc")
-
-    upserts: list[dict] = []
-
-    async def fake_upsert(session, **kwargs):
-        upserts.append(kwargs)
-
-    monkeypatch.setattr(gh_store, "upsert_installation", fake_upsert)
-
-    class _FakeSession:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *args):
-            return False
-
-    monkeypatch.setattr(db_engine, "get_session_factory", lambda: _FakeSession)
-
-    response = client.get(
-        "/auth/github/callback?installation_id=123&setup_action=install&state=good&code=abc",
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 302
-    assert response.headers["location"] == "https://app.test/settings/github?installed=true"
-    assert len(upserts) == 1
-    assert upserts[0]["org_id"] == "org_abc"
-    assert upserts[0]["github_installation_id"] == 123
-
-
-def test_github_callback_invalid_state_redirects_to_settings_error(monkeypatch) -> None:
-    client = _client(monkeypatch)
-
-    response = client.get(
-        "/auth/github/callback?installation_id=123&setup_action=install&state=bad-state",
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 302
-    assert response.headers["location"] == "https://app.test/settings/github?error=oauth_state_invalid"
-
-
-# Verify installation token permissions.
-# Verify callback security with a GitHub HTTP transport test double.
-# Verify installation token permissions.
-
-# Sentinel secrets. These are fake, but they stand in for the real ones so the
-# "nothing leaks into a response body or a log line" assertions are meaningful.
-FAKE_CLIENT_SECRET = "sentinel-client-secret-must-never-be-echoed"
-FAKE_USER_TOKEN = "ghu_sentinel_user_token"
 MINTED_TOKEN = "ghs_sentinel_minted_installation_token"
-
-OAUTH_TOKEN_PATH = "/login/oauth/access_token"
-USER_INSTALLATIONS_PATH = "/user/installations"
-
-VICTIM_INSTALLATION_ID = 111111  # belongs to another tenant; the attacker target
+OWNED_INSTALLATION_ID = 222222
+VICTIM_INSTALLATION_ID = 111111
 ATTACKER_ORG = "org_attacker"
-OWNED_INSTALLATION_ID = 222222  # genuinely accessible to the authorizing user
+REPO_IDS = (5001, 5002)
 
-# Distinguish accessible repositories from other installation repositories.
-# that live in the same installation but are off-limits to that user.
-USER_REPO_ID = 5001
-SIBLING_REPO_IDS = (5002, 5003)
+
+# Integration tests: GitHub HTTP transport double + aiosqlite database.
 
 
 @pytest.fixture(scope="module")
 def rsa_private_key_pem() -> str:
-    """A throwaway RSA-2048 private key so ``generate_app_jwt`` runs for real."""
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import rsa
 
@@ -235,48 +53,36 @@ def rsa_private_key_pem() -> str:
 class GitHubTransportMock:
     """Records every GitHub HTTP request and serves canned responses.
 
-    ``installation_pages`` is a list of pages; ``list_user_installations``
-    paginates until a page comes back shorter than ``per_page`` (100), so a
-    two-element list with a full first page exercises the pagination loop.
+    ``known_installations`` maps installation id -> account login. Any other
+    id is a 404 from /app/installations/{id}. ``repo_pages`` is a list of
+    pages for /installation/repositories (per_page=100 pagination).
     """
 
     def __init__(
         self,
         *,
-        installation_pages: list[list[dict]] | None = None,
-        user_repo_pages: list[list[dict]] | None = None,
-        token_response: dict | None = None,
-        user_installations_status: int = 200,
-        user_repos_status: int = 200,
+        known_installations: dict[int, str] | None = None,
+        repo_pages: list[list[dict]] | None = None,
+        repos_status: int = 200,
     ) -> None:
-        self.installation_pages = installation_pages or [[]]
-        # Default: the authorizing user can reach exactly one repo.
-        self.user_repo_pages = user_repo_pages if user_repo_pages is not None else [[{"id": USER_REPO_ID}]]
-        self.token_response = token_response if token_response is not None else {"access_token": FAKE_USER_TOKEN}
-        self.user_installations_status = user_installations_status
-        self.user_repos_status = user_repos_status
-        self.requests: list[dict] = []  # {method, path, json}
+        self.known = known_installations or {OWNED_INSTALLATION_ID: "victim-corp"}
+        self.repo_pages = repo_pages if repo_pages is not None else [
+            [{"id": i, "full_name": f"victim-corp/repo-{i}"} for i in REPO_IDS]
+        ]
+        self.repos_status = repos_status
+        self.requests: list[dict] = []
 
-    # Define request log helper functions.
     @property
     def paths(self) -> list[str]:
         return [r["path"] for r in self.requests]
-
-    @property
-    def mint_calls(self) -> list[str]:
-        return [p for p in self.paths if p.endswith("/access_tokens")]
 
     @property
     def mint_bodies(self) -> list[dict | None]:
         return [r["json"] for r in self.requests if r["path"].endswith("/access_tokens")]
 
     @property
-    def user_installations_calls(self) -> list[str]:
-        return [p for p in self.paths if p.endswith(USER_INSTALLATIONS_PATH)]
-
-    @property
-    def user_repo_calls(self) -> list[str]:
-        return [p for p in self.paths if p.endswith("/repositories") and p.startswith("api.github.com/user/")]
+    def repo_list_calls(self) -> list[str]:
+        return [p for p in self.paths if p.endswith("/installation/repositories")]
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         url = request.url
@@ -291,98 +97,93 @@ class GitHubTransportMock:
                 body = {"__unparsed__": True}
         self.requests.append({"method": request.method, "path": f"{url.host}{url.path}", "json": body})
 
-        if url.host == "github.com" and url.path == OAUTH_TOKEN_PATH:
-            return httpx.Response(200, json=self.token_response)
-
-        if url.host == "api.github.com" and url.path == USER_INSTALLATIONS_PATH:
-            if self.user_installations_status != 200:
-                return httpx.Response(self.user_installations_status, json={"message": "Bad credentials"})
-            page = int(url.params.get("page", "1"))
-            items = self.installation_pages[page - 1] if 0 <= page - 1 < len(self.installation_pages) else []
-            return httpx.Response(200, json={"total_count": len(items), "installations": items})
-
-        if (
-            url.host == "api.github.com"
-            and url.path.startswith("/user/installations/")
-            and url.path.endswith("/repositories")
-        ):
-            if self.user_repos_status != 200:
-                return httpx.Response(self.user_repos_status, json={"message": "Not accessible"})
-            page = int(url.params.get("page", "1"))
-            items = self.user_repo_pages[page - 1] if 0 <= page - 1 < len(self.user_repo_pages) else []
-            return httpx.Response(200, json={"total_count": len(items), "repositories": items})
-
         if url.host == "api.github.com" and url.path.endswith("/access_tokens"):
             return httpx.Response(201, json={"token": MINTED_TOKEN, "expires_at": "2099-01-01T00:00:00Z"})
-
         if url.host == "api.github.com" and url.path.startswith("/app/installations/"):
+            inst_id = int(url.path.split("/")[3])
+            login = self.known.get(inst_id)
+            if login is None:
+                return httpx.Response(404, json={"message": "Not Found"})
             return httpx.Response(
                 200,
                 json={
-                    "id": int(url.path.rsplit("/", 1)[-1]),
-                    "account": {"login": "victim-corp", "type": "Organization"},
-                    "permissions": {"contents": "write"},
+                    "id": inst_id,
+                    "account": {"login": login, "type": "Organization"},
+                    "permissions": {"contents": "write", "pull_requests": "write"},
                 },
             )
-
+        if url.host == "api.github.com" and url.path == "/installation/repositories":
+            if self.repos_status != 200:
+                return httpx.Response(self.repos_status, json={"message": "nope"})
+            page = int(url.params.get("page", "1"))
+            items = self.repo_pages[page - 1] if 0 <= page - 1 < len(self.repo_pages) else []
+            return httpx.Response(200, json={"total_count": len(items), "repositories": items})
         return httpx.Response(404, json={"message": "unexpected request in test"})
 
 
 class CallbackHarness:
-    """Bundles the TestClient, the HTTP mock, and the recorded store writes."""
-
-    def __init__(self, client: TestClient, http: GitHubTransportMock, upserts: list[dict]) -> None:
+    def __init__(self, client: TestClient, http: GitHubTransportMock, factory) -> None:
         self.client = client
         self.http = http
-        self.upserts = upserts
+        self.factory = factory
 
     def callback(self, **params):
         query = "&".join(f"{k}={v}" for k, v in params.items() if v is not None)
         return self.client.get(f"/auth/github/callback?{query}", follow_redirects=False)
 
+    def rows(self) -> list[GatewayGitHubInstallation]:
+        async def _read():
+            async with self.factory() as session:
+                result = await session.execute(select(GatewayGitHubInstallation))
+                return list(result.scalars().all())
+
+        return asyncio.run(_read())
+
+    def seed(self, *, org_id: str, github_installation_id: int, status: str = "active") -> None:
+        async def _write():
+            async with self.factory() as session:
+                session.add(
+                    GatewayGitHubInstallation(
+                        org_id=org_id,
+                        github_installation_id=github_installation_id,
+                        github_account_login="seeded",
+                        github_account_type="Organization",
+                        status=status,
+                        created_at=1.0,
+                        updated_at=1.0,
+                    )
+                )
+                await session.commit()
+
+        asyncio.run(_write())
+
 
 @pytest.fixture()
-def make_harness(monkeypatch: pytest.MonkeyPatch, rsa_private_key_pem: str):
-    """Factory building a CallbackHarness with GitHub mocked at the transport layer."""
+def make_harness(monkeypatch: pytest.MonkeyPatch, rsa_private_key_pem: str, tmp_path):
     from cryptography.fernet import Fernet
 
     from gateway import github_client
     from gateway.api import _oauth_state
     from gateway.db import engine as db_engine
     from gateway.store import crypto as store_crypto
-    from gateway.store import github as gh_store
 
-    # Real Fernet encryption with a throwaway raw key (no PBKDF2, no salt file).
     monkeypatch.setenv("SP_ENCRYPTION_KEY", Fernet.generate_key().decode())
     monkeypatch.setattr(store_crypto, "_CACHED_MULTIFERNET", None)
-
-    # Real HMAC state signing, fresh nonce store per test (replay isolation).
     monkeypatch.setattr(_oauth_state, "_HMAC_KEY", None)
     monkeypatch.setattr(_oauth_state, "_NONCE_STORE", _oauth_state._NonceStore())
 
-    upserts: list[dict] = []
+    db_path = tmp_path / "callback.db"
+    engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", poolclass=NullPool)
 
-    async def fake_upsert(session, **kwargs):
-        upserts.append(kwargs)
+    async def _create():
+        async with engine.begin() as conn:
+            await conn.run_sync(GatewayBase.metadata.create_all)
 
-    monkeypatch.setattr(gh_store, "upsert_installation", fake_upsert)
+    asyncio.run(_create())
+    factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    monkeypatch.setattr(db_engine, "get_session_factory", lambda: factory)
 
-    class _FakeSession:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *args):
-            return False
-
-    monkeypatch.setattr(db_engine, "get_session_factory", lambda: _FakeSession)
-
-    def _build(
-        *,
-        cloud: bool = True,
-        client_secret: str = FAKE_CLIENT_SECRET,
-        configured: bool = True,
-        **mock_kwargs,
-    ) -> CallbackHarness:
+    def _build(*, cloud: bool = True, configured: bool = True, **mock_kwargs) -> CallbackHarness:
         monkeypatch.setattr(
             github,
             "get_github_settings",
@@ -391,10 +192,13 @@ def make_harness(monkeypatch: pytest.MonkeyPatch, rsa_private_key_pem: str):
                 sp_web_url="https://app.test",
                 sp_github_app_id="3786558",
                 sp_github_app_client_id="Iv1.testclient",
-                sp_github_app_client_secret=client_secret,
+                sp_github_app_client_secret="",
                 sp_github_app_private_key=rsa_private_key_pem,
             ),
         )
+        from gateway.config import github as github_config
+
+        monkeypatch.setattr(github_config, "get_github_settings", github.get_github_settings)
         monkeypatch.setattr(github, "is_cloud_mode", lambda: cloud)
         monkeypatch.setenv("SP_DEPLOYMENT_MODE", "cloud" if cloud else "local")
 
@@ -409,9 +213,10 @@ def make_harness(monkeypatch: pytest.MonkeyPatch, rsa_private_key_pem: str):
 
         app = FastAPI()
         app.include_router(github.router)
-        return CallbackHarness(TestClient(app, raise_server_exceptions=False), http_mock, upserts)
+        return CallbackHarness(TestClient(app, raise_server_exceptions=False), http_mock, factory)
 
-    return _build
+    yield _build
+    asyncio.run(engine.dispose())
 
 
 def _signed_state(org_id: str) -> str:
@@ -420,258 +225,195 @@ def _signed_state(org_id: str) -> str:
     return make_state(org_id)
 
 
-def _full_page(count: int = 100, start_id: int = 900000) -> list[dict]:
-    return [{"id": start_id + i, "account": {"login": f"filler-{i}"}} for i in range(count)]
-
-
 class TestCallbackSecurityMatrix:
-    # Verify installation ownership.
-
-    def test_foreign_installation_id_is_rejected_and_no_token_is_minted(self, make_harness) -> None:
-        """Verify that the callback rejects a foreign installation identifier.
-
-        The caller supplies a valid state and OAuth code for its organization.
-        The caller also supplies another organization's installation identifier.
-        The callback must not request an access token or write to the store.
-        """
-        h = make_harness(installation_pages=[[{"id": OWNED_INSTALLATION_ID}]])
-
+    def test_owned_installation_succeeds_with_scoped_token_and_no_oauth_calls(self, make_harness) -> None:
+        h = make_harness()
         response = h.callback(
-            installation_id=VICTIM_INSTALLATION_ID,
-            setup_action="install",
-            state=_signed_state(ATTACKER_ORG),
-            code="attacker-own-valid-code",
+            installation_id=OWNED_INSTALLATION_ID, setup_action="install", state=_signed_state("org_legit")
         )
-
-        assert response.status_code == 302
-        assert response.headers["location"] == "https://app.test/settings/github?error=installation_not_authorized"
-
-        # Verify installation ownership through GitHub.
-        assert h.http.user_installations_calls, "user-authorization leg was never performed"
-        # Verify that the callback does not mint a token.
-        assert h.http.mint_calls == [], "installation token was minted for a foreign installation"
-        assert not any(p.startswith("api.github.com/app/installations/") for p in h.http.paths), (
-            "app-JWT installation endpoints were reached for a foreign installation"
-        )
-        # ...and nothing was persisted under the attacker org.
-        assert h.upserts == []
-
-    def test_owned_installation_succeeds_and_upserts_under_state_org(self, make_harness) -> None:
-        h = make_harness(installation_pages=[[{"id": OWNED_INSTALLATION_ID}, {"id": 333333}]])
-
-        response = h.callback(
-            installation_id=OWNED_INSTALLATION_ID,
-            setup_action="install",
-            state=_signed_state("org_legit"),
-            code="legit-code",
-        )
-
         assert response.status_code == 302
         assert response.headers["location"] == "https://app.test/settings/github?installed=true"
-        assert len(h.http.mint_calls) == 1
-        assert len(h.upserts) == 1
-        # org_id comes from the signed state, never from a caller-supplied param.
-        assert h.upserts[0]["org_id"] == "org_legit"
-        assert h.upserts[0]["github_installation_id"] == OWNED_INSTALLATION_ID
-        assert h.upserts[0]["github_account_login"] == "victim-corp"
+
+        # No OAuth code exchange, no /user/installations lookup.
+        assert not any(p.startswith("github.com/login") for p in h.http.paths)
+        assert not any("/user/" in p for p in h.http.paths)
+        # Installation verified via the app JWT, repositories listed via the app.
+        assert f"api.github.com/app/installations/{OWNED_INSTALLATION_ID}" in h.http.paths
+        assert len(h.http.repo_list_calls) == 1
+        # Two mints: one unrestricted for the internal listing (discarded),
+        # one repository-scoped that is stored.
+        assert h.http.mint_bodies == [None, {"repository_ids": list(REPO_IDS)}]
+
+        rows = h.rows()
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.org_id == "org_legit"
+        assert row.github_installation_id == OWNED_INSTALLATION_ID
+        assert row.github_account_login == "victim-corp"
+        assert row.authorized_repository_ids == list(REPO_IDS)
+        assert [r["full_name"] for r in row.authorized_repositories] == [
+            f"victim-corp/repo-{i}" for i in REPO_IDS
+        ]
+        assert row.permissions == {"contents": "write", "pull_requests": "write"}
+        assert row.access_token_enc and MINTED_TOKEN.encode() not in row.access_token_enc
+
+    def test_unknown_installation_id_is_rejected_and_nothing_is_minted(self, make_harness) -> None:
+        h = make_harness()
+        response = h.callback(
+            installation_id=VICTIM_INSTALLATION_ID, setup_action="install", state=_signed_state(ATTACKER_ORG)
+        )
+        assert response.headers["location"] == "https://app.test/settings/github?error=installation_not_found"
+        assert h.http.mint_bodies == []
+        assert h.rows() == []
+
+    def test_installation_claimed_by_another_org_is_refused(self, make_harness) -> None:
+        h = make_harness()
+        h.seed(org_id="org_victim", github_installation_id=OWNED_INSTALLATION_ID)
+        response = h.callback(
+            installation_id=OWNED_INSTALLATION_ID, setup_action="install", state=_signed_state(ATTACKER_ORG)
+        )
+        assert response.headers["location"] == "https://app.test/settings/github?error=installation_claimed"
+        # Verified the installation exists, but never listed repos or minted.
+        assert h.http.mint_bodies == []
+        assert h.http.repo_list_calls == []
+        rows = h.rows()
+        assert [(r.org_id, r.status) for r in rows] == [("org_victim", "active")]
+
+    def test_disconnected_row_in_another_org_does_not_block_claim(self, make_harness) -> None:
+        h = make_harness()
+        h.seed(org_id="org_old", github_installation_id=OWNED_INSTALLATION_ID, status="disconnected")
+        response = h.callback(
+            installation_id=OWNED_INSTALLATION_ID, setup_action="install", state=_signed_state("org_new")
+        )
+        assert response.headers["location"] == "https://app.test/settings/github?installed=true"
+        assert sorted((r.org_id, r.status) for r in h.rows()) == [("org_new", "active"), ("org_old", "disconnected")]
+
+    def test_update_refreshes_same_org_row(self, make_harness) -> None:
+        h = make_harness()
+        h.seed(org_id="org_legit", github_installation_id=OWNED_INSTALLATION_ID)
+        response = h.callback(
+            installation_id=OWNED_INSTALLATION_ID, setup_action="update", state=_signed_state("org_legit")
+        )
+        assert response.headers["location"] == "https://app.test/settings/github?installed=true"
+        rows = h.rows()
+        assert len(rows) == 1
+        assert rows[0].github_account_login == "victim-corp"
+        assert rows[0].authorized_repository_ids == list(REPO_IDS)
+
+    def test_stateless_update_refreshes_single_existing_claim(self, make_harness) -> None:
+        """Redirect-on-update: no state, installation held by one org -> refreshed."""
+        h = make_harness()
+        h.seed(org_id="org_legit", github_installation_id=OWNED_INSTALLATION_ID)
+        response = h.callback(installation_id=OWNED_INSTALLATION_ID, setup_action="update")
+        assert response.headers["location"] == "https://app.test/settings/github?installed=true"
+        rows = h.rows()
+        assert [(r.org_id, r.status) for r in rows] == [("org_legit", "active")]
+        assert rows[0].authorized_repository_ids == list(REPO_IDS)
+        assert rows[0].github_account_login == "victim-corp"
+        assert h.http.mint_bodies == [None, {"repository_ids": list(REPO_IDS)}]
+
+    def test_stateless_update_for_unclaimed_installation_is_rejected(self, make_harness) -> None:
+        h = make_harness()
+        response = h.callback(installation_id=OWNED_INSTALLATION_ID, setup_action="update")
+        assert response.headers["location"] == "https://app.test/settings/github?error=oauth_state_invalid"
+        assert h.http.requests == []
+        assert h.rows() == []
+
+    def test_stateless_update_with_two_holders_is_rejected(self, make_harness) -> None:
+        h = make_harness()
+        h.seed(org_id="org_a", github_installation_id=OWNED_INSTALLATION_ID)
+        h.seed(org_id="org_b", github_installation_id=OWNED_INSTALLATION_ID, status="suspended")
+        response = h.callback(installation_id=OWNED_INSTALLATION_ID, setup_action="update")
+        assert response.headers["location"] == "https://app.test/settings/github?error=oauth_state_invalid"
+        assert h.http.requests == []
+
+    def test_stateless_disconnected_row_does_not_count_as_a_claim(self, make_harness) -> None:
+        h = make_harness()
+        h.seed(org_id="org_old", github_installation_id=OWNED_INSTALLATION_ID, status="disconnected")
+        response = h.callback(installation_id=OWNED_INSTALLATION_ID, setup_action="update")
+        assert response.headers["location"] == "https://app.test/settings/github?error=oauth_state_invalid"
+        assert [(r.org_id, r.status) for r in h.rows()] == [("org_old", "disconnected")]
+
+    def test_state_bound_org_cannot_take_over_via_update(self, make_harness) -> None:
+        """A valid state for org B never moves org A's installation, even on update."""
+        h = make_harness()
+        h.seed(org_id="org_a", github_installation_id=OWNED_INSTALLATION_ID)
+        response = h.callback(
+            installation_id=OWNED_INSTALLATION_ID, setup_action="update", state=_signed_state("org_b")
+        )
+        assert response.headers["location"] == "https://app.test/settings/github?error=installation_claimed"
+        assert [(r.org_id, r.status) for r in h.rows()] == [("org_a", "active")]
 
     def test_org_id_cannot_be_overridden_by_a_query_param(self, make_harness) -> None:
-        """A caller-supplied ``org_id`` query param must be ignored entirely."""
-        h = make_harness(installation_pages=[[{"id": OWNED_INSTALLATION_ID}]])
-
-        response = h.callback(
+        h = make_harness()
+        h.callback(
             installation_id=OWNED_INSTALLATION_ID,
             setup_action="install",
             state=_signed_state("org_from_state"),
-            code="legit-code",
             org_id="org_injected_by_attacker",
         )
+        assert [r.org_id for r in h.rows()] == ["org_from_state"]
 
-        assert response.status_code == 302
-        assert h.upserts[0]["org_id"] == "org_from_state"
+    def test_repositories_on_second_page_are_captured(self, make_harness) -> None:
+        page1 = [{"id": 900000 + i, "full_name": f"victim-corp/f{i}"} for i in range(100)]
+        h = make_harness(repo_pages=[page1, [{"id": 7, "full_name": "victim-corp/last"}]])
+        h.callback(installation_id=OWNED_INSTALLATION_ID, setup_action="install", state=_signed_state("org_legit"))
+        assert len(h.http.repo_list_calls) == 2
+        row = h.rows()[0]
+        assert len(row.authorized_repository_ids) == 101
+        assert 7 in row.authorized_repository_ids
+        assert h.http.mint_bodies[-1] == {"repository_ids": row.authorized_repository_ids}
 
-    # Verify pagination.
-
-    def test_installation_on_second_page_is_accepted(self, make_harness) -> None:
-        """Proves list_user_installations paginates instead of trusting page 1."""
-        h = make_harness(installation_pages=[_full_page(), [{"id": OWNED_INSTALLATION_ID}]])
-
+    def test_empty_installation_stores_row_without_token_in_cloud(self, make_harness) -> None:
+        h = make_harness(repo_pages=[[]])
         response = h.callback(
-            installation_id=OWNED_INSTALLATION_ID,
-            setup_action="install",
-            state=_signed_state("org_legit"),
-            code="legit-code",
+            installation_id=OWNED_INSTALLATION_ID, setup_action="install", state=_signed_state("org_legit")
         )
-
         assert response.headers["location"] == "https://app.test/settings/github?installed=true"
-        assert len(h.http.user_installations_calls) == 2, "second page was never fetched"
-        assert len(h.http.mint_calls) == 1
+        # Only the internal listing mint; no scoped token can be minted for zero repos.
+        assert h.http.mint_bodies == [None]
+        row = h.rows()[0]
+        assert row.authorized_repository_ids == []
+        assert row.access_token_enc is None
 
-    def test_absent_from_all_pages_is_rejected(self, make_harness) -> None:
-        h = make_harness(installation_pages=[_full_page(), _full_page(start_id=800000)])
-
+    def test_repository_listing_failure_is_reported(self, make_harness) -> None:
+        h = make_harness(repos_status=500)
         response = h.callback(
-            installation_id=VICTIM_INSTALLATION_ID,
-            setup_action="install",
-            state=_signed_state(ATTACKER_ORG),
-            code="attacker-code",
+            installation_id=OWNED_INSTALLATION_ID, setup_action="install", state=_signed_state("org_legit")
         )
-
-        assert response.headers["location"] == "https://app.test/settings/github?error=installation_not_authorized"
-        # Two full pages then an empty third page terminates the loop.
-        assert len(h.http.user_installations_calls) == 3
-        assert h.http.mint_calls == []
-
-    def test_empty_user_installations_is_rejected(self, make_harness) -> None:
-        """Valid user token, but the user can see no installations at all."""
-        h = make_harness(installation_pages=[[]])
-
-        response = h.callback(
-            installation_id=VICTIM_INSTALLATION_ID,
-            setup_action="install",
-            state=_signed_state(ATTACKER_ORG),
-            code="attacker-code",
-        )
-
-        assert response.headers["location"] == "https://app.test/settings/github?error=installation_not_authorized"
-        assert h.http.mint_calls == []
-        assert h.upserts == []
-
-    # Verify code and secret preconditions.
-
-    def test_missing_code_rejected_without_any_github_call(self, make_harness) -> None:
-        h = make_harness()
-
-        response = h.callback(
-            installation_id=VICTIM_INSTALLATION_ID,
-            setup_action="install",
-            state=_signed_state(ATTACKER_ORG),
-        )
-
-        assert response.headers["location"] == "https://app.test/settings/github?error=oauth_code_missing"
-        assert h.http.requests == []
-        assert h.upserts == []
-
-    def test_unconfigured_client_secret_fails_closed_with_no_github_call(self, make_harness) -> None:
-        """If SP_GITHUB_APP_CLIENT_SECRET is missing we must fail closed, not skip the check."""
-        h = make_harness(client_secret="")
-
-        response = h.callback(
-            installation_id=VICTIM_INSTALLATION_ID,
-            setup_action="install",
-            state=_signed_state(ATTACKER_ORG),
-            code="attacker-code",
-        )
-
-        assert response.headers["location"] == "https://app.test/settings/github?error=github_app_not_configured"
-        assert h.http.requests == [], "a GitHub call was made despite the missing client secret"
-        assert h.upserts == []
+        assert response.headers["location"] == "https://app.test/settings/github?error=repository_listing_failed"
+        assert h.rows() == []
 
     def test_app_not_configured_short_circuits(self, make_harness) -> None:
         h = make_harness(configured=False)
-
         response = h.callback(installation_id=OWNED_INSTALLATION_ID, setup_action="install")
-
         assert response.headers["location"] == "https://app.test/settings/github?error=github_app_not_configured"
         assert h.http.requests == []
 
-    def test_code_exchange_error_response_rejected(self, make_harness) -> None:
-        h = make_harness(token_response={"error": "bad_verification_code"})
-
-        response = h.callback(
-            installation_id=OWNED_INSTALLATION_ID,
-            setup_action="install",
-            state=_signed_state("org_legit"),
-            code="stale-or-forged-code",
-        )
-
-        assert response.headers["location"] == "https://app.test/settings/github?error=oauth_verification_failed"
-        assert h.http.user_installations_calls == []
-        assert h.http.mint_calls == []
-
-    def test_code_exchange_without_access_token_rejected(self, make_harness) -> None:
-        h = make_harness(token_response={"token_type": "bearer"})
-
-        response = h.callback(
-            installation_id=OWNED_INSTALLATION_ID,
-            setup_action="install",
-            state=_signed_state("org_legit"),
-            code="weird-code",
-        )
-
-        assert response.headers["location"] == "https://app.test/settings/github?error=oauth_verification_failed"
-        assert h.http.mint_calls == []
-
-    def test_user_installations_401_rejected_not_crashed(self, make_harness) -> None:
-        """A revoked/invalid user token must fail closed, not 500."""
-        h = make_harness(user_installations_status=401)
-
-        response = h.callback(
-            installation_id=OWNED_INSTALLATION_ID,
-            setup_action="install",
-            state=_signed_state("org_legit"),
-            code="legit-code",
-        )
-
-        assert response.status_code == 302
-        assert response.headers["location"] == "https://app.test/settings/github?error=oauth_verification_failed"
-        assert h.http.mint_calls == []
-        assert h.upserts == []
-
-    # Verify state handling.
+    # State handling.
 
     def test_tampered_state_org_rejected(self, make_harness) -> None:
-        """Rewriting the org inside a signed state breaks the HMAC."""
-        h = make_harness(installation_pages=[[{"id": OWNED_INSTALLATION_ID}]])
+        h = make_harness()
         good = _signed_state("org_victim")
         tampered = good.replace("org_victim", "org_attacker", 1)
         assert tampered != good
-
-        response = h.callback(
-            installation_id=OWNED_INSTALLATION_ID,
-            setup_action="install",
-            state=tampered,
-            code="legit-code",
-        )
-
+        response = h.callback(installation_id=OWNED_INSTALLATION_ID, setup_action="install", state=tampered)
         assert response.headers["location"] == "https://app.test/settings/github?error=oauth_state_invalid"
         assert h.http.requests == []
-        assert h.upserts == []
+        assert h.rows() == []
 
     def test_state_is_single_use_replay_rejected(self, make_harness) -> None:
-        h = make_harness(installation_pages=[[{"id": OWNED_INSTALLATION_ID}]])
+        h = make_harness()
         state = _signed_state("org_legit")
-
-        first = h.callback(
-            installation_id=OWNED_INSTALLATION_ID, setup_action="install", state=state, code="code-1"
-        )
+        first = h.callback(installation_id=OWNED_INSTALLATION_ID, setup_action="install", state=state)
         assert first.headers["location"] == "https://app.test/settings/github?installed=true"
-
-        replay = h.callback(
-            installation_id=VICTIM_INSTALLATION_ID, setup_action="install", state=state, code="code-2"
-        )
+        replay = h.callback(installation_id=VICTIM_INSTALLATION_ID, setup_action="install", state=state)
         assert replay.headers["location"] == "https://app.test/settings/github?error=oauth_state_invalid"
-
-        # Only the first (authorized) flow minted a token.
-        assert len(h.http.mint_calls) == 1
-        assert len(h.upserts) == 1
-        assert h.upserts[0]["github_installation_id"] == OWNED_INSTALLATION_ID
+        assert len(h.rows()) == 1
 
     def test_missing_state_in_cloud_mode_rejected(self, make_harness) -> None:
         h = make_harness()
-
-        response = h.callback(installation_id=OWNED_INSTALLATION_ID, setup_action="install", code="c")
-
-        assert response.headers["location"] == "https://app.test/settings/github?error=oauth_state_invalid"
-        assert h.http.requests == []
-
-    def test_garbage_state_rejected(self, make_harness) -> None:
-        h = make_harness()
-
-        response = h.callback(
-            installation_id=OWNED_INSTALLATION_ID, setup_action="install", state="not-a-state", code="c"
-        )
-
+        response = h.callback(installation_id=OWNED_INSTALLATION_ID, setup_action="install")
         assert response.headers["location"] == "https://app.test/settings/github?error=oauth_state_invalid"
         assert h.http.requests == []
 
@@ -681,463 +423,16 @@ class TestCallbackSecurityMatrix:
         h = make_harness()
         state = _signed_state("org_legit")
         monkeypatch.setattr(_oauth_state, "STATE_TTL_SECONDS", -1)
-
-        response = h.callback(
-            installation_id=OWNED_INSTALLATION_ID, setup_action="install", state=state, code="c"
-        )
-
+        response = h.callback(installation_id=OWNED_INSTALLATION_ID, setup_action="install", state=state)
         assert response.headers["location"] == "https://app.test/settings/github?error=oauth_state_invalid"
         assert h.http.requests == []
 
-    # Verify local-mode behavior.
+    # Local mode.
 
-    def test_local_mode_unchanged_no_user_authorization_check(self, make_harness) -> None:
-        """Local mode has no tenant boundary: no code, no /user/installations call."""
-        h = make_harness(cloud=False, installation_pages=[[]])
-
-        response = h.callback(installation_id=OWNED_INSTALLATION_ID, setup_action="install")
-
-        assert response.headers["location"] == "https://app.test/settings/github?installed=true"
-        assert h.http.user_installations_calls == []
-        assert len(h.http.mint_calls) == 1
-        assert len(h.upserts) == 1
-        assert h.upserts[0]["org_id"] == "local"
-
-    def test_local_mode_unverifiable_state_falls_back_to_local_org(self, make_harness) -> None:
+    def test_local_mode_links_under_local_org_without_state(self, make_harness) -> None:
         h = make_harness(cloud=False)
-
-        response = h.callback(installation_id=OWNED_INSTALLATION_ID, setup_action="install", state="junk")
-
-        assert response.headers["location"] == "https://app.test/settings/github?installed=true"
-        assert h.upserts[0]["org_id"] == "local"
-
-    # Verify that responses contain no secrets.
-
-    @pytest.mark.parametrize(
-        ("scenario", "expected_error"),
-        [
-            ("foreign", "installation_not_authorized"),
-            ("exchange_failed", "oauth_verification_failed"),
-            ("no_secret", "github_app_not_configured"),
-        ],
-    )
-    def test_failure_paths_leak_no_secrets_and_no_exception_detail(
-        self, make_harness, caplog, scenario: str, expected_error: str, rsa_private_key_pem: str
-    ) -> None:
-        import logging
-
-        caplog.set_level(logging.DEBUG)
-
-        if scenario == "foreign":
-            h = make_harness(installation_pages=[[{"id": OWNED_INSTALLATION_ID}]])
-            installation_id = VICTIM_INSTALLATION_ID
-        elif scenario == "exchange_failed":
-            h = make_harness(token_response={"error": "bad_verification_code"})
-            installation_id = OWNED_INSTALLATION_ID
-        else:
-            h = make_harness(client_secret="")
-            installation_id = OWNED_INSTALLATION_ID
-
-        response = h.callback(
-            installation_id=installation_id,
-            setup_action="install",
-            state=_signed_state(ATTACKER_ORG),
-            code="some-code",
-        )
-
-        assert response.status_code == 302
-        location = response.headers["location"]
-        assert location == f"https://app.test/settings/github?error={expected_error}"
-
-        body_and_logs = response.text + "\n" + location + "\n" + caplog.text
-        pem_body = "".join(rsa_private_key_pem.splitlines()[1:-1])[:64]
-        for secret in (FAKE_CLIENT_SECRET, FAKE_USER_TOKEN, MINTED_TOKEN, pem_body):
-            assert secret not in body_and_logs, "a secret value appeared in a response or log line"
-
-        # No exception detail / stack noise leaked to the user.
-        assert "Traceback" not in response.text
-        for noisy in ("httpx", "MockTransport", "asyncio"):
-            assert noisy not in location
-
-    def test_stored_token_is_encrypted_not_plaintext(self, make_harness) -> None:
-        """The minted installation token must never be persisted in the clear."""
-        from gateway.store.crypto import _decrypt
-
-        h = make_harness(installation_pages=[[{"id": OWNED_INSTALLATION_ID}]])
-
-        h.callback(
-            installation_id=OWNED_INSTALLATION_ID,
-            setup_action="install",
-            state=_signed_state("org_legit"),
-            code="legit-code",
-        )
-
-        enc = h.upserts[0]["access_token_enc"]
-        assert isinstance(enc, bytes)
-        assert MINTED_TOKEN.encode() not in enc
-        assert _decrypt(enc) == MINTED_TOKEN
-
-    def test_success_redirect_carries_no_token(self, make_harness) -> None:
-        h = make_harness(installation_pages=[[{"id": OWNED_INSTALLATION_ID}]])
-
-        response = h.callback(
-            installation_id=OWNED_INSTALLATION_ID,
-            setup_action="install",
-            state=_signed_state("org_legit"),
-            code="legit-code",
-        )
-
-        assert MINTED_TOKEN not in response.headers["location"]
-        assert MINTED_TOKEN not in response.text
-        assert FAKE_USER_TOKEN not in response.headers["location"]
-
-
-# Verify installation token permissions.
-# Verify installation token repository restrictions.
-#
-# Seeing an installation is not the same as being able to reach every repo in
-# it. A body-less POST to /access_tokens mints a token with the installation's
-# full permissions on ALL its repositories, discarding the user∩app
-# intersection GitHub's user-access-token model would enforce. The token must be
-# restricted to the repositories the authorizing user can actually access.
-# Verify installation token permissions.
-
-
-def _repo_page(ids) -> list[dict]:
-    return [{"id": i, "full_name": f"acme/repo-{i}", "private": True} for i in ids]
-
-
-class TestInstallationTokenRepositoryScoping:
-    def test_token_is_scoped_to_only_the_repos_the_user_can_access(self, make_harness) -> None:
-        """CORE REGRESSION TEST.
-
-        The installation contains repo A plus two siblings, but the authorizing
-        user can only reach A. The minted token must carry
-        ``repository_ids == [A]`` and must not mention the siblings.
-        """
-        h = make_harness(
-            installation_pages=[[{"id": OWNED_INSTALLATION_ID}]],
-            user_repo_pages=[_repo_page([USER_REPO_ID])],
-        )
-
-        response = h.callback(
-            installation_id=OWNED_INSTALLATION_ID,
-            setup_action="install",
-            state=_signed_state("org_legit"),
-            code="legit-code",
-        )
-
-        assert response.headers["location"] == "https://app.test/settings/github?installed=true"
-        assert len(h.http.mint_calls) == 1
-        body = h.http.mint_bodies[0]
-        assert body is not None, "the token mint POST had no body — the restriction was dropped"
-        assert body["repository_ids"] == [USER_REPO_ID]
-        for sibling in SIBLING_REPO_IDS:
-            assert sibling not in body["repository_ids"]
-        # ...and the scope is persisted so refresh can stay narrow.
-        assert h.upserts[0]["authorized_repository_ids"] == [USER_REPO_ID]
-
-    def test_mint_post_body_always_declares_repository_ids(self, make_harness) -> None:
-        """Guard: a future refactor that drops the body must fail the suite."""
-        h = make_harness(
-            installation_pages=[[{"id": OWNED_INSTALLATION_ID}]],
-            user_repo_pages=[_repo_page([USER_REPO_ID, *SIBLING_REPO_IDS])],
-        )
-
-        h.callback(
-            installation_id=OWNED_INSTALLATION_ID,
-            setup_action="install",
-            state=_signed_state("org_legit"),
-            code="legit-code",
-        )
-
-        (body,) = h.http.mint_bodies
-        assert isinstance(body, dict)
-        assert "repository_ids" in body
-        assert body["repository_ids"] == [USER_REPO_ID, *SIBLING_REPO_IDS]
-
-    def test_empty_user_repo_list_rejected_without_minting(self, make_harness) -> None:
-        """Verify refusal when a user cannot access any installation repository."""
-        h = make_harness(
-            installation_pages=[[{"id": OWNED_INSTALLATION_ID}]],
-            user_repo_pages=[[]],
-        )
-
-        response = h.callback(
-            installation_id=OWNED_INSTALLATION_ID,
-            setup_action="install",
-            state=_signed_state("org_legit"),
-            code="legit-code",
-        )
-
-        assert response.status_code == 302
-        assert response.headers["location"] == "https://app.test/settings/github?error=no_accessible_repositories"
-        assert h.http.mint_calls == [], "an unrestricted token was minted for a user with no accessible repos"
-        assert h.upserts == []
-
-    def test_per_installation_repositories_endpoint_is_paginated(self, make_harness) -> None:
-        first_page = _repo_page(range(6000, 6100))  # A full page continues pagination.
-        assert len(first_page) == 100
-        h = make_harness(
-            installation_pages=[[{"id": OWNED_INSTALLATION_ID}]],
-            user_repo_pages=[first_page, _repo_page([USER_REPO_ID])],
-        )
-
-        response = h.callback(
-            installation_id=OWNED_INSTALLATION_ID,
-            setup_action="install",
-            state=_signed_state("org_legit"),
-            code="legit-code",
-        )
-
-        assert response.headers["location"] == "https://app.test/settings/github?installed=true"
-        assert len(h.http.user_repo_calls) == 2, "second page of user repositories was never fetched"
-        body = h.http.mint_bodies[0]
-        assert len(body["repository_ids"]) == 101
-        assert USER_REPO_ID in body["repository_ids"], "page-2 repo missing from the token scope"
-
-    def test_user_repositories_call_uses_the_installation_specific_path(self, make_harness) -> None:
-        h = make_harness(installation_pages=[[{"id": OWNED_INSTALLATION_ID}]])
-
-        h.callback(
-            installation_id=OWNED_INSTALLATION_ID,
-            setup_action="install",
-            state=_signed_state("org_legit"),
-            code="legit-code",
-        )
-
-        assert h.http.user_repo_calls == [
-            f"api.github.com/user/installations/{OWNED_INSTALLATION_ID}/repositories"
-        ]
-
-    def test_user_repositories_error_rejects_without_minting(self, make_harness) -> None:
-        h = make_harness(installation_pages=[[{"id": OWNED_INSTALLATION_ID}]], user_repos_status=403)
-
-        response = h.callback(
-            installation_id=OWNED_INSTALLATION_ID,
-            setup_action="install",
-            state=_signed_state("org_legit"),
-            code="legit-code",
-        )
-
-        assert response.status_code == 302
-        assert response.headers["location"] == "https://app.test/settings/github?error=oauth_verification_failed"
-        assert h.http.mint_calls == []
-        assert h.upserts == []
-
-    def test_foreign_installation_never_reaches_the_repo_enumeration(self, make_harness) -> None:
-        """Verify that installation ownership is checked before repository access."""
-        h = make_harness(installation_pages=[[{"id": OWNED_INSTALLATION_ID}]])
-
-        h.callback(
-            installation_id=VICTIM_INSTALLATION_ID,
-            setup_action="install",
-            state=_signed_state(ATTACKER_ORG),
-            code="attacker-code",
-        )
-
-        assert h.http.user_repo_calls == []
-        assert h.http.mint_calls == []
-
-    def test_local_mode_mints_installation_wide_token_by_design(self, make_harness) -> None:
-        """Local/single-tenant: no user token exists, so no intersection to take.
-
-        Documented, explicit exception. it goes through
-        ``create_unrestricted_installation_token`` and sends no body.
-        """
-        h = make_harness(cloud=False)
-
         response = h.callback(installation_id=OWNED_INSTALLATION_ID, setup_action="install")
-
         assert response.headers["location"] == "https://app.test/settings/github?installed=true"
-        assert h.http.user_repo_calls == []
-        assert h.http.mint_bodies == [None]
-        assert h.upserts[0]["authorized_repository_ids"] is None
-
-
-class TestCreateInstallationTokenContract:
-    async def test_empty_repository_ids_raises_rather_than_minting_wide(self) -> None:
-        from gateway.github_client import create_installation_token
-
-        for bad in ([], None):
-            with pytest.raises(ValueError, match="non-empty repository_ids"):
-                await create_installation_token("jwt", 1, repository_ids=bad)
-
-    async def test_repository_ids_is_keyword_only_and_required(self) -> None:
-        import inspect
-
-        from gateway.github_client import create_installation_token
-
-        sig = inspect.signature(create_installation_token)
-        param = sig.parameters["repository_ids"]
-        assert param.kind is inspect.Parameter.KEYWORD_ONLY
-        assert param.default is inspect.Parameter.empty
-
-
-class TestTokenRefreshKeepsRepositoryScope:
-    """The refresh path must not widen a scoped token an hour after install."""
-
-    @staticmethod
-    def _row(**kw):
-        from gateway.db.models import GatewayGitHubInstallation
-
-        defaults = {
-            "id": "inst-row-1",
-            "org_id": "org_legit",
-            "github_installation_id": OWNED_INSTALLATION_ID,
-            "github_account_login": "acme",
-            "github_account_type": "Organization",
-            "access_token_enc": b"enc",
-            "token_expires_at": 0.0,  # An expired token requires a refresh.
-            "authorized_repository_ids": None,
-            "status": "active",
-            "created_at": 0.0,
-            "updated_at": 0.0,
-        }
-        defaults.update(kw)
-        return GatewayGitHubInstallation(**defaults)
-
-    @staticmethod
-    def _session(linked_repo_ids: list[int]):
-        class _Scalars:
-            def __init__(self, values):
-                self._values = values
-
-            def all(self):
-                return list(self._values)
-
-        class _Result:
-            def __init__(self, values):
-                self._values = values
-
-            def scalars(self):
-                return _Scalars(self._values)
-
-        class _Session:
-            async def execute(self, *_args, **_kw):
-                return _Result(linked_repo_ids)
-
-            async def commit(self):
-                return None
-
-        return _Session()
-
-    @pytest.fixture(autouse=True)
-    def _patch_crypto_and_jwt(self, monkeypatch: pytest.MonkeyPatch):
-        from gateway import github_client
-        from gateway.store import crypto as store_crypto
-
-        monkeypatch.setattr(store_crypto, "_decrypt_with_migration", lambda b: ("stale-token", False))
-        monkeypatch.setattr(store_crypto, "_encrypt", lambda v: b"enc")
-        monkeypatch.setattr(github_client, "generate_app_jwt", lambda app_id, key: "fake-jwt")
-
-        self.restricted: list[list[int]] = []
-        self.unrestricted: list[int] = []
-
-        async def spy_restricted(app_jwt, installation_id, *, repository_ids):
-            self.restricted.append(list(repository_ids))
-            return {"token": MINTED_TOKEN, "expires_at": "2099-01-01T00:00:00Z"}
-
-        async def spy_unrestricted(app_jwt, installation_id):
-            self.unrestricted.append(installation_id)
-            return {"token": MINTED_TOKEN, "expires_at": "2099-01-01T00:00:00Z"}
-
-        monkeypatch.setattr(github_client, "create_installation_token", spy_restricted)
-        monkeypatch.setattr(github_client, "create_unrestricted_installation_token", spy_unrestricted)
-        yield
-
-    async def test_refresh_reuses_stored_authorized_repository_ids(self, monkeypatch) -> None:
-        from gateway.store import github as gh_store
-
-        monkeypatch.setenv("SP_DEPLOYMENT_MODE", "cloud")
-        row = self._row(authorized_repository_ids=[USER_REPO_ID])
-
-        token = await gh_store.get_valid_token(self._session([*SIBLING_REPO_IDS]), row)
-
-        assert token == MINTED_TOKEN
-        assert self.restricted == [[USER_REPO_ID]], "refresh did not reuse the stored repository scope"
-        assert self.unrestricted == []
-
-    async def test_null_scope_row_infers_nothing_from_linked_repos(self) -> None:
-        """Verify that linked projects do not define a missing authorization set.
-
-        An installation without an authorization set must reconnect.
-        """
-        from gateway.store import github as gh_store
-
-        row = self._row(authorized_repository_ids=None)
-
-        scope = await gh_store._refresh_repository_scope(self._session([USER_REPO_ID]), row)
-
-        assert scope is None, "refresh inferred a repository scope from linked projects"
-
-    async def test_stored_scope_row_returns_exactly_the_stored_ids(self) -> None:
-        from gateway.store import github as gh_store
-
-        row = self._row(authorized_repository_ids=[USER_REPO_ID])
-
-    # Use only the authorization set captured during installation.
-        scope = await gh_store._refresh_repository_scope(self._session([*SIBLING_REPO_IDS]), row)
-
-        assert scope == [USER_REPO_ID]
-
-    async def test_legacy_row_with_no_scope_refuses_in_cloud_mode(self, monkeypatch) -> None:
-        from gateway.store import github as gh_store
-
-        monkeypatch.setenv("SP_DEPLOYMENT_MODE", "cloud")
-        row = self._row(authorized_repository_ids=None)
-
-        with pytest.raises(ValueError, match="no repository scope is recorded"):
-            await gh_store.get_valid_token(self._session([]), row)
-
-        assert self.restricted == []
-        assert self.unrestricted == [], "cloud mode fell back to an installation-wide token"
-
-    async def test_local_mode_refresh_may_be_installation_wide(self, monkeypatch) -> None:
-        from gateway.store import github as gh_store
-
-        monkeypatch.setenv("SP_DEPLOYMENT_MODE", "local")
-        row = self._row(authorized_repository_ids=None)
-
-        await gh_store.get_valid_token(self._session([]), row)
-
-        assert self.unrestricted == [OWNED_INSTALLATION_ID]
-        assert self.restricted == []
-
-    async def test_unexpired_token_is_returned_without_minting(self, monkeypatch) -> None:
-        import time as _time
-
-        from gateway.store import github as gh_store
-
-        monkeypatch.setenv("SP_DEPLOYMENT_MODE", "cloud")
-        row = self._row(token_expires_at=_time.time() + 3600)
-
-        token = await gh_store.get_valid_token(self._session([]), row)
-
-        assert token == "stale-token"
-        assert self.restricted == []
-        assert self.unrestricted == []
-
-
-class TestLegacyLocalModeInstallRedirectRemoved:
-    """Verify that GET /auth/github does not provide an installation redirect.
-
-    GET /api/github/install-url provides the authenticated installation URL.
-    Only the OAuth callback uses the /auth/github path.
-    """
-
-    def _paths(self) -> set[str]:
-        return {route.path for route in github.router.routes}
-
-    def test_install_url_and_callback_are_registered(self) -> None:
-        paths = self._paths()
-        assert "/api/github/install-url" in paths
-        assert "/auth/github/callback" in paths
-
-    def test_legacy_redirect_route_is_not_registered(self) -> None:
-        assert "/auth/github" not in self._paths()
-
-    def test_legacy_redirect_returns_404(self, monkeypatch) -> None:
-        client = _client(monkeypatch)
-
-        assert client.get("/auth/github", follow_redirects=False).status_code == 404
+        assert [r.org_id for r in h.rows()] == ["local"]
+        # Scoped token still preferred when repositories exist.
+        assert h.http.mint_bodies == [None, {"repository_ids": list(REPO_IDS)}]

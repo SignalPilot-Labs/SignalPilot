@@ -110,6 +110,17 @@ __all__ = [
 _DONE = object()
 
 
+def _error_text(exc: BaseException, *, operation: str) -> str:
+    """``<ExceptionType> during <operation>[: message]``, never the repr.
+
+    The full traceback still travels in ``full_trace``; only the content
+    shown as the reply must stay a plain sentence.
+    """
+    text = f"{type(exc).__name__} during {operation}"
+    message = str(exc).strip()
+    return f"{text}: {message}" if message else text
+
+
 def _run_agent_in_thread(
     agent_state: _ActiveAgent,
     message: str,
@@ -200,7 +211,7 @@ def _run_agent_in_thread(
             event_queue.put(
                 AgentEvent(
                     type="error",
-                    content=str(e) if str(e) else repr(e),
+                    content=_error_text(e, operation="agent run"),
                     full_trace=full_error,
                     diagnostic_context={"error_type": type(e).__name__},
                     is_error=True,
@@ -225,7 +236,7 @@ def _run_agent_in_thread(
         event_queue.put(
             AgentEvent(
                 type="error",
-                content=str(e) if str(e) else repr(e),
+                content=_error_text(e, operation="agent thread"),
                 full_trace=tb,
                 diagnostic_context={"error_type": type(e).__name__},
                 is_error=True,
@@ -261,7 +272,13 @@ def stop_agent(session_id: str) -> bool:
 
 
 async def steer_agent(session_id: str, message: str, steering_id: str) -> bool:
-    """Queue a user message on a live SDK client without interrupting it."""
+    """Queue a user message on a live SDK client without interrupting it.
+
+    The pending-turn counter is incremented BEFORE the query is sent, under
+    the agent's steering lock. The relay loop reads the counter under the
+    same lock when a ResultMessage arrives, so an accepted steering message
+    can never land on a client the relay has already decided to close.
+    """
     agent = _active_agents.get(session_id)
     if (
         agent is None
@@ -272,18 +289,25 @@ async def steer_agent(session_id: str, message: str, steering_id: str) -> bool:
         or agent.task.done()
     ):
         return False
-    if steering_id in agent.accepted_steering_ids:
-        return True
-    agent.accepted_steering_ids.add(steering_id)
+    with agent.steering_lock:
+        if steering_id in agent.accepted_steering_ids:
+            return True
+        if agent.closing:
+            return False
+        agent.accepted_steering_ids.add(steering_id)
+        agent.pending_steering_turns += 1
     future = asyncio.run_coroutine_threadsafe(
         agent.client.query(message),
         agent.loop,
     )
     try:
         await asyncio.wrap_future(future)
-        agent.pending_steering_turns += 1
     except Exception:
-        agent.accepted_steering_ids.discard(steering_id)
+        with agent.steering_lock:
+            agent.accepted_steering_ids.discard(steering_id)
+            agent.pending_steering_turns = max(
+                0, agent.pending_steering_turns - 1
+            )
         raise
     LOGGER.info("Queued steering message for session %s", session_id)
     return True
@@ -360,6 +384,16 @@ async def run_notebook_agent(
     )
 
     agent = _ActiveAgent()
+    if _active_agents.get(str(session_id)) is not None:
+        # A previous attempt for this session is still live (a re-executed
+        # chat run). Stop it before taking the slot: two agents for one
+        # session id would share kernels and scratch.
+        LOGGER.warning(
+            "Stopping the previous active agent for session %s before "
+            "starting a new one",
+            session_id,
+        )
+        stop_agent(str(session_id))
     _active_agents[str(session_id)] = agent
 
     thread = threading.Thread(
@@ -400,4 +434,7 @@ async def run_notebook_agent(
             if isinstance(event, AgentEvent):
                 yield event
     finally:
-        _active_agents.pop(str(session_id), None)
+        # Only release the slot this agent still owns: a superseding
+        # attempt may have registered a newer agent under the same id.
+        if _active_agents.get(str(session_id)) is agent:
+            _active_agents.pop(str(session_id), None)

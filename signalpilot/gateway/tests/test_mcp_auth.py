@@ -400,6 +400,7 @@ class TestMCPAuthMiddleware:
 
         async def capturing_app(scope_arg, receive, send):
             captured_scope.update(scope_arg)
+            assert mcp_org_id_var.get() == "local"
             await send({"type": "http.response.start", "status": 200, "headers": []})
             await send({"type": "http.response.body", "body": b"{}", "more_body": False})
 
@@ -433,5 +434,3 @@ class TestMCPAuthMiddleware:
         # The clamped org_id must be "local", not the stale cloud value
         auth = captured_scope.get("state", {}).get("auth", {})
         assert auth.get("org_id") == "local", f"Expected org_id='local' (clamped) but got '{auth.get('org_id')}'"
-        # mcp_org_id_var must also be "local"
-        assert mcp_org_id_var.get() == "local"

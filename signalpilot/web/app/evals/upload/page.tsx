@@ -10,7 +10,9 @@
  */
 
 import { useCallback, useRef, useState } from "react";
+import Link from "next/link";
 import {
+  ArrowLeft,
   CheckCircle2,
   FileArchive,
   Lock,
@@ -19,6 +21,8 @@ import {
 } from "lucide-react";
 import { uploadEval, type EvalUploadResult } from "~/lib/api";
 import { PageHeader } from "~/components/ui/page-header";
+import { usePermissions } from "~/lib/hooks/use-permissions";
+import { ReadOnlyNote } from "~/components/access/read-only-note";
 
 const MAX_MB = 8192;
 const MAX_LABEL = MAX_MB >= 1024 ? `${MAX_MB / 1024} GB` : `${MAX_MB} MB`;
@@ -44,6 +48,35 @@ function validate(file: File): string | null {
 }
 
 export default function EvalUploadPage() {
+  const { can } = usePermissions();
+  // Uploading an eval set is an admin action (`evals.run`); a member gets a
+  // short read-only notice and a way back to the results.
+  if (!can("evals.run")) return <EvalUploadMemberNotice />;
+  return <EvalUploadForm />;
+}
+
+function EvalUploadMemberNotice() {
+  return (
+    <div className="min-h-screen p-8 animate-fade-in">
+      <PageHeader
+        title="eval upload"
+        subtitle="share"
+        description="send your eval materials to the SignalPilot team"
+      />
+      <div className="max-w-xl mx-auto mt-8 space-y-4" data-testid="eval-upload-member">
+        <ReadOnlyNote block>only org admins upload eval sets</ReadOnlyNote>
+        <Link
+          href="/evals"
+          className="inline-flex items-center gap-2 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+        >
+          <ArrowLeft className="w-3.5 h-3.5" strokeWidth={1.5} /> back to evals
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+function EvalUploadForm() {
   const [phase, setPhase] = useState<Phase>({ state: "ready" });
   const [file, setFile] = useState<File | null>(null);
   const [notes, setNotes] = useState("");

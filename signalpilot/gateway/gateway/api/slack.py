@@ -135,7 +135,7 @@ def _allowed_redirect_origins() -> set[str]:
 
 
 def _is_safe_redirect_target(target: str) -> bool:
-    if not target or target.startswith(("//", "\\")):
+    if not target or target.startswith("//") or "\\" in target:
         return False
     parsed = urlparse(target)
     if not parsed.scheme and not parsed.netloc:

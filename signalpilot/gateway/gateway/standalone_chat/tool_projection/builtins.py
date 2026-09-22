@@ -48,8 +48,10 @@ _GREP_COUNT_RE = re.compile(r"^Found (\d+) (?:files?|matches?|lines?)", re.MULTI
 def project_too_large(content: str, *, tool: str) -> ProjectedResult | None:
     """Recognise the runtime's "result too large, saved to file" notice.
 
-    The agent still reads the saved file, so this is not an error; the card
-    just cannot show the rows. Returns None when the notice is absent.
+    The tool call did not deliver its result to the model, so it counts as
+    a failure (``error=True``) even though the SDK reports success; the
+    agent usually narrows the call instead of reading the spilled file.
+    Returns None when the notice is absent.
     """
     match = _TOO_LARGE_RE.search(content or "")
     if not match:
@@ -65,6 +67,7 @@ def project_too_large(content: str, *, tool: str) -> ProjectedResult | None:
         "result_chars_reported": chars,
         "saved_path": match.group(2),
     }
+    projected.error = True
     return projected
 
 

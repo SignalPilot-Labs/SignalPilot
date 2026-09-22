@@ -189,12 +189,12 @@ async def test_rejects_a_finished_run_and_a_foreign_project(db_session, enabled,
 
 
 @pytest.mark.asyncio
-async def test_disabled_feature_hides_the_route(db_session, storage, monkeypatch):
+async def test_kill_switch_off_answers_503(db_session, storage, monkeypatch):
     monkeypatch.setenv("SP_FEATURE_STANDALONE_CHAT", "0")
     run = await _running_run(db_session)
     with pytest.raises(HTTPException) as exc:
         await _post(db_session, run, "artifacts/x.png", PNG)
-    assert exc.value.status_code == 404
+    assert exc.value.status_code == 503
 
 
 # ── Path rules ───────────────────────────────────────────────────────────────
@@ -299,6 +299,8 @@ def test_classify_downgrades_fake_images_and_keeps_text_kinds():
     assert routes.classify("rows.csv", b"a,b\n") == ("data", "text/csv")
     assert routes.classify("report.html", b"<html>") == ("html", "text/html")
     assert routes.classify("notes.md", b"# hi") == ("markdown", "text/markdown")
+    assert routes.classify("revenue.dashboard.json", b"{}") == ("dashboard", "application/vnd.signalpilot.dashboard+json")
+    assert routes.classify("rows.json", b"{}") == ("code", "application/json")
     assert routes.classify("blob", b"\x00\x01")[0] == "other"
 
 

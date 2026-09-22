@@ -34,70 +34,196 @@ export interface MeResponse {
   image_url: string | null;
 }
 
+export type SubscriptionTier = "free" | "team" | "scale" | "enterprise";
+
+/** A plan price term. "year" is the published term, "quarter" the three-month option; "month" survives on older subscriptions. */
+export type BillingInterval = "month" | "quarter" | "year";
+
+/** The full entitlement row from `GET /api/v1/billing/subscription`. */
 export interface SubscriptionResponse {
-  plan_tier: string;
+  plan_tier: SubscriptionTier;
   status: string;
+  /** The backend has already applied the billable rule (status, tier, grace). */
+  is_billable: boolean;
   stripe_subscription_id: string | null;
   current_period_end: string | null;
-  max_api_keys: number;
+  billing_interval: BillingInterval;
+  included_seats: number;
+  included_models: number;
+  included_eval_runs: number;
+  included_credits: number;
+  managed: boolean;
+  enterprise_flags: Record<string, unknown>;
+  contract: Record<string, unknown> | null;
+  grace_until: string | null;
   pending_downgrade_to: string | null;
   pending_downgrade_date: string | null;
   cancel_at_period_end: boolean;
   cancel_date: string | null;
 }
 
+export type PaidTier = "team" | "scale" | "enterprise";
+
 export interface PlanPrice {
   price_id: string;
-  amount: number; // cents
+  lookup_key: string | null;
+  amount: number; // cents, for the whole term
   currency: string;
-  interval: "month" | "year";
+  interval: BillingInterval;
+  /** Months one payment covers (1, 3 or 12). */
+  months: number;
 }
 
+/**
+ * One plan from `GET /api/v1/billing/plans`, exactly as Stripe publishes it:
+ * fees from prices, allowances and the seat rate from the product's metadata.
+ * There is no local copy of these numbers; Stripe is the source of truth.
+ */
 export interface PlanInfo {
-  tier: string;
+  tier: PaidTier;
   name: string;
   description: string;
-  features: string[];
-  highlight_color: string;
+  rank: number;
+  /** Sales-led: no self-serve price; allowances are the contract's starting point. */
+  custom: boolean;
+  /** Fee per month at the published (yearly) term; null for a custom plan. */
+  monthly_fee_cents: number | null;
+  included_seats: number;
+  included_models: number;
+  included_eval_runs: number;
+  included_credits: number;
+  /** Credits per added seat-month; null when seats are priced in the contract. */
+  seat_month_credits: number | null;
+  managed_from_cents: number | null;
+  recommended_from_seats: number | null;
+  recommended_from_models: number | null;
   prices: PlanPrice[];
+}
+
+/** The per-use credit rate card as the backend reads it from Stripe. */
+export interface RateCard {
+  credit_cents: number;
+  thread_credits: number;
+  query_credits: number;
+  model_month_credits: number;
+  eval_run_credits: number;
+  token_credits_per_dollar: number;
+  overage_cents_per_credit: number;
+  version: string | null;
 }
 
 export interface PlansResponse {
   plans: PlanInfo[];
+  rates: RateCard;
   publishable_key: string;
 }
 
-export interface UsageSummaryResponse {
-  total_requests: number;
-  total_requests_today: number;
-  total_requests_7d: number;
-  total_requests_30d: number;
-  daily_limit: number;
-  daily_used: number;
-  daily_reset_at: string;
-  active_keys: number;
-  last_activity_at: string | null;
+export interface CheckoutResponse {
+  checkout_url: string | null;
+  /** "checkout" redirects to Stripe; "updated" changed the plan in place. */
+  action: "checkout" | "updated";
 }
 
+export interface ProrationPreviewResponse {
+  amount_due: number; // cents; positive = charge, negative = credit
+  currency: string;
+  credit: number;
+  new_charge: number;
+  immediate: boolean;
+  effective_date: string | null;
+}
+
+export interface AllowanceUse {
+  used: number;
+  included: number;
+}
+
+/** Credits consumed for one unit this period, with the metered quantity behind them. */
+export interface UnitConsumption {
+  credits: number;
+  quantity: number;
+  rows: number;
+}
+
+/** `GET /api/v1/usage/summary`: the open period read from the credit ledger. */
+export interface UsageSummaryResponse {
+  period_start: string;
+  period_end: string;
+  plan_tier: SubscriptionTier;
+  is_billable: boolean;
+  included_credits: number;
+  granted: number;
+  purchased: number;
+  consumed: number;
+  consumed_by_unit: Record<string, UnitConsumption>;
+  returned: number;
+  expired: number;
+  available: number;
+  overage: number;
+  overage_cents: number;
+  allowances: {
+    seats: AllowanceUse;
+    models: AllowanceUse;
+    eval_runs: AllowanceUse;
+  };
+}
+
+/** One UTC day of consumption from `GET /api/v1/usage/daily`. */
 export interface DailyUsagePoint {
-  date: string;
-  requests: number;
+  date: string; // YYYY-MM-DD
+  credits: number;
+  by_unit: Record<string, number>;
 }
 
 export interface DailyUsageResponse {
   points: DailyUsagePoint[];
 }
 
-export interface KeyUsageEntry {
-  key_id: string;
-  key_name: string;
-  total_requests: number;
-  last_7d: number;
-  last_used_at: string | null;
+/**
+ * One user's consumption in a period, from `GET /api/v1/usage/by-user` and
+ * `GET /api/v1/usage/me`. `user_id` is null for unattributed rows, which the
+ * backend labels "System / scheduled".
+ */
+export interface UsageByUserRow {
+  user_id: string | null;
+  name: string | null;
+  email: string | null;
+  credits_consumed: number;
+  threads: number;
+  queries: number;
+  tokens_in: number;
+  tokens_out: number;
+  tokens_cache_read: number;
+  token_credits: number;
 }
 
-export interface KeyUsageByKeyResponse {
-  keys: KeyUsageEntry[];
+/** `GET /api/v1/usage/by-user?period=YYYY-MM-01` (admin only). */
+export interface UsageByUserResponse {
+  period_start: string;
+  period_end: string;
+  rows: UsageByUserRow[];
+}
+
+/**
+ * `GET /api/v1/usage/me?period=`: the caller's own row in the same shape,
+ * with no org totals. Some backends return the row inline, others under
+ * `rows`; `usageMeRow()` reads both.
+ */
+export interface UsageMeResponse {
+  period_start: string;
+  period_end: string;
+  rows?: UsageByUserRow[];
+  row?: UsageByUserRow | null;
+}
+
+/** The caller's row out of a `usage/me` answer, or null when nothing was consumed. */
+export function usageMeRow(data: UsageMeResponse | null | undefined): UsageByUserRow | null {
+  if (!data) return null;
+  if (data.row) return data.row;
+  if (Array.isArray(data.rows) && data.rows.length > 0) return data.rows[0];
+  const inline = data as Partial<UsageByUserRow>;
+  if (typeof inline.credits_consumed === "number") return inline as UsageByUserRow;
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -216,26 +342,26 @@ export interface BackendClient {
   createApiKey(name: string, scopes: string[]): Promise<ApiKeyCreatedResponse>;
   deleteApiKey(keyId: string): Promise<void>;
   getPlans(): Promise<PlansResponse>;
-  previewProration(priceId: string): Promise<{
-    amount_due: number;
-    currency: string;
-    credit: number;
-    new_charge: number;
-    immediate: boolean;
-    effective_date: string | null;
-  }>;
+  previewProration(priceId: string): Promise<ProrationPreviewResponse>;
   getSubscription(): Promise<SubscriptionResponse>;
   createCheckoutSession(
     priceId: string,
     successUrl: string,
     cancelUrl: string,
-  ): Promise<{ checkout_url: string | null; action: "checkout" | "updated" }>;
+  ): Promise<CheckoutResponse>;
   createPortalSession(returnUrl: string): Promise<{ portal_url: string }>;
   cancelSubscription(): Promise<{ status: string; cancel_date: string | null }>;
   reactivateSubscription(): Promise<{ status: string }>;
   getUsageSummary(): Promise<UsageSummaryResponse>;
   getUsageDaily(days?: number): Promise<DailyUsageResponse>;
-  getUsageByKey(): Promise<KeyUsageByKeyResponse>;
+  /** Admin only. `period` is the first day of the month, YYYY-MM-01; omitted = open period. */
+  getUsageByUser(period?: string): Promise<UsageByUserResponse>;
+  /** Any member: their own consumption for the period. */
+  getUsageMe(period?: string): Promise<UsageMeResponse>;
+}
+
+function periodQuery(period?: string): string {
+  return period ? `?period=${encodeURIComponent(period)}` : "";
 }
 
 /**
@@ -265,18 +391,16 @@ export function useBackendClient(): BackendClient {
       backendFetch<PlansResponse>("/api/v1/billing/plans", getToken),
 
     previewProration: (priceId: string) =>
-      backendFetch<{ amount_due: number; currency: string; credit: number; new_charge: number; immediate: boolean; effective_date: string | null }>(
-        "/api/v1/billing/preview-proration", getToken, {
-          method: "POST",
-          body: JSON.stringify({ price_id: priceId }),
-        },
-      ),
+      backendFetch<ProrationPreviewResponse>("/api/v1/billing/preview-proration", getToken, {
+        method: "POST",
+        body: JSON.stringify({ price_id: priceId }),
+      }),
 
     getSubscription: () =>
       backendFetch<SubscriptionResponse>("/api/v1/billing/subscription", getToken),
 
     createCheckoutSession: (priceId: string, successUrl: string, cancelUrl: string) =>
-      backendFetch<{ checkout_url: string | null; action: "checkout" | "updated" }>("/api/v1/billing/checkout", getToken, {
+      backendFetch<CheckoutResponse>("/api/v1/billing/checkout", getToken, {
         method: "POST",
         body: JSON.stringify({
           price_id: priceId,
@@ -307,7 +431,11 @@ export function useBackendClient(): BackendClient {
     getUsageDaily: (days = 30) =>
       backendFetch<DailyUsageResponse>(`/api/v1/usage/daily?days=${days}`, getToken),
 
-    getUsageByKey: () =>
-      backendFetch<KeyUsageByKeyResponse>("/api/v1/usage/by-key", getToken),
+    getUsageByUser: (period?: string) =>
+      backendFetch<UsageByUserResponse>(`/api/v1/usage/by-user${periodQuery(period)}`, getToken),
+
+    getUsageMe: (period?: string) =>
+      backendFetch<UsageMeResponse>(`/api/v1/usage/me${periodQuery(period)}`, getToken),
+
   }), [getToken]);
 }

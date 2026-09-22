@@ -2,6 +2,7 @@
 
 import {
   AlertCircle,
+  TriangleAlert,
   Check,
   ChevronRight,
   Database,
@@ -11,7 +12,6 @@ import {
   FileSearch,
   Globe,
   ListTodo,
-  LayoutDashboard,
   NotebookPen,
   Play,
   ShieldCheck,
@@ -25,6 +25,10 @@ import {
   type RunStep,
   type RunStepCategory,
 } from "~/lib/chat-run-steps";
+import {
+  FAILED_TONE_CLASS,
+  FailedBadge,
+} from "~/components/chat/tool-cards/card-primitives";
 import { resolveToolCard } from "~/components/chat/tool-cards/registry";
 import { ToolCard } from "~/components/chat/tool-cards/tool-card";
 import { StepBody, stepHasBody } from "./step-body";
@@ -67,7 +71,6 @@ export const CATEGORY_ICONS: Partial<Record<RunStepCategory, typeof Database>> =
   web: Globe,
   source: Waypoints,
   artifact: Table2,
-  dashboard: LayoutDashboard,
   dbt: Waypoints,
   plan: Waypoints,
   approval: ShieldCheck,
@@ -102,8 +105,11 @@ export function StatusDot({ status }: { status: RunStep["status"] }) {
   }
   if (status === "failed") {
     return (
-      <span className="relative z-10 flex h-[18px] w-[18px] flex-none items-center justify-center rounded-full border border-[var(--color-error)]/40 bg-[var(--color-bg)]">
-        <AlertCircle className="h-3 w-3 text-[var(--color-error)]" />
+      <span
+        data-testid="chat-step-status-failed"
+        className="relative z-10 flex h-[18px] w-[18px] flex-none items-center justify-center rounded-full border border-[var(--color-border)] bg-[var(--color-bg)]"
+      >
+        <TriangleAlert className={`h-3 w-3 ${FAILED_TONE_CLASS}`} aria-label="Failed" />
       </span>
     );
   }
@@ -178,13 +184,12 @@ const LegacyStepRow = memo(function LegacyStepRow({ step }: { step: RunStep }) {
               className={`flex-none ${
                 step.status === "running"
                   ? "chat-live-label font-medium"
-                  : step.status === "failed"
-                    ? "text-[var(--color-error)]"
-                    : "text-[var(--color-text)]"
+                  : "text-[var(--color-text)]"
               }`}
             >
               {step.title}
             </span>
+            {step.status === "failed" && <FailedBadge />}
             {preview && (
               <span className="min-w-0 truncate font-mono text-[11px] text-[var(--color-text-dim)]">
                 {preview}
@@ -207,7 +212,7 @@ const LegacyStepRow = memo(function LegacyStepRow({ step }: { step: RunStep }) {
             </span>
           </button>
           {step.status === "failed" && step.detail && (
-            <p className="mt-1 pl-6 text-[11px] leading-4 text-[var(--color-error)]/90">
+            <p className="mt-1 pl-6 text-[11px] leading-4 text-[var(--color-text-muted)]">
               {step.detail}
             </p>
           )}

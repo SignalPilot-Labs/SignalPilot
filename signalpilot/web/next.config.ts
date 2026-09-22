@@ -8,15 +8,9 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   output: process.env.VERCEL ? undefined : "standalone",
   poweredByHeader: false,
-  async redirects() {
-    return [
-      {
-        source: "/dashboards/new",
-        destination: "/chats",
-        permanent: false,
-      },
-    ];
-  },
+  // next/image is not used. Disabling the optimizer keeps the self-hosted
+  // standalone server from exposing /_next/image (image-processing CVEs).
+  images: { unoptimized: true },
   serverExternalPackages: [
     "@tailwindcss/oxide",
     "lightningcss",

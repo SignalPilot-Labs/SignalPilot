@@ -40,10 +40,15 @@ let phraseSeed = 0;
 /**
  * Cycles through THINKING_PHRASES, starting from a different phrase each
  * mount so several indicators in one transcript don't move in lockstep.
+ *
+ * The first render always shows the first phrase: the server and the client
+ * must paint the same text or React discards the server tree on hydration.
+ * The per-mount offset is applied in an effect, on the client only.
  */
 function useCyclingPhrase(): string {
-  const [index, setIndex] = useState(() => phraseSeed++ % THINKING_PHRASES.length);
+  const [index, setIndex] = useState(0);
   useEffect(() => {
+    setIndex(phraseSeed++ % THINKING_PHRASES.length);
     const id = window.setInterval(
       () => setIndex((i) => (i + 1) % THINKING_PHRASES.length),
       PHRASE_INTERVAL_MS,

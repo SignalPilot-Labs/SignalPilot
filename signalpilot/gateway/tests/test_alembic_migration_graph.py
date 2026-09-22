@@ -35,7 +35,55 @@ def test_real_migration_chain_is_the_tracked_head() -> None:
     config = build_alembic_config("postgresql://unused:unused@localhost/unused")
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_current_head() == "0026"
+    assert scripts.get_current_head() == "0037"
+
+    # 0036 links the dbt project repository and branch to the eval configuration.
+    revision_0036 = scripts.get_revision("0036")
+    assert revision_0036 is not None
+    assert revision_0036.down_revision == "0035"
+
+    # 0035 records chat agent branch pushes on the pull request rows.
+    revision_0035 = scripts.get_revision("0035")
+    assert revision_0035 is not None
+    assert revision_0035.down_revision == "0034"
+
+    # 0034 adds agent pull requests and the installation repository list.
+    revision_0034 = scripts.get_revision("0034")
+    assert revision_0034 is not None
+    assert revision_0034.down_revision == "0033"
+
+    # 0033 (xata branch owners) and 0032 (credit billing) come from origin/staging.
+    revision_0033 = scripts.get_revision("0033")
+    assert revision_0033 is not None
+    assert revision_0033.down_revision == "0032"
+    revision_0032 = scripts.get_revision("0032")
+    assert revision_0032 is not None
+    assert revision_0032.down_revision == "0031"
+
+    # 0031 adds single-use private artifact download grants.
+    revision_0031 = scripts.get_revision("0031")
+    assert revision_0031 is not None
+    assert revision_0031.down_revision == "0030"
+
+    # 0030 adds durable MCP agent jobs after the dashboard changes.
+    revision_0030 = scripts.get_revision("0030")
+    assert revision_0030 is not None
+    assert revision_0030.down_revision == "0029"
+
+    # 0029 drops the dashboard share token (link visibility removed).
+    revision_0029 = scripts.get_revision("0029")
+    assert revision_0029 is not None
+    assert revision_0029.down_revision == "0028"
+
+    # 0028 adds the published dashboard gallery tables on top of the drop.
+    revision_0028 = scripts.get_revision("0028")
+    assert revision_0028 is not None
+    assert revision_0028.down_revision == "0027"
+
+    # 0027 drops the governed dashboard tables (0012, 0020, 0021, 0025).
+    revision_0027 = scripts.get_revision("0027")
+    assert revision_0027 is not None
+    assert revision_0027.down_revision == "0026"
 
     revision_0026 = scripts.get_revision("0026")
     assert revision_0026 is not None

@@ -170,6 +170,17 @@ async def evaluate_project_readiness(
                 files, head = _project_tree(project.id, branch)
         except Exception:
             pass
+    if head:
+        # Fresh-on-demand pull: the push webhook is the fast path, but a lost
+        # delivery must never leave a chat on a stale branch. Bounded to one
+        # fetch per project/branch per minute; failures keep the current head.
+        from gateway.git.sync import fetch_if_stale
+
+        try:
+            if await fetch_if_stale(db, org_id=org_id, project_id=project.id, branch=branch):
+                files, head = _project_tree(project.id, branch)
+        except Exception:
+            pass
     if not head:
         return ProjectReadiness(
             False,

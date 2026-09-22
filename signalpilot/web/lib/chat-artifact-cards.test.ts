@@ -291,6 +291,8 @@ describe("helpers", () => {
     expect(guessKindFromPath("a/notes.md")).toBe("markdown");
     expect(guessKindFromPath("a/calc.py")).toBe("code");
     expect(guessKindFromPath("a/book.ipynb")).toBe("notebook");
+    expect(guessKindFromPath("artifacts/revenue.dashboard.json")).toBe("dashboard");
+    expect(guessKindFromPath("artifacts/rows.json")).toBe("data");
     expect(guessKindFromPath("a/blob.bin")).toBe("other");
     expect(guessKindFromPath("a/noext")).toBe("other");
   });
@@ -304,6 +306,7 @@ describe("helpers", () => {
     expect(cardKindLabel("code", "calc.py")).toBe("Script");
     expect(cardKindLabel("image", "chart.png")).toBe("Image");
     expect(cardKindLabel("notebook", "a.ipynb")).toBe("Notebook");
+    expect(cardKindLabel("dashboard", "revenue.dashboard.json")).toBe("Dashboard");
     expect(cardKindLabel("markdown", "notes.md")).toBe("Document");
     expect(cardKindLabel("other", "blob.bin")).toBe("File");
   });
@@ -312,6 +315,7 @@ describe("helpers", () => {
     expect(primaryActionLabel("html")).toBe("Open");
     expect(primaryActionLabel("image")).toBe("Open");
     expect(primaryActionLabel("data")).toBe("Preview");
+    expect(primaryActionLabel("dashboard")).toBe("Open");
     expect(primaryActionLabel("markdown")).toBe("Read");
     expect(primaryActionLabel("code")).toBe("View");
     expect(primaryActionLabel("notebook")).toBe("View");

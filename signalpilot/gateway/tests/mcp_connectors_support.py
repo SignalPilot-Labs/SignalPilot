@@ -92,8 +92,8 @@ def tool_stub(name: str, **annotations: Any) -> SimpleNamespace:
         name=name,
         title=None,
         description=f"{name} from provider",
-        inputSchema={"type": "object", "properties": {}},
-        annotations=SimpleNamespace(model_dump=lambda exclude_none=True: annotations, title=None),
+        input_schema={"type": "object", "properties": {}},
+        annotations=SimpleNamespace(model_dump=lambda exclude_none=True, by_alias=True: annotations, title=None),
     )
 
 

@@ -45,6 +45,12 @@ from .core import (
     GatewaySetting,
     GatewayUploadSession,
 )
+from .dashboards import (
+    GatewayDashboardRefresh,
+    GatewayPublishedDashboard,
+    GatewayPublishedDashboardVersion,
+)
+from .downloads import GatewayArtifactDownload as GatewayArtifactDownload
 from .evals import (
     GatewayEvalAccuracyHistory,
     GatewayEvalConfig,
@@ -88,11 +94,6 @@ from .queries import (
     GatewayChatRuntimeArchive,
     GatewayChatTraceEvent,
     GatewayChatTraceThread,
-    GatewayDashboard,
-    GatewayDashboardAuthoringSession,
-    GatewayDashboardChartDraft,
-    GatewayDashboardResult,
-    GatewayDashboardVersion,
     GatewayGovernedQueryExecution,
     GatewayQueryApproval,
     GatewayQueryPlan,
@@ -101,6 +102,7 @@ from .queries import (
     GatewayStructuredQueryResult,
 )
 from .runtime import (
+    GatewayAgentPullRequest,
     GatewayAgentRun,
     GatewayDbtManifest,
     GatewayGitHubInstallation,
@@ -116,8 +118,10 @@ from .workspace import (
     GatewayWorkspaceProject,
     GatewayWorkspaceRevision,
 )
+from .xata import GatewayXataBranchOwner
 
 __all__ = [
+    "GatewayAgentPullRequest",
     "GatewayAgentRun",
     "GatewayAnalysisTrail",
     "GatewayApiKey",
@@ -140,11 +144,7 @@ __all__ = [
     "GatewayChatUserPreference",
     "GatewayConnection",
     "GatewayCredential",
-    "GatewayDashboard",
-    "GatewayDashboardAuthoringSession",
-    "GatewayDashboardChartDraft",
-    "GatewayDashboardResult",
-    "GatewayDashboardVersion",
+    "GatewayDashboardRefresh",
     "GatewayDbtManifest",
     "GatewayEvalAccuracyHistory",
     "GatewayEvalConfig",
@@ -170,6 +170,8 @@ __all__ = [
     "GatewayOrgSecrets",
     "GatewayProject",
     "GatewayProjectBranch",
+    "GatewayPublishedDashboard",
+    "GatewayPublishedDashboardVersion",
     "GatewayQueryApproval",
     "GatewayQueryPlan",
     "GatewayQueryProposal",
@@ -191,6 +193,7 @@ __all__ = [
     "GatewayWorkspaceLease",
     "GatewayWorkspaceProject",
     "GatewayWorkspaceRevision",
+    "GatewayXataBranchOwner",
     "NotionDeliverable",
     "NotionDeliverableContextSnapshot",
     "NotionDeliverableUpdate",
@@ -205,3 +208,8 @@ __all__ = [
     "TZDateTime",
     "strip_ssl_secrets",
 ]
+
+# The credit ledger model lives in gateway.billing but registers on the shared
+# metadata so create_all and Alembic autogenerate both see it. A module
+# import (not a name import) keeps this safe in either import order.
+import gateway.billing.models  # noqa: F401

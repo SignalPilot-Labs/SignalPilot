@@ -102,8 +102,9 @@ test.describe("chat UX test harness", () => {
       "Worked through 10 steps · 2 code runs · 6 files",
     );
     // The trailing discovery chain folds to a plain count with one chip per
-    // card kind (table list, column profile, dbt run, knowledge, connector).
-    await expect(groups.nth(2)).toContainText("Worked through 5 steps");
+    // card kind (table list, column profile, dbt run, knowledge, connector,
+    // and the three dashboard tools).
+    await expect(groups.nth(2)).toContainText("Worked through 8 steps");
     await expect(groups.nth(2)).toContainText("dbt run");
     await expect(groups.nth(2)).toContainText("47 tables");
     await expect(
@@ -133,17 +134,16 @@ test.describe("chat UX test harness", () => {
   test("docks the agent plan above the composer while the run streams", async ({
     page,
   }) => {
-    // First TodoWrite has landed: 0/4, first item live, list expanded.
+    // First TodoWrite has landed: 0/4, first item live, list folded to
+    // its header until the reader opens it.
     await page.goto(at(2_000));
     await waitForHydration(page);
     const tracker = page.getByTestId("chat-plan-tracker");
     await expect(tracker).toBeVisible();
     await expect(tracker).toContainText("Plan");
     await expect(tracker).toContainText("0/4");
-    await expect(tracker).toContainText(
-      "Confirm the revenue model and region join",
-    );
-    await expect(tracker).toContainText("Save the chart and the underlying rows");
+    const header = tracker.getByRole("button", { name: /agent plan/i });
+    await expect(header).toHaveAttribute("aria-expanded", "false");
     // It lives inside the composer, directly above the input, never in the
     // transcript.
     const composer = page.getByTestId("standalone-chat-composer");
@@ -155,15 +155,20 @@ test.describe("chat UX test harness", () => {
     const trackerBox = (await tracker.boundingBox())!;
     const inputBox = (await composer.locator("textarea").boundingBox())!;
     expect(trackerBox.y + trackerBox.height).toBeLessThanOrEqual(inputBox.y + 1);
-    // The header toggle collapses the checklist to the one-line summary.
-    const header = tracker.getByRole("button", { name: /agent plan/i });
+    // The header toggle expands the checklist upward from the input.
+    await header.click();
     await expect(header).toHaveAttribute("aria-expanded", "true");
+    await expect(tracker).toContainText(
+      "Confirm the revenue model and region join",
+    );
+    await expect(tracker).toContainText("Save the chart and the underlying rows");
     await header.click();
     await expect(header).toHaveAttribute("aria-expanded", "false");
-    // Late in the run the second TodoWrite advances the plan to 3/4.
+    // Late in the run the second TodoWrite advances the plan to 3/4 and
+    // the dock stays folded: a plan update never pops it open.
     await page.goto(at(16_000));
     await expect(tracker).toContainText("3/4");
-    await expect(header).toHaveAttribute("aria-expanded", "true");
+    await expect(header).toHaveAttribute("aria-expanded", "false");
   });
 
   test("folds the plan to its summary header once the run completes, and reopens on demand", async ({

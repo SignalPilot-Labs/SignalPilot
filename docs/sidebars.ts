@@ -42,6 +42,8 @@ const sidebars: SidebarsConfig = {
         'product/schema-explorer',
         'product/audit',
         'product/activity',
+        'product/plans',
+        'product/roles',
         'workspaces',
       ],
     },

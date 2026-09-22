@@ -227,11 +227,12 @@ class TestUserInstallationsLive:
 
         assert exc.value.response.status_code == 401
 
-    async def test_callback_rejects_when_user_token_is_invalid(self) -> None:
-        """The 401 above must surface as a redirect rejection, not a 500.
+    async def test_callback_rejects_installation_the_app_does_not_own(self) -> None:
+        """A foreign installation id must surface as a redirect rejection, not a 500.
 
-        Real network on the ``/user/installations`` leg; the code-exchange leg is
-        stubbed because a real single-use code needs a browser.
+        Real network on the app-JWT ``/app/installations/{id}`` leg: GitHub
+        answers 404 for an installation that does not belong to this app, so
+        the callback redirects with ``installation_not_found`` and never mints.
         """
         from gateway import github_client
         from gateway.api import _oauth_state, github
@@ -256,11 +257,6 @@ class TestUserInstallationsLive:
             )
             monkey.setattr(github, "is_cloud_mode", lambda: True)
 
-            async def stub_exchange(client_id, client_secret, code):
-                return {"access_token": "ghu_this_token_is_not_valid_at_all"}
-
-            monkey.setattr(github_client, "exchange_code_for_token", stub_exchange)
-
             minted: list[int] = []
 
             async def spy_create(app_jwt, installation_id, *, repository_ids):
@@ -282,14 +278,14 @@ class TestUserInstallationsLive:
 
             response = client.get(
                 "/auth/github/callback?installation_id=1&setup_action=install"
-                f"&state={make_state('org_live_test')}&code=dummy",
+                f"&state={make_state('org_live_test')}",
                 follow_redirects=False,
             )
 
             assert response.status_code == 302
             assert response.headers["location"] == (
-                "https://app.test/settings/github?error=oauth_verification_failed"
+                "https://app.test/settings/github?error=installation_not_found"
             )
-            assert minted == [], "an installation token was minted despite an unusable user token"
+            assert minted == [], "an installation token was minted for a foreign installation"
         finally:
             monkey.undo()

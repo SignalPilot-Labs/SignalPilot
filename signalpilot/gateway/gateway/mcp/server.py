@@ -1,10 +1,11 @@
-"""FastMCP instance, transport security config, and main() entry point."""
+"""MCPServer instance, transport security config, and main() entry point."""
 
 from __future__ import annotations
 
 import os as _os
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
+from mcp.server.transport_security import TransportSecuritySettings
 
 from ..config import get_mcp_settings
 from ..config.gateway import get_gateway_settings
@@ -32,7 +33,7 @@ if _os.environ.get("SP_DEPLOYMENT_MODE") == "cloud":
 else:
     _transport_security = {"allowed_hosts": _allowed_hosts_with_ports}
 
-mcp = FastMCP(
+mcp = MCPServer(
     "SignalPilot",
     instructions=(
         "You have access to SignalPilot, a governed platform for AI database access. "
@@ -40,15 +41,43 @@ mcp = FastMCP(
         "DDL/DML blocking, dangerous function blocking, audit logging). "
         "Use list_connections to see available databases."
     ),
-    transport_security=_transport_security,
     # Stateless streamable HTTP: no server-side session table. The chat
     # agent's MCP client holds its session id for a whole run, and a stateful
     # transport keeps that table in one process's memory. Every deploy,
     # restart, or second replica then answers the rest of the run with
     # "Session not found". Per-request auth already lives in
     # MCPAuthMiddleware and contextvars, so no tool depends on the session.
-    stateless_http=True,
 )
+
+
+async def _agent_tool_catalog(ctx, call_next):
+    """Advertise the execution policy for delegated agents and in-app chat."""
+    result = await call_next(ctx)
+    if ctx.method != "tools/list":
+        return result
+    from mcp.types import ListToolsResult
+
+    from .audit import STANDALONE_CHAT_TOOL_ALLOWLIST
+    from .context import mcp_execution_identity_var
+
+    identity = mcp_execution_identity_var.get(None) or ""
+    if identity.startswith("chat:"):
+        allowed = STANDALONE_CHAT_TOOL_ALLOWLIST
+    else:
+        return result
+    catalog = ListToolsResult.model_validate(result)
+    return catalog.model_copy(update={"tools": [tool for tool in catalog.tools if tool.name in allowed]})
+
+
+mcp.middleware.append(_agent_tool_catalog)
+
+
+def streamable_http_app():
+    """Build the authenticated host's stateless MCP transport."""
+    return mcp.streamable_http_app(
+        stateless_http=True,
+        transport_security=TransportSecuritySettings(**_transport_security),
+    )
 
 
 def _set_stdio_auth_context() -> None:
@@ -78,7 +107,7 @@ def main():
         from gateway.auth.mcp_api_key import MCPAuthMiddleware
 
         port = int(_entry_os.environ.get("SP_MCP_PORT", "8000"))
-        starlette_app = mcp.streamable_http_app()
+        starlette_app = streamable_http_app()
         authenticated_app = MCPAuthMiddleware(starlette_app)
         uvicorn.run(authenticated_app, host="0.0.0.0", port=port, server_header=False)
     else:

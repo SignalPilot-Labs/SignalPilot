@@ -134,9 +134,16 @@ def distill_graph(manifest: dict) -> dict:
     }
 
 
-def schedule_compile(org_id: str, project_id: str, branch: str, *, trigger: str = "manual") -> None:
+def schedule_compile(
+    org_id: str, project_id: str, branch: str, *, trigger: str = "manual", force: bool = False
+) -> None:
     """Fire-and-forget a compile for the branch head. Coalesces per
-    (project, branch): a newer request supersedes a still-running older one."""
+    (project, branch): a newer request cancels a still-running older one,
+    whose sandbox is destroyed on the way out.
+
+    ``force`` recompiles even when the head revision already has a finished
+    map (manual clicks, dbt_project_dir changes). Without it a compile of an
+    already-compiled revision is a no-op."""
     key = (project_id, branch)
     existing = _active.get(key)
     if existing and not existing.done():
@@ -145,7 +152,7 @@ def schedule_compile(org_id: str, project_id: str, branch: str, *, trigger: str 
     async def _run() -> None:
         async with _semaphore:
             try:
-                await run_compile(org_id, project_id, branch, trigger=trigger)
+                await run_compile(org_id, project_id, branch, trigger=trigger, force=force)
             except asyncio.CancelledError:
                 logger.info("dbt-map compile superseded for %s@%s", project_id, branch)
                 raise
@@ -158,10 +165,11 @@ def schedule_compile(org_id: str, project_id: str, branch: str, *, trigger: str 
 
 
 async def run_compile(
-    org_id: str, project_id: str, branch: str, *, trigger: str = "manual"
+    org_id: str, project_id: str, branch: str, *, trigger: str = "manual", force: bool = False
 ) -> GatewayDbtManifest | None:
     """Compile the branch head revision. Returns the row, or None when there
-    is nothing to do (no revisions, already compiled, or lost the claim)."""
+    is nothing to do (no revisions, already compiled and not forced, or an
+    unforced request lost the claim to a live compile)."""
     from ..db.engine import get_session_factory
 
     storage = workspace_object_storage()
@@ -179,18 +187,24 @@ async def run_compile(
             logger.info("dbt-map: no revisions for %s@%s; nothing to compile", project_id, branch)
             return None
 
-        row = await _claim(session, org_id, project_id, branch, head, trigger)
+        row = await _claim(session, org_id, project_id, branch, head, trigger, force=force)
         if row is None:
             return None
+        # Every write below is scoped to this attempt: a forced recompile that
+        # takes the row over resets created_at, and the superseded task must
+        # not touch the new attempt's row when its cancellation lands.
+        attempt = row.created_at
 
         try:
             manifest_bytes, dbt_version, error = await _compile_in_sandbox(
-                session, store, org_id=org_id, project_id=project_id, branch=branch, revision=head
+                session, store, org_id=org_id, project_id=project_id, branch=branch,
+                revision=head, row_id=row.id, attempt=attempt,
             )
             if manifest_bytes is None:
-                await _finish(session, row.id, status="failed", error=error or "dbt parse failed")
+                await _finish(session, row.id, status="failed", error=error or "dbt parse failed", attempt=attempt)
                 return await _get_row(session, row.id)
 
+            await _set_phase(session, row.id, "store", attempt=attempt)
             manifest = json.loads(manifest_bytes)
             graph = distill_graph(manifest)
             m_key = dbt_manifest_key(org_id, project_id, branch, head)
@@ -213,6 +227,7 @@ async def run_compile(
                 session,
                 row.id,
                 status="success",
+                attempt=attempt,
                 manifest_key=m_key,
                 graph_key=g_key,
                 sql_key=s_key,
@@ -226,18 +241,23 @@ async def run_compile(
             )
             return await _get_row(session, row.id)
         except asyncio.CancelledError:
-            await _finish(session, row.id, status="failed", error="superseded by a newer compile")
+            await _finish(session, row.id, status="failed", error="superseded by a newer compile", attempt=attempt)
             raise
         except Exception as e:
             logger.exception("dbt-map compile failed for %s@%s", project_id, branch)
-            await _finish(session, row.id, status="failed", error=str(e)[:2000])
+            await _finish(session, row.id, status="failed", error=str(e)[:2000], attempt=attempt)
             return await _get_row(session, row.id)
 
 
 async def _claim(
-    session, org_id: str, project_id: str, branch: str, revision: int, trigger: str
+    session, org_id: str, project_id: str, branch: str, revision: int, trigger: str,
+    *, force: bool = False,
 ) -> GatewayDbtManifest | None:
-    """Insert the (project, branch, revision) row, or take over a dead one."""
+    """Insert the (project, branch, revision) row, or take over a dead one.
+
+    ``force`` takes the row over whatever its state: a finished map is
+    rebuilt, and a running one is superseded (schedule_compile has already
+    cancelled the in-process task, which destroys its sandbox)."""
     now = time.time()
     row = GatewayDbtManifest(
         id=str(uuid.uuid4()),
@@ -247,6 +267,7 @@ async def _claim(
         revision=revision,
         status="running",
         trigger=trigger,
+        phase="snapshot",
         lease_expires_at=now + _LEASE_SECONDS,
         created_at=now,
         updated_at=now,
@@ -269,22 +290,27 @@ async def _claim(
     ).scalars().first()
     if existing is None:
         return None
-    if existing.status == "success":
-        return None
-    if existing.status == "running" and (existing.lease_expires_at or 0) > now:
-        return None
-    # failed, or running with a dead lease: take it over.
+    if not force:
+        if existing.status == "success":
+            return None
+        if existing.status == "running" and (existing.lease_expires_at or 0) > now:
+            return None
+    # failed, running with a dead lease, or forced: take it over. created_at
+    # restarts so the elapsed time shown in the UI is for this attempt.
+    takeover = ["failed", "running", "queued", "success"] if force else ["failed", "running", "queued"]
     result = await session.execute(
         update(GatewayDbtManifest)
         .where(
             GatewayDbtManifest.id == existing.id,
-            GatewayDbtManifest.status.in_(["failed", "running", "queued"]),
+            GatewayDbtManifest.status.in_(takeover),
         )
         .values(
             status="running",
             trigger=trigger,
+            phase="snapshot",
             error=None,
             lease_expires_at=now + _LEASE_SECONDS,
+            created_at=now,
             updated_at=now,
         )
     )
@@ -294,17 +320,37 @@ async def _claim(
     return await _get_row(session, existing.id)
 
 
+async def _set_phase(session, row_id: str, phase: str, *, attempt: float | None = None, **values) -> None:
+    """Advance a running compile's phase (and refresh its lease) so the UI can
+    show progress. Best-effort: a failed write never aborts the compile."""
+    now = time.time()
+    stmt = update(GatewayDbtManifest).where(GatewayDbtManifest.id == row_id)
+    if attempt is not None:
+        stmt = stmt.where(GatewayDbtManifest.created_at == attempt)
+    try:
+        await session.execute(
+            stmt.values(phase=phase, lease_expires_at=now + _LEASE_SECONDS, updated_at=now, **values)
+        )
+        await session.commit()
+    except Exception:
+        logger.warning("dbt-map: could not record phase %s for %s", phase, row_id, exc_info=True)
+        await session.rollback()
+
+
 async def _get_row(session, row_id: str) -> GatewayDbtManifest | None:
     return (
         await session.execute(select(GatewayDbtManifest).where(GatewayDbtManifest.id == row_id))
     ).scalars().first()
 
 
-async def _finish(session, row_id: str, *, status: str, **values) -> None:
+async def _finish(session, row_id: str, *, status: str, attempt: float | None = None, **values) -> None:
+    """Finalize a compile row. With ``attempt`` the write only lands when the
+    row still belongs to that attempt (see run_compile)."""
+    stmt = update(GatewayDbtManifest).where(GatewayDbtManifest.id == row_id)
+    if attempt is not None:
+        stmt = stmt.where(GatewayDbtManifest.created_at == attempt)
     await session.execute(
-        update(GatewayDbtManifest)
-        .where(GatewayDbtManifest.id == row_id)
-        .values(status=status, lease_expires_at=None, updated_at=time.time(), **values)
+        stmt.values(status=status, phase=None, lease_expires_at=None, updated_at=time.time(), **values)
     )
     await session.commit()
 
@@ -317,8 +363,17 @@ async def _compile_in_sandbox(
     project_id: str,
     branch: str,
     revision: int,
+    row_id: str | None = None,
+    attempt: float | None = None,
 ) -> tuple[bytes | None, str | None, str | None]:
-    """Run dbt parse on a sandbox; return (manifest_bytes, dbt_version, error)."""
+    """Run dbt parse on a sandbox; return (manifest_bytes, dbt_version, error).
+    With ``row_id`` the compile row's phase and dbt_project_dir are kept
+    current as the steps progress."""
+
+    async def phase(name: str, **values) -> None:
+        if row_id is not None:
+            await _set_phase(session, row_id, name, attempt=attempt, **values)
+
     revision, snap_key = await store.build_snapshot(
         session, org_id=org_id, project_id=project_id, branch=branch, revision=revision
     )
@@ -342,6 +397,7 @@ async def _compile_in_sandbox(
     dbt_dir, source, _ = resolve_dbt_project_dir_detailed(settings_json, ws_manifest)
     if source == "none":
         return None, None, "no dbt_project.yml found in this project"
+    await phase("sandbox", dbt_project_dir=dbt_dir or "")
 
     nb = get_notebook_settings()
     image: str | None = None
@@ -361,6 +417,7 @@ async def _compile_in_sandbox(
     )
     sandbox_id = await runtime.create(spec)
     try:
+        await phase("dbt")
         workdir = f"/workspace/{dbt_dir}" if dbt_dir else "/workspace"
         command = (
             "set -e; "

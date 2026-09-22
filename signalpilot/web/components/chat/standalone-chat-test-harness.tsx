@@ -22,7 +22,6 @@ import { StandaloneChatComposer } from "~/components/chat/standalone-chat-compos
 import { useDockScrollCompensation } from "~/components/chat/use-dock-scroll-compensation";
 import { selectComposerPlan } from "~/lib/chat-composer-plan";
 import { hasArtifactsContent } from "~/lib/chat-artifacts";
-import { pickDefaultNotebook } from "~/lib/chat-live-notebook";
 import {
   FIXTURE_RUN_ID,
   FIXTURE_TOTAL_MS,
@@ -38,6 +37,8 @@ import {
 } from "~/lib/chat-test-fixture";
 import { NotebookPen } from "lucide-react";
 import { useOpenArtifact } from "~/components/chat/use-open-artifact";
+import { useArtifactNotices } from "~/components/chat/use-artifact-notices";
+import { ArtifactNotices } from "~/components/chat/artifact-notices";
 import { ChatSettingsPanel } from "~/components/chat/chat-settings-panel";
 import { useChatSettingsPanel } from "~/components/chat/use-chat-settings-panel";
 import { ConnectorsProvider } from "~/components/connectors/connectors-context";
@@ -50,6 +51,7 @@ import {
   FIXTURE_QUERY_RESULT_ID,
   fixtureQueryResultPage,
 } from "~/lib/chat-test-fixture-tools";
+import { createFixtureDashboardPublishApi } from "~/lib/chat-test-fixture-dashboard";
 
 const SPEEDS = [1, 2, 4] as const;
 const TICK_MS = 50;
@@ -78,6 +80,12 @@ export function StandaloneChatTestHarness() {
   const withFollowUp = searchParams.get("followup") === "1";
   const connectorsApi = useMemo(
     () => createFixtureConnectorsApi({ latencyMs: 120 }),
+    [],
+  );
+  // "Publish" on the dashboard file talks to this in-memory gallery
+  // instead of the gateway.
+  const dashboardsApi = useMemo(
+    () => createFixtureDashboardPublishApi({ latencyMs: 120 }),
     [],
   );
   const [elapsed, setElapsed] = useState(initialAt);
@@ -126,14 +134,12 @@ export function StandaloneChatTestHarness() {
   );
 
   // Notebook panel: the harness has no gateway, so it simulates the
-  // conversation notebook resource from the replayed events. Auto-open
-  // mirrors the chat page: once per run when the notebook goes live.
+  // conversation notebook resource from the replayed events. As on the
+  // chat page the panel never opens by itself: artifact notices offer it.
   const conversationNotebooks = useMemo(
     () => fixtureConversationNotebooks(events),
     [events],
   );
-  // Auto-open follows the default (analysis) notebook, as on the chat page.
-  const defaultNotebook = pickDefaultNotebook(conversationNotebooks);
   const conversationFiles = useMemo(
     () => fixtureConversationFiles(events),
     [events],
@@ -150,9 +156,23 @@ export function StandaloneChatTestHarness() {
   }, [settingsInitiallyOpen, openSettingsPanel]);
   // Inline artifact cards open the panel focused on their file, as on the
   // real chat page.
-  const { openFileRequest, openArtifact } = useOpenArtifact(() =>
-    setNotebookPanelOpen(true),
+  const { openFileRequest, openArtifact, openNotebook } = useOpenArtifact(
+    () => setNotebookPanelOpen(true),
   );
+  // The fixture run id stands in for the live run while the replay is
+  // mid-flight; scrubbing back before notebook_started resets the ledger
+  // by switching the "conversation" key.
+  const notebookEpoch = conversationNotebooks.length === 0 ? 0 : 1;
+  const artifactNotices = useArtifactNotices({
+    conversationId: `conversation-fixture-1:${notebookEpoch}`,
+    notebooks: conversationNotebooks,
+    files: conversationFiles,
+    filesLoading: false,
+    currentRunId: FIXTURE_RUN_ID,
+    panelOpen: notebookPanelOpen || settingsPanel.open,
+    openArtifact,
+    openNotebook,
+  });
   // File-content stub: the harness has no gateway, so it serves the fixture
   // files' literal contents as object URLs. This keeps the image-card
   // thumbnail path (and any future content-dependent card UI) verifiable
@@ -161,6 +181,15 @@ export function StandaloneChatTestHarness() {
     const content = fixtureFileContent(fileId);
     if (!content) throw new Error(`No fixture content for file ${fileId}`);
     return URL.createObjectURL(new Blob([content.body], { type: content.mime }));
+  }, []);
+  // Text stub for the same files: the dashboard viewer reads its spec and
+  // datasets through it, so the real DashboardRenderer runs at /chats/test.
+  const getFileText = useCallback(async (fileId: string) => {
+    const content = fixtureFileContent(fileId);
+    if (!content) throw new Error(`No fixture content for file ${fileId}`);
+    return typeof content.body === "string"
+      ? content.body
+      : new TextDecoder().decode(content.body);
   }, []);
   // Full-rows stub for the governed query result: the table card's "Load
   // all rows" pages the same deterministic 1,204 rows the gateway would.
@@ -173,22 +202,11 @@ export function StandaloneChatTestHarness() {
     },
     [],
   );
-  const notebookPanelAutoOpenedRunRef = useRef<string | null>(null);
   useEffect(() => {
-    if (
-      defaultNotebook?.status === "live" &&
-      notebookPanelAutoOpenedRunRef.current !== FIXTURE_RUN_ID
-    ) {
-      notebookPanelAutoOpenedRunRef.current = FIXTURE_RUN_ID;
-      setNotebookPanelOpen(true);
-    }
-    if (!defaultNotebook) {
-      // Scrubbed back before notebook_started (or restarted): reset so the
-      // panel auto-opens again when the notebook (re)starts.
-      notebookPanelAutoOpenedRunRef.current = null;
-      setNotebookPanelOpen(false);
-    }
-  }, [defaultNotebook]);
+    // Scrubbed back before notebook_started (or restarted): close the
+    // panel, as a fresh conversation would start closed.
+    if (conversationNotebooks.length === 0) setNotebookPanelOpen(false);
+  }, [conversationNotebooks]);
   const status = fixtureRunStatus(elapsed);
   const messages = useMemo<UiMessage[]>(
     () => [
@@ -384,14 +402,15 @@ export function StandaloneChatTestHarness() {
           files: conversationFiles,
           openArtifact,
           getFileObjectUrl,
+          getFileText,
           getToolResultRows,
+          dashboardsApi,
           // Frozen replay clock, so relative timestamps are honest on
           // every frame instead of measuring from the real wall clock.
           nowMs: fixtureNowMs(elapsed),
           openChatSettings: settingsPanel.openPanel,
           onStop: async () => undefined,
           onRetry: async () => undefined,
-          onOpenDashboardPreview: () => undefined,
         }}
       >
       <div className="relative flex min-h-0 flex-1 overflow-hidden">
@@ -451,6 +470,9 @@ export function StandaloneChatTestHarness() {
             <NotebookPen className="h-4 w-4" />
           </button>
         )}
+        {!replaying && (
+          <ArtifactNotices {...artifactNotices} />
+        )}
         {settingsPanel.open && (
           <ChatSettingsPanel
             onClose={settingsPanel.closePanel}
@@ -494,13 +516,17 @@ export function StandaloneChatTestHarness() {
                 Live notebook view stub
               </div>
             }
-            fileViewOverride={
-              <div
-                data-testid="chat-file-stub"
-                className="flex h-full items-center justify-center text-xs text-[var(--color-text-dim)]"
-              >
-                File viewer stub
-              </div>
+            fileViewOverride={(file) =>
+              // Dashboards render for real (their viewer needs no gateway);
+              // every other kind keeps the stub.
+              file.kind === "dashboard" ? undefined : (
+                <div
+                  data-testid="chat-file-stub"
+                  className="flex h-full items-center justify-center text-xs text-[var(--color-text-dim)]"
+                >
+                  File viewer stub
+                </div>
+              )
             }
           />
         )}

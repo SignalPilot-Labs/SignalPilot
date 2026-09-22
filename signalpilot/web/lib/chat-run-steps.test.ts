@@ -1,7 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  activeDashboardAuthoringProgress,
-  activeDashboardPreviewLabel,
   extractRunPlan,
   extractRuntimeBoot,
   foldRunBlocks,
@@ -138,165 +136,6 @@ describe("foldRunSteps", () => {
     expect(query?.status).toBe("running");
   });
 
-  it("renders dashboard validation as regular tools and the final preview specially", () => {
-    const dashboardEvents = [
-      {
-        run_id: "dashboard-run",
-        sequence: 1,
-        type: "tool_started" as const,
-        payload: {
-          tool: "mcp__standalone-chat__begin_dashboard_authoring",
-          tool_call_id: "begin-call",
-          parent_tool_call_id: "",
-          input: { request: "Build a sales dashboard", timezone: "UTC" },
-        },
-        created_at: "2026-09-01T10:00:00Z",
-      },
-      {
-        run_id: "dashboard-run",
-        sequence: 2,
-        type: "tool_started" as const,
-        payload: {
-          tool: "mcp__standalone-chat__upsert_dashboard_chart",
-          tool_call_id: "chart-a-call",
-          parent_tool_call_id: "",
-          input: {
-            chart_id: "revenue",
-            chart: { title: "Total revenue" },
-          },
-        },
-        created_at: "2026-09-01T10:00:01Z",
-      },
-      {
-        run_id: "dashboard-run",
-        sequence: 3,
-        type: "tool_started" as const,
-        payload: {
-          tool: "mcp__standalone-chat__upsert_dashboard_chart",
-          tool_call_id: "chart-b-call",
-          parent_tool_call_id: "",
-          input: {
-            chart_id: "trend",
-            chart: { title: "Revenue trend" },
-          },
-        },
-        created_at: "2026-09-01T10:00:02Z",
-      },
-      {
-        run_id: "dashboard-run",
-        sequence: 4,
-        type: "tool_started" as const,
-        payload: {
-          tool: "mcp__standalone-chat__create_dashboard_preview",
-          tool_call_id: "preview-call",
-          parent_tool_call_id: "",
-          input: { expected_draft_revision: 3 },
-        },
-        created_at: "2026-09-01T10:00:02Z",
-      },
-      {
-        run_id: "dashboard-run",
-        sequence: 5,
-        type: "tool_completed" as const,
-        payload: {
-          tool_call_id: "chart-b-call",
-          error: false,
-          dashboard_authoring: {
-            label: "Dashboard chart validated (1 of 2)",
-            phase: "upsert_dashboard_chart",
-            authoring_session_id: "session-top-level",
-            draft_revision: 3,
-          },
-        },
-        created_at: "2026-09-01T10:00:03Z",
-      },
-      {
-        run_id: "dashboard-run",
-        sequence: 6,
-        type: "tool_completed" as const,
-        payload: {
-          tool_call_id: "preview-call",
-          error: false,
-          dashboard_authoring: {
-            label: "Dashboard preview ready",
-            phase: "create_dashboard_preview",
-            authoring_session_id: "session-top-level",
-            draft_revision: 3,
-          },
-        },
-        created_at: "2026-09-01T10:00:04Z",
-      },
-      {
-        run_id: "dashboard-run",
-        sequence: 7,
-        type: "tool_completed" as const,
-        payload: { tool_call_id: "begin-call", error: false },
-        created_at: "2026-09-01T10:00:05Z",
-      },
-      {
-        run_id: "dashboard-run",
-        sequence: 8,
-        type: "tool_completed" as const,
-        payload: { tool_call_id: "chart-a-call", error: true },
-        created_at: "2026-09-01T10:00:06Z",
-      },
-    ];
-
-    const dashboardSteps = foldRunSteps(dashboardEvents, "dashboard-run");
-    expect(dashboardSteps).toHaveLength(4);
-    expect(dashboardSteps.map((step) => step.category)).toEqual([
-      "generic",
-      "generic",
-      "generic",
-      "dashboard",
-    ]);
-    expect(dashboardSteps.map((step) => step.title)).toEqual([
-      "Resolving dashboard fields",
-      "Validating Total revenue",
-      "Validating Revenue trend",
-      "Creating dashboard preview",
-    ]);
-    expect(dashboardSteps.map((step) => step.status)).toEqual([
-      "succeeded",
-      "failed",
-      "succeeded",
-      "succeeded",
-    ]);
-    expect(dashboardSteps[2]?.detail).toBeNull();
-    expect(dashboardSteps[3]?.detail).toBe("Dashboard preview ready");
-  });
-
-  it("exposes the plan-ready session and revision for event-driven preview refresh", () => {
-    const progress = activeDashboardAuthoringProgress(
-      [
-        {
-          run_id: "dashboard-run",
-          sequence: 1,
-          type: "tool_completed" as const,
-          payload: {
-            tool_call_id: "plan-call",
-            error: false,
-            dashboard_authoring: {
-              phase: "set_dashboard_plan",
-              label: "Building 9 dashboard charts",
-              authoring_session_id: "session-progressive",
-              draft_revision: 4,
-            },
-          },
-          created_at: "2026-09-01T10:00:00Z",
-        },
-      ],
-      "dashboard-run",
-    );
-
-    expect(progress).toEqual({
-      label: "Building 9 dashboard charts",
-      phase: "set_dashboard_plan",
-      sessionId: "session-progressive",
-      draftRevision: 4,
-    });
-  });
-
   it("normalizes governed-tool wording in persisted chat events", () => {
     const [failed] = foldRunSteps(
       [
@@ -421,14 +260,21 @@ describe("foldRunBlocks", () => {
     expect(chain1.steps.at(-1)?.tool).toBe("Agent");
     expect(chain1.steps.at(-2)?.tool).toBe("query_database");
     expect(narration.text).toContain("analysis runtime");
-    // notebook → write → bash → 3 export writes → edit → md write → todo →
-    // run_cells
-    expect(chain2.steps).toHaveLength(10);
+    // notebook → write → bash → bash probe → 3 export writes → edit →
+    // md write → todo → run_cells
+    expect(chain2.steps).toHaveLength(11);
+    // The `ls` probe exits 1 but is a completed step, not a failure.
+    expect(chain2.steps[3]?.status).toBe("succeeded");
+    expect(chain2.steps[3]?.result?.kind === "terminal" && chain2.steps[3].result.probe).toBe(true);
     expect(chain2.steps[0]?.tool).toBe("start_analysis_notebook");
     expect(answer.text).toContain("EMEA drove the growth");
-    // Follow-up verification chain: list_tables → explore_columns →
-    // dbt_execute → search_knowledge → hubspot connector, then a short tail.
+    // Dashboard load + check + render, then the follow-up verification
+    // chain: list_tables → explore_columns → dbt_execute → search_knowledge →
+    // hubspot connector, then a short tail.
     expect(chain3.steps.map((step) => step.tool)).toEqual([
+      "dashboard_load_published",
+      "dashboard_sample_data",
+      "dashboard_screenshot",
       "list_tables",
       "explore_columns",
       "dbt_execute",
@@ -436,6 +282,9 @@ describe("foldRunBlocks", () => {
       "search_contacts",
     ]);
     expect(chain3.steps.map((step) => step.result?.kind)).toEqual([
+      "dashboard_load",
+      "dashboard_sample",
+      "dashboard_screenshot",
       "table_list",
       "column_profile",
       "dbt_run",
@@ -539,10 +388,10 @@ describe("summarizeRunSteps", () => {
   it("counts queries, code runs, files and errors", () => {
     const summary = summarizeRunSteps(foldRunSteps(allEvents, FIXTURE_RUN_ID));
     expect(summary.queries).toBe(2); // validate_sql + query_database
-    expect(summary.codeRuns).toBe(2); // Bash + run_cells
+    expect(summary.codeRuns).toBe(3); // Bash + Bash probe + run_cells
     // 5 Writes (py + html + svg + csv + md) + Edit
     expect(summary.files).toBe(6);
-    expect(summary.errors).toBe(1);
+    expect(summary.errors).toBe(1); // the probe is not an error
     expect(summary.running).toBe(false);
   });
 });

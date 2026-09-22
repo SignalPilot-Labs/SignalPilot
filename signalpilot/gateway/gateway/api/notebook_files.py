@@ -26,30 +26,41 @@ import posixpath
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import BaseModel, ConfigDict, Field
-from pydantic.alias_generators import to_camel
 
 from ..auth import DBSession, OrgID, UserID
 from ..security.scope_guard import RequireScope
-from ..workspace_store import WorkspaceStore
-from ..workspace_store.store import RevisionNotFound, Upsert
-from .deps import ProjectsGate, StoreD
+from ..workspace_store.store import Upsert
+from .deps import RequireBillablePlan, StoreD
+from .notebook_files_tree import (
+    _DIR_PLACEHOLDER,
+    IGNORE_NAMES,  # noqa: F401  (re-export)
+    NOTEBOOK_EXTENSIONS,  # noqa: F401  (re-export)
+    NbFileDeleteRequest,
+    NbFileDetailsRequest,
+    NbFileListRequest,
+    NbFileMoveRequest,
+    NbFileSearchRequest,
+    NbFileUpdateRequest,
+    _build_tree,
+    _copy_or_move,
+    _entries,
+    _file_info,
+    _list_one_level,
+    _rel,
+    _under_prefix,
+)
 from .workspace_files import (
     WorkspaceStoreD,
-    _confined,
     _require_project,
     _valid_branch,
 )
 
-router = APIRouter(prefix="/api", dependencies=[ProjectsGate])
+router = APIRouter(prefix="/api", dependencies=[RequireBillablePlan])
 
-NOTEBOOK_EXTENSIONS = {".py", ".md", ".qmd"}
-IGNORE_NAMES = {"__pycache__", ".git", "node_modules", ".venv", "target"}
-_DIR_PLACEHOLDER = ".gitkeep"
 
 # Default content for a freshly created, empty notebook (mirrors the shape
 # SpConvert emits for an empty app; __generated_with is stamped on first save).
-_EMPTY_NOTEBOOK_PY = '''import signalpilot as sp
+_EMPTY_NOTEBOOK_PY = """import signalpilot as sp
 
 app = sp.App()
 
@@ -61,184 +72,7 @@ def _():
 
 if __name__ == "__main__":
     app.run()
-'''
-
-
-# ── Request models (camelCase wire format, matching msgspec rename="camel") ──
-
-
-class _CamelModel(BaseModel):
-    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
-
-
-class NbFileListRequest(_CamelModel):
-    path: str | None = None
-    recursive: bool = False
-
-
-class NbFileDetailsRequest(_CamelModel):
-    path: str
-
-
-class NbFileDeleteRequest(_CamelModel):
-    path: str
-
-
-class NbFileMoveRequest(_CamelModel):
-    path: str
-    new_path: str
-
-
-class NbFileUpdateRequest(_CamelModel):
-    path: str
-    contents: str
-
-
-class NbFileSearchRequest(_CamelModel):
-    query: str
-    path: str | None = None
-    include_directories: bool = True
-    include_files: bool = True
-    depth: int = 3
-    limit: int = 100
-
-
-# ── Helpers ──────────────────────────────────────────────────────────────────
-
-
-def _rel(path: str | None) -> str:
-    """Normalize a client-supplied path to a confined store-relative path.
-
-    The editor in gateway mode only ever holds store-relative paths (the root
-    is ""), but be liberal about leading slashes and backslashes; traversal
-    outside the project root is rejected exactly like workspace_files."""
-    if path is None:
-        return ""
-    p = str(path).replace("\\", "/").strip().lstrip("/")
-    if p in ("", "."):
-        return ""
-    return _confined(p)
-
-
-def _file_info(
-    rel: str,
-    *,
-    is_directory: bool = False,
-    last_modified: float | None = None,
-    children: list[dict[str, Any]] | None = None,
-) -> dict[str, Any]:
-    name = rel.rstrip("/").rsplit("/", 1)[-1] if rel else ""
-    ext = posixpath.splitext(name)[1].lower()
-    return {
-        "id": rel,
-        "path": rel,
-        "name": name,
-        "isDirectory": is_directory,
-        "isSpFile": (not is_directory) and ext in NOTEBOOK_EXTENSIONS,
-        "lastModified": last_modified,
-        "children": children if children is not None else [],
-    }
-
-
-async def _entries(
-    ws: WorkspaceStore, db, *, org_id: str, project_id: str, branch: str
-) -> list[Any]:
-    """All manifest entries at head; [] when the branch has no revisions."""
-    try:
-        manifest = await ws.load_manifest(
-            db, org_id=org_id, project_id=project_id, branch=branch
-        )
-    except RevisionNotFound:
-        return []
-    return list(manifest.entries)
-
-
-def _under_prefix(entries: list[Any], prefix: str) -> list[Any]:
-    if not prefix:
-        return list(entries)
-    wanted = prefix.rstrip("/") + "/"
-    return [e for e in entries if e.path.startswith(wanted)]
-
-
-def _list_one_level(entries: list[Any], prefix: str) -> list[dict[str, Any]]:
-    strip = f"{prefix}/" if prefix else ""
-    dirs: dict[str, float | None] = {}
-    files: list[dict[str, Any]] = []
-    for entry in entries:
-        rel = entry.path
-        if strip:
-            if not rel.startswith(strip):
-                continue
-            rel = rel[len(strip):]
-        if not rel:
-            continue
-        name = rel.split("/", 1)[0]
-        if name in IGNORE_NAMES:
-            continue
-        child = f"{prefix}/{name}" if prefix else name
-        mtime = entry.mtime or None
-        if "/" in rel:
-            prev = dirs.get(child)
-            if child not in dirs or (mtime and mtime > (prev or 0)):
-                dirs[child] = mtime
-        elif name != _DIR_PLACEHOLDER:
-            files.append(_file_info(child, last_modified=mtime))
-
-    dir_infos = [
-        _file_info(d, is_directory=True, last_modified=dirs[d]) for d in sorted(dirs)
-    ]
-    files.sort(key=lambda info: str(info["name"]).lower())
-    return dir_infos + files
-
-
-def _build_tree(entries: list[Any], prefix: str) -> list[dict[str, Any]]:
-    """Assemble the full nested subtree under ``prefix`` in one pass, so a
-    fully expanded file tree costs ONE round trip (RequestingTree contract)."""
-    strip = f"{prefix}/" if prefix else ""
-    dir_nodes: dict[str, dict[str, Any]] = {}
-    root_children: list[dict[str, Any]] = []
-
-    def parent_children(parent_rel: str) -> list[dict[str, Any]]:
-        if not parent_rel:
-            return root_children
-        node = dir_nodes.get(parent_rel)
-        if node is None:
-            # Materialize missing ancestor directories bottom-up.
-            grand, _, _name = parent_rel.rpartition("/")
-            full = f"{prefix}/{parent_rel}" if prefix else parent_rel
-            node = _file_info(full, is_directory=True)
-            dir_nodes[parent_rel] = node
-            parent_children(grand).append(node)
-        return node["children"]
-
-    for entry in entries:
-        rel = entry.path
-        if strip:
-            if not rel.startswith(strip):
-                continue
-            rel = rel[len(strip):]
-        if not rel:
-            continue
-        parts = rel.split("/")
-        if any(p in IGNORE_NAMES for p in parts):
-            continue
-        name = parts[-1]
-        if name == _DIR_PLACEHOLDER:
-            parent_children("/".join(parts[:-1]))
-            continue
-        full = f"{prefix}/{rel}" if prefix else rel
-        parent_children("/".join(parts[:-1])).append(
-            _file_info(full, last_modified=entry.mtime or None)
-        )
-
-    def sort_level(children: list[dict[str, Any]]) -> None:
-        children.sort(key=lambda i: (not i["isDirectory"], str(i["name"]).lower()))
-        for child in children:
-            if child["isDirectory"]:
-                sort_level(child["children"])
-
-    sort_level(root_children)
-    return root_children
+"""
 
 
 # ── Endpoints ────────────────────────────────────────────────────────────────
@@ -287,18 +121,12 @@ async def file_details(
     branch = _valid_branch(branch)
     rel = _rel(body.path)
     if not rel:
-        return {"file": _file_info("", is_directory=True), "contents": None,
-                "mimeType": None, "isBase64": False}
-    result = await ws.read_file(
-        db, org_id=org_id, project_id=project_id, branch=branch, path=rel
-    )
+        return {"file": _file_info("", is_directory=True), "contents": None, "mimeType": None, "isBase64": False}
+    result = await ws.read_file(db, org_id=org_id, project_id=project_id, branch=branch, path=rel)
     if result is None:
-        entries = await _entries(
-            ws, db, org_id=org_id, project_id=project_id, branch=branch
-        )
+        entries = await _entries(ws, db, org_id=org_id, project_id=project_id, branch=branch)
         if _under_prefix(entries, rel):
-            return {"file": _file_info(rel, is_directory=True), "contents": None,
-                    "mimeType": None, "isBase64": False}
+            return {"file": _file_info(rel, is_directory=True), "contents": None, "mimeType": None, "isBase64": False}
         raise HTTPException(status_code=404, detail=f"File not found: {rel}")
     entry, raw = result
     is_base64 = False
@@ -362,31 +190,37 @@ async def create_file_or_directory(
         if not name.strip():
             raise ValueError("Cannot create file or directory with empty name")
         if "/" in name or "\\" in name or "\x00" in name or name in (".", ".."):
-            raise ValueError(
-                f"Invalid name {name!r}: must not contain path separators "
-                "or refer to a parent directory"
-            )
+            raise ValueError(f"Invalid name {name!r}: must not contain path separators or refer to a parent directory")
         parent = _rel(path)
         rel = f"{parent}/{name}" if parent else name
 
         if file_type == "directory":
             # The manifest has no empty directories; commit a placeholder.
             await ws.commit_at_head(
-                db, org_id=org_id, project_id=project_id, branch=branch,
+                db,
+                org_id=org_id,
+                project_id=project_id,
+                branch=branch,
                 upserts=[Upsert(path=f"{rel}/{_DIR_PLACEHOLDER}", content=b"")],
-                deletes=[], created_by=user_id, message=f"create {rel}/",
+                deletes=[],
+                created_by=user_id,
+                message=f"create {rel}/",
             )
-            return {"success": True, "message": None,
-                    "info": _file_info(rel, is_directory=True)}
+            return {"success": True, "message": None, "info": _file_info(rel, is_directory=True)}
 
         body = contents or b""
         if file_type == "notebook" and not contents:
             if posixpath.splitext(name)[1].lower() not in (".md", ".qmd"):
                 body = _EMPTY_NOTEBOOK_PY.encode("utf-8")
         await ws.commit_at_head(
-            db, org_id=org_id, project_id=project_id, branch=branch,
-            upserts=[Upsert(path=rel, content=body)], deletes=[],
-            created_by=user_id, message=f"create {rel}",
+            db,
+            org_id=org_id,
+            project_id=project_id,
+            branch=branch,
+            upserts=[Upsert(path=rel, content=body)],
+            deletes=[],
+            created_by=user_id,
+            message=f"create {rel}",
         )
         return {"success": True, "message": None, "info": _file_info(rel)}
     except HTTPException:
@@ -415,9 +249,7 @@ async def delete_file_or_directory(
         rel = _rel(body.path)
         if not rel:
             return {"success": False, "message": "Cannot delete the project root"}
-        entries = await _entries(
-            ws, db, org_id=org_id, project_id=project_id, branch=branch
-        )
+        entries = await _entries(ws, db, org_id=org_id, project_id=project_id, branch=branch)
         by_path = {e.path for e in entries}
         if rel in by_path:
             deletes = [rel]
@@ -426,8 +258,13 @@ async def delete_file_or_directory(
             if not deletes:
                 return {"success": False, "message": f"File not found: {rel}"}
         await ws.commit_at_head(
-            db, org_id=org_id, project_id=project_id, branch=branch,
-            upserts=[], deletes=deletes, created_by=user_id,
+            db,
+            org_id=org_id,
+            project_id=project_id,
+            branch=branch,
+            upserts=[],
+            deletes=deletes,
+            created_by=user_id,
             message=f"delete {rel}",
         )
         return {"success": True, "message": None}
@@ -435,65 +272,6 @@ async def delete_file_or_directory(
         raise
     except Exception as exc:
         return {"success": False, "message": str(exc)}
-
-
-async def _copy_or_move(
-    project_id: str,
-    body: NbFileMoveRequest,
-    org_id: str,
-    user_id: str,
-    db,
-    ws: WorkspaceStore,
-    branch: str,
-    *,
-    move: bool,
-):
-    verb = "move" if move else "copy"
-    try:
-        source = _rel(body.path)
-        destination = _rel(body.new_path)
-        if not source or not destination:
-            return {"success": False, "message": "Source and destination required",
-                    "info": None}
-        try:
-            await ws.copy_file(
-                db, org_id=org_id, project_id=project_id, branch=branch,
-                source=source, destination=destination, created_by=user_id,
-                move=move,
-            )
-            return {"success": True, "message": None, "info": _file_info(destination)}
-        except FileNotFoundError:
-            pass  # not a file — try a directory copy/move below
-        except RevisionNotFound:
-            return {"success": False, "message": f"File not found: {source}",
-                    "info": None}
-        # Directory copy/move: one batch of reference upserts (+ deletes).
-        entries = _under_prefix(
-            await _entries(ws, db, org_id=org_id, project_id=project_id, branch=branch),
-            source,
-        )
-        if not entries:
-            return {"success": False, "message": f"File not found: {source}",
-                    "info": None}
-        upserts = [
-            Upsert(
-                path=f"{destination}/{e.path[len(source) + 1:]}",
-                sha256=e.sha256, size=e.size, mode=e.mode, mtime=e.mtime,
-            )
-            for e in entries
-        ]
-        deletes = [e.path for e in entries] if move else []
-        await ws.commit_at_head(
-            db, org_id=org_id, project_id=project_id, branch=branch,
-            upserts=upserts, deletes=deletes, created_by=user_id,
-            message=f"{verb} {source} -> {destination}",
-        )
-        return {"success": True, "message": None,
-                "info": _file_info(destination, is_directory=True)}
-    except HTTPException:
-        raise
-    except Exception as exc:
-        return {"success": False, "message": str(exc), "info": None}
 
 
 @router.post(
@@ -511,9 +289,7 @@ async def copy_file_or_directory(
     branch: str = Query("main"),
 ):
     await _require_project(store, ws, db, project_id)
-    return await _copy_or_move(
-        project_id, body, org_id, user_id, db, ws, _valid_branch(branch), move=False
-    )
+    return await _copy_or_move(project_id, body, org_id, user_id, db, ws, _valid_branch(branch), move=False)
 
 
 @router.post(
@@ -531,9 +307,7 @@ async def move_file_or_directory(
     branch: str = Query("main"),
 ):
     await _require_project(store, ws, db, project_id)
-    return await _copy_or_move(
-        project_id, body, org_id, user_id, db, ws, _valid_branch(branch), move=True
-    )
+    return await _copy_or_move(project_id, body, org_id, user_id, db, ws, _valid_branch(branch), move=True)
 
 
 @router.post(
@@ -557,9 +331,14 @@ async def update_file(
         if not rel:
             return {"success": False, "message": "A file path is required", "info": None}
         await ws.commit_at_head(
-            db, org_id=org_id, project_id=project_id, branch=branch,
+            db,
+            org_id=org_id,
+            project_id=project_id,
+            branch=branch,
             upserts=[Upsert(path=rel, content=body.contents.encode("utf-8"))],
-            deletes=[], created_by=user_id, message=f"put {rel}",
+            deletes=[],
+            created_by=user_id,
+            message=f"put {rel}",
         )
         return {"success": True, "message": None, "info": _file_info(rel)}
     except HTTPException:
@@ -587,9 +366,7 @@ async def search_files(
     query = body.query.strip()
     if not query:
         return {"files": [], "query": body.query, "totalFound": 0}
-    entries = await _entries(
-        ws, db, org_id=org_id, project_id=project_id, branch=branch
-    )
+    entries = await _entries(ws, db, org_id=org_id, project_id=project_id, branch=branch)
     prefix_rel = _rel(body.path)
     prefix = f"{prefix_rel}/" if prefix_rel else ""
     needle = query.lower()
@@ -613,11 +390,7 @@ async def search_files(
                         results.append(_file_info(dir_path, is_directory=True))
     results.sort(
         key=lambda info: (
-            0
-            if str(info["name"]).lower() == needle
-            else 1
-            if str(info["name"]).lower().startswith(needle)
-            else 2,
+            0 if str(info["name"]).lower() == needle else 1 if str(info["name"]).lower().startswith(needle) else 2,
             str(info["name"]),
         )
     )

@@ -98,8 +98,8 @@ knowledge-base-spec.md
 local-instructions.md
 marimo-ref.md
 security-audit.md
-dashboard_products.py
-dashboard.py
+/dashboard_products.py
+/dashboard.py
 Dockerfile.web.dockerignore
 signalpilot/web/e2e-*.png
 signalpilot/web/e2e-journey-*.png
@@ -176,3 +176,7 @@ redshift_*.py
 /.*creds*
 /.*credentials*
 e2e-eval/project-repo/
+
+# kubeconfigs
+k3s.yaml
+kubeconfig*

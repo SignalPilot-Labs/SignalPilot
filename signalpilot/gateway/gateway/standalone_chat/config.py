@@ -14,10 +14,11 @@ CHAT_MODEL_OPTIONS: tuple[tuple[str, str], ...] = (
     ("claude-opus-4-6", "Opus 4.6"),
     ("claude-sonnet-4-6", "Sonnet 4.6"),
     ("claude-opus-5", "Opus 5"),
+    ("claude-opus-5-5", "Opus 5.5"),
     ("claude-fable-5-1", "Fable 5.1"),
 )
 CHAT_MODEL_IDS = frozenset(model_id for model_id, _label in CHAT_MODEL_OPTIONS)
-FALLBACK_CHAT_MODEL = "claude-opus-4-6"
+FALLBACK_CHAT_MODEL = "claude-opus-5-5"
 CHAT_EFFORT_OPTIONS: tuple[tuple[str, str], ...] = (
     ("low", "Low"),
     ("medium", "Medium"),

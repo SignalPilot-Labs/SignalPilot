@@ -100,7 +100,7 @@ export function StandaloneChatTestHarness() {
   const [replaying, setReplaying] = useState(false);
   const [speed, setSpeed] = useState<(typeof SPEEDS)[number]>(1);
   const [selectedModel, setSelectedModel] =
-    useState<StandaloneChatModel>("claude-opus-5");
+    useState<StandaloneChatModel>("claude-opus-5-5");
   const [selectedEffort, setSelectedEffort] =
     useState<StandaloneChatEffort>("medium");
   const speedRef = useRef(speed);
@@ -483,6 +483,7 @@ export function StandaloneChatTestHarness() {
                 { id: "claude-opus-4-6", label: "Opus 4.6" },
                 { id: "claude-sonnet-4-6", label: "Sonnet 4.6" },
                 { id: "claude-opus-5", label: "Opus 5" },
+                { id: "claude-opus-5-5", label: "Opus 5.5" },
                 { id: "claude-fable-5-1", label: "Fable 5.1" },
               ],
               disabled: false,

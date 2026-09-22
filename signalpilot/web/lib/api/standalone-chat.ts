@@ -63,6 +63,7 @@ export type StandaloneChatModel =
   | "claude-opus-4-6"
   | "claude-sonnet-4-6"
   | "claude-opus-5"
+  | "claude-opus-5-5"
   | "claude-fable-5-1";
 
 export type StandaloneChatModelOption = {

@@ -26,7 +26,7 @@ import { LAYER_COLOR } from "./palette";
 import type { MapLayer } from "./palette";
 import { MapNode, NODE_H, NODE_W, type MapNodeData, mapNodeTypes } from "./map-node";
 import { lineageCone, type MapModel, type ParsedMap } from "./parse-map";
-import { stageColumns } from "./lineage-nav";
+import { STAGE_LABELS, stageColumns } from "./lineage-nav";
 
 // Staged (focus) layout metrics. Edges are simple left-to-right bezier runs,
 // so columns can sit close; the taller row gap lets small cones fill the
@@ -83,8 +83,11 @@ function layoutStaged(
   ids: Set<string>,
   edges: { source: string; target: string }[],
 ): { positions: Map<string, { x: number; y: number }>; captions: StageCaption[] } {
-  const { stages, columnOf } = stageColumns(parsed, ids);
-  const order = stages.map((s) => [...s.ids]);
+  // Lanes, not stages: a stage holding a dependency chain spans several
+  // lanes, so every edge runs left to right (no backward or same-column loops).
+  const { stages, lanes } = stageColumns(parsed, ids);
+  const order = lanes.map((lane) => [...lane.ids]);
+  const stageSize = new Map(stages.map((s) => [s.label, s.ids.length]));
 
   const parentsOf = new Map<string, string[]>();
   for (const e of edges) {
@@ -117,7 +120,12 @@ function layoutStaged(
     const colH = col.length * NODE_H + (col.length - 1) * ROW_GAP;
     const yStart = (totalH - colH) / 2;
     col.forEach((id, r) => positions.set(id, { x, y: yStart + r * (NODE_H + ROW_GAP) }));
-    captions.push({ label: stages[c].label, count: col.length, x, y: -84 });
+    // One caption per stage, over its first lane, counting the whole stage.
+    const stage = lanes[c].stage;
+    if (c === 0 || lanes[c - 1].stage !== stage) {
+      const label = STAGE_LABELS[stage];
+      captions.push({ label, count: stageSize.get(label) ?? col.length, x, y: -84 });
+    }
   });
   return { positions, captions };
 }

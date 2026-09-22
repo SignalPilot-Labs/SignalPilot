@@ -46,6 +46,7 @@ export function StandaloneChatComposer({
   liveLabel,
   plan = null,
   planRunning = false,
+  onOpenPlan,
 }: {
   value: string;
   onValueChange: (value: string) => void;
@@ -68,8 +69,10 @@ export function StandaloneChatComposer({
   liveLabel?: string;
   /** The current run's plan, docked above the input. Null renders no dock. */
   plan?: RunPlan | null;
-  /** The plan's run is streaming: the dock opens by default. */
+  /** The plan's run is streaming: styles the current step as live. */
   planRunning?: boolean;
+  /** Opens the plan file in the artifacts panel, when there is one. */
+  onOpenPlan?: () => void;
 }) {
   const canSubmit = Boolean(value.trim()) && !submitDisabled;
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -112,7 +115,7 @@ export function StandaloneChatComposer({
           so the two read as one control. It grows upward as items land. */}
       {plan && (
         <div data-testid="chat-composer-plan-dock" className="relative z-10">
-          <PlanTracker plan={plan} running={planRunning} />
+          <PlanTracker plan={plan} running={planRunning} onOpen={onOpenPlan} />
         </div>
       )}
       {/* Single field: textarea on top, one borderless control bar beneath.

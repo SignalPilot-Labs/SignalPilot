@@ -120,11 +120,12 @@ describe("ChatComposerPanel plan dock", () => {
     expect(tracker()).toBeNull();
   });
 
-  it("derives the running run's plan from the context events, expanded", async () => {
+  it("derives the running run's plan from the context events, folded", async () => {
     await render(run("running"), events);
     expect(tracker()?.textContent).toContain("1/2");
     expect(tracker()?.textContent).toContain("Query it");
-    expect(expanded()).toBe("true");
+    // Folded by default even mid-run: the reader opens it on demand.
+    expect(expanded()).toBe("false");
   });
 
   it("keeps the latest run's final plan folded once it completes", async () => {

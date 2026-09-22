@@ -197,7 +197,7 @@ describe("Standalone Data Chat composer plan dock", () => {
     expect(tracker()).toBeNull();
   });
 
-  it("docks the plan above the input, expanded while the run streams", async () => {
+  it("docks the plan above the input, folded while the run streams", async () => {
     await render({ plan, planRunning: true, running: true, onStop: vi.fn() });
     const dock = container.querySelector(
       '[data-testid="chat-composer-plan-dock"]',
@@ -209,9 +209,13 @@ describe("Standalone Data Chat composer plan dock", () => {
       dock!.compareDocumentPosition(textarea) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
-    expect(header()?.getAttribute("aria-expanded")).toBe("true");
+    // Folded by default, even mid-run; the header carries the summary and
+    // the live step label.
+    expect(header()?.getAttribute("aria-expanded")).toBe("false");
     expect(tracker()?.textContent).toContain("Plan");
     expect(tracker()?.textContent).toContain("1/3");
+    await act(async () => header()?.click());
+    expect(header()?.getAttribute("aria-expanded")).toBe("true");
     // The in-progress item shows its active form; every item is listed.
     expect(tracker()?.textContent).toContain("Querying fct_orders");
     expect(tracker()?.textContent).toContain("Save the chart");
@@ -231,17 +235,17 @@ describe("Standalone Data Chat composer plan dock", () => {
     expect(header()?.getAttribute("aria-expanded")).toBe("false");
   });
 
-  it("resets a manual toggle whenever the run state flips", async () => {
+  it("folds again when a new run starts, and keeps the toggle when one settles", async () => {
     await render({ plan: donePlan, planRunning: false });
     await act(async () => header()?.click());
     expect(header()?.getAttribute("aria-expanded")).toBe("true");
-    // A new run: the default (open) applies again, the manual toggle resets.
+    // A new run: a fresh plan never lands expanded.
     await render({ plan, planRunning: true });
-    expect(header()?.getAttribute("aria-expanded")).toBe("true");
+    expect(header()?.getAttribute("aria-expanded")).toBe("false");
     await act(async () => header()?.click());
-    expect(header()?.getAttribute("aria-expanded")).toBe("false");
-    // The run settles: the dock folds regardless of the earlier toggle.
+    expect(header()?.getAttribute("aria-expanded")).toBe("true");
+    // The run settles: the reader's open dock stays open.
     await render({ plan: donePlan, planRunning: false });
-    expect(header()?.getAttribute("aria-expanded")).toBe("false");
+    expect(header()?.getAttribute("aria-expanded")).toBe("true");
   });
 });

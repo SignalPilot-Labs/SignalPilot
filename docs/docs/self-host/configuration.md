@@ -134,6 +134,7 @@ Each lease keeps query state and cancellation isolated from other requests. Thes
 | `SP_CHAT_AGENT_MODEL` | provider default | Model used by the chat agent. |
 | `SP_CHAT_DATASET_CONNECTORS` | `postgres,snowflake` | Connector types that expose dataset references in chat. |
 | `SP_CHAT_APPROVAL_WARM_SECONDS` | `900` | How long a sandbox stays warm while a query approval is pending. |
+| `SP_CHAT_DEV_DATABASE` | unset | Default database for the chat `refresh_mart` tool, on the same server as the chat's connection. Unset, refreshes build into the connection's own database; the agent can always name a database explicitly. |
 | `SP_AGENT_EFFORT` | `medium` | Reasoning effort for agent runs. |
 | `SP_AGENT_MAX_CONCURRENT_PER_ORG` | `2` | Concurrent agent runs per organization. |
 | `CHAT_WORKER_CONCURRENCY` | `4` | Runs one worker process handles at once. |

@@ -96,6 +96,7 @@ test.describe("artifacts panel (fixture harness)", () => {
     // Mid-run only the analysis notebook exists: no chip strip.
     await page.goto(at(9_000));
     await waitForHydration(page);
+    await page.getByTestId("live-notebook-toggle").click();
     await expect(page.getByTestId("live-notebook-panel")).toBeVisible();
     await expect(page.getByTestId("artifacts-notebook-chip")).toHaveCount(0);
     // At the end the fixture's second ("forecast") notebook has landed.

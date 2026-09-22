@@ -27,6 +27,7 @@ from gateway.standalone_chat.execution import steer_execution
 from gateway.standalone_chat.worker_context import (
     message_context as _message_context,
 )
+from gateway.store import notebook_sessions as notebook_session_store
 
 logger = logging.getLogger(__name__)
 
@@ -160,6 +161,77 @@ async def _announce_notebook(run_id: str, payload: dict[str, Any]) -> None:
             )
 
 
+async def empty_answer_error(
+    *,
+    run_id: str,
+    worker_id: str,
+    execution: Any,
+    final_result: dict[str, Any] | None,
+) -> Exception:
+    """Explain a run that streamed to completion with no answer text.
+
+    The two known causes are the runtime being stopped underneath the run
+    (the notebook session is no longer running: snapshotted, stopped, or
+    timed out) and the model ending its turn without text (the SDK result
+    says so). Both are recorded on the error so the next occurrence is
+    diagnosable from the run alone.
+    """
+    from gateway.standalone_chat.worker_errors import AnalysisRuntimeError
+
+    session_status: str | None = None
+    session_id = str(getattr(execution, "session_id", "") or "")
+    if session_id:
+        with suppress(Exception):
+            factory = _worker().get_session_factory()
+            async with factory() as db:
+                run = await _worker().chat_store.get_worker_run(db, run_id=run_id, worker_id=worker_id)
+                info = await notebook_session_store.get_session_internal(
+                    db, session_id=session_id, org_id=str(run.org_id) if run else None
+                )
+                session_status = str(getattr(info, "status", "") or "") or None
+    diagnostic: dict[str, Any] = {
+        "notebook_session_id": session_id or None,
+        "notebook_session_status": session_status,
+        **dict(final_result or {}),
+    }
+    if session_status and session_status != "running":
+        message = (
+            "The analysis runtime was stopped while the run was in progress "
+            f"(session {session_status}). Retry the message; the runtime resumes on the next run."
+        )
+        return AnalysisRuntimeError(
+            message,
+            full_trace=message,
+            diagnostic_context=diagnostic,
+            public_error_code="runtime_stopped",
+            public_error_message=message,
+        )
+    return AnalysisRuntimeError(
+        "The analysis runtime returned no answer",
+        full_trace="The analysis runtime returned no answer",
+        diagnostic_context=diagnostic,
+    )
+
+
+async def touch_run_session(run_id: str, worker_id: str) -> bool:
+    """Ping the notebook session the run executes on, so the lifecycle loop
+    sees it as active. Only the browser pings otherwise, and a chat run on
+    a session older than the idle window was being snapshotted mid-run.
+    Returns True when a session was pinged."""
+    factory = _worker().get_session_factory()
+    with suppress(Exception):
+        async with factory() as db:
+            run = await _worker().chat_store.get_worker_run(db, run_id=run_id, worker_id=worker_id)
+            session_id = getattr(run, "execution_session_id", None) if run else None
+            if not session_id:
+                return False
+            pinged = await notebook_session_store.ping_session_by_id(
+                db, session_id=str(session_id), org_id=str(run.org_id)
+            )
+            return pinged is not None
+    return False
+
+
 async def _lease_renewer(run_id: str, worker_id: str, stop: asyncio.Event) -> None:
     interval = max(5.0, lease_seconds() / 3)
     factory = _worker().get_session_factory()
@@ -202,6 +274,7 @@ async def _lease_renewer(run_id: str, worker_id: str, stop: asyncio.Event) -> No
             worker_id,
             lease_seconds(),
         )
+        await touch_run_session(run_id, worker_id)
 
 
 async def _cancellation_monitor(

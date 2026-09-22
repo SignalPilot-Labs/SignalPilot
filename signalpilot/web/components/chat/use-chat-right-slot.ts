@@ -26,8 +26,16 @@ export function useChatRightSlot({
     dismissSettings();
     setArtifactsOpen(true);
   }, [dismissSettings, setArtifactsOpen]);
-  // Inline artifact cards open the panel focused on their file.
-  const { openFileRequest, openArtifact } = useOpenArtifact(openArtifacts);
+  // Inline artifact cards and notices open the panel focused on their
+  // file, or on the notebook.
+  const { openFileRequest, openArtifact, openNotebook } =
+    useOpenArtifact(openArtifacts);
 
-  return { settings, openArtifacts, openFileRequest, openArtifact };
+  return {
+    settings,
+    openArtifacts,
+    openFileRequest,
+    openArtifact,
+    openNotebook,
+  };
 }

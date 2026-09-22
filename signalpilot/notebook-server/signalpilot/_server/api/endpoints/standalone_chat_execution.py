@@ -558,6 +558,7 @@ async def execute(*, request: Request) -> StreamingResponse:
                     agent_usage=state.agent_usage,
                     archive_id=state.archive_id,
                     kernel_stopped=False,
+                    agent_result=state.agent_result,
                 )
                 yield (json.dumps(final_payload, default=str) + "\n").encode(
                     "utf-8"

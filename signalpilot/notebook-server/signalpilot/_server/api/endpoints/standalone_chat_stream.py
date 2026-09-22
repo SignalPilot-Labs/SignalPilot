@@ -85,6 +85,9 @@ class AgentRunState:
     ran_sessions: set[str] = field(default_factory=set)
     agent_cost_usd: float | None = None
     agent_usage: dict[str, Any] | None = None
+    # The SDK ResultMessage's subtype / stop reason / turn count: forwarded
+    # on the final event so an empty answer can be explained gateway-side.
+    agent_result: dict[str, Any] | None = None
     agent_failed: bool = False
     # Set by the archive step; None when the upload failed (a warning, not
     # a run failure).
@@ -353,6 +356,14 @@ async def forward_agent_events(
                 state.agent_cost_usd = event.cost_usd
             if getattr(event, "usage", None):
                 state.agent_usage = event.usage
+            state.agent_result = {
+                "result_subtype": getattr(event, "result_subtype", "") or "",
+                "stop_reason": getattr(event, "stop_reason", "") or "",
+                "num_turns": getattr(event, "num_turns", 0) or 0,
+                "api_error_status": (event.diagnostic_context or {}).get(
+                    "api_error_status"
+                ),
+            }
         if event.type == "tool_use" and event.tool_call_id:
             state.tool_names_by_id[event.tool_call_id] = event.tool_name
             tool_input = (

@@ -287,11 +287,14 @@ def build_final_payload(
     agent_usage: dict[str, Any] | None,
     archive_id: str | None,
     kernel_stopped: bool,
+    agent_result: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     final_payload: dict[str, Any] = {
         "type": "final",
         "content": accepted_text,
     }
+    if agent_result:
+        final_payload["result"] = agent_result
     if agent_cost_usd is not None:
         final_payload["cost_usd"] = agent_cost_usd
     if agent_usage is not None:

@@ -19,6 +19,11 @@ from signalpilot._server.ai.claude_agent_state import (
     clip_tool_result_for_event,
     tool_result_text,
 )
+from signalpilot._server.ai.plan_file import (
+    PLAN_FILE_TOOLS,
+    is_plan_file_path,
+    open_plan_file_count,
+)
 
 if TYPE_CHECKING:
     import queue
@@ -112,8 +117,11 @@ class _SdkStreamState:
 
     turn_count: int = 0
     latest_rate_limit_info: dict[str, Any] | None = None
-    # The most recent TodoWrite tool input: the run's live plan.
+    # The most recent TodoWrite tool input: the run's live plan on CLIs that
+    # still offer TodoWrite.
     last_todo_input: dict[str, Any] | None = None
+    # The plan file (artifacts/plan.md) the agent wrote this run, if any.
+    plan_file_path: str | None = None
     plan_continuations: int = 0
 
 
@@ -178,7 +186,11 @@ async def _continue_open_plan(
     """
     if bool(getattr(msg, "is_error", False)):
         return False
-    open_items = open_todo_count(state.last_todo_input)
+    open_items = (
+        open_plan_file_count(state.plan_file_path)
+        if state.plan_file_path
+        else open_todo_count(state.last_todo_input)
+    )
     if open_items == 0:
         return False
     if state.plan_continuations >= MAX_PLAN_CONTINUATIONS:
@@ -257,6 +269,13 @@ async def _relay_sdk_messages(
                             if isinstance(block.input, dict)
                             else None
                         )
+                    elif (
+                        block.name in PLAN_FILE_TOOLS
+                        and not parent_id
+                        and isinstance(block.input, dict)
+                        and is_plan_file_path(block.input.get("file_path"))
+                    ):
+                        state.plan_file_path = str(block.input["file_path"])
                     event_queue.put(
                         AgentEvent(
                             type="tool_use",

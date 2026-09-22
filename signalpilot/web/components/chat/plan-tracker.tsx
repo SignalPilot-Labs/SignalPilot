@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, ChevronDown, ListTodo } from "lucide-react";
+import { Check, ChevronDown, ExternalLink, ListTodo } from "lucide-react";
 import { memo, useState } from "react";
 import { composerPlanSummary } from "~/lib/chat-composer-plan";
 import type { PlanItem, RunPlan } from "~/lib/chat-run-steps";
@@ -66,10 +66,13 @@ function ItemMarker({ status }: { status: PlanItem["status"] }) {
 export const PlanTracker = memo(function PlanTracker({
   plan,
   running = true,
+  onOpen,
 }: {
   plan: RunPlan;
   /** The plan's run is streaming: styles the current step as live. */
   running?: boolean;
+  /** Opens the plan file in the artifacts panel (plan-file plans only). */
+  onOpen?: () => void;
 }) {
   // Folded until the reader opens it. A new run (running flips back on)
   // folds it again, so a fresh plan never lands expanded (React's
@@ -90,6 +93,24 @@ export const PlanTracker = memo(function PlanTracker({
     >
       <div className="chat-collapse" data-open={open}>
         <div>
+          {(plan.title || onOpen) && (
+            <div className="flex items-center gap-2 px-4 pt-2.5 text-[11px] text-[var(--color-text-muted)]">
+              <span data-testid="chat-plan-title" className="min-w-0 flex-1 truncate font-medium">
+                {plan.title ?? ""}
+              </span>
+              {onOpen && (
+                <button
+                  type="button"
+                  data-testid="chat-plan-open"
+                  onClick={onOpen}
+                  className="flex flex-none items-center gap-1 rounded px-1.5 py-0.5 text-[var(--color-text-dim)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
+                >
+                  <ExternalLink className="h-3 w-3" />
+                  Open
+                </button>
+              )}
+            </div>
+          )}
           <ul className="chat-plan__body space-y-1 px-3 py-2.5">
             {plan.items.map((item, index) => (
               <li

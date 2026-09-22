@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from signalpilot._server.ai.claude_agent_options import resolve_agent_cwd
+from signalpilot._server.ai.plan_file import PLAN_FILE_NAME
 from signalpilot._server.api.endpoints.standalone_chat_prompt import (
     STANDALONE_DISALLOWED_MCP_TOOLS,
 )
@@ -66,7 +67,10 @@ def build_agent_options(
         "max_turns": max_turns,
         "new_chat": False,
         "message_history": history,
-        "system_prompt_override": system_prompt,
+        # The plan file path goes last so the cached prompt prefix is stable.
+        "system_prompt_override": (
+            f"{system_prompt}\nPlan file: {scratch / 'artifacts' / PLAN_FILE_NAME}\n"
+        ),
         "mcp_config": mcp_config,
         "thread_id": f"standalone:{run_id}",
         "notebook_mcp_app": runtime_app,

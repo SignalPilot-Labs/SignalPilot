@@ -223,7 +223,10 @@ export function parseMap(raw: RawMapGraph): ParsedMap {
   const layerCounts = {
     source: 0, staging: 0, intermediate: 0, dimension: 0, fact: 0, mart: 0, other: 0,
   } as Record<MapLayer, number>;
-  for (const model of models.values()) layerCounts[model.layer] += 1;
+  // Legend counts what the canvas draws: dbt sources are never drawn.
+  for (const model of models.values()) {
+    if (model.resourceType !== "source") layerCounts[model.layer] += 1;
+  }
 
   return {
     models,

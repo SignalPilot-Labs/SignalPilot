@@ -105,6 +105,8 @@ export type RunPlan = {
   completed: number;
   /** The in-progress item, preferring its activeForm for display. */
   currentLabel: string | null;
-  /** Sequence of the TodoWrite event the plan came from. */
+  /** Sequence of the TodoWrite or plan-file event the plan came from. */
   sequence: number;
+  /** The plan file's heading, when the plan came from artifacts/plan.md. */
+  title?: string | null;
 };

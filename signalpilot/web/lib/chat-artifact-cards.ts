@@ -1,3 +1,4 @@
+import { isPlanFilePath } from "~/lib/chat-run-steps/plan-file";
 import type {
   ConversationFileInfo,
   ConversationFileKind,
@@ -121,7 +122,8 @@ export function toolTouchPaths(event: StandaloneChatEvent): string[] {
       : null;
   const path =
     text(input?.file_path) ?? text(input?.notebook_path) ?? text(input?.path);
-  return path ? [path] : [];
+  // The plan file shows in the plan dock, not as a transcript card.
+  return path && !isPlanFilePath(path) ? [path] : [];
 }
 
 /** Paths a `files_changed` event touches: every non-deleted entry of its
@@ -136,7 +138,7 @@ function filesChangedTouchPaths(event: StandaloneChatEvent): string[] {
     const record = entry as Record<string, unknown>;
     if (record.deleted === true) continue;
     const path = text(record.path);
-    if (path) paths.push(path);
+    if (path && !isPlanFilePath(path)) paths.push(path);
   }
   return paths;
 }

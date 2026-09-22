@@ -1,5 +1,6 @@
 import type { StandaloneChatEvent } from "~/lib/api";
 import { asRecord, text } from "./payload";
+import { extractPlanFilePlan } from "./plan-file";
 import { normalizeToolName } from "./tool-names";
 import type {
   PlanItem,
@@ -74,11 +75,23 @@ export function extractRuntimeBoot(
 }
 
 /**
- * The latest plan the agent published via TodoWrite, for the pinned plan
- * tracker. Subagent TodoWrites are ignored — the tracker shows the main
- * run's plan only. Returns null until the run publishes a plan.
+ * The run's plan for the pinned plan tracker: the plan file
+ * (artifacts/plan.md, see plan-file.ts) or, on CLIs that still have it, the
+ * latest TodoWrite, whichever the run updated last. Subagent calls are
+ * ignored. Returns null until the run publishes a plan.
  */
 export function extractRunPlan(
+  events: StandaloneChatEvent[],
+  runId: string,
+): RunPlan | null {
+  const fromTodos = extractTodoWritePlan(events, runId);
+  const fromFile = extractPlanFilePlan(events, runId);
+  if (!fromTodos) return fromFile;
+  if (!fromFile) return fromTodos;
+  return fromFile.sequence > fromTodos.sequence ? fromFile : fromTodos;
+}
+
+function extractTodoWritePlan(
   events: StandaloneChatEvent[],
   runId: string,
 ): RunPlan | null {

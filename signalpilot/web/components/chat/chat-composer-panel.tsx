@@ -10,6 +10,7 @@ import {
   type SetStateAction,
 } from "react";
 import { selectComposerPlan } from "~/lib/chat-composer-plan";
+import { PLAN_FILE_PATH } from "~/lib/chat-run-steps";
 import type {
   StandaloneChatBootstrap,
   StandaloneChatEvent,
@@ -68,7 +69,8 @@ export function ChatComposerPanel({
   // The run's live state for the Stop ring and hint. The panel renders
   // inside the chat UI provider on the live page; without one (harness,
   // tests) there are no events and the state stays idle.
-  const events = useContext(ChatUiContext)?.events ?? EMPTY_EVENTS;
+  const ui = useContext(ChatUiContext);
+  const events = ui?.events ?? EMPTY_EVENTS;
   const live = useRunLiveState(
     events,
     currentRun?.id,
@@ -79,6 +81,14 @@ export function ChatComposerPanel({
   const composerPlan = useMemo(
     () => selectComposerPlan(events, currentRun),
     [events, currentRun],
+  );
+  // A plan kept in artifacts/plan.md opens in the artifacts panel.
+  const planFileId = ui?.files.find((file) => file.path === PLAN_FILE_PATH)?.id;
+  const openArtifact = ui?.openArtifact;
+  const onOpenPlan = useMemo(
+    () =>
+      planFileId && openArtifact ? () => openArtifact(planFileId) : undefined,
+    [planFileId, openArtifact],
   );
   return (
     <StandaloneChatComposer
@@ -124,6 +134,7 @@ export function ChatComposerPanel({
       liveLabel={live.label}
       plan={composerPlan?.plan ?? null}
       planRunning={composerPlan?.running ?? false}
+      onOpenPlan={onOpenPlan}
     />
   );
 }

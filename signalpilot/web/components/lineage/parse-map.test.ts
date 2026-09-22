@@ -80,6 +80,46 @@ describe("parseMap", () => {
     expect(p.layerCounts.fact).toBe(1);
   });
 
+  it("classifies core, prep and report models, then unmatched ones by position", () => {
+    const model = (name: string, path: string) => ({ name, resource_type: "model", path });
+    const p = parseMap({
+      metadata: { project_name: "demo" },
+      nodes: {
+        "model.d.core_cost_line": model("core_cost_line", "models/core/core_cost_line.sql"),
+        "model.d.pool": model("pool", "models/core/pool.sql"),
+        "model.d.fct_sales_lines": model("fct_sales_lines", "models/core/fct_sales_lines.sql"),
+        "model.d.prep_rows": model("prep_rows", "models/misc/prep_rows.sql"),
+        "model.d.report_weekly": model("report_weekly", "models/misc/report_weekly.sql"),
+        "model.d.scratch_join": model("scratch_join", "models/adhoc/scratch_join.sql"),
+        "model.d.quick_check": model("quick_check", "models/adhoc/quick_check.sql"),
+        "model.d.lonely": model("lonely", "models/adhoc/lonely.sql"),
+      },
+      parent_map: {
+        "model.d.scratch_join": [],
+        "model.d.quick_check": ["model.d.scratch_join"],
+        "model.d.lonely": [],
+      },
+      child_map: {
+        "model.d.scratch_join": ["model.d.quick_check"],
+        "model.d.quick_check": [],
+        "model.d.lonely": [],
+      },
+    });
+    const layer = (id: string) => p.models.get(id)!.layer;
+    expect(layer("model.d.core_cost_line")).toBe("intermediate");
+    expect(layer("model.d.pool")).toBe("intermediate"); // core/ folder
+    // A name prefix outranks the folder it sits in.
+    expect(layer("model.d.fct_sales_lines")).toBe("fact");
+    expect(layer("model.d.prep_rows")).toBe("intermediate");
+    expect(layer("model.d.report_weekly")).toBe("mart");
+    // No rule matches: a model that feeds others is intermediate, an
+    // endpoint is a mart, and only a model with no neighbours stays other.
+    expect(layer("model.d.scratch_join")).toBe("intermediate");
+    expect(layer("model.d.quick_check")).toBe("mart");
+    expect(layer("model.d.lonely")).toBe("other");
+    expect(p.layerCounts.other).toBe(1);
+  });
+
   it("keeps dbt sources in the map but out of the legend counts", () => {
     // The canvas never draws dbt sources; the Raw Tables panel still reads
     // them from the parsed map, so they stay in `models`.

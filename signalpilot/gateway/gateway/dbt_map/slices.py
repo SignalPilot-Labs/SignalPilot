@@ -36,11 +36,19 @@ def _trim_test(node: dict) -> dict:
     return out
 
 
-def skeleton_node(uid: str, node: dict, graph: dict) -> dict:
-    """A node without columns, plus column_count and its attached test chips."""
+def skeleton_node(uid: str, node: dict, graph: dict, *, include_tests: bool = False) -> dict:
+    """A node without columns, plus column_count.
+
+    Graph nodes carry no tests: tests are ~75% of a manifest's nodes and their
+    chips were 20-45% of the skeleton payload for no graph value. Only a single
+    focus-model record (the cone's ``model``) asks for them.
+    """
     nodes = graph.get("nodes") or {}
     slim = {k: v for k, v in node.items() if k != "columns"}
     slim["column_count"] = len(node.get("columns") or {})
+    slim["tests"] = []
+    if not include_tests:
+        return slim
     tests: list[dict] = []
     for child_id in (graph.get("child_map") or {}).get(uid, []):
         child = nodes.get(child_id)
@@ -61,7 +69,7 @@ def _filter_map(mapping: dict, nodes: dict) -> dict:
 
 
 def build_skeleton(graph: dict) -> dict:
-    """Full graph minus tests and columns; test chips folded onto their parents."""
+    """Full graph minus tests and columns."""
     nodes = graph.get("nodes") or {}
     return {
         "metadata": {**(graph.get("metadata") or {}), "variant": "skeleton"},
@@ -162,7 +170,11 @@ def build_cone(graph: dict, uid: str, hops: int | None) -> dict:
             cone_nodes[nid] = _source_stub(nid)
 
     focus = nodes.get(uid) or sources.get(uid) or {}
-    model = {"unique_id": uid, **skeleton_node(uid, focus, graph), "columns": columns_list(focus)}
+    model = {
+        "unique_id": uid,
+        **skeleton_node(uid, focus, graph, include_tests=True),
+        "columns": columns_list(focus),
+    }
     return {
         "model": model,
         "graph": {

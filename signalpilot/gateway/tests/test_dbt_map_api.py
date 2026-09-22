@@ -398,21 +398,15 @@ def test_skeleton_drops_tests_and_columns(harness):
     orders = skel["nodes"]["model.demo.orders"]
     assert "columns" not in orders
     assert orders["column_count"] == 3
-    assert orders["tests"] == [
-        {"name": "not_null_orders_id", "test_metadata": {"name": "not_null", "kwargs": {"column_name": "id"}}},
-        {
-            "name": "not_null_orders_amount",
-            "test_metadata": {"name": "not_null", "kwargs": {"column_name": "amount"}},
-        },
-    ]
-    assert skel["nodes"]["model.demo.dim_x"]["tests"] == []
+    # Graph nodes carry no test chips; tests never render on the lineage graph.
+    assert all(node["tests"] == [] for node in skel["nodes"].values())
     assert skel["child_map"]["model.demo.orders"] == ["model.demo.mart_a", "model.demo.mart_b"]
     assert not any(k.startswith("test.") for k in skel["parent_map"])
     assert skel["sources"] == graph["sources"]
     assert len(resp.content) < len(client.get(URL, headers={"Accept-Encoding": "identity"}).content)
 
 
-def test_skeleton_caps_tests_per_node():
+def test_skeleton_nodes_carry_no_tests_even_when_many_exist():
     graph = synthetic_graph()
     for i in range(60):
         uid = f"test.demo.t{i}"
@@ -420,7 +414,8 @@ def test_skeleton_caps_tests_per_node():
         graph["parent_map"][uid] = ["model.demo.dim_x"]
         graph["child_map"]["model.demo.dim_x"].append(uid)
     skel = build_skeleton(graph)
-    assert len(skel["nodes"]["model.demo.dim_x"]["tests"]) == 40
+    assert skel["nodes"]["model.demo.dim_x"]["tests"] == []
+    assert not any(uid.startswith("test.") for uid in skel["nodes"])
 
 
 def test_skeleton_is_gzipped_when_accepted(harness):

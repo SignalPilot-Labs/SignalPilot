@@ -163,6 +163,9 @@ def public_diagnostic_context(exc: Exception) -> dict[str, Any]:
         "duration_ms",
         "duration_api_ms",
         "sdk_session_id",
+        "num_turns",
+        "notebook_session_id",
+        "notebook_session_status",
         "operation",
         "http_status",
     }

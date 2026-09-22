@@ -12,7 +12,9 @@ Marts are built on a schedule. The schedule is often nightly. So the newest data
 may not be in a mart yet.
 
 Your only warehouse write action is `refresh_mart`. It rebuilds a mart from the
-latest raw data into the dev database. It does not change production data.
+latest raw data through the connection this chat uses. It builds into the
+connection's default database. Give the optional `database` argument only when
+the user names a different database on the same server.
 
 ### Steps for each analysis
 
@@ -31,3 +33,5 @@ latest raw data into the dev database. It does not change production data.
 2. Refresh a mart only when the freshness check shows the mart is behind. Do not
    refresh a mart without a reason.
 3. Do not try to find, read, or rebuild database credentials. No task needs them.
+4. Stop if `refresh_mart` returns an error. Report the error to the user. Answer
+   from the mart as it is, and say that the data may be behind. Do not retry.

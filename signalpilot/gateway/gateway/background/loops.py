@@ -216,10 +216,16 @@ async def notebook_lifecycle_loop(
             backend = get_notebook_backend(settings)
             async with session_factory() as session:
                 now = time.time()
+                # The browser pings a session it has open; a chat run does
+                # not, so its session is judged by the run instead of the
+                # ping clock.
+                busy = await ns.session_ids_with_active_chat_runs(session)
                 for s in await ns.list_running_internal(session):
                     if not s.runtime_handle:
                         continue
                     idle = now - (s.last_ping or 0)
+                    if s.session_id in busy:
+                        idle = 0.0
                     if idle < settings.idle_snapshot_seconds:
                         try:
                             await backend.extend(

@@ -62,6 +62,8 @@ from gateway.standalone_chat.worker_events import (
     _steering_monitor,
     _update_summary,
     _worker_id,
+    empty_answer_error,
+    touch_run_session,
 )
 from gateway.standalone_chat.worker_recovery import load_interrupted_tool_completions
 from gateway.standalone_chat.worker_tool_results import (
@@ -119,6 +121,9 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
     steering: asyncio.Task[None] | None = None
     final_text = ""
     streamed_text = ""
+    # The SDK's result diagnostics from the final event (subtype, stop
+    # reason, turn count): what an empty answer is explained with.
+    final_result: dict[str, Any] | None = None
     report_proposal: dict[str, Any] | None = None
     starts_new_text_block = False
     tool_names_by_id: dict[str, str] = {}
@@ -237,6 +242,9 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                                 stop,
                             )
                         )
+                # The session is in use from here; the lease renewer keeps
+                # pinging it until the run ends.
+                await touch_run_session(run_id, worker_id)
                 if recovering or notebook_attempt > 0:
                     # A re-claimed run, or our own reconnect: the previous
                     # attempt may still be running under this run id on the
@@ -393,6 +401,8 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                         )
                     elif event_type == "final":
                         final_text = content or final_text or streamed_text
+                        if isinstance(event.get("result"), dict):
+                            final_result = dict(event["result"])
                         # Operator accounting: cost + token usage reported by
                         # the agent SDK, persisted on the run row.
                         raw_usage = event.get("usage")
@@ -447,7 +457,12 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                 )
             return
         if not answer:
-            raise RuntimeError("The analysis runtime returned no answer")
+            raise await empty_answer_error(
+                run_id=run_id,
+                worker_id=worker_id,
+                execution=execution,
+                final_result=final_result,
+            )
 
         await _flush_deltas(run_id)
         async with factory() as db:

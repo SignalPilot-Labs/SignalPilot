@@ -352,31 +352,14 @@ export function useChatAutoScroll(
 }
 
 /**
- * Auto-open the notebook panel once per run when the notebook is live.
- * A manual close stays closed for the rest of that run.
+ * The artifacts panel's open state, reset per conversation. The panel
+ * never opens on its own: when the agent starts a notebook or produces a
+ * chart, an artifact notice (useArtifactNotices) offers to open it.
  */
-export function useNotebookPanelState(
-  conversationId: string | undefined,
-  notebookStatus: string | undefined,
-  currentRunId: string | undefined,
-) {
+export function useNotebookPanelState(conversationId: string | undefined) {
   const [notebookPanelOpen, setNotebookPanelOpen] = useState(false);
-  const notebookPanelAutoOpenedRunRef = useRef<string | null>(null);
-  useEffect(() => {
-    // Auto-open once per run when the notebook is live. A manual close
-    // stays closed for the rest of that run.
-    if (
-      notebookStatus === "live" &&
-      currentRunId &&
-      notebookPanelAutoOpenedRunRef.current !== currentRunId
-    ) {
-      notebookPanelAutoOpenedRunRef.current = currentRunId;
-      setNotebookPanelOpen(true);
-    }
-  }, [notebookStatus, currentRunId]);
   useEffect(() => {
     setNotebookPanelOpen(false);
-    notebookPanelAutoOpenedRunRef.current = null;
   }, [conversationId]);
   return [notebookPanelOpen, setNotebookPanelOpen] as const;
 }

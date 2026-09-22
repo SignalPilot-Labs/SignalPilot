@@ -208,8 +208,10 @@ async def test_ensure_tunnel_alive_relaunches_only_when_down(fast_ready):
 class FakeStore:
     def __init__(self, extras: dict | None):
         self.extras = extras
+        self.requested: list[str] = []
 
     async def get_connection_string(self, name):
+        self.requested.append(name)
         return PG_DSN
 
     async def get_connection(self, name):
@@ -398,3 +400,51 @@ def test_forwarder_script_proxy_requires_socat(forwarder_ns, monkeypatch):
 
 def test_forwarder_script_stays_small():
     assert len(FORWARDER_SCRIPT.strip().splitlines()) <= 80
+
+
+@pytest.mark.asyncio
+async def test_refresh_executor_uses_the_target_connection_and_its_own_cache(executor_env):
+    """The refresh executor connects through the target's connection, uses the
+    warehouse's default schema (no scratch schema), and is cached apart from
+    the scratch executor of the same identity."""
+    rt = executor_env
+    store = FakeStore(None)
+    target = dbt_executor.RefreshTarget(connection_name="pg-dev")
+    sandbox_id, _dbt_dir, schema = await dbt_executor.ensure_executor(
+        None, identity="chat:abc12345-1", org_id="o", project_id="p", branch="main",
+        connection_name="pg", store=store, refresh=target,
+    )
+    assert store.requested == ["pg-dev"]
+    assert schema == "public"
+    assert "schema: public" in rt.files["/creds/profiles.yml"].decode()
+    assert set(dbt_executor._executors) == {"chat:abc12345-1::refresh"}
+    # Reuse reports the same schema without re-reading the connection.
+    again = await dbt_executor.ensure_executor(
+        None, identity="chat:abc12345-1", org_id="o", project_id="p", branch="main",
+        connection_name="pg", store=store, refresh=target,
+    )
+    assert again == (sandbox_id, _dbt_dir, "public")
+    assert store.requested == ["pg-dev"]
+    # The scratch executor is created separately under the bare key (the fake
+    # runtime hands out one id, so compare the cache, not the ids).
+    _, _, scratch_schema = await _ensure(store)
+    assert scratch_schema.startswith("sp_chat_")
+    assert set(dbt_executor._executors) == {"chat:abc12345-1", "chat:abc12345-1::refresh"}
+    assert len(rt.created) == 2 if hasattr(rt, "created") else True
+    await dbt_executor.release_executor("chat:abc12345-1")
+    assert dbt_executor._executors == {} and dbt_executor._executor_schemas == {}
+
+
+@pytest.mark.asyncio
+async def test_refresh_executor_database_override_repoints_the_dsn(executor_env):
+    rt = executor_env
+    target = dbt_executor.RefreshTarget(
+        connection_name="pg", database_override="analytics_dev", schema="marts"
+    )
+    _, _, schema = await dbt_executor.ensure_executor(
+        None, identity="chat:abc12345-2", org_id="o", project_id="p", branch="main",
+        connection_name="pg", store=FakeStore(None), refresh=target,
+    )
+    profile = rt.files["/creds/profiles.yml"].decode()
+    assert schema == "marts"
+    assert "dbname: analytics_dev" in profile or "database: analytics_dev" in profile

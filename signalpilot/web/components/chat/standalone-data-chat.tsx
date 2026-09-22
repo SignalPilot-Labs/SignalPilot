@@ -22,7 +22,6 @@ import {
 } from "~/lib/standalone-chat-state";
 import { projectSettingsHref } from "~/lib/project-settings-route";
 import { useConversationArtifacts } from "~/components/chat/use-conversation-notebook";
-import { pickDefaultNotebook } from "~/lib/chat-live-notebook";
 import { hasArtifactsContent } from "~/lib/chat-artifacts";
 import { ChatUiContext } from "~/components/chat/chat-ui-context";
 import { ChatPaywall } from "~/components/billing/chat-paywall";
@@ -68,6 +67,8 @@ import {
   ChatRightPanels,
 } from "~/components/chat/standalone-chat-panels";
 import { useChatRightSlot } from "~/components/chat/use-chat-right-slot";
+import { useArtifactNotices } from "~/components/chat/use-artifact-notices";
+import { ArtifactNotices } from "~/components/chat/artifact-notices";
 import { useDockScrollCompensation } from "~/components/chat/use-dock-scroll-compensation";
 import { ConnectorsProvider } from "~/components/connectors/connectors-context";
 import { useChatModelSettings } from "~/components/chat/use-chat-model-settings";
@@ -181,13 +182,8 @@ export function StandaloneDataChat({
     executions: sqlTraceExecutions,
     loading: artifactsLoading,
   } = useConversationArtifacts(conversationId ?? null, events);
-  // Panel-open and auto-open follow the DEFAULT (analysis) notebook.
-  const defaultNotebook = pickDefaultNotebook(conversationNotebooks);
-  const [notebookPanelOpen, setNotebookPanelOpen] = useNotebookPanelState(
-    conversationId,
-    defaultNotebook?.status,
-    currentRun?.id,
-  );
+  const [notebookPanelOpen, setNotebookPanelOpen] =
+    useNotebookPanelState(conversationId);
   const conversationLoading = Boolean(
     conversationId && !detail && !detailError && detailLoading,
   );
@@ -221,9 +217,22 @@ export function StandaloneDataChat({
     openArtifacts: openArtifactsPanel,
     openFileRequest,
     openArtifact,
+    openNotebook,
   } = useChatRightSlot({
     artifactsOpen: notebookPanelOpen,
     setArtifactsOpen: setNotebookPanelOpen,
+  });
+  // New notebooks, charts, dashboards and reports raise a notice under the
+  // panel toggle instead of opening the panel by themselves.
+  const artifactNotices = useArtifactNotices({
+    conversationId,
+    notebooks: conversationNotebooks,
+    files: conversationFiles,
+    filesLoading: artifactsLoading,
+    currentRunId: currentRun?.id,
+    panelOpen: notebookPanelOpen || settingsPanel.open,
+    openArtifact,
+    openNotebook,
   });
 
   const { viewportRef, shouldStickToBottomRef, onViewportScroll } =
@@ -555,6 +564,9 @@ export function StandaloneDataChat({
                 }
                 onReplay={canReplay ? enterReplay : undefined}
               />
+            )}
+            {conversationId && !replaying && (
+              <ArtifactNotices {...artifactNotices} />
             )}
           </main>
           {settingsPanel.open || conversationId ? (

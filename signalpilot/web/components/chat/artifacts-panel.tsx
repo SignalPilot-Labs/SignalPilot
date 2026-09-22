@@ -31,6 +31,7 @@ import type {
   StandaloneChatEvent,
 } from "~/lib/api";
 import { ChatFileViewer } from "~/components/chat/chat-file-viewer";
+import type { ArtifactOpenRequest } from "~/components/chat/use-open-artifact";
 import { ChatUiContext } from "~/components/chat/chat-ui-context";
 import { SqlTracePanel } from "~/components/chat/sql-trace-panel";
 import { describeQueryExecutions } from "~/lib/chat-query-descriptions";
@@ -239,9 +240,10 @@ export function ArtifactsPanel({
   /** True while the first resource calls are still in flight. */
   loading?: boolean;
   onClose: () => void;
-  /** External "open this file" request (from an inline artifact card).
-   * A new nonce re-applies the request even for the same file. */
-  openFileRequest?: { fileId: string; nonce: number } | null;
+  /** External "open this" request (from an inline artifact card or an
+   * artifact notice). A new nonce re-applies the request even for the
+   * same target. */
+  openFileRequest?: ArtifactOpenRequest | null;
   /** Test-only: rendered instead of the notebook view (the fixture harness has no gateway). */
   liveViewOverride?: ReactNode;
   /** Test-only: rendered instead of the file viewer (the fixture harness has no gateway). */
@@ -286,6 +288,10 @@ export function ArtifactsPanel({
   }, [conversationId]);
   useEffect(() => {
     if (!openFileRequest) return;
+    if (openFileRequest.kind === "notebook") {
+      setSelectedTab("notebook");
+      return;
+    }
     setSelectedTab("files");
     setSelectedFileId(openFileRequest.fileId);
   }, [openFileRequest]);

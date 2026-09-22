@@ -11,7 +11,6 @@ from gateway.standalone_chat.dbt_executor import (
     scratch_schema_for,
 )
 
-
 # ── argv allowlist / sanitization ────────────────────────────────────────────
 
 
@@ -118,6 +117,51 @@ def test_refresh_mart_selector_rebuilds_upstream_lineage():
     argv = build_dbt_argv("run", select="+fct_daily_sales", dbt_dir="dumpsters_dbt")
     assert argv[:2] == ["dbt", "run"]
     assert argv[argv.index("--select") + 1] == "+fct_daily_sales"
+
+
+def test_refresh_target_is_the_chat_connection_by_default(monkeypatch):
+    from gateway.standalone_chat.dbt_executor import resolve_refresh_target
+
+    monkeypatch.delenv("SP_CHAT_DEV_DATABASE", raising=False)
+    target = resolve_refresh_target(" analytics ")
+    assert target.connection_name == "analytics"
+    assert target.database_override is None and target.schema is None
+
+
+def test_refresh_target_honours_the_agent_named_database(monkeypatch):
+    from gateway.standalone_chat.dbt_executor import resolve_refresh_target
+
+    monkeypatch.setenv("SP_CHAT_DEV_DATABASE", "Analytics_dev")
+    # An explicit database wins over the deployment default.
+    assert resolve_refresh_target("analytics", " Analytics_scratch ").database_override == "Analytics_scratch"
+    # No database named: the deployment default applies.
+    assert resolve_refresh_target("analytics", None).database_override == "Analytics_dev"
+    assert resolve_refresh_target("analytics", "  ").database_override == "Analytics_dev"
+
+
+@pytest.mark.parametrize("bad", ["Analytics;DROP", "a/b", "a b", "1abc", "x?y=z"])
+def test_refresh_target_rejects_unsafe_database_names(bad):
+    from gateway.standalone_chat.dbt_executor import resolve_refresh_target
+
+    with pytest.raises(DbtExecutorError):
+        resolve_refresh_target("analytics", bad)
+
+
+def test_refresh_target_requires_a_bound_connection():
+    from gateway.standalone_chat.dbt_executor import resolve_refresh_target
+
+    with pytest.raises(DbtExecutorError):
+        resolve_refresh_target(None)
+
+
+@pytest.mark.parametrize(
+    ("db_type", "schema"),
+    [("mssql", "dbo"), ("snowflake", "PUBLIC"), ("postgres", "public"), ("redshift", "public")],
+)
+def test_default_schema_follows_the_warehouse(db_type, schema):
+    from gateway.standalone_chat.dbt_executor import default_schema_for
+
+    assert default_schema_for(db_type) == schema
 
 
 def test_dev_database_reads_env(monkeypatch):

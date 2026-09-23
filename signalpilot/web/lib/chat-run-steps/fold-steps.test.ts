@@ -255,3 +255,30 @@ describe("query_database description titles", () => {
     expect(longStep.title.endsWith("…")).toBe(true);
   });
 });
+
+describe("foldRunSteps plan file", () => {
+  it("renders no row for plan-file writes or their capture line", () => {
+    const plan = "/tmp/signalpilot-chat-runs/r/artifacts/plan.md";
+    const steps = foldRunSteps(
+      [
+        started(1, "Write", { tool_call_id: "w", input: { file_path: plan, content: "- [ ] a" } }),
+        completed(2, { tool_call_id: "w", summary: "Wrote plan.md" }),
+        {
+          run_id: RUN,
+          sequence: 3,
+          type: "progress",
+          payload: { label: "Saved artifacts/plan.md" },
+          created_at: "2026-09-01T10:00:03Z",
+        },
+        started(4, "Edit", { tool_call_id: "e", input: { file_path: plan, old_string: "[ ]", new_string: "[x]" } }),
+        started(5, "Write", { tool_call_id: "n", input: { file_path: "/tmp/x/artifacts/notes.md" } }),
+        completed(6, { tool_call_id: "e", summary: "Edited plan.md" }),
+        completed(7, { tool_call_id: "n", summary: "Wrote notes.md" }),
+      ],
+      RUN,
+    );
+    expect(steps).toHaveLength(1);
+    expect(steps[0].status).toBe("succeeded");
+    expect(steps[0].input?.file_path).toBe("/tmp/x/artifacts/notes.md");
+  });
+});

@@ -8,7 +8,10 @@ from typing import TYPE_CHECKING
 import pytest
 
 from signalpilot._server.ai.claude_agent_options import (
+    DEFERRED_WORK_TOOLS,
+    _build_agent_env,
     _build_agent_options_kwargs,
+    _build_disallowed_tools,
     resolve_agent_cwd,
 )
 from signalpilot._server.api.endpoints.standalone_chat_agent_options import (
@@ -166,3 +169,18 @@ def test_missing_or_unset_cli_keeps_the_bundled_cli(
     workspace = tmp_path / "second"
     workspace.mkdir()
     assert "cli_path" not in _kwargs(workspace)
+
+
+def test_agent_runs_background_work_in_the_foreground() -> None:
+    # A run ends at its result; a background subagent would never report.
+    assert _build_agent_env(None, None)["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
+
+
+def test_deferred_work_tools_are_always_disallowed() -> None:
+    assert _build_disallowed_tools(disallow_file_edits=False) == DEFERRED_WORK_TOOLS
+    disallowed = _build_disallowed_tools(
+        disallow_file_edits=False, additional_disallowed_tools=["Agent", "Monitor"]
+    )
+    assert "ScheduleWakeup" in disallowed
+    assert "Agent" in disallowed
+    assert len(disallowed) == len(set(disallowed))

@@ -120,7 +120,10 @@ async def check_model_schema(connection_name: str, model_name: str, yml_columns:
         return f"Error: {sanitize_mcp_error(str(e))}"
 
     if not actual:
-        return f"Error: Model '{model_name}' not found in database. Has it been materialized yet?"
+        return (
+            f"Error: Model '{model_name}' not found in database. Has it been materialized yet? "
+            "If the model lives outside the connection's default database, pass database.schema.model."
+        )
 
     comparison = compare_columns(expected, actual)
 
@@ -847,6 +850,15 @@ async def verify_model_values(connection_name: str, model_name: str) -> str:
             conn = await store.get_connection(connection_name)
             if not conn:
                 return f"Error: Connection '{connection_name}' not found."
+            # The checks below use DuckDB SQL (SHOW TABLES, LIMIT) and an
+            # unscoped catalog lookup.
+            db_type = getattr(conn.db_type, "value", conn.db_type)
+            if db_type != "duckdb":
+                return (
+                    f"Error: verify_model_values supports DuckDB connections only; "
+                    f"'{connection_name}' is {db_type}. Use audit_model_sources, "
+                    "or compare the model against its sources with query_database."
+                )
 
             from gateway.connectors.pool_manager import pool_manager
 

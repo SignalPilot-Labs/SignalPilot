@@ -22,13 +22,13 @@ if TYPE_CHECKING:
     import queue
 
 
-def _result(*, is_error: bool = False) -> ResultMessage:
+def _result(*, is_error: bool = False, num_turns: int = 1) -> ResultMessage:
     return ResultMessage(
         subtype="error" if is_error else "success",
         duration_ms=1,
         duration_api_ms=1,
         is_error=is_error,
-        num_turns=1,
+        num_turns=num_turns,
         session_id="sdk-session",
         result="failed" if is_error else None,
     )
@@ -191,6 +191,58 @@ async def test_completed_plan_or_error_result_does_not_continue() -> None:
     )
     assert client.queries == []
     assert [e.type for e in _drain(agent.event_queue)] == ["tool_use", "error"]
+
+
+@pytest.mark.asyncio
+async def test_zero_turn_result_before_the_user_message_is_skipped() -> None:
+    # A resume after an unfinished background task: the CLI answers its own
+    # injected turn first (zero API turns), then the queued user message.
+    agent = _ActiveAgent()
+    answer = AssistantMessage(content=[ToolUseBlock(id="q", name="query", input={})], model="m")
+    client = FakeClient([_result(num_turns=0), answer, _result(num_turns=3)])
+    state = _SdkStreamState()
+    await asyncio.wait_for(
+        _relay_sdk_messages(client, agent, agent.event_queue, state),
+        timeout=5,
+    )
+    assert state.skipped_empty_results == 1
+    assert [e.type for e in _drain(agent.event_queue)] == ["tool_use", "done"]
+
+    # A result the SDK attributes to a task notification is skipped too.
+    notified = _result(num_turns=2)
+    notified.origin = {"kind": "task-notification"}
+    agent = _ActiveAgent()
+    client = FakeClient([notified, answer, _result(num_turns=3)])
+    state = _SdkStreamState()
+    await asyncio.wait_for(
+        _relay_sdk_messages(client, agent, agent.event_queue, state),
+        timeout=5,
+    )
+    assert state.skipped_empty_results == 1
+    assert [e.type for e in _drain(agent.event_queue)] == ["tool_use", "done"]
+
+
+@pytest.mark.asyncio
+async def test_zero_turn_results_are_skipped_at_most_twice() -> None:
+    agent = _ActiveAgent()
+    client = FakeClient([_result(num_turns=0)] * 3)
+    state = _SdkStreamState()
+    await asyncio.wait_for(
+        _relay_sdk_messages(client, agent, agent.event_queue, state),
+        timeout=5,
+    )
+    assert state.skipped_empty_results == 2
+    assert [e.type for e in _drain(agent.event_queue)] == ["done"]
+
+    # An error result is never skipped.
+    agent = _ActiveAgent()
+    client = FakeClient([_result(is_error=True, num_turns=0)])
+    state = _SdkStreamState()
+    await asyncio.wait_for(
+        _relay_sdk_messages(client, agent, agent.event_queue, state),
+        timeout=5,
+    )
+    assert [e.type for e in _drain(agent.event_queue)] == ["error"]
 
 
 def test_error_text_never_uses_the_repr() -> None:

@@ -36,6 +36,10 @@ __all__ = [
 ]
 
 FILE_EDIT_TOOLS = ["Write", "Edit", "MultiEdit", "NotebookEdit", "Bash"]
+# Tools that defer work past the end of the turn. A run ends at its result
+# and the CLI process exits, so nothing ever wakes the agent back up; the
+# deferred work is lost and poisons the next resume (see _build_agent_env).
+DEFERRED_WORK_TOOLS = ["ScheduleWakeup", "CronCreate", "CronDelete", "CronList", "Monitor"]
 _EFFORT_LEVELS = {"low", "medium", "high", "xhigh", "max"}
 
 
@@ -76,6 +80,12 @@ def _build_agent_env(
 ) -> dict[str, str]:
     """Environment for the agent subprocess: os.environ + auth + overrides."""
     agent_env = dict(os.environ)
+    # Run subagents and shell commands in the foreground. Since Claude Code
+    # 2.1.280 the Agent tool launches subagents in the background by default.
+    # The run ends at the main agent's result, so the agent reports without
+    # the subagents' results, and the next resume finds the unfinished task,
+    # injects its own turn and ends the run before the user's message.
+    agent_env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "1"
     _apply_auth_config(agent_env, auth_config)
     if agent_env_overrides:
         agent_env.update(agent_env_overrides)
@@ -235,11 +245,10 @@ def _build_disallowed_tools(
     *,
     disallow_file_edits: bool,
     additional_disallowed_tools: list[str] | None = None,
-) -> list[str] | None:
+) -> list[str]:
     disallowed = [
+        *DEFERRED_WORK_TOOLS,
         *(FILE_EDIT_TOOLS if disallow_file_edits else []),
         *(additional_disallowed_tools or []),
     ]
-    if not disallowed:
-        return None
     return list(dict.fromkeys(disallowed))

@@ -169,6 +169,16 @@ describe("deriveArtifactCards", () => {
     expect(deriveArtifactCards([], files, RUN, false)).toHaveLength(0);
   });
 
+  it("never makes a card for the plan file, even from the manifest", () => {
+    const cards = deriveArtifactCards(
+      [writeEvent("artifacts/plan.md", { sequence: 4 })],
+      [file("artifacts/plan.md"), file("artifacts/summary.md")],
+      RUN,
+      false,
+    );
+    expect(cards.map((card) => card.path)).toEqual(["artifacts/summary.md"]);
+  });
+
   it("ignores write events from other runs", () => {
     const cards = deriveArtifactCards(
       [writeEvent("exports/x.html", { runId: "run-2" })],

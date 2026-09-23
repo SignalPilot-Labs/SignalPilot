@@ -184,3 +184,9 @@ def test_deferred_work_tools_are_always_disallowed() -> None:
     assert "ScheduleWakeup" in disallowed
     assert "Agent" in disallowed
     assert len(disallowed) == len(set(disallowed))
+
+
+def test_agent_echoes_queued_user_messages(tmp_path: Path) -> None:
+    # The relay places follow-ups from the CLI's echo of each queued message.
+    options = _kwargs(_workspace(tmp_path, ["proj"]))
+    assert options["extra_args"] == {"replay-user-messages": None}

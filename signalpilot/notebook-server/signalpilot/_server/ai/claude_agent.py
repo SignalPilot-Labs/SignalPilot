@@ -271,6 +271,21 @@ def stop_agent(session_id: str) -> bool:
     return True
 
 
+async def _steering_prompt(message: str, steering_id: str):
+    """The steering message as a stream-json user message.
+
+    The CLI keeps the ``uuid`` when it echoes the message (see
+    ``replay-user-messages``), which is how the relay knows which steering
+    message the model just read.
+    """
+    yield {
+        "type": "user",
+        "uuid": steering_id,
+        "message": {"role": "user", "content": message},
+        "parent_tool_use_id": None,
+    }
+
+
 async def steer_agent(session_id: str, message: str, steering_id: str) -> bool:
     """Queue a user message on a live SDK client without interrupting it.
 
@@ -297,7 +312,7 @@ async def steer_agent(session_id: str, message: str, steering_id: str) -> bool:
         agent.accepted_steering_ids.add(steering_id)
         agent.pending_steering_turns += 1
     future = asyncio.run_coroutine_threadsafe(
-        agent.client.query(message),
+        agent.client.query(_steering_prompt(message, steering_id)),
         agent.loop,
     )
     try:

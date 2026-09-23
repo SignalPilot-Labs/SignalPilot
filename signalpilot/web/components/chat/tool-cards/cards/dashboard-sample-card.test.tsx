@@ -1,4 +1,5 @@
 import { act } from "react";
+import { openToolRow } from "../test-utils";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { DashboardSampleResult, RunStep } from "~/lib/chat-run-steps";
@@ -140,6 +141,7 @@ describe("dashboard sample card", () => {
 
   it("shows the input pills and a progress rail while running", async () => {
     await render(step({ status: "running", endedAt: null, durationMs: null }));
+    await openToolRow(container);
     const body = q(container, '[data-testid="chat-dashboard-sample-card"]');
     expect(body?.textContent).toContain("revenue.dashboard.json");
     expect(body?.textContent).toContain("Checking dashboard data…");

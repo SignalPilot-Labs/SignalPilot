@@ -8,7 +8,6 @@ import {
   StepArtifactCardsContext,
   collectGroupArtifactCards,
 } from "./step-artifact-cards";
-import { cardKindForStep } from "~/components/chat/tool-cards/registry-tools";
 import { ToolChipStrip } from "~/components/chat/tool-cards/tool-chip";
 import { RunTimeline } from "./timeline";
 
@@ -31,34 +30,21 @@ export function describeRunWork(steps: RunStep[]): string {
   return `${summary.total} ${summary.total === 1 ? "step" : "steps"}${detail}`;
 }
 
-/** The last step of a group whose result is (or will be) a table. */
-function lastTableStep(steps: RunStep[]): RunStep | null {
-  for (let index = steps.length - 1; index >= 0; index -= 1) {
-    if (cardKindForStep(steps[index]) === "table") return steps[index];
-  }
-  return null;
-}
-
 /**
- * One tool chain rendered as a collapsible group: expanded with a live
- * shimmer header while any of its steps run, collapsing to a chip strip
- * (one merged pill per kind of work) once the chain completes and the
- * agent moves on. Picking a chip reopens the group with that card
- * expanded. The final group of a completed run that ends in a table stays
- * open with the table expanded and the other cards compact.
+ * One tool chain rendered as a collapsible group. While any step runs it
+ * shows a live header and its latest one-line rows (see RunTimeline's live
+ * window); once the chain completes it settles to the chip strip (one
+ * merged pill per kind of work). Nothing inside opens by itself: picking a
+ * chip reopens the group with that step expanded. Files the chain produced
+ * always render once, in the group footer, so they never move when the
+ * group opens or closes.
  */
 export function StandardActivityGroup({
   steps,
   live,
-  isFinalGroup = false,
-  runCompleted = false,
 }: {
   steps: RunStep[];
   live: boolean;
-  /** This group is the last steps block of its run. */
-  isFinalGroup?: boolean;
-  /** The run has reached a terminal status. */
-  runCompleted?: boolean;
 }) {
   const [userToggle, setUserToggle] = useState<boolean | null>(null);
   const [focus, setFocus] = useState<{ key: string; nonce: number } | null>(null);
@@ -71,14 +57,9 @@ export function StandardActivityGroup({
       setFocus(null);
     }
   }, [active]);
-  const pinnedTable =
-    !active && isFinalGroup && runCompleted ? lastTableStep(steps) : null;
-  const open = userToggle ?? (active || pinnedTable !== null);
-  // A collapsed group hides its step rows, so the files it produced move
-  // to a footer under the header until the group is reopened. The inner
-  // rows get no cards meanwhile, so a file never renders twice.
-  const hoistedCards = open ? [] : collectGroupArtifactCards(steps, cardsByStep);
-  const focusStepKey = focus?.key ?? pinnedTable?.key ?? null;
+  const open = userToggle ?? active;
+  const groupCards = collectGroupArtifactCards(steps, cardsByStep);
+  const focusStepKey = focus?.key ?? null;
   const latest = steps[steps.length - 1] ?? null;
   const pick = (key: string) => {
     setUserToggle(true);
@@ -134,8 +115,8 @@ export function StandardActivityGroup({
       )}
       <div className="chat-collapse" data-open={open}>
         <div>
-          <div className="border-t border-[var(--color-border)] px-3 py-3">
-            <StepArtifactCardsContext.Provider value={open ? cardsByStep : null}>
+          <div className="border-t border-[var(--color-border)] px-3 py-2">
+            <StepArtifactCardsContext.Provider value={null}>
               <RunTimeline
                 steps={steps}
                 groupLive={active}
@@ -147,7 +128,7 @@ export function StandardActivityGroup({
         </div>
       </div>
       <ArtifactCardBlock
-        cards={hoistedCards}
+        cards={groupCards}
         testId="chat-group-artifact-cards"
         className="border-t border-[var(--color-border)] px-3 py-3"
       />
@@ -155,23 +136,6 @@ export function StandardActivityGroup({
   );
 }
 
-export function ActivityGroup({
-  steps,
-  live,
-  isFinalGroup = false,
-  runCompleted = false,
-}: {
-  steps: RunStep[];
-  live: boolean;
-  isFinalGroup?: boolean;
-  runCompleted?: boolean;
-}) {
-  return (
-    <StandardActivityGroup
-      steps={steps}
-      live={live}
-      isFinalGroup={isFinalGroup}
-      runCompleted={runCompleted}
-    />
-  );
+export function ActivityGroup({ steps, live }: { steps: RunStep[]; live: boolean }) {
+  return <StandardActivityGroup steps={steps} live={live} />;
 }

@@ -161,6 +161,28 @@ async def _announce_notebook(run_id: str, payload: dict[str, Any]) -> None:
             )
 
 
+_SOURCE_REF_KEYS = frozenset(
+    {"metric_name", "model_name", "schema_name", "source_name", "table_name"}
+)
+
+
+async def append_tool_side_events(run_id: str, tool_name: str, tool_input: Any) -> None:
+    """Emit the sql / source side events of a top-level tool call.
+
+    The UI attaches them to the latest open top-level step, so subagent
+    tools never emit them (their SQL shows on the child step's input).
+    """
+    append = _worker()._append
+    fields = tool_input if isinstance(tool_input, dict) else {}
+    if tool_name.endswith(("query_database", "explain_query", "validate_sql")):
+        sql = fields.get("sql")
+        if sql:
+            await append(run_id, "sql", {"sql": sql})
+    if any(marker in tool_name for marker in ("schema", "table", "relationship", "metric")):
+        source_refs = {key: value for key, value in fields.items() if key in _SOURCE_REF_KEYS}
+        await append(run_id, "source", {"tool": tool_name, **source_refs})
+
+
 async def empty_answer_error(
     *,
     run_id: str,

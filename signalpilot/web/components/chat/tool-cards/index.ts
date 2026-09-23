@@ -45,7 +45,6 @@ export {
   type ChipModel,
 } from "./tool-chip";
 export {
-  COMPLETION_HOLD_MS,
   useCardDensity,
   type CardDensity,
   type CardDensityOptions,

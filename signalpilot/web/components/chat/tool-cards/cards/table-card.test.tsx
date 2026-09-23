@@ -1,4 +1,5 @@
 import { act, type ReactNode } from "react";
+import { openToolRow } from "../test-utils";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatUiContext, type ChatUiContextValue } from "~/components/chat/chat-ui-context";
@@ -90,11 +91,8 @@ const q = (root: ParentNode, selector: string) => root.querySelector(selector);
 const qa = (root: ParentNode, selector: string) => [...root.querySelectorAll(selector)];
 
 describe("summarizeTable", () => {
-  it("registers the table kind pinned open when last in group", () => {
-    const def = getToolCardDefinition("table");
-    expect(def?.accent).toBe("data");
-    expect(def?.stayOpenOnComplete?.(step(), true)).toBe(true);
-    expect(def?.stayOpenOnComplete?.(step(), false)).toBe(false);
+  it("registers the table kind", () => {
+    expect(getToolCardDefinition("table")?.accent).toBe("data");
   });
   it("formats the chip stat and marks partial results", () => {
     expect(summarizeTable(step())).toEqual({
@@ -161,10 +159,11 @@ describe("table card", () => {
 
   it("running: prettified SQL folded to six lines, ghost rows and the live line", async () => {
     await render(step({ status: "running", result: null, endedAt: null, durationMs: null }));
+    await openToolRow(container);
     const card = q(container, '[data-testid="chat-tool-card-table"]');
     expect(card).not.toBeNull();
     expect(q(container, '[data-testid="chat-tool-card"]')?.getAttribute("data-density")).toBe(
-      "running",
+      "expanded",
     );
     const sql = q(container, '[data-testid="chat-table-sql"]');
     expect(sql?.querySelector("pre")?.textContent).toContain("SELECT");
@@ -193,12 +192,12 @@ describe("table card", () => {
     expect(q(container, '[data-testid="chat-data-table-sort-net_revenue"]')).not.toBeNull();
   });
 
-  it("stays expanded when it is the trailing step of a live group", async () => {
+  it("stays one line when it is the trailing step of a live group", async () => {
     await render(step());
     expect(q(container, '[data-testid="chat-tool-card"]')?.getAttribute("data-density")).toBe(
-      "expanded",
+      "compact",
     );
-    expect(qa(container, '[data-testid="chat-data-table"] tbody tr')).toHaveLength(50);
+    expect(q(container, '[data-testid="chat-data-table"]')).toBeNull();
   });
 
   it("warns on a truncated result", async () => {
@@ -249,6 +248,7 @@ describe("table card", () => {
         result: tableResult({ rows: [], rowCount: null, errorMessage: "relation fct_orders does not exist" }),
       }),
     );
+    await openToolRow(container);
     expect(q(container, '[data-testid="chat-tool-card"]')?.getAttribute("data-density")).toBe(
       "expanded",
     );

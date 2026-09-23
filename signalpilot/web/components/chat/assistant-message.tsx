@@ -154,7 +154,8 @@ export function AssistantMessage({
           )}
           {(running ||
             blocks.length > 0 ||
-            anchoredCards.trailing.length > 0) && (
+            anchoredCards.trailing.length > 0 ||
+            (message.interjections?.length ?? 0) > 0) && (
             <div role="status" aria-live="polite">
               <RunActivityBlocks
                 blocks={blocks}
@@ -166,6 +167,7 @@ export function AssistantMessage({
                 }
                 trailingCards={anchoredCards.trailing}
                 instantText={textInstant}
+                interjections={message.interjections}
               />
             </div>
           )}

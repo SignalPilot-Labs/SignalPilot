@@ -62,6 +62,7 @@ from gateway.standalone_chat.worker_events import (
     _steering_monitor,
     _update_summary,
     _worker_id,
+    append_tool_side_events,
     empty_answer_error,
     touch_run_session,
 )
@@ -334,30 +335,12 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                         # top-level step in the UI — suppress them for
                         # subagent tools, whose SQL still shows on the child
                         # step from its input.
-                        if parent_tool_call_id:
-                            continue
-                        if tool_name.endswith(("query_database", "explain_query", "validate_sql")):
-                            sql = tool_input.get("sql") if isinstance(tool_input, dict) else None
-                            if sql:
-                                await _append(run_id, "sql", {"sql": sql})
-                        if any(marker in tool_name for marker in ("schema", "table", "relationship", "metric")):
-                            source_refs = {
-                                key: value
-                                for key, value in (tool_input.items() if isinstance(tool_input, dict) else [])
-                                if key
-                                in {
-                                    "metric_name",
-                                    "model_name",
-                                    "schema_name",
-                                    "source_name",
-                                    "table_name",
-                                }
-                            }
-                            await _append(
-                                run_id,
-                                "source",
-                                {"tool": tool_name, **source_refs},
-                            )
+                        if not parent_tool_call_id:
+                            await append_tool_side_events(run_id, tool_name, tool_input)
+                    elif event_type == "steering_delivered":
+                        # The model just read a follow-up: the web places the
+                        # message at this point in the run.
+                        await _append(run_id, "steering_delivered", {"message_id": content})
                     elif event_type == "tool_result":
                         if not parent_tool_call_id:
                             starts_new_text_block = bool(streamed_text)

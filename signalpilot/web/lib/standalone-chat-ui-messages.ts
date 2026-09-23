@@ -102,6 +102,45 @@ export function syntheticRunMessage(
   };
 }
 
+/** The run a follow-up was sent into, when it was sent during a run. */
+function steeredRunId(message: StandaloneChatMessage): string | null {
+  const runId = message.metadata.steering_for_run_id;
+  return message.role === "user" && typeof runId === "string" ? runId : null;
+}
+
+/**
+ * Move each follow-up sent during a run out of the top-level list and onto
+ * that run's assistant row, which renders it at the point the agent read it
+ * (or at the bottom of the run while it is still queued). A follow-up whose
+ * run has no row in the list stays where it is.
+ */
+export function nestInterjections(messages: UiMessage[]): void {
+  if (!messages.some((message) => steeredRunId(message))) return;
+  // Rows are copied before they gain interjections: the list holds the
+  // gateway detail's own objects, which must stay untouched.
+  const runRows = new Map<string, number>();
+  messages.forEach((message, index) => {
+    const runId = message.runId ?? message.metadata.run_id;
+    if (message.role === "assistant" && typeof runId === "string") {
+      runRows.set(runId, index);
+    }
+  });
+  const nested = new Map<string, StandaloneChatMessage[]>();
+  const kept = messages.filter((message) => {
+    const runId = steeredRunId(message);
+    if (!runId || !runRows.has(runId)) return true;
+    nested.set(runId, [...(nested.get(runId) ?? []), message]);
+    return false;
+  });
+  const rows = kept.map((message) => {
+    const runId = message.runId ?? message.metadata.run_id;
+    const interjections =
+      message.role === "assistant" && typeof runId === "string" ? nested.get(runId) : undefined;
+    return interjections ? { ...message, interjections } : message;
+  });
+  messages.splice(0, messages.length, ...rows);
+}
+
 /**
  * Build the rendered message list.
  *
@@ -144,6 +183,7 @@ export function buildStandaloneUiMessages({
   }
   const streaming =
     currentRun?.status === "queued" || currentRun?.status === "running";
+  nestInterjections(messages);
   if (pendingSubmission && isSubmitting && !streaming) {
     messages.push({
       id: `pending-assistant-${pendingSubmission.id}`,

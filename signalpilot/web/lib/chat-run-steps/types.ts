@@ -80,7 +80,9 @@ export type RunStepSummary = {
 export type RunBlock =
   | { kind: "text"; key: string; text: string }
   | { kind: "thinking"; key: string; text: string }
-  | { kind: "steps"; key: string; steps: RunStep[] };
+  | { kind: "steps"; key: string; steps: RunStep[] }
+  /** A follow-up the user sent during the run, where the agent read it. */
+  | { kind: "interjection"; key: string; messageId: string };
 
 export type RuntimeBootPhase = "provisioning" | "resuming" | "ready";
 

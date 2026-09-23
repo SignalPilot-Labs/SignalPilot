@@ -54,7 +54,7 @@ export function deriveLiveStateFromBlocks(
   if (trailing.kind === "text") {
     return { state: "writing", label: "Writing", step: null };
   }
-  if (trailing.kind === "thinking") {
+  if (trailing.kind === "thinking" || trailing.kind === "interjection") {
     return { state: "thinking", label: "Thinking", step: null };
   }
   const step = deepestRunningStep(trailing.steps);

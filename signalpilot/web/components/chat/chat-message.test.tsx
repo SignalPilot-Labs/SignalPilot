@@ -238,18 +238,17 @@ describe("Data Chat artifact cards in the timeline", () => {
     });
   };
 
-  it("anchors a card under the step that produced the file and trails the rest", async () => {
+  it("puts a step's cards in its group footer while live and trails the rest", async () => {
     await render(message("running"));
-    // The run is live, so the group is open and the step row renders.
-    const anchored = container.querySelector(
-      '[data-testid="chat-step-artifact-cards"]',
+    // Cards render once, in the group footer, never inside the step rows,
+    // so they do not move when the group opens or closes.
+    expect(
+      container.querySelector('[data-testid="chat-step-artifact-cards"]'),
+    ).toBeNull();
+    const footer = container.querySelector(
+      '[data-testid="chat-group-artifact-cards"]',
     );
-    expect(anchored?.getAttribute("data-anchor-sequence")).toBe("2");
-    expect(anchored?.textContent).toContain("rows.csv");
-    // The step row precedes its card inside the same list.
-    const list = anchored?.closest("ol");
-    const items = [...(list?.children ?? [])];
-    expect(items.indexOf(anchored!.closest("li")!)).toBe(1);
+    expect(footer?.textContent).toContain("rows.csv");
     const trailing = container.querySelector(
       '[data-testid="chat-trailing-artifact-cards"]',
     );
@@ -259,10 +258,6 @@ describe("Data Chat artifact cards in the timeline", () => {
     expect(
       container.querySelector('[data-testid="chat-md-file-chip"]'),
     ).not.toBeNull();
-    // No bottom-of-message block any more.
-    expect(
-      container.querySelectorAll('[data-testid="chat-artifact-cards"]'),
-    ).toHaveLength(2);
   });
 
   it("hoists a collapsed group's cards into a visible footer once the run ends", async () => {

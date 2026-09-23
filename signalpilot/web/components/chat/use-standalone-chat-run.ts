@@ -340,6 +340,22 @@ export function useChatAutoScroll(
     viewport.scrollTop = viewport.scrollHeight;
   }, [conversationId, uiMessages]);
 
+  // Content also grows inside a message (streamed text, rows pacing in, a
+  // group settling): follow that growth while pinned, so the view glides
+  // with the transcript instead of falling behind until the next message.
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    const transcript = viewport?.querySelector(
+      '[data-testid="standalone-chat-messages"]',
+    );
+    if (!viewport || !transcript || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (shouldStickToBottomRef.current) viewport.scrollTop = viewport.scrollHeight;
+    });
+    observer.observe(transcript);
+    return () => observer.disconnect();
+  }, [conversationId, uiMessages.length]);
+
   const onViewportScroll = useCallback(() => {
     const viewport = viewportRef.current;
     if (!viewport) return;

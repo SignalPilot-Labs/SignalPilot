@@ -158,6 +158,30 @@ def git_publish_section(base_branch: str) -> str:
     return section.replace("{base_branch}", base_branch or "the project branch")
 
 
+def _dbt_project_dir_line() -> str:
+    """Name the org's configured dbt project directory for the agent.
+
+    A repo can hold more than one dbt project; without this the agent reads
+    whichever it finds first and can end up describing models that were never
+    built. Best-effort: an unreachable gateway or an unset setting omits the
+    line rather than failing the run.
+    """
+    try:
+        from signalpilot._dbt.materialize import resolve_dbt_project_dir
+
+        configured = resolve_dbt_project_dir()
+    except Exception:
+        return ""
+    if configured is None:
+        return ""
+    where = configured or "the repository root"
+    return (
+        f"dbt project directory: {where}\n"
+        "Read dbt files only from there; other folders in this repo may hold "
+        "different dbt projects that are not the selected one.\n"
+    )
+
+
 def _execution_prompt_values(
     body: dict[str, Any],
     *,
@@ -239,6 +263,7 @@ def _execution_prompt_values(
         )
         + "\n\n"
         + f"Selected project: {project_id}\nFrozen branch: {branch}\n"
+        + _dbt_project_dir_line()
         + f"Frozen commit: {commit_sha}\nSelected connection: {connection_name}\n"
         + f"Lineage link: /lineage/<model_name>?project={project_id}\n"
         + f"Connectors: {connectors_line}\n\n"

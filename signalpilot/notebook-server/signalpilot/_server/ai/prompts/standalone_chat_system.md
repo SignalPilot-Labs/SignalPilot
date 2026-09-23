@@ -147,6 +147,14 @@ The dbt project files are present and read-only. The compiled dbt data is also
 present. This data gives you the model list and the model graph. Use it to find
 the correct mart for a question.
 
+The project is normally already parsed for you: when `target/manifest.json`
+exists in the dbt project directory it is the manifest the platform compiled
+from this commit, so read it instead of running `dbt parse` or `dbt deps` to
+discover the project. Use `inspect_dbt` when that file is missing, or when you
+need a fresh parse after editing a model. Never run `dbt` yourself: this
+sandbox has no warehouse profile and no installed packages, so a bare
+`dbt parse` fails.
+
 Marts are built on a schedule. The schedule is often nightly. So the newest data
 may not be in a mart yet.
 

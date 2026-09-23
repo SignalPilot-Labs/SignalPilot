@@ -126,3 +126,56 @@ def test_prompt_omits_the_line_rather_than_failing(monkeypatch, outcome: str) ->
 
     monkeypatch.setattr(materialize, "resolve_dbt_project_dir", fake)
     assert prompt_mod._dbt_project_dir_line() == ""
+
+
+# --- the agent's own working directory ----------------------------------------
+#
+# With several dbt projects in one repo, resolve_agent_cwd used to fall through
+# to the repository root, leaving the agent (and scan_project.py) to guess.
+
+
+def _repo_with_projects(tmp_path, *names: str):
+    for name in names:
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "dbt_project.yml").write_text("name: x\n", encoding="utf-8")
+    return tmp_path
+
+
+def test_agent_cwd_uses_the_configured_project(tmp_path, monkeypatch) -> None:
+    from signalpilot._dbt import materialize
+    from signalpilot._server.ai import claude_agent_options as opts
+
+    repo = _repo_with_projects(tmp_path, "dumpsters_dbt", "dumpsters_dbt_simplified")
+    monkeypatch.setattr(materialize, "resolve_dbt_project_dir", lambda **_k: "dumpsters_dbt_simplified")
+    cwd, project_dir = opts.resolve_agent_cwd(str(repo))
+    assert cwd == project_dir == str((repo / "dumpsters_dbt_simplified").resolve())
+
+
+def test_agent_cwd_keeps_the_root_when_several_and_no_setting(tmp_path, monkeypatch) -> None:
+    from signalpilot._dbt import materialize
+    from signalpilot._server.ai import claude_agent_options as opts
+
+    repo = _repo_with_projects(tmp_path, "a_dbt", "b_dbt")
+    monkeypatch.setattr(materialize, "resolve_dbt_project_dir", lambda **_k: None)
+    cwd, project_dir = opts.resolve_agent_cwd(str(repo))
+    assert cwd == project_dir == str(repo)
+
+
+def test_agent_cwd_still_picks_a_lone_project(tmp_path, monkeypatch) -> None:
+    from signalpilot._dbt import materialize
+    from signalpilot._server.ai import claude_agent_options as opts
+
+    repo = _repo_with_projects(tmp_path, "only_dbt")
+    monkeypatch.setattr(materialize, "resolve_dbt_project_dir", lambda **_k: None)
+    cwd, _ = opts.resolve_agent_cwd(str(repo))
+    assert cwd == str(repo / "only_dbt")
+
+
+def test_agent_cwd_ignores_a_setting_outside_the_checkout(tmp_path, monkeypatch) -> None:
+    from signalpilot._dbt import materialize
+    from signalpilot._server.ai import claude_agent_options as opts
+
+    repo = _repo_with_projects(tmp_path, "a_dbt", "b_dbt")
+    monkeypatch.setattr(materialize, "resolve_dbt_project_dir", lambda **_k: "../escape")
+    cwd, _ = opts.resolve_agent_cwd(str(repo))
+    assert cwd == str(repo)

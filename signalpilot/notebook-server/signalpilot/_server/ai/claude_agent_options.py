@@ -49,6 +49,32 @@ def _agent_effort(override: str | None = None) -> str:
     return effort if effort in _EFFORT_LEVELS else "medium"
 
 
+def _configured_project_subdir(root: Path) -> Path | None:
+    """The org's configured dbt project directory under ``root``.
+
+    Without this, a repo holding several dbt projects falls through to the
+    repository root, and everything downstream (the agent's own file reads,
+    scan_project.py) has to guess which project is the one. Best effort: no
+    gateway session, no setting, or a directory missing from this checkout
+    returns None and the caller keeps its previous behaviour.
+    """
+    try:
+        from signalpilot._dbt.materialize import resolve_dbt_project_dir
+
+        configured = resolve_dbt_project_dir()
+    except Exception:
+        return None
+    if not configured:
+        return None
+    try:
+        candidate = (root / configured).resolve()
+        if not candidate.is_relative_to(root.resolve()):
+            return None
+    except OSError:
+        return None
+    return candidate if (candidate / "dbt_project.yml").is_file() else None
+
+
 def resolve_agent_cwd(workspace: str | None) -> tuple[str, str]:
     """The agent working directory and the dbt project directory.
 
@@ -58,6 +84,9 @@ def resolve_agent_cwd(workspace: str | None) -> tuple[str, str]:
     A ``dbt_project.yml`` at the root, none, or several keep the root.
     """
     root = Path(workspace or os.getcwd())
+    configured = _configured_project_subdir(root)
+    if configured is not None:
+        return str(configured), str(configured)
     try:
         if (root / "dbt_project.yml").is_file():
             return str(root), str(root)

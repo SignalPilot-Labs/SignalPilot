@@ -461,8 +461,8 @@ def scan_packages(work_dir: Path) -> str:
 def _resolve_work_dir(argv: list[str]) -> Path | None:
     """The dbt project to scan.
 
-    An explicit path wins, then ``SP_DBT_PROJECT_DIR`` (the directory the
-    platform configured for this project), then the current directory. Only as
+    An explicit path wins, then ``SP_DBT_PROJECT_DIR`` or ``SP_PROJECT_DIR``
+    (the directory the platform configured for this project), then cwd. Only as
     a last resort is a child guessed, and never when several children hold a
     dbt_project.yml -- a repo with five dbt projects would otherwise be scanned
     as whichever one the filesystem listed first.
@@ -470,7 +470,12 @@ def _resolve_work_dir(argv: list[str]) -> Path | None:
     candidates: list[Path] = []
     if len(argv) > 1:
         candidates.append(Path(argv[1]))
-    configured = os.environ.get("SP_DBT_PROJECT_DIR", "").strip()
+    # SP_PROJECT_DIR is set for every agent run (claude_agent_options);
+    # SP_DBT_PROJECT_DIR is the explicit override.
+    configured = (
+        os.environ.get("SP_DBT_PROJECT_DIR", "").strip()
+        or os.environ.get("SP_PROJECT_DIR", "").strip()
+    )
     base = Path(argv[1]) if len(argv) > 1 else Path.cwd()
     if configured:
         candidates.append(base / configured)

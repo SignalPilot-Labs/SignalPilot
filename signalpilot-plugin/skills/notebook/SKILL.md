@@ -65,6 +65,19 @@ not by trial:
 
 ## Cell rules (marimo, not Jupyter)
 
+- Put one text cell before every code cell. The text cell gives a one line
+  summary of what the code cell below it does. Give every code cell its own
+  summary, including the first one.
+  - In marimo a text cell is a separate cell. It holds one `sp.md("...")` call.
+    Each step is therefore two cells: the summary cell, then the code cell.
+  - Add both cells in the same `edit_notebook` batch. Add the summary cell
+    first, so the notebook reads in the correct order.
+  - Write what the step does, in one line. Write
+    `sp.md("Join invoice lines to the account dimension for one row per account
+    per month")`. Do not write `sp.md("Run a query")`.
+  - Use one line. Do not use a heading mark.
+  - A text cell does not need `sp.init()`. Do not import `signalpilot` in it. A
+    text cell defines no name, so it cannot cause `MultipleDefinitionError`.
 - One live cell defines each top-level name. A second definition raises
   `MultipleDefinitionError`. Fix all conflicting cells in one edit batch.
 - An underscore name is local to the cell that writes it, and the editor

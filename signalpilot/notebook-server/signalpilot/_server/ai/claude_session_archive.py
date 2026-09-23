@@ -16,6 +16,10 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from signalpilot import _loggers
+
+LOGGER = _loggers.sp_logger()
+
 _SAFE_ID = re.compile(r"^[a-zA-Z0-9-]{1,160}$")
 _MAX_COMPRESSED_BYTES = 64 * 1024 * 1024
 _MAX_UNCOMPRESSED_BYTES = 256 * 1024 * 1024
@@ -157,10 +161,29 @@ async def prepare_claude_session(
 
 
 async def persist_claude_session(state: ClaudeSessionState) -> bool:
-    """Upload the complete native SDK state after a turn."""
-    if not state.upload_url or not _has_session(
-        state.config_dir, state.session_id, state.cwd
-    ):
+    """Upload the complete native SDK state after a turn.
+
+    False means the session cannot be resumed later. The caller must not pass
+    `--resume` after a False: the CLI exits 1 with "No conversation found with
+    session ID" and the next message fails instead of answering.
+    """
+    if not state.upload_url:
+        LOGGER.warning(
+            "No upload URL for the Claude session; it cannot be resumed "
+            "session_id=%s storage=%s",
+            state.session_id,
+            state.storage,
+        )
+        return False
+    if not _has_session(state.config_dir, state.session_id, state.cwd):
+        # The CLI keys sessions on the working directory, so a cwd that moved
+        # between turns looks exactly like a missing session.
+        LOGGER.warning(
+            "Claude wrote no session file for session_id=%s cwd=%s; nothing to "
+            "archive and the next message cannot resume",
+            state.session_id,
+            state.cwd,
+        )
         return False
     data = await asyncio.to_thread(_create_archive, state.config_dir)
     async with httpx.AsyncClient(timeout=60.0, follow_redirects=False) as client:

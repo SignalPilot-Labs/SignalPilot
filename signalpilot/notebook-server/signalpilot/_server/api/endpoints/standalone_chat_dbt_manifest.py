@@ -8,6 +8,12 @@ revision and stores the manifest, so copy the newest successful one into
 ``<dbt project>/target/manifest.json``. The verifier agents read it for
 resource types, materializations, and raw SQL.
 
+Which directory inside the checkout is the dbt project comes from the dbt map
+row. Rows compiled before that column existed carry NULL, so fall back to
+asking the gateway for the org's configured directory; guessing from the tree
+only works when the repo holds exactly one dbt project, and several of ours
+hold more.
+
 Best effort: a project without a successful dbt map still gets a usable
 checkout, just without ``target/``.
 """
@@ -28,6 +34,29 @@ if TYPE_CHECKING:
 LOGGER = _loggers.sp_logger()
 
 _MAX_MANIFEST_BYTES = 512 * 1024 * 1024
+
+
+def _configured_dbt_project_dir(
+    *, project_id: str, branch: str, gateway_url: str, gateway_token: str
+) -> str | None:
+    """The org's configured dbt project directory, for manifest rows that do
+    not record one. Returns None when the gateway has no answer."""
+    try:
+        response = httpx.get(
+            f"{gateway_url}/api/workspace-projects/{project_id}/dbt-project-dir",
+            params={"branch": branch},
+            headers={"Authorization": f"Bearer {gateway_token}"},
+            timeout=15.0,
+        )
+        response.raise_for_status()
+        return response.json().get("dbt_project_dir")
+    except Exception:
+        LOGGER.warning(
+            "Could not resolve the configured dbt project dir project_id=%s",
+            project_id,
+            exc_info=True,
+        )
+        return None
 
 
 def _dbt_project_directory(
@@ -101,12 +130,21 @@ def _seed(
     if not manifest_url:
         return None
 
-    project_dir = _dbt_project_directory(checkout, body.get("dbt_project_dir"))
+    configured = body.get("dbt_project_dir")
+    if configured is None:
+        # Compiled before the dbt map recorded its directory (migration 0037).
+        configured = _configured_dbt_project_dir(
+            project_id=project_id,
+            branch=branch,
+            gateway_url=gateway_url,
+            gateway_token=gateway_token,
+        )
+    project_dir = _dbt_project_directory(checkout, configured)
     if project_dir is None:
         LOGGER.warning(
             "dbt manifest not seeded: no dbt project directory project_id=%s dir=%r",
             project_id,
-            body.get("dbt_project_dir"),
+            configured,
         )
         return None
     target = project_dir / "target" / "manifest.json"

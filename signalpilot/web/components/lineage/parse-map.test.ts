@@ -120,6 +120,37 @@ describe("parseMap", () => {
     expect(p.layerCounts.other).toBe(1);
   });
 
+  it("keys layers on declarations and the compiled schema before names", () => {
+    const node = (name: string, extra: Record<string, unknown>) => ({
+      name, resource_type: "model", path: `misc/${name}.sql`, ...extra,
+    });
+    const p = parseMap({
+      metadata: { project_name: "demo" },
+      nodes: {
+        "model.d.declared": node("stg_declared", { schema: "staging", layer: "mart" }),
+        "model.d.tagged": node("anything", { schema: "main", tags: ["daily", "Intermediate"] }),
+        "model.d.core_tag": node("orders_rollup", { schema: "marts", tags: ["core"] }),
+        "model.d.prefixed_schema": node("orders_clean", { schema: "dbt_prod_staging" }),
+        "model.d.schema_over_name": node("stg_legacy_summary", { schema: "marts" }),
+        "model.d.dim_in_marts": node("dim_customer", { schema: "marts" }),
+        "model.d.fct_in_core": node("fct_sales_lines", { schema: "core" }),
+        "model.d.core_schema": node("pool", { schema: "core" }),
+        "model.d.default_schema": node("stg_orders", { schema: "dbo" }),
+      },
+    });
+    const layer = (id: string) => p.models.get(id)!.layer;
+    expect(layer("model.d.declared")).toBe("mart"); // meta.layer wins
+    expect(layer("model.d.tagged")).toBe("intermediate");
+    expect(layer("model.d.core_tag")).toBe("mart"); // a "core" tag is not a layer
+    expect(layer("model.d.prefixed_schema")).toBe("staging");
+    expect(layer("model.d.schema_over_name")).toBe("mart");
+    expect(layer("model.d.dim_in_marts")).toBe("dimension");
+    expect(layer("model.d.fct_in_core")).toBe("fact");
+    expect(layer("model.d.core_schema")).toBe("intermediate");
+    // A default schema says nothing; the name prefix decides.
+    expect(layer("model.d.default_schema")).toBe("staging");
+  });
+
   it("keeps dbt sources in the map but out of the legend counts", () => {
     // The canvas never draws dbt sources; the Raw Tables panel still reads
     // them from the parsed map, so they stay in `models`.

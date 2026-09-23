@@ -4,22 +4,64 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from signalpilot import _loggers
+
 if TYPE_CHECKING:
     from pathlib import Path
+
+LOGGER = _loggers.sp_logger()
+
+
+def _configured_dbt_project_dir(root: Path) -> Path | None:
+    """The org's configured dbt project directory, resolved under ``root``.
+
+    A repo can hold several dbt projects (``dumpsters_dbt`` and
+    ``dumpsters_dbt_simplified``). Which one is THE project is an org setting
+    that lives gateway-side, so every member and every code path agrees on it.
+    Returns None when the gateway cannot be reached, has no answer, or the
+    answer does not exist in this checkout — the caller then scans.
+    """
+    try:
+        from signalpilot._dbt.materialize import resolve_dbt_project_dir
+
+        configured = resolve_dbt_project_dir()
+    except Exception as exc:  # gateway unreachable, no session, not a workspace
+        LOGGER.info("dbt project dir not resolved from the gateway (%s); scanning", type(exc).__name__)
+        return None
+    if configured is None:
+        return None
+    candidate = (root / configured).resolve() if configured else root.resolve()
+    if not candidate.is_relative_to(root.resolve()):
+        LOGGER.warning("configured dbt project dir %r escapes the checkout; ignoring", configured)
+        return None
+    if not (candidate / "dbt_project.yml").is_file():
+        LOGGER.warning(
+            "configured dbt project dir %r has no dbt_project.yml in this checkout; scanning instead",
+            configured,
+        )
+        return None
+    return candidate
 
 
 def _resolve_dbt_project_dir(root: Path) -> Path | None:
     """Return the dbt project directory under the checkout root.
 
-    The checkout root is not always the dbt project. Some repos keep the dbt
-    project in a nested folder, for example ``dumpsters_dbt/``. Return the root
-    when it holds ``dbt_project.yml``. If not, walk down up to 3 levels and
-    return the first folder that holds ``dbt_project.yml`` (shallowest wins).
+    The org's configured directory wins, exactly as it does for the dbt map
+    compile and for ``dbt run`` (see ``_dbt.materialize``). Without one, the
+    root is used when it holds ``dbt_project.yml``; otherwise walk down up to
+    3 levels and return the first folder that holds one (shallowest wins).
     Return ``None`` when no dbt project is found.
+
+    The scan is a fallback only: with two dbt projects in one repo it picks
+    the alphabetically first, which is how a chat could end up reading a
+    different project from the one the org configured.
     """
     from pathlib import Path as _Path
 
     root = _Path(root)
+    configured = _configured_dbt_project_dir(root)
+    if configured is not None:
+        return configured
     if (root / "dbt_project.yml").is_file():
         return root
     skip = {

@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, ChevronDown, ListTodo } from "lucide-react";
+import { Check, ChevronDown, ExternalLink, ListTodo } from "lucide-react";
 import { memo, useState } from "react";
 import { composerPlanSummary } from "~/lib/chat-composer-plan";
 import type { PlanItem, RunPlan } from "~/lib/chat-run-steps";
@@ -8,9 +8,9 @@ import type { PlanItem, RunPlan } from "~/lib/chat-run-steps";
 /**
  * The agent's published plan (TodoWrite), docked directly above the
  * composer input. The header sits against the input; the checklist opens
- * ABOVE the header, so the dock grows upward from the input. Expanded while
- * the run streams, folded to the one-line summary once it settles; the
- * user's toggle wins until the run state changes again. Purely
+ * ABOVE the header, so the dock grows upward from the input. Folded to the
+ * one-line summary by default; the reader's click expands the checklist
+ * and their choice sticks until a new run starts. Purely
  * presentational: state comes from the event stream, so it survives
  * reloads and fixture replays.
  *
@@ -66,21 +66,23 @@ function ItemMarker({ status }: { status: PlanItem["status"] }) {
 export const PlanTracker = memo(function PlanTracker({
   plan,
   running = true,
+  onOpen,
 }: {
   plan: RunPlan;
-  /** Expanded by default while true; folds to the summary line when the
-   * run finishes. The user's own toggle wins until `running` changes. */
+  /** The plan's run is streaming: styles the current step as live. */
   running?: boolean;
+  /** Opens the plan file in the artifacts panel (plan-file plans only). */
+  onOpen?: () => void;
 }) {
-  const [userToggle, setUserToggle] = useState<boolean | null>(null);
-  // Reset the manual toggle when the run state flips, so a new run opens
-  // the dock and a finished run folds it (React's render-time state reset).
+  // Folded until the reader opens it. A new run (running flips back on)
+  // folds it again, so a fresh plan never lands expanded (React's
+  // render-time state reset).
+  const [open, setOpen] = useState(false);
   const [seenRunning, setSeenRunning] = useState(running);
   if (seenRunning !== running) {
     setSeenRunning(running);
-    setUserToggle(null);
+    if (running) setOpen(false);
   }
-  const open = userToggle ?? running;
   const done = plan.completed === plan.items.length;
   return (
     <section
@@ -91,6 +93,24 @@ export const PlanTracker = memo(function PlanTracker({
     >
       <div className="chat-collapse" data-open={open}>
         <div>
+          {(plan.title || onOpen) && (
+            <div className="flex items-center gap-2 px-4 pt-2.5 text-[11px] text-[var(--color-text-muted)]">
+              <span data-testid="chat-plan-title" className="min-w-0 flex-1 truncate font-medium">
+                {plan.title ?? ""}
+              </span>
+              {onOpen && (
+                <button
+                  type="button"
+                  data-testid="chat-plan-open"
+                  onClick={onOpen}
+                  className="flex flex-none items-center gap-1 rounded px-1.5 py-0.5 text-[var(--color-text-dim)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]"
+                >
+                  <ExternalLink className="h-3 w-3" />
+                  Open
+                </button>
+              )}
+            </div>
+          )}
           <ul className="chat-plan__body space-y-1 px-3 py-2.5">
             {plan.items.map((item, index) => (
               <li
@@ -122,7 +142,7 @@ export const PlanTracker = memo(function PlanTracker({
         type="button"
         aria-expanded={open}
         aria-label={open ? "Collapse the agent plan" : "Expand the agent plan"}
-        onClick={() => setUserToggle(!open)}
+        onClick={() => setOpen(!open)}
         className="chat-plan__header flex w-full items-center gap-2.5 px-3 py-2 text-left"
       >
         <ListTodo className="h-3.5 w-3.5 flex-none text-[var(--color-text-dim)]" />

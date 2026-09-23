@@ -7,6 +7,8 @@ import {
 } from "./chat-test-fixture-artifact-files";
 import { dashboardFixtureEvents } from "./chat-test-fixture-dashboard";
 import {
+  FIXTURE_PROBE_COMMAND,
+  fixtureProbeTerminalCompletion,
   fixtureSchemaCompletion,
   fixtureTableCompletion,
   fixtureTerminalCompletion,
@@ -444,6 +446,22 @@ const RAW_EVENTS: FixtureEvent[] = [
     sequence: 20,
     type: "tool_completed",
     payload: fixtureTerminalCompletion("t7"),
+  },
+  // A Bash probe: exit 1 from `ls` on a missing path is a "not found"
+  // answer, not a failure (error: false, result.probe: true).
+  {
+    at: 12_000,
+    run_id: FIXTURE_RUN_ID,
+    sequence: 21,
+    type: "tool_started",
+    payload: { tool: "Bash", input: { command: FIXTURE_PROBE_COMMAND } },
+  },
+  {
+    at: 12_300,
+    run_id: FIXTURE_RUN_ID,
+    sequence: 22,
+    type: "tool_completed",
+    payload: fixtureProbeTerminalCompletion("t7b"),
   },
   // Export files (HTML report, SVG chart, CSV) — the inline artifact card
   // variants. Defined in chat-test-fixture-artifact-files.ts.

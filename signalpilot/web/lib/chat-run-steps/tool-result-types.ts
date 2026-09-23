@@ -159,6 +159,11 @@ export type TerminalResult = ToolResultBase & {
   stderr: string;
   stdoutTruncated: boolean;
   stderrTruncated: boolean;
+  /**
+   * The non-zero exit was a probe outcome (ls/grep/test on a missing path),
+   * not a failure: the step succeeded and the card says "not found".
+   */
+  probe: boolean;
 };
 
 export type KnowledgeDoc = {

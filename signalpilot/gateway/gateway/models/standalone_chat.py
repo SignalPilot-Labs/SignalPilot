@@ -27,6 +27,7 @@ ChatEventType = Literal[
     "steering_queued",
     "steering_picked_up",
     "steering_not_delivered",
+    "steering_delivered",
     "text_delta",
     "thinking_delta",
     "tool_started",
@@ -75,6 +76,7 @@ class StandaloneChatProject(BaseModel):
 
 class ChatBootstrapResponse(BaseModel):
     enabled: bool
+    plan_locked: bool = False
     projects: list[StandaloneChatProject]
     selected_project_id: str | None
     is_admin: bool

@@ -39,13 +39,31 @@ _PATH_PATTERNS: list[re.Pattern[str]] = [
 # Python traceback frame pattern
 _TRACEBACK_FRAME_RE = re.compile(r'File "[^"]+", line \d+')
 
+# Cap for warehouse error bodies returned to the agent. SQL errors name the
+# column, the token and the position; 300 characters cut most of them off.
+DB_ERROR_CAP = 500
+
+# ``host=`` is a secret only when it is part of a DSN or a connection
+# failure. Inside a SQL error body ("syntax error at or near host=") it is the
+# user's own text and redacting it hides the diagnostic the agent needs.
+_HOST_PATTERN_PREFIX = "host="
+_DSN_CONTEXT_RE = re.compile(
+    r"\b(?:port|dbname|database|user|username|password|sslmode)=\S|\bconnect",
+    re.IGNORECASE,
+)
+
+
+def _host_is_sensitive(text: str) -> bool:
+    return bool(_DSN_CONTEXT_RE.search(text))
+
 
 def sanitize_mcp_error(error: str, *, cap: int = 200) -> str:
     """Sanitize an exception message for return to an LLM agent client.
 
     Applies sensitive pattern redaction, path stripping, traceback frame
     stripping, and length capping. Preserves enough diagnostic text for
-    agent self-correction on DB errors (Spider2.0 SOTA pattern).
+    agent self-correction on DB errors (Spider2.0 SOTA pattern). Use
+    ``cap=DB_ERROR_CAP`` for warehouse error bodies.
 
     Args:
         error: Raw exception string to sanitize.
@@ -55,8 +73,11 @@ def sanitize_mcp_error(error: str, *, cap: int = 200) -> str:
         Sanitized string, at most `cap` characters long.
     """
     sanitized = error
+    host_sensitive = _host_is_sensitive(error)
 
     for pattern in _SENSITIVE_PATTERNS:
+        if pattern.pattern.startswith(_HOST_PATTERN_PREFIX) and not host_sensitive:
+            continue
         sanitized = pattern.sub("[REDACTED]", sanitized)
 
     for pattern in _PATH_PATTERNS:

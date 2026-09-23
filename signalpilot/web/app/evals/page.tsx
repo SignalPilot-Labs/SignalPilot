@@ -102,6 +102,7 @@ function EvalsPageInner() {
         <ControlDeck
           evalSet={evalSet}
           repoUrl={cfg?.repo_url ?? ""}
+          projectRepoUrl={cfg?.project_repo_url ?? ""}
           model={cfg?.model ?? "sonnet"}
           runnerEnabled={cfg?.enabled ?? true}
           activeRun={activeRun}

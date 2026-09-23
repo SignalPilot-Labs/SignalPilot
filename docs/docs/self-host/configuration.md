@@ -131,9 +131,10 @@ Each lease keeps query state and cancellation isolated from other requests. Thes
 |---|---|---|
 | `ANTHROPIC_API_KEY` | unset | Anthropic API key for chat and agent runs. |
 | `CLAUDE_CODE_OAUTH_TOKEN` | unset | Alternative credential for chat and agent runs. |
-| `SP_CHAT_AGENT_MODEL` | provider default | Model used by the chat agent. |
+| `SP_CHAT_AGENT_MODEL` | `claude-opus-5-5` | Default model for new chat conversations. Must be one of the models offered in the chat model selector; an unknown value falls back to the default. |
 | `SP_CHAT_DATASET_CONNECTORS` | `postgres,snowflake` | Connector types that expose dataset references in chat. |
 | `SP_CHAT_APPROVAL_WARM_SECONDS` | `900` | How long a sandbox stays warm while a query approval is pending. |
+| `SP_CHAT_DEV_DATABASE` | unset | Default database for the chat `refresh_mart` tool, on the same server as the chat's connection. Unset, refreshes build into the connection's own database; the agent can always name a database explicitly. |
 | `SP_AGENT_EFFORT` | `medium` | Reasoning effort for agent runs. |
 | `SP_AGENT_MAX_CONCURRENT_PER_ORG` | `2` | Concurrent agent runs per organization. |
 | `CHAT_WORKER_CONCURRENCY` | `4` | Runs one worker process handles at once. |
@@ -176,7 +177,8 @@ variables. See [What each plan includes](/docs/product/plans).
 | `SP_GITHUB_APP_PRIVATE_KEY` | unset | App private key (PEM) used to mint short-lived installation tokens. |
 | `SP_GITHUB_APP_SLUG` | `signalpilot` | App slug, used to build install URLs. |
 | `SP_GITHUB_BOT_TOKEN` | unset | Token used to comment on pull requests and set statuses when no App is configured. |
-| `SP_GITHUB_WEBHOOK_SECRET` | unset | HMAC secret for `/api/github/webhook`. |
+| `SP_GITHUB_WEBHOOK_SECRET` | unset | HMAC secret for `/api/github/webhook`. Set it to the same value as the App's webhook secret; unset, the route answers `503` and pushes are not picked up. |
+| `SP_REPO_SYNC_INTERVAL_SECONDS` | `900` | How often watched branches of linked repositories are pulled from GitHub without a webhook, as a fallback. `0` disables the sweep. |
 | `SP_GITHUB_BOT_CONNECTION` | unset | Default connection the pull request verification battery runs against. |
 | `NOTION_OAUTH_CLIENT_ID`, `NOTION_OAUTH_CLIENT_SECRET` | unset | Notion integration credentials. |
 | `NOTION_OAUTH_REDIRECT_URI` | unset | Redirect URI registered with the Notion integration. |

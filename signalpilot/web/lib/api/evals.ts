@@ -14,6 +14,13 @@ export type EvalConfig = {
   repo_url: string;
   repo_installation_id?: string | null;
   repo_id?: number | null;
+  /** The dbt project the eval set runs against. Canonical https://github.com/<owner>/<repo>; a local path in self-host mode. */
+  project_repo_url: string;
+  /** Set together with project_repo_id, or both null. */
+  project_repo_installation_id: string | null;
+  project_repo_id: number | null;
+  /** Branch name. Empty means the repository's default branch. */
+  project_ref: string;
   model: string;
   max_tasks: number;
   prompt_preamble: string;

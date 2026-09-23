@@ -1,4 +1,5 @@
 import { act } from "react";
+import { openToolRow } from "../test-utils";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatUiContext, type ChatUiContextValue } from "~/components/chat/chat-ui-context";
@@ -147,6 +148,7 @@ describe("runtime card", () => {
 
   it("shows the notebook name with the orbiting icon while running", async () => {
     await render(step({ status: "running", endedAt: null, durationMs: null }));
+    await openToolRow(container);
     const body = q(container, '[data-testid="chat-runtime-card"]');
     expect(body?.textContent).toContain("analysis");
     expect(q(body!, ".chat-boot-orbit")).not.toBeNull();

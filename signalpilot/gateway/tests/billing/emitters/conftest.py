@@ -9,12 +9,31 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from gateway.billing import GatewayCreditLedger, OrgEntitlement, local_entitlement
+from gateway.billing import GatewayCreditLedger, OrgEntitlement, local_entitlement, rate_card
 from gateway.db.models import GatewayBase
 
 ORG = "org_billable"
 USER = "user_1"
 NOW = datetime(2026, 9, 14, 12, 0, tzinfo=UTC)
+
+# The published rate card as the backend snapshots it from Stripe.
+TEST_RATE_CARD = rate_card.RateCard(
+    thread_credits=50,
+    query_credits=1,
+    eval_run_credits=50,
+    model_month_credits=600,
+    token_credits_per_usd=100,
+    seat_month_credits={"team": 1_500, "scale": 1_500, "enterprise": None},
+    version="2",
+)
+
+
+@pytest.fixture(autouse=True)
+def _rate_card():
+    """Every emitter test prices from the published card without a DB read."""
+    rate_card.install(TEST_RATE_CARD)
+    yield
+    rate_card.install(None)
 
 
 @pytest_asyncio.fixture

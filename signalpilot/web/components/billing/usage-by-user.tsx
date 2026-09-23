@@ -1,7 +1,7 @@
 "use client";
 
 // Per-user consumption: the admin table from `usage/by-user` and the period
-// selector both views share. Pure rendering; the page owns the fetches.
+// selector. Pure rendering; the page owns the fetches.
 
 import type { UsageByUserRow } from "~/lib/backend-client";
 import { creditsToUsd, formatCredits, formatUsd } from "~/lib/billing-rates";
@@ -121,42 +121,6 @@ export function UsageByUserTable({ rows }: { rows: UsageByUserRow[] }) {
           })}
         </tbody>
       </table>
-    </div>
-  );
-}
-
-/** Member view: the caller's own row as a small grid of tiles. */
-export function MyUsageTiles({ row }: { row: UsageByUserRow | null }) {
-  const credits = Math.abs(row?.credits_consumed ?? 0);
-  const tiles: { label: string; value: string; sub?: string; testId: string }[] = [
-    { label: "credits", value: formatCredits(credits), sub: formatUsd(creditsToUsd(credits)), testId: "my-credits" },
-    { label: "threads", value: formatCount(row?.threads ?? 0), testId: "my-threads" },
-    { label: "queries", value: formatCount(row?.queries ?? 0), testId: "my-queries" },
-    {
-      label: "tokens",
-      value: formatCount((row?.tokens_in ?? 0) + (row?.tokens_out ?? 0)),
-      sub: `${formatCount(row?.tokens_in ?? 0)} in · ${formatCount(row?.tokens_out ?? 0)} out · ${formatCount(row?.tokens_cache_read ?? 0)} cache`,
-      testId: "my-tokens",
-    },
-    {
-      label: "token credits",
-      value: formatCredits(Math.abs(row?.token_credits ?? 0)),
-      testId: "my-token-credits",
-    },
-  ];
-  return (
-    <div className="grid grid-cols-2 md:grid-cols-5 gap-3" data-testid="my-usage">
-      {tiles.map((t) => (
-        <div
-          key={t.label}
-          data-testid={t.testId}
-          className="border border-[var(--color-border)] bg-[var(--color-bg-card)] rounded-[14px] p-4"
-        >
-          <div className="text-[11px] text-[var(--color-text-dim)] uppercase tracking-[0.08em]">{t.label}</div>
-          <div className="mt-1 text-[18px] font-mono tabular-nums text-[var(--color-text)]">{t.value}</div>
-          {t.sub ? <div className="mt-0.5 text-[11px] text-[var(--color-text-dim)]">{t.sub}</div> : null}
-        </div>
-      ))}
     </div>
   );
 }

@@ -7,7 +7,8 @@ from typing import TYPE_CHECKING, Any
 from signalpilot import _loggers
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import AsyncGenerator, Callable
+    from pathlib import Path
 
 LOGGER = _loggers.sp_logger()
 
@@ -156,6 +157,11 @@ def evaluate_notebook_failure(
     return None
 
 
+ARCHIVE_FAILED_WARNING = (
+    "Notebook archive upload failed; the answer and artifacts are kept"
+)
+
+
 async def archive_run_notebooks(
     runtime_app: Any,
     *,
@@ -168,13 +174,18 @@ async def archive_run_notebooks(
 ) -> tuple[str | None, dict[str, Any] | None]:
     """Archive every started notebook, analysis first.
 
-    Returns (analysis_archive_id, error_payload). Only the ANALYSIS archive
-    failure produces an error payload; a named notebook's failure logs and
-    continues.
+    Returns (analysis_archive_id, warning_payload). An archive failure is a
+    WARNING, never a run failure: the composed answer and the captured
+    artifacts already exist, and the kernels stay alive for the live panel.
+    The analysis notebook's failure yields a warning event for the
+    transcript; a named notebook's failure only logs.
     """
-    import traceback
+    from signalpilot._server.api.endpoints.standalone_chat_stream import (
+        error_text,
+    )
 
     archive_id: str | None = None
+    warning: dict[str, Any] | None = None
     for notebook_name in ordered_notebook_names(sessions):
         archive_session = sessions[notebook_name]
         try:
@@ -187,30 +198,86 @@ async def archive_run_notebooks(
                 notebook_name=notebook_name,
             )
         except Exception as exc:
-            LOGGER.error(
-                "Standalone notebook archive failed run_id=%s notebook=%s "
-                "session_id=%s attempt=%s error_type=%s",
+            LOGGER.warning(
+                "Standalone notebook archive failed; keeping the answer "
+                "run_id=%s notebook=%s session_id=%s attempt=%s error=%s",
                 run_id,
                 notebook_name,
                 archive_session,
                 attempt,
-                type(exc).__name__,
+                error_text(exc, operation="archive_notebook"),
+                exc_info=True,
             )
-            if notebook_name != "analysis":
-                continue
-            return archive_id, {
-                "type": "error",
-                "content": str(exc) if str(exc) else repr(exc),
-                "full_trace": traceback.format_exc(),
-                "diagnostic_context": {
-                    "error_type": type(exc).__name__,
-                    "operation": "archive_analysis_notebook",
-                },
-                "is_error": True,
-            }
+            if notebook_name == "analysis":
+                warning = {
+                    "type": "progress",
+                    "content": ARCHIVE_FAILED_WARNING,
+                    "is_error": False,
+                    "warning": True,
+                    "diagnostic_context": {
+                        "error_type": type(exc).__name__,
+                        "operation": "archive_analysis_notebook",
+                        "run_id": run_id,
+                    },
+                }
+            continue
         if notebook_name == "analysis":
             archive_id = named_archive_id
-    return archive_id, None
+    return archive_id, warning
+
+
+async def archive_and_keep_alive(
+    runtime_app: Any,
+    *,
+    lifecycle: Any,
+    state: Any,
+    run_id: str,
+    attempt: int,
+    conversation_id: str,
+    gateway_api_url: str,
+    scoped_token: str,
+    working_scratch: Path,
+    run_scratch: Path,
+    archive_fn: Callable[..., Any],
+    register_keepalive_fn: Callable[..., None],
+) -> AsyncGenerator[bytes, None]:
+    """Archive the run's notebooks, then keep its kernels alive.
+
+    Sets ``state.archive_id`` (None on upload failure) and yields the
+    archive warning line when the analysis upload failed. The kernels and
+    notebooks stay ALIVE after a validated run so the chat page's live
+    notebook panel can attach; the next run in the conversation, or the
+    sandbox's own lifecycle, closes them.
+    """
+    from signalpilot._server.api.endpoints.standalone_chat_stream import (
+        _ndjson,
+    )
+
+    state.archive_id, warning = await archive_run_notebooks(
+        runtime_app,
+        sessions=lifecycle.sessions,
+        run_id=run_id,
+        attempt=attempt,
+        gateway_api_url=gateway_api_url,
+        scoped_token=scoped_token,
+        archive_fn=archive_fn,
+    )
+    if warning is not None:
+        yield _ndjson(warning)
+    register_keepalive_fn(
+        conversation_id=conversation_id,
+        sessions=dict(lifecycle.sessions),
+        # The notebooks may live in an ADOPTED scratch from an earlier
+        # turn; register the directory that actually contains them.
+        scratch=working_scratch,
+    )
+    if working_scratch != run_scratch:
+        # Adopted turn: this run's unused seeded scratch still holds a
+        # token copy. Remove it.
+        try:
+            (run_scratch / ".gateway-token").unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def build_final_payload(
@@ -220,11 +287,14 @@ def build_final_payload(
     agent_usage: dict[str, Any] | None,
     archive_id: str | None,
     kernel_stopped: bool,
+    agent_result: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     final_payload: dict[str, Any] = {
         "type": "final",
         "content": accepted_text,
     }
+    if agent_result:
+        final_payload["result"] = agent_result
     if agent_cost_usd is not None:
         final_payload["cost_usd"] = agent_cost_usd
     if agent_usage is not None:

@@ -63,6 +63,7 @@ export type StandaloneChatModel =
   | "claude-opus-4-6"
   | "claude-sonnet-4-6"
   | "claude-opus-5"
+  | "claude-opus-5-5"
   | "claude-fable-5-1";
 
 export type StandaloneChatModelOption = {
@@ -79,6 +80,8 @@ export type StandaloneChatEffortOption = {
 
 export type StandaloneChatBootstrap = {
   enabled: boolean;
+  /** True when the org's plan does not include chat (free tier). */
+  plan_locked?: boolean;
   projects: StandaloneChatProject[];
   selected_project_id: string | null;
   is_admin: boolean;
@@ -139,6 +142,7 @@ export type StandaloneChatEvent = {
     | "steering_queued"
     | "steering_picked_up"
     | "steering_not_delivered"
+    | "steering_delivered"
     | "text_delta"
     | "thinking_delta"
     | "tool_started"

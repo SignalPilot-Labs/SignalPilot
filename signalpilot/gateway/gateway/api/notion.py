@@ -153,7 +153,7 @@ def _same_notion_id(left: str | None, right: str | None) -> bool:
 
 
 def _is_safe_redirect_target(target: str) -> bool:
-    if not target or target.startswith(("//", "\\")):
+    if not target or target.startswith("//") or "\\" in target:
         return False
     parsed = urlparse(target)
     if not parsed.scheme and not parsed.netloc:

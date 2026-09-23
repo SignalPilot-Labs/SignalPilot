@@ -14,7 +14,6 @@ import httpx
 from gateway.db.engine import get_session_factory, init_db
 from gateway.standalone_chat.config import (
     lease_seconds,
-    standalone_chat_enabled,
     worker_concurrency,
     worker_poll_seconds,
 )
@@ -55,12 +54,17 @@ from gateway.standalone_chat.worker_errors import (
     public_raw_error_fields as _public_raw_error_fields,
 )
 from gateway.standalone_chat.worker_events import (
+    _announce_notebook,
+    _cancel_previous_attempt,
     _cancellation_monitor,
     _lease_renewer,
     _notebook_started_payload,  # noqa: F401 — re-exported for tests
     _steering_monitor,
     _update_summary,
     _worker_id,
+    append_tool_side_events,
+    empty_answer_error,
+    touch_run_session,
 )
 from gateway.standalone_chat.worker_recovery import load_interrupted_tool_completions
 from gateway.standalone_chat.worker_tool_results import (
@@ -76,6 +80,24 @@ _CLARIFICATION_PREFIX = "CLARIFICATION_REQUESTED:"
 # One batcher per run being executed by this worker. Deltas are coalesced;
 # every other event flushes them first so transcript order is preserved.
 _delta_batchers: dict[str, DeltaBatcher] = {}
+
+
+async def _agent_session_archive_exists(*, org_id: str, conversation_id: str) -> bool:
+    """True when a saved Claude session archive exists for this conversation."""
+    try:
+        from gateway.standalone_chat.agent_sessions import agent_session_archive_key
+        from gateway.standalone_chat.object_storage import chat_object_storage
+
+        storage = chat_object_storage()
+        if not storage.enabled:
+            return False
+        key = agent_session_archive_key(
+            org_id=org_id, conversation_id=conversation_id
+        )
+        return await storage.exists(key)
+    except Exception:
+        # Never let this optimisation break a run: on doubt, build the context.
+        return False
 
 
 async def _write_event(run_id: str, event_type: str, payload: dict[str, Any]) -> None:
@@ -109,32 +131,6 @@ async def _flush_deltas(run_id: str) -> None:
         await batcher.flush()
 
 
-async def _announce_notebook(run_id: str, payload: dict[str, Any]) -> None:
-    """Append the notebook_started event and persist the conversation pointer.
-
-    The pointer makes the conversation row the single source of truth for
-    where the notebook lives. Persist only a complete id set: a partial
-    payload cannot be attached to and must not clobber a good pointer.
-    """
-    await _append(run_id, "notebook_started", payload)
-    gateway_session_id = payload.get("gateway_session_id")
-    kernel_session_id = payload.get("kernel_session_id")
-    notebook_path = payload.get("notebook_path")
-    if not (gateway_session_id and kernel_session_id and notebook_path):
-        return
-    with suppress(Exception):
-        factory = get_session_factory()
-        async with factory() as db:
-            await chat_store.set_conversation_notebook_for_run(
-                db,
-                run_id=run_id,
-                gateway_session_id=str(gateway_session_id),
-                kernel_session_id=str(kernel_session_id),
-                notebook_path=str(notebook_path),
-                name=str(payload.get("notebook") or "analysis"),
-            )
-
-
 async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
     stop = asyncio.Event()
     renewer = asyncio.create_task(_lease_renewer(run_id, worker_id, stop))
@@ -144,6 +140,9 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
     steering: asyncio.Task[None] | None = None
     final_text = ""
     streamed_text = ""
+    # The SDK's result diagnostics from the final event (subtype, stop
+    # reason, turn count): what an empty answer is explained with.
+    final_result: dict[str, Any] | None = None
     report_proposal: dict[str, Any] | None = None
     starts_new_text_block = False
     tool_names_by_id: dict[str, str] = {}
@@ -158,7 +157,15 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
             # Tool result handling runs after this session closes.
             run_org_id = run.org_id
             recovering = run.execution_attempt > 1
-            context = await chat_store.worker_context(db, run=run)
+            # A resumed SDK session already carries the conversation-derived
+            # context, so do not pay to rebuild it. The archive's presence is
+            # the same signal the notebook server uses to decide to resume.
+            resume_likely = await _agent_session_archive_exists(
+                org_id=run.org_id, conversation_id=run.conversation_id
+            )
+            context = await chat_store.worker_context(
+                db, run=run, include_query_context=not resume_likely
+            )
             project = context["project"]
             branch = context["conversation"].branch or project.default_branch or "main"
             commit_sha = str(context["conversation"].commit_sha or "")
@@ -262,6 +269,19 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                                 stop,
                             )
                         )
+                # The session is in use from here; the lease renewer keeps
+                # pinging it until the run ends.
+                await touch_run_session(run_id, worker_id)
+                if recovering or notebook_attempt > 0:
+                    # A re-claimed run, or our own reconnect: the previous
+                    # attempt may still be running under this run id on the
+                    # notebook runtime. Stop it (keeping its kernels for
+                    # the resumed model) before executing again.
+                    await _cancel_previous_attempt(
+                        execution,
+                        run_id=run_id,
+                        reason="re-claimed" if recovering else "reconnect",
+                    )
                 async for event in stream_execution(execution):
                     if stop.is_set():
                         raise asyncio.CancelledError
@@ -341,30 +361,12 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                         # top-level step in the UI — suppress them for
                         # subagent tools, whose SQL still shows on the child
                         # step from its input.
-                        if parent_tool_call_id:
-                            continue
-                        if tool_name.endswith(("query_database", "explain_query", "validate_sql")):
-                            sql = tool_input.get("sql") if isinstance(tool_input, dict) else None
-                            if sql:
-                                await _append(run_id, "sql", {"sql": sql})
-                        if any(marker in tool_name for marker in ("schema", "table", "relationship", "metric")):
-                            source_refs = {
-                                key: value
-                                for key, value in (tool_input.items() if isinstance(tool_input, dict) else [])
-                                if key
-                                in {
-                                    "metric_name",
-                                    "model_name",
-                                    "schema_name",
-                                    "source_name",
-                                    "table_name",
-                                }
-                            }
-                            await _append(
-                                run_id,
-                                "source",
-                                {"tool": tool_name, **source_refs},
-                            )
+                        if not parent_tool_call_id:
+                            await append_tool_side_events(run_id, tool_name, tool_input)
+                    elif event_type == "steering_delivered":
+                        # The model just read a follow-up: the web places the
+                        # message at this point in the run.
+                        await _append(run_id, "steering_delivered", {"message_id": content})
                     elif event_type == "tool_result":
                         if not parent_tool_call_id:
                             starts_new_text_block = bool(streamed_text)
@@ -403,9 +405,13 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                             stderr=event.get("stderr"),
                             raw_error_truncated=event.get("raw_error_truncated") is True,
                             stderr_truncated=event.get("stderr_truncated") is True,
+                            public_error_code=event.get("public_error_code"),
+                            public_error_message=event.get("public_error_message"),
                         )
                     elif event_type == "final":
                         final_text = content or final_text or streamed_text
+                        if isinstance(event.get("result"), dict):
+                            final_result = dict(event["result"])
                         # Operator accounting: cost + token usage reported by
                         # the agent SDK, persisted on the run row.
                         raw_usage = event.get("usage")
@@ -460,7 +466,12 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                 )
             return
         if not answer:
-            raise RuntimeError("The analysis runtime returned no answer")
+            raise await empty_answer_error(
+                run_id=run_id,
+                worker_id=worker_id,
+                execution=execution,
+                final_result=final_result,
+            )
 
         await _flush_deltas(run_id)
         async with factory() as db:
@@ -498,7 +509,9 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
             type(exc).__name__,
             exc_info=True,
         )
-        public_message = _public_error_message(exc)
+        # A runtime-classified failure keeps its own code and sentence.
+        public_code = getattr(exc, "public_error_code", None) or "analysis_failed"
+        public_message = getattr(exc, "public_error_message", None) or _public_error_message(exc)
         full_trace = _public_full_trace(exc)
         diagnostic_context = _public_diagnostic_context(exc)
         diagnostic_context["run_id"] = run_id
@@ -507,7 +520,7 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                 run_id,
                 "error",
                 {
-                    "code": "analysis_failed",
+                    "code": public_code,
                     "message": public_message,
                     "full_trace": full_trace,
                     "diagnostic_context": diagnostic_context,
@@ -521,7 +534,7 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                 db,
                 run_id=run_id,
                 worker_id=worker_id,
-                code="analysis_failed",
+                code=public_code,
                 message=public_message,
             )
     finally:
@@ -557,9 +570,6 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
 
 async def run_worker() -> None:
     await init_db()
-    if not standalone_chat_enabled():
-        logger.info("Standalone chat worker disabled by feature flag")
-        return
     worker_id = _worker_id()
     concurrency = worker_concurrency()
     active: set[asyncio.Task[None]] = set()

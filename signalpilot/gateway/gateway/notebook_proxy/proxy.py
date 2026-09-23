@@ -203,7 +203,8 @@ class NotebookProxy:
         - asyncio.TaskGroup: cancellation of either pump tears down both.
         """
         outbound_headers = _build_outbound_ws_headers(ws, self._upstream_token)
-        logger.info("WS PROXY connecting to upstream: %s", upstream_url)
+        # Never log the upstream route URL: it is the sandbox address.
+        logger.info("WS PROXY connecting to upstream")
 
         try:
             upstream_ws = await websockets.asyncio.client.connect(

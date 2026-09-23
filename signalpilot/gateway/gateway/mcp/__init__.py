@@ -83,7 +83,10 @@ from gateway.mcp.tools.schema import (
     schema_statistics,
 )
 from gateway.mcp.tools.dbt_execute import dbt_execute
+from gateway.mcp.tools.comment_on_pull_request import comment_on_pull_request
+from gateway.mcp.tools.open_pull_request import open_pull_request
 from gateway.mcp.tools.refresh_mart import refresh_mart
+from gateway.mcp.tools.update_pull_request import update_pull_request
 from gateway.mcp.tools.sandbox_vm import (
     sandbox_exec,
     sandbox_read_file,
@@ -152,6 +155,9 @@ __all__ = [
     "audit_model_sources",
     "compare_join_types",
     "list_workspace_projects",
+    "open_pull_request",
+    "update_pull_request",
+    "comment_on_pull_request",
     "sandbox_exec",
     "sandbox_write_file",
     "sandbox_read_file",

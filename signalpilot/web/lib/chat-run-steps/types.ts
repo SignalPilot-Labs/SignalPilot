@@ -80,7 +80,9 @@ export type RunStepSummary = {
 export type RunBlock =
   | { kind: "text"; key: string; text: string }
   | { kind: "thinking"; key: string; text: string }
-  | { kind: "steps"; key: string; steps: RunStep[] };
+  | { kind: "steps"; key: string; steps: RunStep[] }
+  /** A follow-up the user sent during the run, where the agent read it. */
+  | { kind: "interjection"; key: string; messageId: string };
 
 export type RuntimeBootPhase = "provisioning" | "resuming" | "ready";
 
@@ -105,6 +107,8 @@ export type RunPlan = {
   completed: number;
   /** The in-progress item, preferring its activeForm for display. */
   currentLabel: string | null;
-  /** Sequence of the TodoWrite event the plan came from. */
+  /** Sequence of the TodoWrite or plan-file event the plan came from. */
   sequence: number;
+  /** The plan file's heading, when the plan came from artifacts/plan.md. */
+  title?: string | null;
 };

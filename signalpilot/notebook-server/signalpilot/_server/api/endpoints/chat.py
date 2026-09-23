@@ -18,6 +18,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 import httpx
+from starlette.authentication import requires
 from starlette.responses import JSONResponse
 
 from signalpilot._server.ai.chat_store import (
@@ -898,6 +899,7 @@ def _respond(result: Any) -> JSONResponse:
 
 
 @router.post("/conversations")
+@requires("edit")
 async def create_conversation(request: Request) -> JSONResponse:
     body = await request.json()
     result = await _gw("POST", "/api/notebook-chat/conversations", body)
@@ -907,6 +909,7 @@ async def create_conversation(request: Request) -> JSONResponse:
 
 
 @router.get("/conversations")
+@requires("edit")
 async def list_conversations(request: Request) -> JSONResponse:
     source = request.query_params.get("source")
     if source in _TRACE_SOURCES:
@@ -940,6 +943,7 @@ async def list_conversations(request: Request) -> JSONResponse:
 
 
 @router.get("/conversations/{conversation_id}")
+@requires("edit")
 async def get_conversation(request: Request) -> JSONResponse:
     cid = request.path_params["conversation_id"]
     traced = await _trace_get_conversation(request, cid)
@@ -953,6 +957,7 @@ async def get_conversation(request: Request) -> JSONResponse:
 
 
 @router.delete("/conversations/{conversation_id}")
+@requires("edit")
 async def delete_conversation(request: Request) -> JSONResponse:
     cid = request.path_params["conversation_id"]
     result = await _gw("DELETE", f"/api/notebook-chat/conversations/{cid}")
@@ -965,6 +970,7 @@ async def delete_conversation(request: Request) -> JSONResponse:
 
 
 @router.post("/conversations/{conversation_id}/messages")
+@requires("edit")
 async def append_message(request: Request) -> JSONResponse:
     cid = request.path_params["conversation_id"]
     body = await request.json()
@@ -975,6 +981,7 @@ async def append_message(request: Request) -> JSONResponse:
 
 
 @router.get("/conversations/{conversation_id}/messages")
+@requires("edit")
 async def list_messages(request: Request) -> JSONResponse:
     cid = request.path_params["conversation_id"]
     qs = ""

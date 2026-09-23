@@ -33,7 +33,7 @@ Seats
 -----
 ``clerk_members.org_member_count`` (accepted memberships at snapshot time).
 billable seats = max(0, members - included_seats); the rate is
-``rates.seat_month_credits(tier)``. When the count is unavailable the seat
+``rate_card.seat_month_credits(tier)``. When the count is unavailable the seat
 row is skipped and logged; the next run fills it in (same key).
 
 Org enumeration
@@ -55,9 +55,10 @@ from typing import Any
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .. import rate_card
 from ..entitlements import OrgEntitlement, get_entitlement, is_cloud_mode
 from ..ledger import LedgerEntry, has_entry
-from ..rates import MODEL_MONTH_CREDITS, daily_credit_share, seat_month_credits
+from ..rates import daily_credit_share
 from ._base import json_safe_payload, write_in_savepoint
 from .clerk_members import org_member_count
 
@@ -152,8 +153,9 @@ async def write_model_day(
     key = model_day_key(entitlement.org_id, day)
     if await has_entry(session, key):
         return None
+    monthly_rate = rate_card.current().model_month_credits
     billable = max(0, covered.count - int(entitlement.included_models or 0))
-    credits = -daily_credit_share(billable * MODEL_MONTH_CREDITS, day)
+    credits = -daily_credit_share(billable * monthly_rate, day)
     entry = LedgerEntry(
         org_id=entitlement.org_id,
         entry_type="consume",
@@ -175,7 +177,7 @@ async def write_model_day(
                 "allowance_position": covered.count,
                 "eval_runs_read": covered.runs_read,
                 "projects": list(covered.projects),
-                "monthly_rate": MODEL_MONTH_CREDITS,
+                "monthly_rate": monthly_rate,
             }
         ),
     )
@@ -186,16 +188,18 @@ async def write_seat_day(session: AsyncSession, entitlement: OrgEntitlement, day
     key = seat_day_key(entitlement.org_id, day)
     if await has_entry(session, key):
         return None
-    rate = seat_month_credits(entitlement.tier)
+    rate = rate_card.seat_month_credits(entitlement.tier)
     billable = max(0, members - int(entitlement.included_seats or 0))
-    credits = -daily_credit_share(billable * rate, day)
+    # A tier without a public seat price (Enterprise) has its seats in the
+    # contract: the row records the count but never deducts.
+    credits = -daily_credit_share(billable * rate, day) if rate is not None else 0
     entry = LedgerEntry(
         org_id=entitlement.org_id,
         entry_type="consume",
         credits=credits,
         unit="seat_day",
         quantity=billable,
-        reason=REASON_OK if billable else REASON_INCLUDED,
+        reason=REASON_OK if billable and rate is not None else REASON_INCLUDED,
         source="system",
         idempotency_key=key,
         occurred_at=datetime(day.year, day.month, day.day, tzinfo=UTC),
@@ -223,6 +227,9 @@ async def snapshot_org(
 ) -> dict[str, int | None]:
     """Write both rows for one org and commit. Returns the ledger ids written."""
     written: dict[str, int | None] = {"model_day": None, "seat_day": None}
+    if await rate_card.require() is None:
+        logger.warning("daily snapshot skipped for org %s on %s: no billing rate card", entitlement.org_id, day)
+        return written
     if not (await has_entry(session, model_day_key(entitlement.org_id, day))):
         covered = await covered_models(session, entitlement.org_id)
         written["model_day"] = await write_model_day(session, entitlement, day, covered=covered)

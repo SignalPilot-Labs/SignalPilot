@@ -11,9 +11,11 @@ import {
 } from "recharts";
 import type { AllowanceUse, DailyUsagePoint, UnitConsumption } from "~/lib/backend-client";
 import { UNIT_LABELS, creditsToUsd, formatCredits, formatUsd } from "~/lib/billing-rates";
+import { ALLOTMENT_BAR_COLOR, INCLUDED_USAGE_COPY, splitAllotment } from "~/lib/allotment";
 
 // ---------------------------------------------------------------------------
-// Credit balance bar
+// Credit balance bar. Past the included credits the bar stays full in its
+// normal colour and the excess is shown as extra usage; it is not an error.
 // ---------------------------------------------------------------------------
 
 export function CreditBalanceCard({
@@ -29,9 +31,8 @@ export function CreditBalanceCard({
   overage: number;
   periodEnd: string;
 }) {
-  const percentage = granted > 0 ? Math.round((consumed / granted) * 100) : consumed > 0 ? 100 : 0;
-  const tone = overage > 0 ? "error" : percentage >= 80 ? "warning" : "success";
-  const barColor = `var(--color-${tone})`;
+  const split = splitAllotment(consumed, granted);
+  const percentage = Math.round(split.fillPct);
   // The period end is a UTC calendar boundary; render it as a UTC date.
   const resetStr = new Date(periodEnd).toLocaleDateString("en-US", {
     month: "short",
@@ -48,7 +49,7 @@ export function CreditBalanceCard({
         <span className="text-[11px] text-[var(--color-text-muted)] uppercase tracking-[0.08em]">
           credits this period
         </span>
-        <span className="text-[13px] font-mono tabular-nums" style={{ color: barColor }}>
+        <span className="text-[13px] font-mono tabular-nums text-[var(--color-text)]">
           {percentage}%
         </span>
       </div>
@@ -63,7 +64,7 @@ export function CreditBalanceCard({
       >
         <div
           className="h-full transition-all duration-500"
-          style={{ width: `${Math.min(percentage, 100)}%`, backgroundColor: barColor }}
+          style={{ width: `${split.fillPct}%`, backgroundColor: ALLOTMENT_BAR_COLOR }}
         />
       </div>
 
@@ -75,9 +76,12 @@ export function CreditBalanceCard({
           of <span className="font-mono tabular-nums">{formatCredits(granted)}</span> credits used
           {overage > 0 && (
             <>
-              {" "}
-              <span className="text-[var(--color-error)] font-mono tabular-nums">
-                +{formatCredits(overage)} overage ({formatUsd(creditsToUsd(overage))})
+              {" · "}
+              <span data-testid="usage-extra" className="text-[var(--color-text)]">
+                Extra usage:{" "}
+                <span className="font-mono tabular-nums">
+                  {formatCredits(overage)} credits ({formatUsd(creditsToUsd(overage))})
+                </span>
               </span>
             </>
           )}
@@ -90,6 +94,11 @@ export function CreditBalanceCard({
           <span className="text-[var(--color-text-muted)] font-mono tabular-nums">{resetStr}</span>
         </span>
       </div>
+      {overage > 0 && (
+        <p data-testid="usage-included-copy" className="mt-2 text-[12px] text-[var(--color-text-dim)]">
+          {INCLUDED_USAGE_COPY}
+        </p>
+      )}
     </div>
   );
 }
@@ -187,7 +196,8 @@ export function ConsumptionByUnitTable({ byUnit }: { byUnit: Record<string, Unit
 }
 
 // ---------------------------------------------------------------------------
-// Allowance meters — seats, models, eval runs are counters, not credits
+// Allowance meters — seats, models, eval runs are counters, not credits.
+// Beyond the allowance is metered, not an error: same colour, full bar.
 // ---------------------------------------------------------------------------
 
 export function AllowanceMeter({
@@ -199,9 +209,9 @@ export function AllowanceMeter({
   use: AllowanceUse;
   beyondNote: string;
 }) {
-  const over = Math.max(0, use.used - use.included);
-  const pct = use.included > 0 ? Math.min(100, Math.round((use.used / use.included) * 100)) : use.used > 0 ? 100 : 0;
-  const color = over > 0 ? "var(--color-warning)" : "var(--color-success)";
+  const split = splitAllotment(use.used, use.included);
+  const over = Math.round(split.extra);
+  const pct = split.fillPct;
 
   return (
     <div
@@ -224,7 +234,7 @@ export function AllowanceMeter({
         aria-label={`${label}: ${use.used} of ${use.included} included`}
         className="h-1 bg-[var(--color-border)] w-full rounded-full overflow-hidden"
       >
-        <div className="h-full" style={{ width: `${pct}%`, backgroundColor: color }} />
+        <div className="h-full" style={{ width: `${pct}%`, backgroundColor: ALLOTMENT_BAR_COLOR }} />
       </div>
       <p className="text-[11px] text-[var(--color-text-dim)] mt-2">
         {over > 0 ? `${over.toLocaleString()} beyond allowance, ${beyondNote}` : "within allowance"}

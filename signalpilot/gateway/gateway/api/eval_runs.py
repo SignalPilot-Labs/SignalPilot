@@ -13,10 +13,11 @@ import logging
 import re
 import time
 import zipfile
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import PlainTextResponse, Response, StreamingResponse
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field
 
 from ..billing.entitlements import get_entitlement
 from ..config.evals import get_eval_run_settings
@@ -24,6 +25,13 @@ from ..evals import runner
 from ..evals.object_store import EvidenceStoreDisabled, get_object_store
 from ..security.scope_guard import RequireScope
 from .deps import RequireBillablePlan, RequireDeploymentCapability, StoreD, deployment_capabilities
+from .eval_config import (
+    PROJECT_REPO_REQUIRED,
+    EvalConfig,
+    require_pinned_connection,
+    require_project_repo,
+    verify_eval_config,
+)
 from .eval_sandboxes import router as sandbox_router
 
 logger = logging.getLogger(__name__)
@@ -54,45 +62,6 @@ _MAX_CONCURRENT_RUNS = 2
 
 # The gateway assembles the export in memory. This limit bounds memory use.
 EXPORT_MAX_BYTES = 256 * 1024 * 1024
-
-
-class EvalConfig(BaseModel):
-    repo_url: str = Field("", max_length=2048)
-    repo_installation_id: str | None = Field(None, max_length=64)
-    repo_id: int | None = Field(None, gt=0)
-    model: str = Field("sonnet", max_length=64)
-    max_tasks: int = Field(0, ge=0, le=200)  # 0 = all
-    prompt_preamble: str = Field("", max_length=4000)
-    # An eval run can use only this connection.
-    # Write tasks also fork their branches from this connection.
-    # A persisted configuration must specify the connection before a run starts.
-    connection: str = Field("", max_length=64)
-    # The default disables automatic runs because each run incurs a model cost.
-    autorun_on_knowledge_add: bool = False
-    # An empty list disables regression notifications.
-    notify_emails: list[str] = Field(default_factory=list, max_length=20)
-
-    @field_validator("connection")
-    @classmethod
-    def _connection_name_is_safe(cls, value: str) -> str:
-        value = value.strip()
-        if value and not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", value):
-            raise ValueError("connection must contain only letters, numbers, underscores, and hyphens")
-        return value
-
-    @field_validator("notify_emails")
-    @classmethod
-    def _emails_look_like_emails(cls, v: list[str]) -> list[str]:
-        for e in v:
-            if len(e) > 254 or "@" not in e or " " in e or e.count("@") != 1:
-                raise ValueError(f"not an email address: {e!r}")
-        return v
-
-    @model_validator(mode="after")
-    def _private_repo_binding_is_complete(self):
-        if (self.repo_installation_id is None) != (self.repo_id is None):
-            raise ValueError("repo_installation_id and repo_id must be set together")
-        return self
 
 
 class EvalRunRequest(BaseModel):
@@ -132,57 +101,9 @@ async def get_eval_config(store: StoreD):
 
 @router.put("/evals/config", dependencies=EVAL_EXECUTE_GUARDS)
 async def put_eval_config(store: StoreD, cfg: EvalConfig):
-    pin = await _require_pinned_connection(store, cfg.connection)
-    cfg = await _verify_private_eval_repo(store, cfg.model_copy(update={"connection": pin}))
+    pin = await require_pinned_connection(store, cfg.connection)
+    cfg = await verify_eval_config(store, cfg.model_copy(update={"connection": pin}))
     return await store.save_eval_config(cfg.model_dump(mode="json"))
-
-
-async def _verify_private_eval_repo(store: StoreD, cfg: EvalConfig) -> EvalConfig:
-    """Verify that the selected installation can read the bound eval repository."""
-    if cfg.repo_installation_id is None:
-        return cfg
-    prefix = "https://github.com/"
-    if not cfg.repo_url.startswith(prefix):
-        raise HTTPException(status_code=422, detail="A private eval repository must use a GitHub HTTPS URL")
-    full_name = cfg.repo_url.removeprefix(prefix).removesuffix(".git").strip("/")
-    if full_name.count("/") != 1:
-        raise HTTPException(status_code=422, detail="The private eval repository URL is invalid")
-
-    from ..github_client import list_installation_repos
-    from ..store import github as github_store
-
-    installation = await github_store.get_installation(
-        store.session,
-        org_id=store.org_id,
-        installation_id=cfg.repo_installation_id,
-    )
-    if installation is None or installation.status != "active":
-        raise HTTPException(status_code=422, detail="The selected GitHub installation is not connected")
-    try:
-        token = await github_store.get_valid_token(store.session, installation)
-        repos = await list_installation_repos(token)
-    except Exception as exc:
-        logger.warning("Could not verify eval repository access for org=%s: %s", store.org_id, type(exc).__name__)
-        raise HTTPException(status_code=502, detail="GitHub repository access could not be verified") from exc
-
-    selected = next((repo for repo in repos if int(repo.get("id", 0)) == cfg.repo_id), None)
-    if selected is None or str(selected.get("full_name", "")).casefold() != full_name.casefold():
-        raise HTTPException(status_code=422, detail="The selected GitHub installation cannot access this repository")
-    canonical_url = f"https://github.com/{selected['full_name']}.git"
-    return cfg.model_copy(update={"repo_url": canonical_url})
-
-
-async def _require_pinned_connection(store: StoreD, connection: str | None) -> str:
-    """Require a real org-scoped connection before persisting or launching."""
-    name = str(connection or "").strip()
-    if not name:
-        raise HTTPException(status_code=422, detail="An eval connection pin is required")
-    if not await store.get_connection(name):
-        raise HTTPException(
-            status_code=422,
-            detail="The eval connection pin does not exist in this workspace",
-        )
-    return name
 
 
 @router.get("/evals/tasks", dependencies=EVAL_GUARDS)
@@ -200,7 +121,7 @@ async def list_eval_tasks(store: StoreD):
         "name": eval_set.name,
         "description": eval_set.description,
         "ref": eval_set.ref,
-        "project_repo": eval_set.project_repo,
+        "warnings": eval_set.warnings,
         "build_fingerprint": eval_set.build_fingerprint,
         "setup": eval_set.setup,
         "tasks": [
@@ -235,9 +156,9 @@ async def start_eval_run(store: StoreD, req: EvalRunRequest):
         raise HTTPException(status_code=422, detail="Eval evidence bucket is not configured (SP_EVAL_S3_BUCKET)")
     cfg = await store.get_eval_config()
     if not cfg.get("repo_url"):
-        raise HTTPException(status_code=400, detail="No eval repo configured — set one on the Evals page")
-
-    await _require_pinned_connection(store, cfg.get("connection"))
+        raise HTTPException(status_code=400, detail="No eval repo configured. Set one on the Evals page")
+    require_project_repo(cfg)
+    await require_pinned_connection(store, cfg.get("connection"))
 
     # Resolve the proposed docs now so bad IDs fail fast and the UI gets titles.
     titles: list[str] = []
@@ -279,7 +200,8 @@ async def _launch_run(
     from ..store import evals as evals_store
 
     cfg = await store.get_eval_config()
-    connection = await _require_pinned_connection(store, cfg.get("connection"))
+    connection = await require_pinned_connection(store, cfg.get("connection"))
+    require_project_repo(cfg)
     run_id = runner.new_run_id()
     # This hash contains each configuration value that an operator can change.
     # Regression attribution requires the same hash before it identifies a knowledge change as the cause.
@@ -290,6 +212,8 @@ async def _launch_run(
                 str(cfg.get("prompt_preamble", "")),
                 str(cfg.get("connection", "")),
                 str(cfg.get("max_tasks", 0)),
+                str(cfg.get("project_repo_url", "")),
+                str(cfg.get("project_ref", "")),
             ]
         ).encode()
     ).hexdigest()[:32]
@@ -371,6 +295,9 @@ async def maybe_autorun_after_knowledge_change(store, doc) -> None:
 
         cfg = await store.get_eval_config()
         if not cfg.get("autorun_on_knowledge_add") or not cfg.get("repo_url"):
+            return
+        if not cfg.get("project_repo_url"):
+            logger.info("Autorun skipped for org %s: %s", store.org_id, PROJECT_REPO_REQUIRED)
             return
 
         _active_tasks_prune()
@@ -492,7 +419,7 @@ async def download_eval_artifact(store: StoreD, run_id: str, task_id: str, filen
     return Response(
         content=data,
         media_type="application/octet-stream",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": _attachment(filename)},
     )
 
 
@@ -550,6 +477,12 @@ def _object_store_or_422():
         return get_object_store()
     except EvidenceStoreDisabled as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+
+
+def _attachment(filename: str) -> str:
+    """Content-Disposition for a stored filename: quoted-string safe plus RFC 6266 filename*."""
+    ascii_name = re.sub(r'[^ -~]|["\;]', "_", filename)
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename, safe='')}"
 
 
 def _safe_id(run_id: str) -> str:

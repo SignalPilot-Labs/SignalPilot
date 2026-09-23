@@ -28,7 +28,7 @@ async def invalidate_cache(_: UserID, store: StoreD, connection_name: str | None
 
 
 @router.post("/connections/{name}/detect-pii", dependencies=[RequireScope("write")])
-async def detect_pii(name: str, store: StoreD):
+async def detect_pii(name: str, store: StoreD, _role: OrgAdmin):
     """Auto-detect PII columns in a database schema based on naming patterns.
 
     Returns suggested PII rules for columns with names matching known

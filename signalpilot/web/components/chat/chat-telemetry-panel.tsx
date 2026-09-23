@@ -168,9 +168,14 @@ export function ChatTelemetryBoundary({
     const timer = window.setInterval(() => setNowMs(Date.now()), 500);
     return () => window.clearInterval(timer);
   }, [running, telemetryEnabled]);
+  // Stable identity: every step row and message footer reads this context.
+  const telemetry = useMemo(
+    () => ({ enabled: telemetryEnabled, nowMs }),
+    [telemetryEnabled, nowMs],
+  );
   if (!CHAT_TELEMETRY_AVAILABLE) return children;
   return (
-    <ChatTelemetryContext.Provider value={{ enabled: telemetryEnabled, nowMs }}>
+    <ChatTelemetryContext.Provider value={telemetry}>
       {children}
       {telemetryEnabled && (
         <ChatTelemetryPanel

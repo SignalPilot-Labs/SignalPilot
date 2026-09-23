@@ -3,6 +3,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  STREAM_MAX_LAG_SECONDS,
   STREAM_MAX_WORDS_PER_SECOND,
   STREAM_WORDS_PER_SECOND,
   streamingWordEnds,
@@ -70,11 +71,12 @@ describe("streaming text smoothing", () => {
     expect(streamingWordEnds("  one  two\nthree")).toEqual([7, 11, 16]);
   });
 
-  it("uses an adaptive rate with a hard maximum", () => {
+  it("uses an adaptive rate that never lets the text lag far behind", () => {
     expect(streamingWordRate(0)).toBe(STREAM_WORDS_PER_SECOND);
     expect(streamingWordRate(40)).toBeGreaterThan(STREAM_WORDS_PER_SECOND);
     expect(streamingWordRate(80)).toBe(STREAM_MAX_WORDS_PER_SECOND);
-    expect(streamingWordRate(8_000)).toBe(STREAM_MAX_WORDS_PER_SECOND);
+    // A long report outpacing the reading rate drains within the lag bound.
+    expect(8_000 / streamingWordRate(8_000)).toBeLessThanOrEqual(STREAM_MAX_LAG_SECONDS);
   });
 
   it("reveals a live burst over time instead of all at once", async () => {
@@ -105,6 +107,14 @@ describe("streaming text smoothing", () => {
     expect(shown()).not.toBe(text);
 
     await runFrames(1_000);
+    expect(shown()).toBe(text);
+  });
+
+  it("lands a large backlog quickly once the run completes", async () => {
+    const text = Array.from({ length: 900 }, (_, index) => `word${index}`).join(" ");
+    await act(async () => root.render(<Probe text={text} streaming />));
+    await act(async () => root.render(<Probe text={text} streaming={false} />));
+    await runFrames(600);
     expect(shown()).toBe(text);
   });
 });

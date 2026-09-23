@@ -1,7 +1,7 @@
 "use client";
 
 import { Bot, ChevronRight } from "lucide-react";
-import { memo, useEffect, useState, type ReactNode } from "react";
+import { memo, useState, type ReactNode } from "react";
 import { ChatMarkdown } from "~/components/chat/chat-markdown";
 import {
   describeSubagentWork,
@@ -56,12 +56,8 @@ export const SubagentRow = memo(function SubagentRow({
   childTimeline: ReactNode;
 }) {
   const running = step.status === "running";
-  const [userToggle, setUserToggle] = useState<boolean | null>(null);
-  // Reopen if it starts working again; collapse once the report lands.
-  useEffect(() => {
-    if (running) setUserToggle(null);
-  }, [running]);
-  const open = userToggle ?? running;
+  // Collapsed unless the user opens it; the header carries the live state.
+  const [open, setOpen] = useState(false);
   const currentChild = [...step.children]
     .reverse()
     .find((child) => child.status === "running");
@@ -73,7 +69,7 @@ export const SubagentRow = memo(function SubagentRow({
   return (
     <li className="chat-step-in relative">
       <div className="flex items-start gap-2.5">
-        <StatusDot status={step.status} />
+        <StatusDot key={step.status} status={step.status} />
         <div className="min-w-0 flex-1 pb-1">
           <section
             data-testid="chat-subagent-card"
@@ -88,7 +84,7 @@ export const SubagentRow = memo(function SubagentRow({
             <button
               type="button"
               aria-expanded={open}
-              onClick={() => setUserToggle(!open)}
+              onClick={() => setOpen(!open)}
               className="flex w-full items-center gap-2.5 px-3 py-2 text-left hover:bg-[var(--color-bg-hover)]"
             >
               <span className="relative h-7 w-7 flex-none" aria-hidden>
@@ -110,14 +106,24 @@ export const SubagentRow = memo(function SubagentRow({
                 </span>
               </span>
               <span className="min-w-0 flex-1">
-                <span className="flex items-center gap-2">
-                  <span className="text-[9px] font-medium uppercase tracking-[0.16em] text-[var(--color-text-dim)]">
+                <span className="flex min-w-0 items-center gap-2">
+                  <span className="flex-none text-[9px] font-medium uppercase tracking-[0.16em] text-[var(--color-text-dim)]">
                     Subagent
                   </span>
-                  {step.subagentType && (
-                    <span className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-input)] px-1.5 py-px font-mono text-[9px] text-[var(--color-text-muted)]">
-                      {step.subagentType}
+                  {running && (currentChild || narration) ? (
+                    <span
+                      key={currentChild?.key ?? "narration"}
+                      data-testid="chat-subagent-activity"
+                      className="chat-state-in min-w-0 truncate text-[10.5px] text-[var(--color-text-muted)]"
+                    >
+                      {currentChild ? currentChild.title : narration}
                     </span>
+                  ) : (
+                    step.subagentType && (
+                      <span className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-input)] px-1.5 py-px font-mono text-[9px] text-[var(--color-text-muted)]">
+                        {step.subagentType}
+                      </span>
+                    )
                   )}
                 </span>
                 <span
@@ -140,24 +146,6 @@ export const SubagentRow = memo(function SubagentRow({
                 />
               </span>
             </button>
-            {running && (currentChild || narration) && (
-              <div className="flex items-center gap-2 border-t border-[var(--color-border)]/60 px-3 py-1.5 text-[11px] text-[var(--color-text-muted)]">
-                <span className="chat-dot-live h-1.5 w-1.5 flex-none rounded-full bg-[var(--color-success)]" />
-                {currentChild ? (
-                  <span className="truncate">
-                    {currentChild.title}
-                    {currentChild.file && (
-                      <span className="font-mono text-[var(--color-text-dim)]">
-                        {" "}
-                        {currentChild.file}
-                      </span>
-                    )}
-                  </span>
-                ) : (
-                  <span className="truncate italic">{narration}</span>
-                )}
-              </div>
-            )}
             <div className="chat-collapse" data-open={open}>
               <div>
                 <div className="border-t border-[var(--color-border)]/60 px-3 py-2.5">

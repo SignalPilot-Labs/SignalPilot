@@ -13,6 +13,16 @@ RUN npm ci --ignore-scripts
 COPY signalpilot/web/dashboard-renderer/ ./
 RUN npm run build && node -e "require('@resvg/resvg-js')"
 
+# Claude Code CLI for the chat agent. The Agent SDK always runs the CLI
+# bundled in its wheel unless it is given a cli_path, and a new model can need
+# a newer Claude Code than the SDK ships (Opus 5.5 needs >= 2.1.280). Install
+# the pinned native binary here and copy only that binary into the final
+# image; the agent options pass it via SP_CLAUDE_CODE_CLI. Bump with
+# `npm view @anthropic-ai/claude-code version`.
+FROM node:24-bookworm-slim AS claude-code
+ARG CLAUDE_CODE_VERSION=2.1.280
+RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" &&     mkdir -p /out && cp -L "$(command -v claude)" /out/claude &&     /out/claude --version | grep -F "${CLAUDE_CODE_VERSION}"
+
 FROM python:3.13-slim
 
 RUN groupadd -g 10001 notebook && \
@@ -46,11 +56,12 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --python /opt/sp-notebook/.venv/bin/python \
       requests httpx starlette uvicorn msgspec \
       pydantic pydantic-settings websockets sse-starlette pyjwt \
-      dbt-core dbt-duckdb duckdb polars pandas pyarrow numpy \
+      dbt-core dbt-duckdb duckdb polars pandas==3.0.3 pyarrow numpy \
       sqlglot altair matplotlib plotly pyyaml jinja2 python-dotenv \
       seaborn scikit-learn scipy \
       anthropic openai tiktoken \
-      dbt-postgres dbt-snowflake dbt-sqlserver dbt-redshift && \
+      dbt-postgres dbt-snowflake dbt-sqlserver dbt-redshift \
+      sshtunnel paramiko && \
     # Bake dependency .pyc once. The runtime root is read-only, so imports should
     # read precompiled bytecode instead of trying to write it at startup.
     python -m compileall -q -j 0 /opt/sp-notebook/.venv/lib 2>/dev/null || true
@@ -66,12 +77,17 @@ COPY --chown=notebook:notebook signalpilot-plugin/skills/ /opt/signalpilot-plugi
 COPY --chown=notebook:notebook signalpilot-plugin/agents/ /opt/signalpilot-plugin/agents/
 
 # Dashboard screenshot CLI (see the dashboard-renderer stage above). Node is
-# needed only for this; the Claude Agent SDK ships its own native binary.
+# needed only for this; Claude Code is a native binary (claude-code stage).
 COPY --from=dashboard-renderer /usr/local/bin/node /usr/local/bin/node
 COPY --from=dashboard-renderer --chown=notebook:notebook /build/dist/render-cli.js /opt/sp-dashboard/render-cli.js
 COPY --from=dashboard-renderer --chown=notebook:notebook /build/node_modules/@resvg/ /opt/sp-dashboard/node_modules/@resvg/
 COPY --from=dashboard-renderer --chown=notebook:notebook /build/fonts/ /opt/sp-dashboard/fonts/
 ENV SP_DASHBOARD_RENDER_CLI=/opt/sp-dashboard/render-cli.js
+
+# Pinned Claude Code CLI (see the claude-code stage above).
+COPY --from=claude-code /out/claude /usr/local/bin/claude
+ENV SP_CLAUDE_CODE_CLI=/usr/local/bin/claude
+RUN /usr/local/bin/claude --version
 # Smoke test in the final layer: an empty spec must fail validation with exit
 # code 2 (the CLI's invalid-spec path), which proves node runs, the bundle
 # loads, and the resvg native module resolves from /opt/sp-dashboard.

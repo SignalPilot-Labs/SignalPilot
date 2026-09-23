@@ -1,5 +1,6 @@
 "use client";
 
+import { TriangleAlert } from "lucide-react";
 import type { DashboardLoadResult, RunStep } from "~/lib/chat-run-steps";
 import { InputPills, ProgressRail, SkeletonRows, plural } from "../card-primitives";
 import { registerToolCard, type ToolCardContext, type ToolCardSummary } from "../registry";
@@ -92,12 +93,15 @@ function DashboardLoadExpanded({ step }: ToolCardContext) {
       <div data-testid="chat-dashboard-load-card" className="px-3.5 py-3">
         <div
           data-testid="chat-dashboard-load-error"
-          className="text-[11.5px] leading-5 text-[var(--color-error)]"
+          className="flex items-start gap-2 text-[11.5px] leading-5 text-[var(--color-text-muted)]"
         >
+          <TriangleAlert className="mt-1 h-3 w-3 flex-none text-[var(--color-warning)]" aria-hidden />
+          <div className="min-w-0">
           <p className="font-medium">{result.message ?? "The dashboard could not be loaded."}</p>
           {result.error && (
             <p className="mt-0.5 font-mono text-[10.5px]">{result.error}</p>
           )}
+          </div>
         </div>
       </div>
     );

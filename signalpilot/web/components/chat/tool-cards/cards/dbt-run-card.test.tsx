@@ -1,8 +1,8 @@
 import { act } from "react";
+import { openToolRow } from "../test-utils";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { DbtRunResult, RunStep } from "~/lib/chat-run-steps";
-import { getToolCardDefinition } from "../registry";
 import { ToolCard } from "../tool-card";
 import { summarizeDbtRun, tallyStatuses } from "./dbt-run-card";
 
@@ -97,13 +97,6 @@ describe("summarizeDbtRun", () => {
     ).toBe("exit 2");
     expect(summarizeDbtRun(step({ input: { command: "build" } })).title).toBe("dbt build");
   });
-  it("stays open after completion only when something errored", () => {
-    const def = getToolCardDefinition("dbt_run")!;
-    expect(def.stayOpenOnComplete?.(step({ result: dbt() }), false)).toBe(true);
-    expect(
-      def.stayOpenOnComplete?.(step({ result: dbt({ statuses: { success: 13 } }) }), false),
-    ).toBe(false);
-  });
 });
 
 describe("dbt run card", () => {
@@ -137,6 +130,7 @@ describe("dbt run card", () => {
         detail: "dbt: 7 of 13 fct_orders",
       }),
     );
+    await openToolRow(container);
     const body = q(container, '[data-testid="chat-dbt-run-card"]');
     expect(body?.textContent).toContain("$dbt run --select marts.revenue+");
     expect(body?.textContent).toContain("dbt: 7 of 13 fct_orders");
@@ -144,6 +138,7 @@ describe("dbt run card", () => {
 
   it("stays expanded with tallies, bar, failures and the log when a model errored", async () => {
     await render(step({ result: dbt() }));
+    await openToolRow(container);
     expect(q(container, '[data-testid="chat-tool-card"]')?.getAttribute("data-density")).toBe(
       "expanded",
     );
@@ -152,6 +147,8 @@ describe("dbt run card", () => {
     const failures = q(container, '[data-testid="chat-dbt-run-failures"]');
     expect(failures?.textContent).toContain("model.analytics.rpt_region_rollup");
     expect(failures?.textContent).toContain("region_name");
+    expect(failures?.innerHTML).toContain("color-warning");
+    expect(container.innerHTML).not.toContain("color-error");
     expect(container.textContent).toContain("target analytics · sync pushed · exit 1");
     // Errors open the log by default.
     expect(

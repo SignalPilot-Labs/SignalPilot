@@ -35,9 +35,18 @@ _UNION_ORIGINS = (Union, types.UnionType)
 
 
 class PythonTypeToOpenAPI:
-    def __init__(self, *, name_overrides: dict[Any, str], camel_case: bool):
+    def __init__(
+        self,
+        *,
+        name_overrides: dict[Any, str],
+        camel_case: bool,
+        honor_defaults: bool = False,
+    ):
         self.name_overrides = name_overrides
         self.camel_case = camel_case
+        # When set, a dataclass field with a default or default_factory is
+        # not required and, for JSON-safe values, carries ``default``.
+        self.honor_defaults = honor_defaults
         self.optional_name_overrides = {
             Optional[arg]: name for arg, name in name_overrides.items()
         }
@@ -281,6 +290,14 @@ class PythonTypeToOpenAPI:
             properties[cased_field_name] = self.convert(
                 field_type, processed_classes
             )
+            has_default, default = _field_default(field)
+            if self.honor_defaults and has_default:
+                if _json_safe_default(default):
+                    properties[cased_field_name] = {
+                        **properties[cased_field_name],
+                        "default": default,
+                    }
+                continue
             if not _is_optional(field_type):
                 required.append(cased_field_name)
 
@@ -320,6 +337,38 @@ def _unique(items: list[Any]) -> list[Any]:
             seen.add(key)
         result.append(item)
     return result
+
+
+def _field_default(field: dataclasses.Field[Any]) -> tuple[bool, Any]:
+    """(has_default, value) for a dataclass field.
+
+    A ``default_factory`` is called once to read its value; a factory that
+    raises counts as a default with an unknown value.
+    """
+    if field.default is not dataclasses.MISSING:
+        return True, field.default
+    if field.default_factory is not dataclasses.MISSING:
+        try:
+            return True, field.default_factory()
+        except Exception:
+            return True, dataclasses.MISSING
+    return False, dataclasses.MISSING
+
+
+def _json_safe_default(value: Any) -> bool:
+    """Only plain JSON scalars and containers of them go into ``default``."""
+    if value is dataclasses.MISSING:
+        return False
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return True
+    if isinstance(value, (list, tuple)):
+        return all(_json_safe_default(item) for item in value)
+    if isinstance(value, dict):
+        return all(
+            isinstance(key, str) and _json_safe_default(item)
+            for key, item in value.items()
+        )
+    return False
 
 
 def _is_optional(field: dataclasses.Field[Any]) -> bool:

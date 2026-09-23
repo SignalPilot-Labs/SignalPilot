@@ -22,7 +22,6 @@ import { StandaloneChatComposer } from "~/components/chat/standalone-chat-compos
 import { useDockScrollCompensation } from "~/components/chat/use-dock-scroll-compensation";
 import { selectComposerPlan } from "~/lib/chat-composer-plan";
 import { hasArtifactsContent } from "~/lib/chat-artifacts";
-import { pickDefaultNotebook } from "~/lib/chat-live-notebook";
 import {
   FIXTURE_RUN_ID,
   FIXTURE_TOTAL_MS,
@@ -38,6 +37,8 @@ import {
 } from "~/lib/chat-test-fixture";
 import { NotebookPen } from "lucide-react";
 import { useOpenArtifact } from "~/components/chat/use-open-artifact";
+import { useArtifactNotices } from "~/components/chat/use-artifact-notices";
+import { ArtifactNotices } from "~/components/chat/artifact-notices";
 import { ChatSettingsPanel } from "~/components/chat/chat-settings-panel";
 import { useChatSettingsPanel } from "~/components/chat/use-chat-settings-panel";
 import { ConnectorsProvider } from "~/components/connectors/connectors-context";
@@ -99,7 +100,7 @@ export function StandaloneChatTestHarness() {
   const [replaying, setReplaying] = useState(false);
   const [speed, setSpeed] = useState<(typeof SPEEDS)[number]>(1);
   const [selectedModel, setSelectedModel] =
-    useState<StandaloneChatModel>("claude-opus-5");
+    useState<StandaloneChatModel>("claude-opus-5-5");
   const [selectedEffort, setSelectedEffort] =
     useState<StandaloneChatEffort>("medium");
   const speedRef = useRef(speed);
@@ -133,14 +134,12 @@ export function StandaloneChatTestHarness() {
   );
 
   // Notebook panel: the harness has no gateway, so it simulates the
-  // conversation notebook resource from the replayed events. Auto-open
-  // mirrors the chat page: once per run when the notebook goes live.
+  // conversation notebook resource from the replayed events. As on the
+  // chat page the panel never opens by itself: artifact notices offer it.
   const conversationNotebooks = useMemo(
     () => fixtureConversationNotebooks(events),
     [events],
   );
-  // Auto-open follows the default (analysis) notebook, as on the chat page.
-  const defaultNotebook = pickDefaultNotebook(conversationNotebooks);
   const conversationFiles = useMemo(
     () => fixtureConversationFiles(events),
     [events],
@@ -157,9 +156,23 @@ export function StandaloneChatTestHarness() {
   }, [settingsInitiallyOpen, openSettingsPanel]);
   // Inline artifact cards open the panel focused on their file, as on the
   // real chat page.
-  const { openFileRequest, openArtifact } = useOpenArtifact(() =>
-    setNotebookPanelOpen(true),
+  const { openFileRequest, openArtifact, openNotebook } = useOpenArtifact(
+    () => setNotebookPanelOpen(true),
   );
+  // The fixture run id stands in for the live run while the replay is
+  // mid-flight; scrubbing back before notebook_started resets the ledger
+  // by switching the "conversation" key.
+  const notebookEpoch = conversationNotebooks.length === 0 ? 0 : 1;
+  const artifactNotices = useArtifactNotices({
+    conversationId: `conversation-fixture-1:${notebookEpoch}`,
+    notebooks: conversationNotebooks,
+    files: conversationFiles,
+    filesLoading: false,
+    currentRunId: FIXTURE_RUN_ID,
+    panelOpen: notebookPanelOpen || settingsPanel.open,
+    openArtifact,
+    openNotebook,
+  });
   // File-content stub: the harness has no gateway, so it serves the fixture
   // files' literal contents as object URLs. This keeps the image-card
   // thumbnail path (and any future content-dependent card UI) verifiable
@@ -189,22 +202,11 @@ export function StandaloneChatTestHarness() {
     },
     [],
   );
-  const notebookPanelAutoOpenedRunRef = useRef<string | null>(null);
   useEffect(() => {
-    if (
-      defaultNotebook?.status === "live" &&
-      notebookPanelAutoOpenedRunRef.current !== FIXTURE_RUN_ID
-    ) {
-      notebookPanelAutoOpenedRunRef.current = FIXTURE_RUN_ID;
-      setNotebookPanelOpen(true);
-    }
-    if (!defaultNotebook) {
-      // Scrubbed back before notebook_started (or restarted): reset so the
-      // panel auto-opens again when the notebook (re)starts.
-      notebookPanelAutoOpenedRunRef.current = null;
-      setNotebookPanelOpen(false);
-    }
-  }, [defaultNotebook]);
+    // Scrubbed back before notebook_started (or restarted): close the
+    // panel, as a fresh conversation would start closed.
+    if (conversationNotebooks.length === 0) setNotebookPanelOpen(false);
+  }, [conversationNotebooks]);
   const status = fixtureRunStatus(elapsed);
   const messages = useMemo<UiMessage[]>(
     () => [
@@ -468,6 +470,9 @@ export function StandaloneChatTestHarness() {
             <NotebookPen className="h-4 w-4" />
           </button>
         )}
+        {!replaying && (
+          <ArtifactNotices {...artifactNotices} />
+        )}
         {settingsPanel.open && (
           <ChatSettingsPanel
             onClose={settingsPanel.closePanel}
@@ -478,6 +483,7 @@ export function StandaloneChatTestHarness() {
                 { id: "claude-opus-4-6", label: "Opus 4.6" },
                 { id: "claude-sonnet-4-6", label: "Sonnet 4.6" },
                 { id: "claude-opus-5", label: "Opus 5" },
+                { id: "claude-opus-5-5", label: "Opus 5.5" },
                 { id: "claude-fable-5-1", label: "Fable 5.1" },
               ],
               disabled: false,

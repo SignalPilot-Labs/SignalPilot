@@ -35,14 +35,27 @@ def test_real_migration_chain_is_the_tracked_head() -> None:
     config = build_alembic_config("postgresql://unused:unused@localhost/unused")
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_current_head() == "0033"
+    assert scripts.get_current_head() == "0037"
 
-    # 0033 records who created each Xata branch (creator-or-admin delete rule).
+    # 0036 links the dbt project repository and branch to the eval configuration.
+    revision_0036 = scripts.get_revision("0036")
+    assert revision_0036 is not None
+    assert revision_0036.down_revision == "0035"
+
+    # 0035 records chat agent branch pushes on the pull request rows.
+    revision_0035 = scripts.get_revision("0035")
+    assert revision_0035 is not None
+    assert revision_0035.down_revision == "0034"
+
+    # 0034 adds agent pull requests and the installation repository list.
+    revision_0034 = scripts.get_revision("0034")
+    assert revision_0034 is not None
+    assert revision_0034.down_revision == "0033"
+
+    # 0033 (xata branch owners) and 0032 (credit billing) come from origin/staging.
     revision_0033 = scripts.get_revision("0033")
     assert revision_0033 is not None
     assert revision_0033.down_revision == "0032"
-
-    # 0032 adds the append-only credit ledger for credit billing.
     revision_0032 = scripts.get_revision("0032")
     assert revision_0032 is not None
     assert revision_0032.down_revision == "0031"

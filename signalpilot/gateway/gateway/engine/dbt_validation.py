@@ -318,6 +318,9 @@ def validate_dbt_statement(sql: str, *, claims: RunTokenClaims) -> ValidatedStat
             )
 
     try:
+        # No connection is in scope here: this guards the SQL that dbt-postgres
+        # emits through the proxy, so the Postgres grammar is the correct,
+        # deliberate choice rather than a fallback.
         stmts = sqlglot.parse(sql, dialect="postgres")
     except Exception as exc:
         return ValidatedStatement(

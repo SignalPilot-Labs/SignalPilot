@@ -2,40 +2,14 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { PlanInfo } from "~/lib/backend-client";
 import { PlanReviewDialog, type ProrationPreview } from "~/components/billing/plan-review-dialog";
 
 (
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
-const SCALE: PlanInfo = {
-  tier: "scale",
-  name: "Scale",
-  description: "",
-  monthly_fee_cents: 250_00,
-  included_seats: 25,
-  included_models: 50,
-  included_eval_runs: 30,
-  included_credits: 12_500,
-  seat_month_credits: 1000,
-  managed_from_cents: 2_500_00,
-  prices: [
-    { price_id: "price_scale_year", lookup_key: "plan_scale_year", amount: 3_000_00, currency: "usd", interval: "year" },
-    { price_id: "price_scale_month", lookup_key: "plan_scale_month", amount: 250_00, currency: "usd", interval: "month" },
-  ],
-};
-
-const TEAM: PlanInfo = {
-  ...SCALE,
-  tier: "team",
-  name: "Team",
-  monthly_fee_cents: 100_00,
-  included_seats: 10,
-  included_models: 30,
-  included_credits: 5_000,
-  prices: [{ price_id: "price_team_month", lookup_key: "plan_team_month", amount: 100_00, currency: "usd", interval: "month" }],
-};
+import { LIVE_RATES } from "~/lib/billing-rates.test";
+import { SCALE, TEAM } from "~/lib/billing-plan-review.test";
 
 function q<T extends Element = HTMLElement>(container: Element, id: string): T {
   const el = container.querySelector<T>(`[data-testid="${id}"]`);
@@ -58,7 +32,7 @@ describe("plan review dialog", () => {
     container.remove();
   });
 
-  it("free to paid: monthly fee, seats, included, due today, continue to payment", async () => {
+  it("free to paid: yearly term by default, seats, included, due today, continue to payment", async () => {
     const onConfirm = vi.fn();
     await act(async () =>
       root.render(
@@ -74,22 +48,43 @@ describe("plan review dialog", () => {
     );
     const dialog = q(container, "plan-review-dialog");
     expect(dialog.textContent).toContain("Review your plan");
-    expect(q(dialog, "review-fee").textContent).toBe("Scale · $250/mo, billed monthly");
-    expect(q(dialog, "review-seats").textContent).toBe("Your organization has 12 members · 25 included · 0 added seats");
+    expect(q(dialog, "review-fee").textContent).toBe("Scale · $250/mo · $3,000 billed yearly");
+    expect(q(dialog, "review-seats").textContent).toBe("Your organization has 12 members · 15 included · 0 added seats");
     expect(q(dialog, "review-included").textContent).toBe(
-      "Included every month: 12,500 credits, 50 covered models, 30 eval runs",
+      "Included every month: 10,000 credits, 50 covered models, 30 eval runs",
     );
     expect(dialog.textContent).toContain("Beyond that, usage is paid in credits at fixed rates.");
     expect(dialog.textContent).toContain("Due today");
-    expect(q(dialog, "review-due").textContent).toContain("$250");
-    // Monthly only: no interval choice, no annual price anywhere.
-    expect(dialog.querySelector('input[type="radio"]')).toBeNull();
-    expect(dialog.textContent).not.toMatch(/annual|\$3,000|month-to-month|\+25%/i);
+    expect(q(dialog, "review-due").textContent).toContain("$3,000");
+    // The terms Stripe offers, yearly selected.
+    expect(q(dialog, "review-term-year").getAttribute("aria-checked")).toBe("true");
+    expect(q(dialog, "review-term-quarter").getAttribute("aria-checked")).toBe("false");
 
     const primary = q<HTMLButtonElement>(dialog, "review-primary");
     expect(primary.textContent).toBe("Continue to payment");
     await act(async () => primary.click());
-    expect(onConfirm).toHaveBeenCalledWith("price_scale_month");
+    expect(onConfirm).toHaveBeenCalledWith("price_scale_year");
+  });
+
+  it("switching to the 3-month term changes the fee, due today and the price bought", async () => {
+    const onConfirm = vi.fn();
+    await act(async () =>
+      root.render(
+        <PlanReviewDialog
+          review={{ plan: SCALE, mode: "checkout" }}
+          members={12}
+          rates={null}
+          currentPeriodEnd={null}
+          onConfirm={onConfirm}
+          onCancel={() => {}}
+        />,
+      ),
+    );
+    await act(async () => q<HTMLButtonElement>(container, "review-term-quarter").click());
+    expect(q(container, "review-fee").textContent).toBe("Scale · $300/mo · $900 billed every 3 months");
+    expect(q(container, "review-due").textContent).toContain("$900");
+    await act(async () => q<HTMLButtonElement>(container, "review-primary").click());
+    expect(onConfirm).toHaveBeenCalledWith("price_scale_quarter");
   });
 
   it("shows the added-seat credit draw when members exceed the allowance", async () => {
@@ -106,9 +101,9 @@ describe("plan review dialog", () => {
       ),
     );
     const seats = q(container, "review-seats");
-    expect(seats.textContent).toContain("Your organization has 12 members · 10 included · 2 added seats");
-    expect(seats.textContent).toContain("2 × 1,000 credits/month (≈ $20/mo) drawn from your credits");
-    expect(q(container, "review-due").textContent).toContain("$100");
+    expect(seats.textContent).toContain("Your organization has 12 members · 5 included · 7 added seats");
+    expect(seats.textContent).toContain("7 × 1,500 credits/month (≈ $105/mo) drawn from your credits");
+    expect(q(container, "review-due").textContent).toContain("$1,200");
   });
 
   it("says seats are counted daily when the member count is unknown", async () => {
@@ -125,7 +120,7 @@ describe("plan review dialog", () => {
       ),
     );
     expect(q(container, "review-seats").textContent).toContain(
-      "Seats are counted daily; members beyond the 10 included use credits",
+      "Seats are counted daily; members beyond the 5 included use credits",
     );
   });
 
@@ -153,7 +148,7 @@ describe("plan review dialog", () => {
         />,
       ),
     );
-    expect(previewProration).toHaveBeenCalledWith("price_scale_month");
+    expect(previewProration).toHaveBeenCalledWith("price_scale_year");
     const dialog = q(container, "plan-review-dialog");
     expect(dialog.textContent).toContain("Due today (prorated)");
     expect(q(dialog, "review-due").textContent).toContain("$150");
@@ -161,7 +156,7 @@ describe("plan review dialog", () => {
     const primary = q<HTMLButtonElement>(dialog, "review-primary");
     expect(primary.textContent).toBe("Confirm change");
     await act(async () => primary.click());
-    expect(onConfirm).toHaveBeenCalledWith("price_scale_month");
+    expect(onConfirm).toHaveBeenCalledWith("price_scale_year");
   });
 
   it("downgrade: no charge today, changes at renewal", async () => {
@@ -192,7 +187,28 @@ describe("plan review dialog", () => {
     expect(q(dialog, "review-primary").textContent).toBe("Confirm change");
   });
 
-  it("expands the rate table inline", async () => {
+  it("expands the rate table inline from the live card, with the plan's seat rate", async () => {
+    await act(async () =>
+      root.render(
+        <PlanReviewDialog
+          review={{ plan: TEAM, mode: "checkout" }}
+          members={3}
+          rates={LIVE_RATES}
+          currentPeriodEnd={null}
+          onConfirm={() => {}}
+          onCancel={() => {}}
+        />,
+      ),
+    );
+    expect(container.querySelector('[data-testid="review-rates"]')).toBeNull();
+    await act(async () => q<HTMLButtonElement>(container, "review-rates-toggle").click());
+    const rates = q(container, "review-rates");
+    expect(rates.textContent).toContain("Successful thread");
+    expect(rates.textContent).toContain("50 ($0.50)");
+    expect(rates.textContent).toContain("1,500 ($15)");
+  });
+
+  it("waits for the rate card instead of showing guessed rates", async () => {
     await act(async () =>
       root.render(
         <PlanReviewDialog
@@ -205,10 +221,7 @@ describe("plan review dialog", () => {
         />,
       ),
     );
-    expect(container.querySelector('[data-testid="review-rates"]')).toBeNull();
-    await act(async () => q<HTMLButtonElement>(container, "review-rates-toggle").click());
-    const rates = q(container, "review-rates");
-    expect(rates.textContent).toContain("Successful thread");
-    expect(rates.textContent).toContain("50 ($0.50)");
+    expect(container.querySelector('[data-testid="review-rates-toggle"]')).toBeNull();
+    expect(container.textContent).toContain("loading rates...");
   });
 });

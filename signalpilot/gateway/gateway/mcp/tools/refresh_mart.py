@@ -2,14 +2,16 @@
 
 The one problem this solves: an analytic mart is stale (e.g. a nightly build,
 so today isn't in it yet) and the agent needs it current to answer. refresh_mart
-rebuilds that mart's lineage from the raw prod sources INTO the shared dev
-database (SP_CHAT_DEV_DATABASE, e.g. Analytics_dev) — production `Analytics`
-stays strictly read-only.
+rebuilds that mart's lineage from the raw sources through the SAME connection
+the chat reads from — into that connection's database by default, or into a
+sibling database on the same server that the agent names (e.g. "Analytics_dev"
+next to a read-only "Analytics"). SP_CHAT_DEV_DATABASE can set that sibling as
+the deployment default so the agent never has to name it.
 
 It runs `dbt run --select +<mart>` in the same gateway-held executor as
-dbt_execute (credentials never reach the agent), but targets the dev database
-with the project's normal schemas so the refreshed mart is shared by everyone.
-A per-mart lock collapses concurrent refreshes of the same mart into one build.
+dbt_execute (credentials never reach the agent), with the project's normal
+schemas so the refreshed mart is shared by everyone. A per-mart lock collapses
+concurrent refreshes of the same mart into one build.
 """
 
 from __future__ import annotations
@@ -33,8 +35,8 @@ from gateway.standalone_chat.dbt_executor import (
     DBT_EXECUTE_CAPABILITY,
     DbtExecutorError,
     build_dbt_argv,
-    dev_database,
     ensure_executor,
+    resolve_refresh_target,
     run_dbt_command,
 )
 
@@ -58,25 +60,36 @@ async def _lock_for(key: str) -> asyncio.Lock:
         return lock
 
 
+# Every refresh_mart failure carries its own next step, because the agent that
+# reads it must not loop on the tool and must not abandon the question either.
+_UNAVAILABLE_NEXT_STEP = (
+    "Do not call refresh_mart again in this run. Answer from the mart as it is now, "
+    "and tell the user the data may be behind."
+)
+_FAILED_NEXT_STEP = (
+    "The refresh did not finish, so the mart is unchanged. Do not call refresh_mart again. "
+    "Tell the user this error, then answer from the mart as it is now and say the data may be behind."
+)
+
+
 def _denial() -> str | None:
     capabilities = mcp_capabilities_var.get(None) or []
     if DBT_EXECUTE_CAPABILITY not in capabilities:
-        return "Error: refresh_mart is not enabled for this session"
+        return f"Error: refresh_mart is not enabled for this session. {_UNAVAILABLE_NEXT_STEP}"
     identity = mcp_execution_identity_var.get(None) or ""
     if not identity.startswith("chat:"):
-        return "Error: refresh_mart requires a chat execution identity"
+        return f"Error: refresh_mart requires a chat execution identity. {_UNAVAILABLE_NEXT_STEP}"
     return None
 
 
 @audited_tool(mcp)
-async def refresh_mart(mart: str) -> str:
+async def refresh_mart(mart: str, database: str | None = None) -> str:
     """
     Rebuild a stale analytic mart so it reflects the latest raw data.
 
     Runs `dbt run --select +<mart>` — rebuilding the mart and its upstream
-    lineage from the raw production sources — into the shared dev database.
-    Production stays read-only; the refreshed mart is materialized in the dev
-    database for you (and everyone) to read.
+    lineage from the raw sources — through the connection this chat uses.
+    The refreshed mart is materialized there for you (and everyone) to read.
 
     Use this ONLY when you have checked that the mart is behind (e.g. its
     MAX(date) is older than the period the question needs). After it returns,
@@ -85,17 +98,19 @@ async def refresh_mart(mart: str) -> str:
     Args:
         mart: The dbt model name of the analytic mart to refresh (e.g.
             "fct_daily_sales"). A bare node name — no selector or path syntax.
+        database: Optional. A database on the same server to build into
+            instead of the connection's own database (e.g. "Analytics_dev").
+            Omit it to use the default.
     """
     if denial := _denial():
         return denial
 
     mart = (mart or "").strip()
     if not _MART_RE.match(mart):
-        return "Error: mart must be a bare dbt model name (letters, digits, underscore)"
-
-    database = dev_database()
-    if not database:
-        return "Error: no dev database is configured for refreshes (SP_CHAT_DEV_DATABASE)"
+        return (
+            "Error: mart must be a bare dbt model name (letters, digits, underscore). "
+            'Pass the model name on its own, for example "fct_daily_sales", then call refresh_mart once more.'
+        )
 
     identity = mcp_execution_identity_var.get(None) or ""
     org_id = mcp_org_id_var.get(None) or "local"
@@ -103,7 +118,14 @@ async def refresh_mart(mart: str) -> str:
     branch = mcp_branch_var.get(None) or "main"
     connection_name = mcp_allowed_connection_var.get(None)
     if not project_id or not connection_name:
-        return "Error: this session has no project/connection binding"
+        return f"Error: this session has no project/connection binding. {_UNAVAILABLE_NEXT_STEP}"
+
+    # Argument problems are separated from build failures: the agent can fix an
+    # argument and call once more, but it must never re-run a failed build.
+    try:
+        target = resolve_refresh_target(connection_name, database)
+    except DbtExecutorError as exc:
+        return f"Error: {exc}. Correct the argument, then call refresh_mart once more."
 
     lock = await _lock_for(f"{org_id}:{project_id}:{branch}:{mart}")
     async with lock:
@@ -117,14 +139,17 @@ async def refresh_mart(mart: str) -> str:
                     branch=branch,
                     connection_name=connection_name,
                     store=store,
-                    target_database=database,
+                    refresh=target,
                 )
                 # Pristine prod code — no sync from the agent sandbox. The point
                 # is to reflect the deployed models, not any local edits.
                 argv = build_dbt_argv("run", select=f"+{mart}", dbt_dir=dbt_dir)
                 result = await run_dbt_command(sandbox_id, argv, dbt_dir)
-                return f"refreshed {mart} into {database} (schema default {schema})\n{result}"
+                where = f"connection {target.connection_name}" + (
+                    f", database {target.database_override}" if target.database_override else ""
+                )
+                return f"refreshed {mart} into {where} (schema default {schema})\n{result}"
         except DbtExecutorError as exc:
-            return f"Error: {exc}"
+            return f"Error refreshing {mart}: {exc}\n{_FAILED_NEXT_STEP}"
         except Exception as exc:  # never leak provider/credential internals
-            return f"Error refreshing mart: {sanitize_mcp_error(str(exc))}"
+            return f"Error refreshing {mart}: {sanitize_mcp_error(str(exc))}\n{_FAILED_NEXT_STEP}"

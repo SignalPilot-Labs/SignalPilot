@@ -1,9 +1,10 @@
 import { act } from "react";
+import { openToolRow } from "../test-utils";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { RunStep, TerminalResult } from "~/lib/chat-run-steps";
 import { ToolCard } from "../tool-card";
-import { summarizeTerminal } from "./terminal-card";
+import { probeCaption, summarizeTerminal } from "./terminal-card";
 
 (
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
@@ -35,8 +36,18 @@ const terminal = (overrides: Partial<TerminalResult> = {}): TerminalResult => ({
   stderr: "",
   stdoutTruncated: false,
   stderrTruncated: false,
+  probe: false,
   ...overrides,
 });
+
+const probe = (command: string, exitCode = 1): TerminalResult =>
+  terminal({
+    command,
+    exitCode,
+    stdout: "",
+    stderr: exitCode === 1 ? "ls: cannot access 'x': No such file or directory" : "",
+    probe: true,
+  });
 
 function step(overrides: Partial<RunStep> = {}): RunStep {
   return {
@@ -88,6 +99,25 @@ describe("summarizeTerminal", () => {
     );
     expect(summarizeTerminal(step({ status: "failed" })).ok).toBe(false);
   });
+  it("words a probe by exit code and command head, and keeps it ok", () => {
+    const caption = (command: string, code = 1) =>
+      probeCaption(step({ input: { command }, result: probe(command, code) }));
+    expect(caption("ls analysis/cache")).toBe("not found");
+    expect(caption("cat notes.md")).toBe("not found");
+    expect(caption("/usr/bin/stat out.csv")).toBe("not found");
+    expect(caption("grep -rn region models/")).toBe("no match");
+    expect(caption("find . -name '*.sql'")).toBe("no match");
+    expect(caption("test -f dbt_project.yml")).toBe("false");
+    expect(caption("[ -d target ]")).toBe("false");
+    expect(caption("python probe.py")).toBe("exit 1");
+    expect(caption("grep -rn region models/", 2)).toBe("exit 2");
+    expect(probeCaption(step({ result: terminal({ exitCode: 1 }) }))).toBeNull();
+    expect(summarizeTerminal(step({ input: { command: "ls x" }, result: probe("ls x") }))).toEqual({
+      title: "Ran a command",
+      stat: "$ ls x · not found",
+      ok: true,
+    });
+  });
 });
 
 describe("terminal card", () => {
@@ -114,6 +144,7 @@ describe("terminal card", () => {
 
   it("shows the prompt with a blinking cursor while running", async () => {
     await render(step({ status: "running", endedAt: null, durationMs: null }));
+    await openToolRow(container);
     const body = q(container, '[data-testid="chat-terminal-card"]');
     expect(body?.textContent).toContain(`$${COMMAND}`);
     expect(q(body!, ".chat-tool-cursor-blink")).not.toBeNull();
@@ -151,13 +182,38 @@ describe("terminal card", () => {
         }),
       }),
     );
+    await openToolRow(container);
     expect(q(container, '[data-testid="chat-tool-card"]')?.getAttribute("data-density")).toBe(
       "expanded",
     );
     const stderr = q(container, '[data-testid="chat-terminal-stderr"]');
     expect(stderr?.textContent).toContain("KeyError");
     expect(stderr?.textContent).toContain("truncated");
-    expect(q(container, '[data-testid="chat-terminal-exit"]')?.textContent).toBe("exit 1");
+    const exit = q(container, '[data-testid="chat-terminal-exit"]');
+    expect(exit?.textContent).toBe("exit 1");
+    expect(exit?.className).toContain("text-[var(--color-warning)]");
+    expect(container.innerHTML).not.toContain("color-error");
+  });
+
+  it("renders a probe as a completed call with a muted caption", async () => {
+    const command = "grep -rn region_name models/";
+    await render(step({ input: { command }, result: probe(command) }));
+    const chip = q(container, '[data-testid="chat-tool-chip"]') as HTMLButtonElement;
+    expect(chip.getAttribute("data-ok")).toBe("true");
+    expect(chip.textContent).toContain("no match");
+    expect(chip.textContent).not.toContain("exit 1");
+    expect(q(container, '[data-testid="chat-tool-chip-failed"]')).toBeNull();
+    await act(async () => chip.click());
+    expect(q(container, '[data-testid="chat-tool-failed-badge"]')).toBeNull();
+    expect(q(container, '[data-testid="chat-tool-error"]')).toBeNull();
+    const probeCaptionEl = q(container, '[data-testid="chat-terminal-probe"]');
+    expect(probeCaptionEl?.textContent).toBe("no match");
+    expect(probeCaptionEl?.className).toContain("color-text-muted");
+    const exit = q(container, '[data-testid="chat-terminal-exit"]');
+    expect(exit?.textContent).toBe("exit 1");
+    expect(exit?.className).not.toContain("color-warning");
+    expect(container.innerHTML).not.toContain("color-warning");
+    expect(container.innerHTML).not.toContain("color-error");
   });
 
   it("degrades a legacy completion to the command block", async () => {

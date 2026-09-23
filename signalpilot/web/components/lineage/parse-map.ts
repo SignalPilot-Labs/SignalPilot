@@ -22,6 +22,8 @@ export interface RawNode {
   database?: string | null;
   description?: string | null;
   tags?: string[];
+  /** The project's own `meta.layer`, when it declares one. */
+  layer?: string | null;
   config?: { materialized?: string | null };
   columns?: RawColumn[] | Record<string, RawColumn>;
   /** Skeleton nodes: column total without the column payload. */
@@ -104,27 +106,84 @@ export interface ParsedMap {
 
 const NON_GRAPH_TYPES = new Set(["test", "unit_test", "operation", "macro", "exposure", "metric"]);
 
+/**
+ * A model's layer, from the strongest signal in the compiled manifest down.
+ * dbt has no layer field (`resource_type` is just "model"), so:
+ *
+ * 1. An explicit declaration: `meta.layer` (served as `layer`) or a tag
+ *    naming a layer.
+ * 2. `dim_` / `fct_` names. Dimensions and facts usually share the marts
+ *    schema and dbt has no fact/dim flag, so the name is the only signal.
+ * 3. The compiled `schema`: the custom schema each folder sets in
+ *    dbt_project.yml. dbt prefixes it with the target schema
+ *    (`dbt_prod_staging`), so its last `_` token counts too.
+ * 4. The model's folders (`fqn` and path).
+ * 5. The remaining name prefixes (`stg_`, `int_`, `mart_`, ...).
+ *
+ * Models nothing places are classified by graph position in `parseMap`.
+ */
 function classifyLayer(id: string, node: RawNode): MapLayer {
   if (node.resource_type === "source" || node.resource_type === "seed" || id.startsWith("source.")) {
     return "source";
   }
-  const name = (node.name ?? "").toLowerCase();
-  const path = (node.path ?? node.original_file_path ?? "").toLowerCase().replaceAll("\\", "/");
-  const fqn = (node.fqn ?? []).map((s) => s.toLowerCase());
-  const inPath = (seg: string) => path.includes(`/${seg}/`) || path.startsWith(`${seg}/`) || fqn.includes(seg);
+  const declared = [node.layer, ...(node.tags ?? [])]
+    .map((value) => declaredLayer(value))
+    .find((layer) => layer !== null);
+  if (declared) return declared;
 
-  if (name.startsWith("stg_") || name.startsWith("base_") || inPath("staging")) return "staging";
-  if (name.startsWith("int_") || inPath("intermediate")) return "intermediate";
-  if (name.startsWith("dim_") || inPath("dimensions")) return "dimension";
-  if (name.startsWith("fct_") || name.startsWith("fact_") || inPath("facts")) return "fact";
-  if (
-    name.startsWith("mart_") || name.startsWith("agg_") || name.startsWith("rpt_") ||
-    inPath("marts") || inPath("reporting")
-  ) {
-    return "mart";
-  }
-  return "other";
+  const name = (node.name ?? "").toLowerCase();
+  const byName = (rules: [MapLayer, string[]][]) =>
+    rules.find(([, prefixes]) => prefixes.some((prefix) => name.startsWith(prefix)))?.[0];
+  const dimOrFact = byName(DIM_FACT_PREFIXES);
+  if (dimOrFact) return dimOrFact;
+
+  const schema = (node.schema ?? "").toLowerCase();
+  const fromSchema = layerFromWord(schema) ?? layerFromWord(schema.split("_").pop());
+  if (fromSchema) return fromSchema;
+
+  const path = (node.path ?? node.original_file_path ?? "").toLowerCase().replaceAll("\\", "/");
+  const folders = [...path.split("/").slice(0, -1), ...(node.fqn ?? []).slice(1, -1).map((s) => s.toLowerCase())];
+  const fromFolder = folders.map((folder) => layerFromWord(folder)).find((layer) => layer !== null);
+  if (fromFolder) return fromFolder;
+
+  return byName(LAYER_PREFIXES) ?? "other";
 }
+
+/** Words that name a layer, as a schema, folder, tag or `meta.layer`. */
+const LAYER_WORDS: Record<string, MapLayer> = {
+  staging: "staging", stg: "staging", base: "staging",
+  intermediate: "intermediate", int: "intermediate", core: "intermediate", prep: "intermediate",
+  dimension: "dimension", dimensions: "dimension", dim: "dimension", dims: "dimension",
+  fact: "fact", facts: "fact", fct: "fact",
+  mart: "mart", marts: "mart", reporting: "mart", report: "mart", reports: "mart",
+};
+
+function layerFromWord(word: string | null | undefined): MapLayer | null {
+  if (!word) return null;
+  return LAYER_WORDS[word.trim().toLowerCase()] ?? null;
+}
+
+/** Tags and `meta.layer` count only when they spell a layer out in full:
+ * a `core` or `base` tag often means "important", not a layer. */
+const DECLARED_WORDS = new Set([
+  "staging", "intermediate", "dimension", "dimensions", "fact", "facts", "mart", "marts",
+]);
+
+function declaredLayer(word: string | null | undefined): MapLayer | null {
+  const normalized = word?.trim().toLowerCase() ?? "";
+  return DECLARED_WORDS.has(normalized) ? layerFromWord(normalized) : null;
+}
+
+const DIM_FACT_PREFIXES: [MapLayer, string[]][] = [
+  ["dimension", ["dim_"]],
+  ["fact", ["fct_", "fact_"]],
+];
+
+const LAYER_PREFIXES: [MapLayer, string[]][] = [
+  ["staging", ["stg_", "base_"]],
+  ["intermediate", ["int_", "core_", "prep_"]],
+  ["mart", ["mart_", "agg_", "rpt_", "report_"]],
+];
 
 /** Normalize a column payload (record in `full`, array in `skeleton`/`cone`). */
 export function parseColumns(raw: RawNode["columns"] | null | undefined): MapColumn[] {
@@ -198,6 +257,16 @@ export function parseMap(raw: RawMapGraph): ParsedMap {
     });
   }
 
+  // Models no name or folder rule placed are classified by position: one that
+  // feeds other models is intermediate work, one that feeds nothing is an
+  // endpoint and reads as a mart. Only a model with no graph neighbours at
+  // all stays "other".
+  for (const model of models.values()) {
+    if (model.layer !== "other") continue;
+    if (model.children.length > 0) model.layer = "intermediate";
+    else if (model.parents.length > 0) model.layer = "mart";
+  }
+
   const edges: MapEdge[] = [];
   const seen = new Set<string>();
   for (const model of models.values()) {
@@ -223,7 +292,10 @@ export function parseMap(raw: RawMapGraph): ParsedMap {
   const layerCounts = {
     source: 0, staging: 0, intermediate: 0, dimension: 0, fact: 0, mart: 0, other: 0,
   } as Record<MapLayer, number>;
-  for (const model of models.values()) layerCounts[model.layer] += 1;
+  // Legend counts what the canvas draws: dbt sources are never drawn.
+  for (const model of models.values()) {
+    if (model.resourceType !== "source") layerCounts[model.layer] += 1;
+  }
 
   return {
     models,

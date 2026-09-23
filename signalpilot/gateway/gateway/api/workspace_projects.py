@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import logging
+import time
+import uuid
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from ..auth import DBSession, OrgAdmin, OrgID, UserID
 from ..config.gateway import _LOCAL_GATEWAY_URL_DEFAULT, get_gateway_settings
+from ..models.audit import AuditEntry
 from ..models.workspace import (
     WorkspaceProjectCreate,
     WorkspaceProjectInfo,
@@ -16,7 +19,7 @@ from ..models.workspace import (
 )
 from ..runtime.mode import is_cloud_mode
 from ..security.scope_guard import RequireScope
-from ..workspace_store.dbt_detect import resolve_dbt_project_dir_detailed
+from ..workspace_store.dbt_detect import DBT_PROJECT_DIR_SETTING, resolve_dbt_project_dir_detailed
 from ..workspace_store.store import RevisionNotFound
 from .deps import RequireBillablePlan, StoreD
 from .workspace_files import WorkspaceStoreD, _valid_branch
@@ -171,15 +174,65 @@ async def get_dbt_project_dir(
     return {"dbt_project_dir": value, "detected": detected, "source": source}
 
 
+async def _audit_settings_write(
+    store, *, project_id: str, before: dict | None, patch: dict, after: dict | None
+) -> None:
+    """Record which settings keys a PUT touched (key names only, never values)."""
+    before_keys = sorted((before or {}).keys())
+    after_keys = sorted((after or {}).keys())
+    try:
+        await store.append_audit(
+            AuditEntry(
+                id=str(uuid.uuid4()),
+                timestamp=time.time(),
+                event_type="workspace_project_settings_update",
+                metadata={
+                    "project_id": project_id,
+                    "before_keys": before_keys,
+                    "after_keys": after_keys,
+                    "set_keys": sorted(k for k, v in patch.items() if v is not None),
+                    "removed_keys": sorted(k for k, v in patch.items() if v is None and k in (before or {})),
+                },
+            )
+        )
+    except Exception:
+        logger.warning("Failed to append audit log for workspace_project_settings_update project=%s", project_id)
+
+
 @router.put("/workspace-projects/{project_id}", response_model=WorkspaceProjectInfo, dependencies=[RequireScope("write")])
 async def update_project(project_id: str, body: WorkspaceProjectUpdate, store: StoreD, _role: OrgAdmin):
-    updates = body.model_dump(exclude_none=True)
+    """Update project fields. ``settings`` is merged key-by-key (PATCH
+    semantics): omitted keys are kept, keys sent as ``null`` are removed."""
+    updates = body.model_dump(exclude_none=True, exclude={"settings"})
+    settings_patch = body.settings.patch() if body.settings is not None else None
+    if settings_patch is not None:
+        updates["settings"] = settings_patch
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
+    before = (await _get_project_or_404(store, project_id)).settings if settings_patch is not None else None
     proj = await store.update_workspace_project(project_id, updates)
     if not proj:
         raise HTTPException(status_code=404, detail="Project not found")
+    if settings_patch is not None:
+        await _audit_settings_write(
+            store, project_id=project_id, before=before, patch=settings_patch, after=proj.settings
+        )
+        _recompile_if_dbt_dir_changed(store.org_id or "local", proj, before)
     return proj
+
+
+def _recompile_if_dbt_dir_changed(org_id: str, proj: WorkspaceProjectInfo, before: dict | None) -> None:
+    """A new dbt_project_dir invalidates the compiled map: it was built from a
+    different directory of the same revision. Force a recompile of the default
+    branch so lineage follows the setting without a second click."""
+    from ..dbt_map import schedule_compile
+
+    key = DBT_PROJECT_DIR_SETTING
+    old_dir = (before or {}).get(key)
+    new_dir = (proj.settings or {}).get(key)
+    if old_dir == new_dir:
+        return
+    schedule_compile(org_id, proj.id, proj.default_branch or "main", trigger="settings", force=True)
 
 
 @router.delete("/workspace-projects/{project_id}", status_code=204, response_model=None, dependencies=[RequireScope("write")])

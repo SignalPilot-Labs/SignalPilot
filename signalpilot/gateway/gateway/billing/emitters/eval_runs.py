@@ -23,8 +23,8 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..ledger import LedgerEntry, unit_quantity
-from ..rates import EVAL_RUN_CREDITS, period_of
-from ._base import json_safe_payload, metered_entitlement, never_raises, write_in_savepoint
+from ..rates import period_of
+from ._base import json_safe_payload, metered, never_raises, write_in_savepoint
 
 REASON_OK = "ok"
 REASON_INCLUDED = "included"
@@ -44,9 +44,10 @@ async def emit_eval_run_credit(
     """Write the eval-run ledger row in ``session``; None when not metered or duplicate."""
     if not org_id or not run_id:
         return None
-    resolved = await metered_entitlement(org_id, entitlement)
-    if resolved is None:
+    pair = await metered(org_id, entitlement)
+    if pair is None:
         return None
+    resolved, card = pair
     now = now or datetime.now(UTC)
     period = period_of(now)
     position = int(await unit_quantity(session, org_id, period, "eval_run")) + 1
@@ -54,7 +55,7 @@ async def emit_eval_run_credit(
     if position <= included:
         credits, reason = 0, REASON_INCLUDED
     else:
-        credits, reason = -EVAL_RUN_CREDITS, REASON_OK
+        credits, reason = -card.eval_run_credits, REASON_OK
     entry = LedgerEntry(
         org_id=org_id,
         entry_type="consume",

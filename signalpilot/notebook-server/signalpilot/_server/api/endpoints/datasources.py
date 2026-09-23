@@ -28,10 +28,12 @@ router = APIRouter()
 
 
 @router.get("/gateway_connections")
+@requires("edit")
 async def gateway_connections(*, request: Request) -> Response:
     """List SignalPilot Gateway database connections.
 
-    Does NOT require an active notebook session — works at any time.
+    Does NOT require an active notebook session — works at any time, but the
+    caller must hold the per-session access token like every other edit route.
     Returns the same connection format the kernel broadcasts after first cell run.
     """
     try:

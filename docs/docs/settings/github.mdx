@@ -36,6 +36,24 @@ repository is not modified.
 
 Sync and fetch actions pull the latest commit into the workspace.
 
+## Pull requests from chat
+
+When a chat runs against a GitHub-linked project, the agent can ship model
+changes as a pull request:
+
+1. The agent edits models in its sandbox and runs `dbt build` until it passes.
+2. It commits and pushes to a `signalpilot/<short-name>` branch. The push goes
+   to SignalPilot's own git server, which mirrors that one branch to your
+   repository. Pushes to any other branch, force pushes, and branch deletions
+   are refused.
+3. It opens a pull request against the project's base branch and links you to
+   it in its answer. It can later update the description or add comments.
+4. You review and merge on GitHub as usual.
+
+There is no approval step before the pull request is opened, and SignalPilot
+never merges. The sandbox holds only its own session token; the GitHub
+installation token stays on the gateway.
+
 ## How credentials are handled
 
 - The gateway exchanges the App's private key for an **installation token** with
@@ -56,6 +74,13 @@ app. See [Configuration](/docs/self-host/configuration#integrations).
 There is also a bot path — `SP_GITHUB_BOT_TOKEN`, `SP_GITHUB_WEBHOOK_SECRET`,
 `SP_GITHUB_BOT_CONNECTION` — used for webhook-driven automation. The webhook
 endpoint refuses requests with `503` until the webhook secret is set.
+
+Point the App's webhook at `<gateway>/api/github/webhook`, give it the same
+secret, and subscribe it to **Push** and **Pull request** events. A push to a
+watched branch is imported and the dbt map recompiled within seconds. If the
+webhook is missing or misconfigured, a background sweep pulls every watched
+branch on an interval (`SP_REPO_SYNC_INTERVAL_SECONDS`, 15 minutes by default),
+so a linked project can be stale for at most one interval.
 
 ## Troubleshooting
 

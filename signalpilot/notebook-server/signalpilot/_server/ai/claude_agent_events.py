@@ -13,10 +13,16 @@ import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from signalpilot import _loggers
 from signalpilot._server.ai.claude_agent_state import (
     AgentEvent,
     clip_tool_result_for_event,
     tool_result_text,
+)
+from signalpilot._server.ai.plan_file import (
+    PLAN_FILE_TOOLS,
+    is_plan_file_path,
+    open_plan_file_count,
 )
 
 if TYPE_CHECKING:
@@ -25,11 +31,45 @@ if TYPE_CHECKING:
     from signalpilot._server.ai.claude_agent_state import _ActiveAgent
 
 __all__ = [
+    "MAX_PLAN_CONTINUATIONS",
+    "PLAN_CONTINUATION_PROMPT",
+    "STEERING_GRACE_SECONDS",
     "_SdkStreamState",
     "_rate_limit_diagnostic",
     "_relay_sdk_messages",
     "_result_message_content",
+    "open_todo_count",
 ]
+
+LOGGER = _loggers.sp_logger()
+
+# Run completion guard: when the model ends its turn with TodoWrite items
+# still open and no error, it is asked to continue at most this many times
+# per run before the result is accepted as final.
+MAX_PLAN_CONTINUATIONS = 2
+PLAN_CONTINUATION_PROMPT = (
+    "Continue with the remaining plan items. "
+    "If they cannot be completed, say why."
+)
+# After a ResultMessage the durable gateway queue gets this long to deliver
+# an interjection accepted while the run was still marked running. The
+# steering lock, not this window, is what makes acceptance race-free.
+STEERING_GRACE_SECONDS = 1.0
+
+
+def open_todo_count(todo_input: dict[str, Any] | None) -> int:
+    """Count TodoWrite items whose status is not ``completed``."""
+    if not isinstance(todo_input, dict):
+        return 0
+    todos = todo_input.get("todos")
+    if not isinstance(todos, list):
+        return 0
+    return sum(
+        1
+        for item in todos
+        if isinstance(item, dict)
+        and str(item.get("status") or "").strip().lower() != "completed"
+    )
 
 
 def _result_message_content(message: Any) -> str:
@@ -77,6 +117,50 @@ class _SdkStreamState:
 
     turn_count: int = 0
     latest_rate_limit_info: dict[str, Any] | None = None
+    # The most recent TodoWrite tool input: the run's live plan on CLIs that
+    # still offer TodoWrite.
+    last_todo_input: dict[str, Any] | None = None
+    # The plan file (artifacts/plan.md) the agent wrote this run, if any.
+    plan_file_path: str | None = None
+    plan_continuations: int = 0
+    skipped_empty_results: int = 0
+
+
+# A resumed session can open with a turn the CLI injects itself, before the
+# queued user message: an unfinished background task from the previous run
+# makes it add "Continue from where you left off." The model answers without
+# an API turn and the CLI emits a result for that turn. Our message is still
+# queued behind it, so the run must keep reading. Bounded so a CLI that never
+# answers cannot hold the run open.
+MAX_SKIPPED_EMPTY_RESULTS = 2
+
+
+def _is_injected_turn_result(msg: Any, state: _SdkStreamState) -> bool:
+    """True for a result that answers a turn the CLI injected, not our message.
+
+    The SDK stamps ``origin`` on results of injected turns (background-task
+    notifications, scheduled prompts); our own prompt has no origin or
+    ``human``. The resume turn carries no origin, so a zero-turn result also
+    counts: a real answer to the user's message always takes an API turn.
+    """
+    if bool(getattr(msg, "is_error", False)):
+        return False
+    if state.skipped_empty_results >= MAX_SKIPPED_EMPTY_RESULTS:
+        return False
+    origin = getattr(msg, "origin", None)
+    kind = origin.get("kind") if isinstance(origin, dict) else None
+    if kind is not None and kind != "human":
+        return True
+    return getattr(msg, "num_turns", None) == 0
+
+
+def _is_steering_echo(msg: Any, agent_state: Any, parent_id: str) -> bool:
+    """True when a user message is the CLI's echo of an accepted steering message."""
+    uuid = getattr(msg, "uuid", None)
+    if not uuid or parent_id:
+        return False
+    with agent_state.steering_lock:
+        return str(uuid) in agent_state.accepted_steering_ids
 
 
 def _result_event(
@@ -127,6 +211,43 @@ def _result_event(
             ),
         },
     )
+
+
+async def _continue_open_plan(
+    client: Any, msg: Any, state: _SdkStreamState
+) -> bool:
+    """Run completion guard for a non-error ResultMessage.
+
+    When the run's last TodoWrite plan still has open items, send one
+    bounded continuation query instead of finishing. Returns True when a
+    continuation was sent (the caller keeps draining the client).
+    """
+    if bool(getattr(msg, "is_error", False)):
+        return False
+    open_items = (
+        open_plan_file_count(state.plan_file_path)
+        if state.plan_file_path
+        else open_todo_count(state.last_todo_input)
+    )
+    if open_items == 0:
+        return False
+    if state.plan_continuations >= MAX_PLAN_CONTINUATIONS:
+        LOGGER.warning(
+            "Run ended with %s open plan items after %s continuations; "
+            "accepting the result",
+            open_items,
+            state.plan_continuations,
+        )
+        return False
+    state.plan_continuations += 1
+    LOGGER.info(
+        "Run ended with %s open plan items; sending continuation %s of %s",
+        open_items,
+        state.plan_continuations,
+        MAX_PLAN_CONTINUATIONS,
+    )
+    await client.query(PLAN_CONTINUATION_PROMPT)
+    return True
 
 
 async def _relay_sdk_messages(
@@ -180,6 +301,19 @@ async def _relay_sdk_messages(
                         )
                     )
                 elif isinstance(block, ToolUseBlock):
+                    if block.name == "TodoWrite" and not parent_id:
+                        state.last_todo_input = (
+                            dict(block.input)
+                            if isinstance(block.input, dict)
+                            else None
+                        )
+                    elif (
+                        block.name in PLAN_FILE_TOOLS
+                        and not parent_id
+                        and isinstance(block.input, dict)
+                        and is_plan_file_path(block.input.get("file_path"))
+                    ):
+                        state.plan_file_path = str(block.input["file_path"])
                     event_queue.put(
                         AgentEvent(
                             type="tool_use",
@@ -194,6 +328,16 @@ async def _relay_sdk_messages(
         elif isinstance(msg, UserMessage):
             content = msg.content
             parent_id = getattr(msg, "parent_tool_use_id", None) or ""
+            if _is_steering_echo(msg, agent_state, parent_id):
+                # The model just took in a steering message: record where.
+                event_queue.put(
+                    AgentEvent(
+                        type="steering_delivered",
+                        content=str(msg.uuid),
+                        turn=state.turn_count,
+                    )
+                )
+                continue
             if isinstance(content, list):
                 for block in content:
                     if isinstance(block, ToolResultBlock):
@@ -221,15 +365,33 @@ async def _relay_sdk_messages(
                         )
 
         elif isinstance(msg, ResultMessage):
+            if _is_injected_turn_result(msg, state):
+                state.skipped_empty_results += 1
+                LOGGER.warning(
+                    "Skipping a zero-turn SDK result; the user message is still queued"
+                )
+                continue
+            if await _continue_open_plan(client, msg, state):
+                continue
             event_queue.put(_result_event(msg, state))
             # A ResultMessage terminates one SDK query, not
             # necessarily this live client. Give the durable
             # gateway queue a brief chance to deliver an
             # interjection that was accepted while the run was
             # still marked running, then consume its next result.
-            await asyncio.sleep(1.0)
-            if agent_state.pending_steering_turns > 0:
-                agent_state.pending_steering_turns -= 1
+            await asyncio.sleep(STEERING_GRACE_SECONDS)
+            # Decide under the steering lock: steer_agent increments the
+            # counter under the same lock before it sends its query, and
+            # refuses once ``closing`` is set, so no accepted message can
+            # be lost between this check and the client's exit.
+            with agent_state.steering_lock:
+                if agent_state.pending_steering_turns > 0:
+                    agent_state.pending_steering_turns -= 1
+                    keep_alive = True
+                else:
+                    agent_state.closing = True
+                    keep_alive = False
+            if keep_alive:
                 continue
             break  # Session complete for this query
 

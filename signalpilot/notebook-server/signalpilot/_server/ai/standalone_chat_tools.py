@@ -107,9 +107,15 @@ def build_standalone_chat_mcp_server(
                     ),
                 )
             ]
-        if notebook_name != "analysis" and not target_path.is_file():
-            # Named notebooks seed lazily in the SAME scratch.
+        if not target_path.is_file():
+            # Named notebooks seed lazily in the SAME scratch. A missing
+            # analysis notebook (a superseded attempt removed the scratch)
+            # is reseeded the same way instead of failing the tool call.
             if notebook_seeder is None:
+                if notebook_name == "analysis":
+                    raise ValueError(
+                        "The analysis notebook file is missing and cannot be reseeded"
+                    )
                 raise ValueError("Named notebooks are unavailable in this run")
             target_path = notebook_seeder(notebook_name)
         start_arguments = {"file_path": str(target_path), "auto_run": True}

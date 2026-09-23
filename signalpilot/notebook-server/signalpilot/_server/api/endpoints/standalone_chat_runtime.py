@@ -98,7 +98,27 @@ def adopt_keepalive_analysis_session(
     entry = _KEEPALIVE_BY_CONVERSATION.get(conversation_id)
     if entry is None:
         return None
-    scratch, sessions = entry
+    adopted = adopt_live_sessions(
+        app, entry[0], entry[1], scoped_token=scoped_token
+    )
+    if adopted is None:
+        _KEEPALIVE_BY_CONVERSATION.pop(conversation_id, None)
+    return adopted
+
+
+def adopt_live_sessions(
+    app: Any,
+    scratch: Path,
+    sessions: dict[str, str],
+    *,
+    scoped_token: str,
+) -> tuple[Path, dict[str, str]] | None:
+    """Adopt the live subset of ``sessions`` in ``scratch`` for a run.
+
+    Dead kernels are closed and dropped. When none survives the scratch is
+    removed and None is returned. Otherwise the run's scoped token is written
+    where the notebooks' setup cells read it.
+    """
     alive: dict[str, str] = {}
     for name, session_id in sessions.items():
         session = None
@@ -114,7 +134,6 @@ def adopt_keepalive_analysis_session(
         except Exception:
             pass
     if not alive:
-        _KEEPALIVE_BY_CONVERSATION.pop(conversation_id, None)
         shutil.rmtree(scratch, ignore_errors=True)
         return None
     token_file = scratch / ".gateway-token"
@@ -215,9 +234,11 @@ def _():
 
 @app.cell(hide_code=True)
 def _(Path, sp):
+    import numpy as np
+    import pandas as pd
     sp.init(gateway_url={gateway_url!r}, session_token_file=Path({str(token_file)!r}))
     db = sp.connect({connection_name!r})
-    return (db,)
+    return db, np, pd
 """
     notebook_path.write_text(
         setup + _NAMED_NOTEBOOK_CELLS + '\n\nif __name__ == "__main__":\n    app.run()\n',

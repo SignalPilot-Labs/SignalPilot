@@ -13,11 +13,11 @@ import { useEffect, useState } from "react";
 import { useToast } from "~/components/ui/toast";
 import {
   compileDbtMap,
-  getDbtMap,
   getDbtProjectDir,
   updateWorkspaceProject,
 } from "~/lib/api";
-import type { DbtMapInfo, WorkspaceProjectInfo } from "~/lib/types";
+import type { WorkspaceProjectInfo } from "~/lib/types";
+import { DbtMapStatusLine, useDbtMapStatus } from "~/components/projects/dbt-map-status";
 import { ProjectAutomationReadOnly } from "~/components/projects/project-automation-readonly";
 
 function errorMessage(error: unknown) {
@@ -57,22 +57,15 @@ export function ProjectAutomationSettings({
     settings.pr_agent_trigger === true,
   );
   const [saving, setSaving] = useState(false);
-  const [mapInfo, setMapInfo] = useState<DbtMapInfo | null>(null);
-  const [mapStatus, setMapStatus] = useState<string>("none");
+  const { status: mapStatus, info: mapInfo, refresh: refreshMap } = useDbtMapStatus(project.id);
   const [compiling, setCompiling] = useState(false);
+  const mapLive = mapStatus === "running" || mapStatus === "queued";
 
   useEffect(() => {
     let active = true;
     void getDbtProjectDir(project.id, project.default_branch || undefined)
       .then((res) => {
         if (active) setDetectedDirs(res.detected);
-      })
-      .catch(() => {});
-    void getDbtMap(project.id, undefined, false)
-      .then((res) => {
-        if (!active) return;
-        setMapStatus(res.status);
-        setMapInfo(res.map);
       })
       .catch(() => {});
     return () => {
@@ -102,7 +95,8 @@ export function ProjectAutomationSettings({
         pr_agent_trigger: prAgentTrigger,
       };
       if (dbtDir === AUTO) {
-        delete nextSettings.dbt_project_dir;
+        // PUT merges settings key-by-key; an explicit null removes the key.
+        nextSettings.dbt_project_dir = null;
       } else {
         nextSettings.dbt_project_dir = dbtDir;
       }
@@ -110,7 +104,15 @@ export function ProjectAutomationSettings({
         settings: nextSettings,
       });
       onProjectUpdated(updated);
-      toast("Project automation settings saved", "success");
+      const dirChanged = (settings.dbt_project_dir ?? null) !== (nextSettings.dbt_project_dir ?? null);
+      toast(
+        dirChanged
+          ? "Settings saved · recompiling the dbt map from the new folder"
+          : "Project automation settings saved",
+        "success",
+      );
+      // A changed dbt folder schedules a recompile server-side; pick it up.
+      if (dirChanged) setTimeout(() => void refreshMap(), 500);
     } catch (error) {
       toast(errorMessage(error), "error");
     } finally {
@@ -123,8 +125,11 @@ export function ProjectAutomationSettings({
     setCompiling(true);
     try {
       await compileDbtMap(project.id);
-      toast("dbt map compile started on a sandbox", "success");
-      setMapStatus("running");
+      toast(
+        mapLive ? "Restarting the dbt map compile" : "dbt map compile started on a sandbox",
+        "success",
+      );
+      await refreshMap();
     } catch (error) {
       toast(errorMessage(error), "error");
     } finally {
@@ -273,17 +278,7 @@ export function ProjectAutomationSettings({
 
         {/* dbt map status + actions */}
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--color-border)] pt-4">
-          <div className="text-[11px] text-[var(--color-text-dim)]">
-            dbt map:{" "}
-            <span className="text-[var(--color-text)]">{mapStatus}</span>
-            {mapInfo?.node_count ? ` · ${mapInfo.node_count} nodes` : ""}
-            {mapInfo?.dbt_version ? ` · dbt ${mapInfo.dbt_version}` : ""}
-            {mapStatus === "failed" && mapInfo?.error ? (
-              <span className="block max-w-md truncate text-[var(--color-error)]">
-                {mapInfo.error}
-              </span>
-            ) : null}
-          </div>
+          <DbtMapStatusLine status={mapStatus} info={mapInfo} />
           <div className="flex items-center gap-2">
             <button
               type="button"
@@ -296,7 +291,7 @@ export function ProjectAutomationSettings({
               ) : (
                 <Hammer className="h-3.5 w-3.5" />
               )}
-              Compile now
+              {mapLive ? "Restart compile" : "Compile now"}
             </button>
             <button
               type="button"

@@ -15,15 +15,16 @@ from signalpilot import _loggers
 from signalpilot._server.ai.claude_agent import (
     clear_chat_session,
     run_notebook_agent,
+    stop_agent,
 )
 from signalpilot._server.ai.claude_session_archive import (
     persist_claude_session,
-    prepare_claude_session,
 )
 from signalpilot._server.ai.standalone_chat_tools import (
     StandaloneNotebookLifecycle,
     build_standalone_chat_mcp_server,
 )
+from signalpilot._server.ai.transport_breaker import clear_breaker
 from signalpilot._server.api.endpoints.chat_files import (
     RuntimeFileUploader,
     ScratchFileCapture,
@@ -35,7 +36,7 @@ from signalpilot._server.api.endpoints.standalone_chat_agent_options import (
 )
 from signalpilot._server.api.endpoints.standalone_chat_finalize import (
     _notebook_edit_requires_successful_run,
-    archive_run_notebooks,
+    archive_and_keep_alive,
     build_final_payload,
     continuity_injection,
     evaluate_notebook_failure,
@@ -43,6 +44,12 @@ from signalpilot._server.api.endpoints.standalone_chat_finalize import (
 )
 from signalpilot._server.api.endpoints.standalone_chat_gateway import (
     gateway_api_base_url,
+)
+from signalpilot._server.api.endpoints.standalone_chat_handover import (
+    make_lifecycle_event,
+    release_run,
+    run_execution_lock,
+    take_over_run,
 )
 from signalpilot._server.api.endpoints.standalone_chat_prompt import (
     STANDALONE_ALLOWED_TOOLS,
@@ -65,17 +72,21 @@ from signalpilot._server.api.endpoints.standalone_chat_runtime import (
     _start_analysis_kernel,
     _with_recorded_notebook_errors,
     adopt_keepalive_analysis_session,
+    adopt_live_sessions,
     register_keepalive_analysis_session,
 )
 from signalpilot._server.api.endpoints.standalone_chat_stream import (
     AgentRunState,
     _ndjson,
     announce_adopted_sessions,
+    error_line,
     forward_agent_events,
+    gateway_unavailable_line,
     start_recovery_analysis,
 )
 from signalpilot._server.api.endpoints.standalone_chat_workspace import (
     prepare_execution_workspace,
+    restore_agent_session,
 )
 from signalpilot._server.auth.standalone_chat import (
     authorize_execution,
@@ -138,6 +149,7 @@ async def execute(*, request: Request) -> StreamingResponse:
         history,
         is_improvement_run,
         sandbox_runtime_enabled,
+        session_context_block,
         system_prompt,
     ) = _execution_prompt_values(
         body,
@@ -170,16 +182,39 @@ async def execute(*, request: Request) -> StreamingResponse:
             gateway_url=gateway_api_url,
         )
 
-    # Multi-turn continuity: adopt the conversation's kept-alive kernels and
-    # notebooks from the previous turn when they are still running — the agent
-    # reuses the SAME session ids across turns and the live notebook panel
-    # stays attached. Falls back to a fresh notebook when no kernel survives.
-    # scope.get: unit tests build bare Requests without an app.
-    adopted = adopt_keepalive_analysis_session(
-        request.scope.get("app"),
-        conversation_id,
-        scoped_token=scoped_token,
-    )
+    # /execute is idempotent per run id. A re-claimed run arrives while the
+    # previous attempt may still be alive in this process: stop its agent,
+    # mark it superseded (its cleanup then leaves kernels and scratch
+    # alone), and inherit its live notebooks so the resumed model's session
+    # ids stay valid. The per-run lock serializes concurrent handovers.
+    async with run_execution_lock(run_id):
+        execution_record, inherited = take_over_run(
+            run_id, stop_agent_fn=stop_agent
+        )
+    adopted: tuple[Path, dict[str, str]] | None = None
+    if inherited is not None:
+        adopted = adopt_live_sessions(
+            runtime_app, inherited[0], inherited[1], scoped_token=scoped_token
+        )
+        LOGGER.info(
+            "Re-executed run inherits notebooks run_id=%s sequence=%s "
+            "sessions=%s",
+            run_id,
+            execution_record.sequence,
+            sorted(adopted[1]) if adopted else [],
+        )
+    if adopted is None:
+        # Multi-turn continuity: adopt the conversation's kept-alive kernels
+        # and notebooks from the previous turn when they are still running.
+        # The agent reuses the SAME session ids across turns and the live
+        # notebook panel stays attached. Falls back to a fresh notebook when
+        # no kernel survives. scope.get: unit tests build bare Requests
+        # without an app.
+        adopted = adopt_keepalive_analysis_session(
+            request.scope.get("app"),
+            conversation_id,
+            scoped_token=scoped_token,
+        )
     adopted_sessions: dict[str, str] = dict(adopted[1]) if adopted else {}
     (
         scratch,
@@ -196,6 +231,7 @@ async def execute(*, request: Request) -> StreamingResponse:
         connection_name=connection_name,
         gateway_url=gateway_api_url,
         gateway_token=scoped_token,
+        preserve_notebook=inherited is not None,
     )
     if adopted is not None:
         # Continue in the previous turn's shared scratch and notebooks.
@@ -207,6 +243,7 @@ async def execute(*, request: Request) -> StreamingResponse:
     # The scratch the agent works in: this run's own on a first turn, the
     # ADOPTED one on later turns. Env, artifacts, and capture point here.
     working_scratch = analysis_notebook_path.parent
+    execution_record.working_scratch = working_scratch
     (working_scratch / "artifacts").mkdir(exist_ok=True)
     capture = ScratchFileCapture(
         scratch=working_scratch,
@@ -221,23 +258,12 @@ async def execute(*, request: Request) -> StreamingResponse:
     after_tool_result = build_after_tool_result_hook(
         capture=capture, uploader=uploader
     )
-    try:
-        agent_session = await prepare_claude_session(
-            conversation_id=conversation_id,
-            cwd=project_directory,
-            transfer=body.get("agent_session"),
-        )
-    except Exception:
-        LOGGER.warning(
-            "Claude session restore failed; using database context run_id=%s",
-            run_id,
-            exc_info=True,
-        )
-        agent_session = await prepare_claude_session(
-            conversation_id=conversation_id,
-            cwd=project_directory,
-            transfer=None,
-        )
+    agent_session = await restore_agent_session(
+        run_id=run_id,
+        conversation_id=conversation_id,
+        cwd=project_directory,
+        transfer=body.get("agent_session"),
+    )
 
     async def stream() -> AsyncGenerator[bytes, None]:
         current_lifecycle: StandaloneNotebookLifecycle | None = None
@@ -283,32 +309,15 @@ async def execute(*, request: Request) -> StreamingResponse:
                 lifecycle = StandaloneNotebookLifecycle()
                 lifecycle.sessions.update(carryover_sessions)
                 current_lifecycle = lifecycle
-
-                async def lifecycle_event(
-                    event_type: str,
-                    payload: dict[str, Any],
-                    lifecycle: StandaloneNotebookLifecycle = lifecycle,
-                    attempt: int = attempt,
-                ) -> None:
-                    if event_type != "notebook_started":
-                        return
-                    started_session = (
-                        str(payload.get("session_id") or "")
-                        or lifecycle.session_id
-                    )
-                    if not started_session:
-                        return
-                    _ANALYSIS_SESSIONS_BY_RUN.setdefault(run_id, set()).add(
-                        started_session
-                    )
-                    runtime_session = _analysis_session(
-                        runtime_app, started_session
-                    )
-                    runtime_session._signalpilot_chat_run_id = run_id
-                    runtime_session._signalpilot_chat_session_id = (
-                        started_session
-                    )
-                    runtime_session._signalpilot_chat_attempt = attempt
+                execution_record.lifecycle = lifecycle
+                execution_record.attempt = attempt
+                lifecycle_event = make_lifecycle_event(
+                    run_id=run_id,
+                    runtime_app=runtime_app,
+                    lifecycle=lifecycle,
+                    attempt=attempt,
+                    session_resolver=_analysis_session,
+                )
 
                 if (
                     recovery_failure is None
@@ -387,7 +396,11 @@ async def execute(*, request: Request) -> StreamingResponse:
                             agent_effort=agent_effort,
                             max_turns=MAX_ANALYSIS_AGENT_TURNS,
                             history=history,
-                            system_prompt=system_prompt,
+                            system_prompt=(
+                                system_prompt
+                                if resume_agent_session or not session_context_block
+                                else f"{system_prompt}\n\n{session_context_block}"
+                            ),
                             mcp_config=mcp_config,
                             run_id=run_id,
                             runtime_app=runtime_app,
@@ -412,9 +425,28 @@ async def execute(*, request: Request) -> StreamingResponse:
                     after_tool_result=after_tool_result,
                 ):
                     yield chunk
+                if execution_record.superseded:
+                    # A newer /execute for this run id took over: it owns
+                    # the kernels, the scratch, and the answer from here.
+                    LOGGER.info(
+                        "Superseded attempt stops run_id=%s sequence=%s",
+                        run_id,
+                        execution_record.sequence,
+                    )
+                    return
                 await save_agent_session()
                 resume_agent_session = True
                 if state.agent_failed:
+                    return
+                transport_error = gateway_unavailable_line(
+                    agent_session.session_id, run_id=run_id
+                )
+                if transport_error is not None:
+                    # The breaker stopped the agent: keep the captured
+                    # artifacts, end the run with gateway_unavailable.
+                    for line in await final_capture():
+                        yield line
+                    yield transport_error
                     return
 
                 if (
@@ -425,12 +457,8 @@ async def execute(*, request: Request) -> StreamingResponse:
                         project_baseline_digest,
                     )
                 ):
-                    yield _ndjson(
-                        {
-                            "type": "error",
-                            "content": "The frozen project workspace changed; the run was rejected.",
-                            "is_error": True,
-                        }
+                    yield error_line(
+                        "The frozen project workspace changed; the run was rejected."
                     )
                     return
 
@@ -473,12 +501,8 @@ async def execute(*, request: Request) -> StreamingResponse:
                         # named kernel survives into the retry.
                         carryover_sessions = dict(lifecycle.sessions)
                         if not kernel_closed:
-                            yield _ndjson(
-                                {
-                                    "type": "error",
-                                    "content": "The failed notebook kernel could not be reset safely.",
-                                    "is_error": True,
-                                }
+                            yield error_line(
+                                "The failed notebook kernel could not be reset safely."
                             )
                             return
                         clear_chat_session(
@@ -497,56 +521,34 @@ async def execute(*, request: Request) -> StreamingResponse:
                             }
                         )
                         continue
-                    yield _ndjson(
-                        {
-                            "type": "error",
-                            "content": "Notebook validation failed after one clean retry; the answer was rejected.",
-                            "is_error": True,
-                        }
+                    yield error_line(
+                        "Notebook validation failed after one clean retry; the answer was rejected."
                     )
                     return
 
-                archive_id = None
-                kernel_stopped = False
                 if lifecycle.sessions:
-                    # Archive EVERY started notebook, analysis first. Only
-                    # the analysis archive failure fails the run.
-                    archive_id, archive_error = await archive_run_notebooks(
+                    # Archive EVERY started notebook, analysis first. An
+                    # archive failure is a warning: the answer and the
+                    # artifacts are kept, and the kernels stay alive for
+                    # the live notebook panel.
+                    async for chunk in archive_and_keep_alive(
                         runtime_app,
-                        sessions=lifecycle.sessions,
+                        lifecycle=lifecycle,
+                        state=state,
                         run_id=run_id,
                         attempt=attempt,
+                        conversation_id=conversation_id,
                         gateway_api_url=gateway_api_url,
                         scoped_token=scoped_token,
+                        working_scratch=working_scratch,
+                        run_scratch=scratch,
                         archive_fn=_archive_analysis_notebook,
-                    )
-                    if archive_error is not None:
-                        yield _ndjson(archive_error)
-                        return
-                    # Keep the kernels and notebooks ALIVE after a successful
-                    # run: the chat page's live notebook panel stays attached
-                    # (or attaches late) and renders the real outputs. The
-                    # next run in this conversation — or the sandbox's own
-                    # lifecycle — closes them.
-                    register_keepalive_analysis_session(
-                        conversation_id=conversation_id,
-                        sessions=dict(lifecycle.sessions),
-                        # The notebooks may live in an ADOPTED scratch from
-                        # an earlier turn — register the directory that
-                        # actually contains them.
-                        scratch=working_scratch,
-                    )
-                    if working_scratch != scratch:
-                        # Adopted turn: this run's unused seeded scratch
-                        # still holds a token copy — remove it.
-                        try:
-                            (scratch / ".gateway-token").unlink(
-                                missing_ok=True
-                            )
-                        except OSError:
-                            pass
+                        register_keepalive_fn=(
+                            register_keepalive_analysis_session
+                        ),
+                    ):
+                        yield chunk
                     keep_workspace = True
-                    kernel_stopped = False
                     _ANALYSIS_SESSIONS_BY_RUN.pop(run_id, None)
                     lifecycle.sessions.clear()
                 accepted_text = (
@@ -559,8 +561,9 @@ async def execute(*, request: Request) -> StreamingResponse:
                     accepted_text=accepted_text,
                     agent_cost_usd=state.agent_cost_usd,
                     agent_usage=state.agent_usage,
-                    archive_id=archive_id,
-                    kernel_stopped=kernel_stopped,
+                    archive_id=state.archive_id,
+                    kernel_stopped=False,
+                    agent_result=state.agent_result,
                 )
                 yield (json.dumps(final_payload, default=str) + "\n").encode(
                     "utf-8"
@@ -569,19 +572,33 @@ async def execute(*, request: Request) -> StreamingResponse:
         finally:
             # Rejection and error paths still push the agent's files.
             await final_capture()
-            await save_agent_session()
-            if current_lifecycle:
-                # Close every kernel the run still owns.
-                for open_session in list(current_lifecycle.sessions.values()):
-                    try:
-                        _close_analysis_kernel(runtime_app, open_session)
-                    except Exception:
-                        pass
-            _ANALYSIS_SESSIONS_BY_RUN.pop(run_id, None)
-            clear_chat_session(f"standalone:{run_id}", persist=False)
-            if not keep_workspace:
-                shutil.rmtree(scratch, ignore_errors=True)
-            if remove_project_directory:
-                shutil.rmtree(project_directory, ignore_errors=True)
+            if execution_record.superseded:
+                # Only the newest attempt owns cleanup: the kernels, the
+                # scratch, and the project checkout now belong to it.
+                LOGGER.info(
+                    "Superseded attempt leaves kernels and scratch to the "
+                    "newer attempt run_id=%s sequence=%s",
+                    run_id,
+                    execution_record.sequence,
+                )
+            else:
+                await save_agent_session()
+                if current_lifecycle:
+                    # Close every kernel the run still owns.
+                    for open_session in list(
+                        current_lifecycle.sessions.values()
+                    ):
+                        try:
+                            _close_analysis_kernel(runtime_app, open_session)
+                        except Exception:
+                            pass
+                _ANALYSIS_SESSIONS_BY_RUN.pop(run_id, None)
+                clear_chat_session(f"standalone:{run_id}", persist=False)
+                clear_breaker(agent_session.session_id)
+                if not keep_workspace:
+                    shutil.rmtree(scratch, ignore_errors=True)
+                if remove_project_directory:
+                    shutil.rmtree(project_directory, ignore_errors=True)
+            release_run(execution_record)
 
     return stream_response(stream())

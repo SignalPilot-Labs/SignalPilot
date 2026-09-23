@@ -229,6 +229,20 @@ async def list_running_internal(session: AsyncSession) -> list[NotebookSessionIn
     return [_to_internal(row, None) for row in rows]
 
 
+async def session_ids_with_active_chat_runs(session: AsyncSession) -> set[str]:
+    """Notebook sessions a non-terminal chat run is bound to. The lifecycle
+    loop must never snapshot these: the run streams through the sandbox and
+    a snapshot mid-run ends it with no answer."""
+    from ..db.models import GatewayChatRun
+    from ..standalone_chat.domain import NONTERMINAL_RUN_STATUSES
+
+    q = select(GatewayChatRun.execution_session_id).where(
+        GatewayChatRun.status.in_(NONTERMINAL_RUN_STATUSES),
+        GatewayChatRun.execution_session_id.is_not(None),
+    )
+    return {str(value) for value in (await session.execute(q)).scalars().all() if value}
+
+
 async def list_stale_sessions(
     session: AsyncSession, *, max_idle_seconds: int = 900, statuses: tuple[str, ...] = ("running",)
 ) -> list[NotebookSessionInternal]:

@@ -10,6 +10,23 @@ import type { DashboardFormat } from "./schema";
 const LOCALE = "en-US";
 const NULL_TEXT = "–"; // en dash
 
+const HTML_ESCAPES: Record<string, string> = {
+  "&": "&amp;",
+  "<": "&lt;",
+  ">": "&gt;",
+  '"': "&quot;",
+  "'": "&#39;",
+};
+
+/**
+ * Escape text for interpolation into tooltip HTML (ECharts assigns the
+ * formatter's string to innerHTML). Category values and series labels come
+ * from warehouse rows and agent-authored dashboard JSON.
+ */
+export function escapeHtml(text: string): string {
+  return text.replace(/[&<>"']/g, (char) => HTML_ESCAPES[char] ?? char);
+}
+
 /**
  * Plain decimals the way Python's `float()` reads them: optional sign, digits
  * with an optional fraction, optional exponent. Python additionally accepts

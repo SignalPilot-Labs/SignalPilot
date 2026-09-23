@@ -3,6 +3,7 @@
 import { GitBranch } from "lucide-react";
 
 import type { DbtMapInfo } from "~/lib/types";
+import { DbtMapStatusLine } from "~/components/projects/dbt-map-status";
 
 function Toggle({ on, children }: { on: boolean; children: React.ReactNode }) {
   return (
@@ -83,10 +84,8 @@ export function ProjectAutomationReadOnly({
         <Toggle on={prAgentTrigger}>Trigger a SignalPilot agent run on pull requests</Toggle>
       </div>
 
-      <div className="border-t border-[var(--color-border)] pt-4 text-[11px] text-[var(--color-text-dim)]">
-        dbt map: <span className="text-[var(--color-text)]">{mapStatus}</span>
-        {mapInfo?.node_count ? ` · ${mapInfo.node_count} nodes` : ""}
-        {mapInfo?.dbt_version ? ` · dbt ${mapInfo.dbt_version}` : ""}
+      <div className="border-t border-[var(--color-border)] pt-4">
+        <DbtMapStatusLine status={mapStatus} info={mapInfo} />
       </div>
     </div>
   );

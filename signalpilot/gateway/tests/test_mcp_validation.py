@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
+from mcp.server.mcpserver.exceptions import ToolError
 
 from gateway.governance import annotations as annotations_mod
 from gateway.governance.annotations import SchemaAnnotations
@@ -93,13 +94,14 @@ async def test_query_database_uses_connection_dialect_for_governance(monkeypatch
     monkeypatch.setattr(query_tools, "_store_session", fake_store_session)
     monkeypatch.setattr(annotations_mod, "load_annotations", lambda org_id, connection_name: SchemaAnnotations())
 
-    result = await query_tools.query_database.__wrapped__(
-        sql="SELECT * FROM read_csv_auto('/etc/passwd')",
-        connection_name="duck",
-    )
+    # Governance rejections are tool errors (isError), not successful strings.
+    with pytest.raises(ToolError, match=r"^Query error:") as raised:
+        await query_tools.query_database.__wrapped__(
+            sql="SELECT * FROM read_csv_auto('/etc/passwd')",
+            connection_name="duck",
+        )
 
-    assert result.startswith("Query error:")
-    assert "read_csv_auto" in result.lower()
+    assert "read_csv_auto" in str(raised.value).lower()
 
 
 def test_query_database_accepts_a_display_only_description() -> None:

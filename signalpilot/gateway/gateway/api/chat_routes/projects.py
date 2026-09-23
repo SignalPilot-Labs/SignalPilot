@@ -71,6 +71,7 @@ async def bootstrap_chat(store: StoreD, role: OrgRole, org_id: OrgID, refresh: b
     if not standalone_chat_enabled() or not entitlement.is_billable:
         return ChatBootstrapResponse(
             enabled=False,
+            plan_locked=True,
             projects=[],
             selected_project_id=None,
             is_admin=_is_admin(role),

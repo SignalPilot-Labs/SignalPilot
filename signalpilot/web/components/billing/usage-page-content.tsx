@@ -1,24 +1,17 @@
 "use client";
 
-// The two bodies of /settings/usage: the org view (admins) and "my usage"
-// (members). Both call the billing backend; the page picks one by permission.
+// The org overview of /settings/usage (admins), read from the credit ledger on
+// the billing backend. Members use the gateway-backed /settings/usage/me page.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, BarChart3, Coins, Gauge, RefreshCw, Users, User } from "lucide-react";
-import { useBackendClient, usageMeRow } from "~/lib/backend-client";
-import type { DailyUsagePoint, UsageByUserRow, UsageSummaryResponse } from "~/lib/backend-client";
-import {
-  DEFAULT_RATE_CARD,
-  centsToUsd,
-  creditsToUsd,
-  formatCredits,
-  formatUsd,
-} from "~/lib/billing-rates";
+import { AlertTriangle, BarChart3, Coins, Gauge, RefreshCw, Users } from "lucide-react";
+import { useBackendClient } from "~/lib/backend-client";
+import type { DailyUsagePoint, RateCard, UsageByUserRow, UsageSummaryResponse } from "~/lib/backend-client";
+import { centsToUsd, creditsToUsd, formatCredits, formatUsd } from "~/lib/billing-rates";
 import { PageHeader, TerminalBar } from "~/components/ui/page-header";
 import { SectionHeader } from "~/components/ui/section-header";
 import { StatusDot } from "~/components/ui/data-viz";
 import { UsageSkeleton } from "~/components/ui/skeleton";
-import { ReadOnlyNote } from "~/components/access/read-only-note";
 import {
   AllowanceMeter,
   ConsumptionByUnitTable,
@@ -26,24 +19,21 @@ import {
   DailyConsumptionChart,
   StatTile,
 } from "~/components/billing/usage-panels";
-import {
-  MyUsageTiles,
-  PeriodSelector,
-  UsageByUserTable,
-  periodOptions,
-} from "~/components/billing/usage-by-user";
+import { PeriodSelector, UsageByUserTable, periodOptions } from "~/components/billing/usage-by-user";
 
-export const USAGE_HEADER = (
-  <PageHeader
-    title="usage"
-    subtitle="credits"
-    description="credits granted, consumed and returned this billing period"
-  />
-);
+export type UsageTab = { label: string; href: string };
 
-const MY_USAGE_HEADER = (
-  <PageHeader title="my usage" subtitle="credits" description="what your own work consumed this period" />
-);
+/** The overview header; `tabs` links the sibling usage pages (/me, /members). */
+export function usageHeader(tabs?: UsageTab[]) {
+  return (
+    <PageHeader
+      title="usage"
+      subtitle="credits"
+      description="credits granted, consumed and returned this billing period"
+      tabs={tabs}
+    />
+  );
+}
 
 // Billing periods are UTC calendar boundaries (midnight UTC). Format them as
 // UTC dates so a viewer west of Greenwich does not see "Aug 31" for Sep 1.
@@ -60,7 +50,7 @@ function formatPeriod(start: string, end: string): string {
 export function UsageError({
   message,
   onRetry,
-  header = USAGE_HEADER,
+  header,
 }: {
   message: string;
   onRetry: () => void;
@@ -68,7 +58,7 @@ export function UsageError({
 }) {
   return (
     <div className="p-8 max-w-4xl animate-fade-in">
-      {header}
+      {header ?? usageHeader()}
       <div
         data-testid="usage-error"
         className="border border-[var(--color-error)]/30 bg-[var(--color-bg-card)] rounded-[14px] p-6 space-y-3"
@@ -145,13 +135,17 @@ function UsageByUserSection() {
 }
 
 // ---------------------------------------------------------------------------
-// Org view — admins: totals, allowances, daily chart, by unit, by user
+// Org view — admins: totals, allowances, daily chart, by unit, by user.
+// Going past the included credits is normal usage, not an error: meters fill
+// in their usual colour and the excess reads as extra cost (lib/allotment).
 // ---------------------------------------------------------------------------
 
-export function OrgUsageContent() {
+export function OrgUsageContent({ tabs }: { tabs?: UsageTab[] }) {
   const client = useBackendClient();
   const [summary, setSummary] = useState<UsageSummaryResponse | null>(null);
   const [daily, setDaily] = useState<DailyUsagePoint[] | null>(null);
+  /** The live rate card from Stripe via the backend; notes that quote a rate wait for it. */
+  const [rates, setRates] = useState<RateCard | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
 
@@ -164,6 +158,14 @@ export function OrgUsageContent() {
 
   useEffect(() => {
     let cancelled = false;
+    // The rate card is decoration on this page: a failed fetch leaves the
+    // notes generic instead of failing the whole page.
+    client
+      .getPlans()
+      .then((res) => {
+        if (!cancelled) setRates(res.rates);
+      })
+      .catch(() => {});
     Promise.all([client.getUsageSummary(), client.getUsageDaily(31)])
       .then(([summaryData, dailyData]) => {
         if (cancelled) return;
@@ -179,7 +181,7 @@ export function OrgUsageContent() {
     };
   }, [client, attempt]);
 
-  if (error) return <UsageError message={error} onRetry={retry} />;
+  if (error) return <UsageError message={error} onRetry={retry} header={usageHeader(tabs)} />;
   if (summary === null || daily === null) return <UsageSkeleton />;
 
   const granted = summary.granted + summary.purchased + summary.returned;
@@ -187,12 +189,9 @@ export function OrgUsageContent() {
 
   return (
     <div className="p-8 max-w-4xl animate-fade-in" data-testid="org-usage">
-      {USAGE_HEADER}
+      {usageHeader(tabs)}
 
-      <TerminalBar
-        path="settings/usage --period"
-        status={<StatusDot status={summary.overage > 0 ? "warning" : "healthy"} size={4} />}
-      >
+      <TerminalBar path="settings/usage --period" status={<StatusDot status="healthy" size={4} />}>
         <div className="flex items-center gap-6 text-xs">
           <span className="text-[var(--color-text-dim)]">
             plan: <code className="text-[12px] text-[var(--color-text)]">{summary.plan_tier}</code>
@@ -222,7 +221,11 @@ export function OrgUsageContent() {
         <SectionHeader icon={Coins} title="credits" />
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
           <StatTile label="granted" value={formatCredits(summary.granted)} sub="included this period" />
-          <StatTile label="consumed" value={formatCredits(consumed)} sub={formatUsd(creditsToUsd(consumed))} />
+          <StatTile
+            label="consumed"
+            value={formatCredits(consumed)}
+            sub={rates ? formatUsd(creditsToUsd(consumed, rates)) : undefined}
+          />
           <StatTile
             label="returned"
             value={formatCredits(summary.returned)}
@@ -231,10 +234,9 @@ export function OrgUsageContent() {
           />
           <StatTile label="available" value={formatCredits(Math.max(summary.available, 0))} />
           <StatTile
-            label="overage"
+            label="extra usage"
             value={formatCredits(summary.overage)}
             sub={summary.overage > 0 ? `${formatUsd(centsToUsd(summary.overage_cents))} on next invoice` : "none"}
-            tone={summary.overage > 0 ? "error" : "default"}
           />
         </div>
       </section>
@@ -246,12 +248,12 @@ export function OrgUsageContent() {
           <AllowanceMeter
             label="covered models"
             use={summary.allowances.models}
-            beyondNote={`${formatCredits(DEFAULT_RATE_CARD.model_month_credits)} credits per model-month`}
+            beyondNote={rates ? `${formatCredits(rates.model_month_credits)} credits per model-month` : "metered monthly in credits"}
           />
           <AllowanceMeter
             label="eval runs"
             use={summary.allowances.eval_runs}
-            beyondNote={`${formatCredits(DEFAULT_RATE_CARD.eval_run_credits)} credits per run`}
+            beyondNote={rates ? `${formatCredits(rates.eval_run_credits)} credits per run` : "metered per run in credits"}
           />
         </div>
       </section>
@@ -275,72 +277,6 @@ export function OrgUsageContent() {
       </section>
 
       <UsageByUserSection />
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// My usage — members: their own row only, no org totals
-// ---------------------------------------------------------------------------
-
-export function MyUsageContent() {
-  const client = useBackendClient();
-  const options = useMemo(() => periodOptions(6), []);
-  const [period, setPeriod] = useState(options[0].value);
-  const [row, setRow] = useState<UsageByUserRow | null | undefined>(undefined);
-  const [range, setRange] = useState<{ start: string; end: string } | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [attempt, setAttempt] = useState(0);
-
-  const retry = useCallback(() => {
-    setError(null);
-    setRow(undefined);
-    setAttempt((n) => n + 1);
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    setRow(undefined);
-    client
-      .getUsageMe(period)
-      .then((data) => {
-        if (cancelled) return;
-        setRow(usageMeRow(data));
-        setRange(data.period_start && data.period_end ? { start: data.period_start, end: data.period_end } : null);
-      })
-      .catch((e: unknown) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [client, period, attempt]);
-
-  if (error) return <UsageError message={error} onRetry={retry} header={MY_USAGE_HEADER} />;
-  if (row === undefined) return <UsageSkeleton />;
-
-  return (
-    <div className="p-8 max-w-4xl animate-fade-in" data-testid="my-usage-page">
-      {MY_USAGE_HEADER}
-
-      <TerminalBar path="settings/usage --me" status={<StatusDot status="healthy" size={4} />}>
-        <div className="flex items-center gap-6 text-xs">
-          {range ? (
-            <span className="text-[var(--color-text-dim)]">
-              period:{" "}
-              <code className="text-[12px] text-[var(--color-text)]">{formatPeriod(range.start, range.end)}</code>
-            </span>
-          ) : null}
-          <PeriodSelector value={period} options={options} onChange={setPeriod} />
-        </div>
-      </TerminalBar>
-
-      <section className="mb-8">
-        <SectionHeader icon={User} title="my consumption" />
-        <MyUsageTiles row={row} />
-      </section>
-
-      <ReadOnlyNote block>org totals and other members&apos; usage are visible to org admins</ReadOnlyNote>
     </div>
   );
 }

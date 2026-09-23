@@ -68,9 +68,9 @@ by layer (`staging` / `intermediate` / `marts`). It is the union of:
   trail via the run/task binding on each task's API key.
 
 Coverage answers "what parts of the project is this eval set blind to?" The
-denominator comes from the `project_repo` checkout (its `target/manifest.json` if
-present, otherwise the `models/` tree), so coverage only appears for sets that
-declare a project. Both `covers` and `builds` count as declared.
+denominator comes from the configured project repository checkout (its
+`target/manifest.json` if present, otherwise the `models/` tree). Both `covers`
+and `builds` count as declared.
 
 Treat the number as a floor, not a measurement:
 

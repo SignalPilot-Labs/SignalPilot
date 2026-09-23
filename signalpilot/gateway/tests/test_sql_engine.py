@@ -9,95 +9,96 @@ class TestValidateSQL:
     """Test the SQL validation pipeline."""
 
     def test_empty_query_blocked(self):
-        result = validate_sql("")
+        result = validate_sql("", dialect="postgres")
         assert not result.ok
         assert "Empty" in (result.blocked_reason or "")
 
     def test_whitespace_only_blocked(self):
-        result = validate_sql("   \n  ")
+        result = validate_sql("   \n  ", dialect="postgres")
         assert not result.ok
 
     def test_simple_select_allowed(self):
-        result = validate_sql("SELECT 1")
+        result = validate_sql("SELECT 1", dialect="postgres")
         assert result.ok
         assert result.blocked_reason is None
 
     def test_select_from_table(self):
-        result = validate_sql("SELECT id, name FROM users WHERE active = true")
+        result = validate_sql("SELECT id, name FROM users WHERE active = true", dialect="postgres")
         assert result.ok
         assert "users" in result.tables
         assert "id" in result.columns
         assert "name" in result.columns
 
     def test_select_with_join(self):
-        result = validate_sql("SELECT u.name, o.total FROM users u JOIN orders o ON u.id = o.user_id")
+        result = validate_sql("SELECT u.name, o.total FROM users u JOIN orders o ON u.id = o.user_id", dialect="postgres")
         assert result.ok
         assert "users" in result.tables
         assert "orders" in result.tables
 
     def test_cte_allowed(self):
         result = validate_sql(
-            "WITH active_users AS (SELECT * FROM users WHERE active) SELECT count(*) FROM active_users"
+            "WITH active_users AS (SELECT * FROM users WHERE active) SELECT count(*) FROM active_users",
+            dialect="postgres",
         )
         assert result.ok
 
     def test_union_allowed(self):
-        result = validate_sql("SELECT id FROM users UNION SELECT id FROM admins")
+        result = validate_sql("SELECT id FROM users UNION SELECT id FROM admins", dialect="postgres")
         assert result.ok
 
     # ─── DDL/DML blocking ─────────────────────────────────────────────
     def test_insert_blocked(self):
-        result = validate_sql("INSERT INTO users (name) VALUES ('test')")
+        result = validate_sql("INSERT INTO users (name) VALUES ('test')", dialect="postgres")
         assert not result.ok
         assert "Insert" in (result.blocked_reason or "")
 
     def test_update_blocked(self):
-        result = validate_sql("UPDATE users SET name = 'test' WHERE id = 1")
+        result = validate_sql("UPDATE users SET name = 'test' WHERE id = 1", dialect="postgres")
         assert not result.ok
 
     def test_delete_blocked(self):
-        result = validate_sql("DELETE FROM users WHERE id = 1")
+        result = validate_sql("DELETE FROM users WHERE id = 1", dialect="postgres")
         assert not result.ok
 
     def test_drop_table_blocked(self):
-        result = validate_sql("DROP TABLE users")
+        result = validate_sql("DROP TABLE users", dialect="postgres")
         assert not result.ok
 
     def test_alter_table_blocked(self):
-        result = validate_sql("ALTER TABLE users ADD COLUMN email text")
+        result = validate_sql("ALTER TABLE users ADD COLUMN email text", dialect="postgres")
         assert not result.ok
 
     def test_create_table_blocked(self):
-        result = validate_sql("CREATE TABLE evil (id int)")
+        result = validate_sql("CREATE TABLE evil (id int)", dialect="postgres")
         assert not result.ok
 
     def test_truncate_blocked(self):
-        result = validate_sql("TRUNCATE TABLE users")
+        result = validate_sql("TRUNCATE TABLE users", dialect="postgres")
         assert not result.ok
 
     def test_grant_blocked(self):
-        result = validate_sql("GRANT ALL ON users TO public")
+        result = validate_sql("GRANT ALL ON users TO public", dialect="postgres")
         assert not result.ok
 
     # ─── Statement stacking ──────────────────────────────────────────
     def test_statement_stacking_blocked(self):
-        result = validate_sql("SELECT 1; DROP TABLE users")
+        result = validate_sql("SELECT 1; DROP TABLE users", dialect="postgres")
         assert not result.ok
         assert "stacking" in (result.blocked_reason or "").lower()
 
     def test_stacking_with_comment_bypass_blocked(self):
         """HIGH-04: stacking hidden in comments should still be caught."""
-        result = validate_sql("SELECT 1; /* comment */ DROP TABLE users")
+        result = validate_sql("SELECT 1; /* comment */ DROP TABLE users", dialect="postgres")
         assert not result.ok
 
     def test_stacking_with_line_comment_bypass_blocked(self):
         """HIGH-04: stacking hidden behind line comments."""
-        result = validate_sql("SELECT 1 -- comment\n; DROP TABLE users")
+        result = validate_sql("SELECT 1 -- comment\n; DROP TABLE users", dialect="postgres")
         assert not result.ok
 
     def test_trailing_semicolon_allowed(self):
         """A single trailing semicolon is fine."""
-        result = validate_sql("SELECT 1;")
+        result = validate_sql("SELECT 1;", dialect="postgres")
         assert result.ok
 
     # ─── Blocked tables ──────────────────────────────────────────────
@@ -105,6 +106,7 @@ class TestValidateSQL:
         result = validate_sql(
             "SELECT * FROM secret_table",
             blocked_tables=["secret_table"],
+            dialect="postgres",
         )
         assert not result.ok
         assert "blocked by policy" in (result.blocked_reason or "").lower()
@@ -113,6 +115,7 @@ class TestValidateSQL:
         result = validate_sql(
             "SELECT * FROM SECRET_TABLE",
             blocked_tables=["secret_table"],
+            dialect="postgres",
         )
         assert not result.ok
 
@@ -120,6 +123,7 @@ class TestValidateSQL:
         result = validate_sql(
             "SELECT * FROM public_table",
             blocked_tables=["secret_table"],
+            dialect="postgres",
         )
         assert result.ok
 
@@ -127,7 +131,7 @@ class TestValidateSQL:
     def test_query_length_limit(self):
         """MED-07: queries over 100KB should be rejected."""
         long_sql = "SELECT " + "a, " * 50001 + "b FROM t"
-        result = validate_sql(long_sql)
+        result = validate_sql(long_sql, dialect="postgres")
         assert not result.ok
         assert "length" in (result.blocked_reason or "").lower()
 

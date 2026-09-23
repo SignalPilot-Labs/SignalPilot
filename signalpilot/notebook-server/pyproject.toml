@@ -64,7 +64,7 @@ dependencies = [
     "plotly>=5.14.0",
     "matplotlib>=3.8.0",
     # runtime AI agent used by chat and Notion analysis endpoints
-    "claude-agent-sdk>=0.1.0",
+    "claude-agent-sdk>=0.2.157",
     "requests>=2.31,<3",
     # dashboard file validation (artifacts/<name>.dashboard.json)
     "jsonschema>=4.18.0",

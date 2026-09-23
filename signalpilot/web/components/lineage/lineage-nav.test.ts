@@ -186,8 +186,49 @@ describe("stageColumns", () => {
     expect(stages.map((s) => s.label)).toEqual(["Sources", "Staging", "Intermediate", "Marts"]);
     expect(stages[0].ids.sort()).toEqual([S_CUSTOMERS, S_ORDERS].sort());
     expect(columnOf.get(RPT_FUNNEL)).toBe(3);
-    // `other` root gets a graph-depth column (stage 1 -> "Staging" column).
-    expect(columnOf.get(LEGACY)).toBe(1);
+    // legacy_dump matches no naming rule but feeds rpt_funnel, so it is
+    // classified by position as intermediate work.
+    expect(parsed.models.get(LEGACY)!.layer).toBe("intermediate");
+    expect(columnOf.get(LEGACY)).toBe(2);
+  });
+
+  it("keeps a deep unclassified chain left of the fact it feeds, with every edge left to right", () => {
+    // Dumpsters shape: stg -> core_1 -> ... -> core_6 -> fct -> mart, plus
+    // core_1 also feeding fct directly. The old rule pushed the core chain
+    // past the fact into the Marts column (backward and same-column edges).
+    const nodes: RawMapGraph["nodes"] = {};
+    const parentMap: Record<string, string[]> = {};
+    const add = (id: string, name: string, path: string, parents: string[]) => {
+      nodes[id] = { name, resource_type: "model", path };
+      parentMap[id] = parents;
+    };
+    add("model.d.stg_lines", "stg_lines", "staging/stg_lines.sql", []);
+    let previous = "model.d.stg_lines";
+    for (let i = 1; i <= 6; i++) {
+      const id = `model.d.core_${i}`;
+      add(id, `core_${i}`, `core/core_${i}.sql`, [previous]);
+      previous = id;
+    }
+    add("model.d.fct_sales", "fct_sales", "facts/fct_sales.sql", [previous, "model.d.core_1"]);
+    add("model.d.mart_perf", "mart_perf", "marts/mart_perf.sql", ["model.d.fct_sales"]);
+    const childMap: Record<string, string[]> = {};
+    for (const [child, parents] of Object.entries(parentMap)) {
+      childMap[child] ??= [];
+      for (const p of parents) (childMap[p] ??= []).push(child);
+    }
+    const chain = parseMap({ metadata: { project_name: "d" }, nodes, parent_map: parentMap, child_map: childMap });
+    const cone = lineageCone(chain, "model.d.mart_perf");
+    const { stages, lanes, laneOf } = stageColumns(chain, cone);
+
+    for (const id of cone) {
+      for (const parent of chain.models.get(id)!.parents) {
+        expect(laneOf.get(parent)!).toBeLessThan(laneOf.get(id)!);
+      }
+    }
+    // The fact and the mart keep their own columns at the right edge.
+    expect(laneOf.get("model.d.mart_perf")).toBe(lanes.length - 1);
+    expect(lanes[laneOf.get("model.d.fct_sales")!].ids).toEqual(["model.d.fct_sales"]);
+    expect(stages.map((s) => s.label)).toEqual(["Staging", "Intermediate", "Dims / Facts", "Marts"]);
   });
 });
 

@@ -14,7 +14,7 @@
 /** Plan tiers the backend can store. `unlimited` exists only in local mode. */
 export type EntitlementTier = "free" | "team" | "scale" | "enterprise" | "unlimited";
 
-export type BillingInterval = "month" | "year";
+export type BillingInterval = "month" | "quarter" | "year";
 
 export interface Entitlement {
   tier: EntitlementTier;
@@ -118,7 +118,7 @@ export function normalizeTier(value: string | null | undefined): EntitlementTier
 }
 
 function normalizeInterval(value: string | null | undefined): BillingInterval {
-  return value === "year" ? "year" : "month";
+  return value === "year" || value === "quarter" ? value : "month";
 }
 
 /**

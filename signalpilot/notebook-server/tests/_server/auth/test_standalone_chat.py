@@ -23,7 +23,9 @@ COMMIT = "a" * 40
 
 @pytest.fixture(autouse=True)
 def process_scope(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SP_SESSION_JWT_SECRET", SECRET)
+    # The runtime never receives the gateway signing secret (SP-01); the
+    # execute channel is authenticated by the session access token instead.
+    monkeypatch.delenv("SP_SESSION_JWT_SECRET", raising=False)
     monkeypatch.setenv("SP_SESSION_ID", "session-a")
     monkeypatch.setenv("SP_ORG_ID", "org-a")
     monkeypatch.setenv("SP_CHAT_PROJECT_ID", "project-a")
@@ -119,11 +121,13 @@ def test_write_and_admin_scopes_are_allowed_for_the_full_mcp_workflow() -> None:
     assert authorization.scope.run_id == "run-11111111"
 
 
-def test_token_signature_is_verified() -> None:
-    with pytest.raises(HTTPException, match="Invalid scoped gateway identity"):
-        authorize_execution(
-            _body("run-11111111", secret="wrong-secret-that-is-also-at-least-32-bytes")
-        )
+def test_token_signature_is_not_checked_in_the_runtime() -> None:
+    # The gateway verifies the signature on every use of the token; the
+    # runtime only checks structure and claims (SP-01 Option A).
+    authorization = authorize_execution(
+        _body("run-11111111", secret="wrong-secret-that-is-also-at-least-32-bytes")
+    )
+    assert authorization.scope.run_id == "run-11111111"
 
 
 def test_small_cold_runtime_clock_skew_is_tolerated() -> None:
@@ -149,13 +153,12 @@ def test_large_future_issued_at_is_rejected() -> None:
         )
 
 
-def test_missing_verification_secret_is_service_failure(
+def test_no_secret_is_needed_to_authorize(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("SP_SESSION_JWT_SECRET")
-    with pytest.raises(HTTPException) as exc_info:
-        authorize_execution(_body("run-11111111"))
-    assert exc_info.value.status_code == 503
+    monkeypatch.delenv("SP_SESSION_JWT_SECRET", raising=False)
+    monkeypatch.delenv("SP_NOTEBOOK_TOKEN_SECRET", raising=False)
+    assert authorize_execution(_body("run-11111111")).scope.run_id == "run-11111111"
 
 
 def test_gateway_mcp_uses_the_verified_token(

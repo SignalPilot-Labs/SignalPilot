@@ -8,6 +8,7 @@ import {
   fixtureSchemaCompletion,
   fixtureTableCompletion,
   fixtureTableListCompletion,
+  fixtureProbeTerminalCompletion,
   fixtureTerminalCompletion,
   fixtureValidationFailureCompletion,
 } from "~/lib/chat-test-fixture-tools";
@@ -107,6 +108,16 @@ describe("parseToolResult", () => {
     expect(result.stdout).toContain("growth sums to 51.9");
     expect(result.stderr).toBe("");
     expect(result.command).toBe("python analysis/q3_growth.py --check");
+    expect(result.probe).toBe(false);
+  });
+
+  it("parses a probe terminal result with the probe flag and exit code", () => {
+    const result = parseToolResult(fixtureProbeTerminalCompletion("t7b"), "Bash", false);
+    expect(result.kind).toBe("terminal");
+    if (result.kind !== "terminal") return;
+    expect(result.probe).toBe(true);
+    expect(result.exitCode).toBe(1);
+    expect(result.errorMessage).toBeNull();
   });
 
   it("parses knowledge docs", () => {

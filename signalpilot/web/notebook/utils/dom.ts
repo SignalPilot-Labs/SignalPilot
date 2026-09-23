@@ -12,12 +12,12 @@ const ansiUp = new AnsiUp();
  */
 export function parseHtmlContent(htmlString: string): string {
   try {
-    // Create a temporary DOM element to parse HTML
-    const tempDiv = document.createElement("div");
-    tempDiv.innerHTML = htmlString;
+    // Parse into an inert document: scripts never run and event handlers
+    // (img onerror) never fire, unlike innerHTML on a detached element.
+    const doc = new DOMParser().parseFromString(htmlString, "text/html");
 
     // Extract text content, removing HTML tags
-    const textContent = tempDiv.textContent || tempDiv.innerText || "";
+    const textContent = doc.body?.textContent || "";
     const lines = textContent.split("\n");
     return lines.map((line) => line.trimEnd()).join("\n");
   } catch (error) {

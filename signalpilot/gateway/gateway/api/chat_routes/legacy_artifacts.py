@@ -8,7 +8,9 @@ fetch them through this route. Keep it until the library moves to files.
 from __future__ import annotations
 
 import hashlib
+import re
 from typing import Annotated
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Query, Response
 from sqlalchemy import select
@@ -115,7 +117,10 @@ async def download_legacy_artifact(
         content=content,
         media_type=media_type,
         headers={
-            "Content-Disposition": f'attachment; filename="{base}.{format}"',
+            "Content-Disposition": (
+                f'attachment; filename="{re.sub(r"[^ -~]|[\"\;]", "_", base)}.{format}"; '
+                f"filename*=UTF-8''{quote(f'{base}.{format}', safe='')}"
+            ),
             "Cache-Control": "private, no-store",
             "X-Content-Type-Options": "nosniff",
         },

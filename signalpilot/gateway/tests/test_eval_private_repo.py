@@ -6,7 +6,7 @@ import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
 
-from gateway.api.eval_runs import EvalConfig, _verify_private_eval_repo
+from gateway.api.eval_config import EvalConfig, verify_eval_config
 from gateway.evals import runner
 from gateway.store import github as github_store
 
@@ -46,7 +46,7 @@ async def test_private_binding_verifies_repo_and_canonicalizes_url(monkeypatch) 
     monkeypatch.setattr("gateway.github_client.list_installation_repos", get_repos)
     store = SimpleNamespace(session=object(), org_id="org-a")
 
-    verified = await _verify_private_eval_repo(store, _config())
+    verified = await verify_eval_config(store, _config())
 
     assert verified.repo_url == "https://github.com/acme/private-evals.git"
 
@@ -70,7 +70,7 @@ async def test_private_binding_rejects_repo_outside_installation(monkeypatch) ->
     store = SimpleNamespace(session=object(), org_id="org-a")
 
     with pytest.raises(HTTPException) as exc:
-        await _verify_private_eval_repo(store, _config())
+        await verify_eval_config(store, _config())
 
     assert exc.value.status_code == 422
 

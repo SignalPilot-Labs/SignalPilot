@@ -15,6 +15,7 @@ import {
   normalizeToolName,
   SUBAGENT_SPAWN_TOOLS,
 } from "./tool-names";
+import { isPlanFilePath } from "./plan-file";
 import { parseToolResult } from "./tool-results";
 import type { RunStep } from "./types";
 
@@ -60,6 +61,18 @@ function queryDescription(
     : sentence;
 }
 
+const PLAN_FILE_WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit"]);
+
+function isPlanFileWrite(tool: string, input: Record<string, unknown> | null): boolean {
+  return PLAN_FILE_WRITE_TOOLS.has(tool) && isPlanFilePath(input?.file_path);
+}
+
+/** The worker's capture line for the plan file, "Saved artifacts/plan.md". */
+function isPlanFileSaveLabel(label: string): boolean {
+  const match = /^Saved\s+(.+)$/.exec(label.trim());
+  return match !== null && isPlanFilePath(match[1]);
+}
+
 export function foldRunSteps(
   events: StandaloneChatEvent[],
   runId: string,
@@ -78,6 +91,9 @@ export function foldRunSteps(
     .filter((event) => event.run_id === runId)
     .sort((a, b) => a.sequence - b.sequence);
 
+  /** Plan-file writes: the plan dock already shows them, so no row. */
+  const hiddenToolCalls = new Set<string>();
+
   for (const event of runEvents) {
     const key = `${event.run_id}-${event.sequence}`;
     if (event.type === "tool_started") {
@@ -86,6 +102,10 @@ export function foldRunSteps(
       const toolCallId = text(event.payload.tool_call_id);
       const parentId = text(event.payload.parent_tool_call_id);
       const input = asRecord(event.payload.input);
+      if (toolCallId && isPlanFileWrite(tool, input)) {
+        hiddenToolCalls.add(toolCallId);
+        continue;
+      }
       const isSpawn = SUBAGENT_SPAWN_TOOLS.has(tool);
       const category = isSpawn ? "subagent" : categorizeTool(tool);
       const step: RunStep = {
@@ -128,6 +148,7 @@ export function foldRunSteps(
       // Pair by tool_call_id when the worker provides it (tools can complete
       // out of order); fall back to FIFO only when it's absent.
       const toolCallId = text(event.payload.tool_call_id);
+      if (toolCallId && hiddenToolCalls.has(toolCallId)) continue;
       let step: RunStep | undefined;
       if (toolCallId && openById.has(toolCallId)) {
         step = openById.get(toolCallId);
@@ -230,7 +251,7 @@ export function foldRunSteps(
     }
     if (event.type === "progress") {
       const label = text(event.payload.label);
-      if (!label) continue;
+      if (!label || isPlanFileSaveLabel(label)) continue;
       steps.push({
         key,
         sequence: event.sequence,

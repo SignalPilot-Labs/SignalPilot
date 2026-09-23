@@ -1,4 +1,5 @@
 import { act } from "react";
+import { openToolRow } from "./test-utils";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { RunStep, ToolResult } from "~/lib/chat-run-steps";
@@ -96,7 +97,11 @@ describe("ToolCard (generic)", () => {
   it("renders the running density with the input echo and a live rail", async () => {
     await render(step({ status: "running", endedAt: null, durationMs: null }));
     const card = q(container, '[data-testid="chat-tool-card"]');
+    // Mounted as its one-line row; the body opens only on a click.
     expect(card?.getAttribute("data-density")).toBe("running");
+    expect(q(container, '[data-testid="chat-tool-card-json"]')).toBeNull();
+    await openToolRow(container);
+    expect(card?.getAttribute("data-density")).toBe("expanded");
     expect(card?.getAttribute("data-kind")).toBe("json");
     expect(card?.getAttribute("data-tool")).toBe("inspect_dbt");
     expect(q(container, '[data-testid="chat-tool-card-json"]')).not.toBeNull();
@@ -125,7 +130,7 @@ describe("ToolCard (generic)", () => {
     expect(q(container, '[data-testid="chat-tool-raw-toggle"]')).not.toBeNull();
   });
 
-  it("keeps a failed step expanded with the error banner", async () => {
+  it("shows a failed step as a one-line reason and the banner on open", async () => {
     await render(
       step({
         status: "failed",
@@ -134,10 +139,25 @@ describe("ToolCard (generic)", () => {
       }),
     );
     const card = q(container, '[data-testid="chat-tool-card"]');
+    // Collapsed: the row carries the reason in amber, nothing opens by itself.
+    expect(card?.getAttribute("data-density")).toBe("compact");
+    const row = q(container, '[data-testid="chat-tool-chip"]');
+    expect(row?.getAttribute("data-status")).toBe("failed");
+    expect(row?.textContent).toContain("relation fct_orders does not exist");
+    expect(row?.innerHTML).toContain("color-warning");
+    await openToolRow(container);
     expect(card?.getAttribute("data-density")).toBe("expanded");
-    expect(q(container, '[data-testid="chat-tool-error"]')?.textContent).toContain(
-      "does not exist",
-    );
+    const error = q(container, '[data-testid="chat-tool-error"]');
+    expect(error?.textContent).toContain("does not exist");
+    expect(card?.innerHTML).not.toContain("color-error");
+    expect(error?.className).toContain("text-[var(--color-text-muted)]");
+    expect(q(container, '[data-testid="chat-step-status-failed"]')).not.toBeNull();
+  });
+
+  it("shows no failed badge on a completed step", async () => {
+    await render(step({ result: jsonResult({}) }), { focusRequested: 1 });
+    expect(q(container, '[data-testid="chat-tool-failed-badge"]')).toBeNull();
+    expect(q(container, '[data-testid="chat-tool-chip-failed"]')).toBeNull();
   });
 
   it("opens a compact card when a focus request arrives", async () => {

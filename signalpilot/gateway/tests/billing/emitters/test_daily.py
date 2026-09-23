@@ -112,14 +112,14 @@ class TestSnapshot:
         assert model_row.occurred_at.replace(tzinfo=UTC) == datetime(2026, 9, 14, tzinfo=UTC)
         assert seat_row.unit == "seat_day"
         assert seat_row.idempotency_key == f"seat_day:{ORG}:2026-09-14"
-        assert seat_row.credits == -daily_credit_share(2 * 1_000, DAY) == -66
+        assert seat_row.credits == -daily_credit_share(2 * 1_500, DAY) == -100
         assert seat_row.quantity == 2
         assert seat_row.payload == {
             "members": 12,
             "included": 10,
             "billable": 2,
             "allowance_position": 12,
-            "monthly_rate": 1000,
+            "monthly_rate": 1500,
         }
 
     async def test_full_month_of_seat_rows_sums_to_the_rate(self, session, team) -> None:
@@ -133,9 +133,12 @@ class TestSnapshot:
             await session.execute(select(GatewayCreditLedger).where(GatewayCreditLedger.unit == "seat_day"))
         ).scalars()
         total = sum(row.credits for row in rows)
-        assert total == -1_000
+        assert total == -1_500
 
-    async def test_enterprise_seat_rate(self, session, enterprise) -> None:
+    async def test_enterprise_seats_are_contracted_not_metered(self, session, enterprise) -> None:
+        """Enterprise has no public seat price: the row records the extra
+        seat but deducts nothing; the contract prices it."""
+
         async def members(org_id: str) -> int | None:
             return 101
 
@@ -143,8 +146,25 @@ class TestSnapshot:
         seat_row = (
             await session.execute(select(GatewayCreditLedger).where(GatewayCreditLedger.unit == "seat_day"))
         ).scalar_one()
-        assert seat_row.credits == -daily_credit_share(1_500, DAY) == -50
-        assert seat_row.payload["monthly_rate"] == 1_500
+        assert seat_row.credits == 0 and seat_row.quantity == 1 and seat_row.reason == "included"
+        assert seat_row.payload.get("monthly_rate") is None
+
+    async def test_snapshot_skipped_without_a_rate_card(self, session, team, monkeypatch) -> None:
+        from gateway.billing import rate_card
+
+        rate_card.install(None)
+
+        async def no_row():
+            return None
+
+        monkeypatch.setattr(rate_card, "refresh", no_row)
+
+        async def members(org_id: str) -> int | None:
+            return 12
+
+        written = await snapshot_org(session, team, DAY, member_counter=members)
+        assert written == {"model_day": None, "seat_day": None}
+        assert (await session.execute(select(GatewayCreditLedger))).scalars().all() == []
 
     async def test_within_allowance_writes_zero_included_rows(self, session, team) -> None:
         async def members(org_id: str) -> int | None:

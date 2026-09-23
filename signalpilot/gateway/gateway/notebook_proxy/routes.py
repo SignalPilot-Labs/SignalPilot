@@ -109,9 +109,11 @@ async def proxy_websocket(
 
     raw_query = ws.url.query
 
+    # The upstream base (sandbox route URL) and raw query are deliberately not
+    # logged; the session id is enough to correlate.
     logger.info(
-        "WS HANDLER: session=%s path=%s query=%s upstream_base=%s user=%s org=%s",
-        session_id, path, raw_query, proxy_session.upstream_base,
+        "WS HANDLER: session=%s path=%s user=%s org=%s",
+        session_id, path,
         getattr(proxy_session, "user_id", "?"), getattr(proxy_session, "org_id", "?"),
     )
 

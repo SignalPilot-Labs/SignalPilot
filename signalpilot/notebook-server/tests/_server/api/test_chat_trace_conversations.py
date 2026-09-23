@@ -6,11 +6,28 @@ import runpy
 import sys
 import types
 from pathlib import Path
-from types import SimpleNamespace
 from typing import TYPE_CHECKING
+
+from starlette.authentication import AuthCredentials, SimpleUser
+from starlette.requests import Request
 
 if TYPE_CHECKING:
     import pytest
+
+
+def _edit_request(query: str) -> Request:
+    """A real, edit-authenticated Request: the route is ``@requires("edit")``."""
+    return Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/chat/conversations",
+            "headers": [],
+            "query_string": query.encode("utf-8"),
+            "auth": AuthCredentials(["read", "edit"]),
+            "user": SimpleUser("user"),
+        }
+    )
 
 
 def _load_chat_endpoint(monkeypatch: pytest.MonkeyPatch) -> dict:
@@ -49,10 +66,14 @@ def test_list_conversations_supports_slack_trace_source(monkeypatch) -> None:
             ]
 
     list_conversations = chat_endpoint["list_conversations"]
-    list_conversations.__globals__["_trace_store"] = lambda _request: FakeTraceStore()
+    # ``list_conversations`` is wrapped by ``@requires("edit")``, so patch the
+    # module globals through an undecorated sibling.
+    chat_endpoint["_trace_list_recent_source_conversations"].__globals__[
+        "_trace_store"
+    ] = lambda _request: FakeTraceStore()
 
     response = asyncio.run(
-        list_conversations(SimpleNamespace(query_params={"source": "slack"}))
+        list_conversations(_edit_request("source=slack"))
     )
     body = json.loads(response.body)
 
@@ -91,10 +112,14 @@ def test_slack_trace_source_gets_source_specific_default_title(
             ]
 
     list_conversations = chat_endpoint["list_conversations"]
-    list_conversations.__globals__["_trace_store"] = lambda _request: FakeTraceStore()
+    # ``list_conversations`` is wrapped by ``@requires("edit")``, so patch the
+    # module globals through an undecorated sibling.
+    chat_endpoint["_trace_list_recent_source_conversations"].__globals__[
+        "_trace_store"
+    ] = lambda _request: FakeTraceStore()
 
     response = asyncio.run(
-        list_conversations(SimpleNamespace(query_params={"source": "slack"}))
+        list_conversations(_edit_request("source=slack"))
     )
     body = json.loads(response.body)
 

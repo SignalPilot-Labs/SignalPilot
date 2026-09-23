@@ -52,13 +52,16 @@ async def github_webhook(request: Request):
     event = request.headers.get("x-github-event", "")
     if event == "ping":
         return {"ok": True, "pong": True}
-    if event not in ("pull_request", "push"):
+    if event not in ("pull_request", "push", "installation", "installation_repositories"):
         return {"ok": True, "ignored": event}
 
     try:
         payload = json.loads(body)
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="invalid JSON body")
+
+    if event in ("installation", "installation_repositories"):
+        return await _handle_installation_event(event, payload)
 
     if event == "push":
         repo = (payload.get("repository") or {}).get("full_name", "")
@@ -75,6 +78,8 @@ async def github_webhook(request: Request):
         return {"ok": True, "scheduled": {"repo": repo, "ref": ref}}
 
     action = payload.get("action", "")
+    if action == "closed":
+        return await _handle_pr_closed(payload)
     if action not in _SCAN_ACTIONS:
         return {"ok": True, "ignored_action": action}
 
@@ -83,16 +88,22 @@ async def github_webhook(request: Request):
     if not repo or not isinstance(pr_number, int):
         raise HTTPException(status_code=400, detail="missing repository/pull_request in payload")
 
-    # Org from the repo link when present; local default otherwise. A lookup
-    # FAILURE (DB down) must not read as "repo not linked" — 503 so GitHub
-    # retries the delivery.
+    # Org from the repo link when present; local default otherwise. The
+    # delivery's installation id picks the owning org when the same repo is
+    # linked in several orgs (SP-26). A lookup FAILURE (DB down) must not read
+    # as "repo not linked" — 503 so GitHub retries the delivery.
+    installation_id = (payload.get("installation") or {}).get("id")
+    if not isinstance(installation_id, int) or isinstance(installation_id, bool):
+        installation_id = None
     try:
         from gateway.db.engine import get_session_factory
         from gateway.store import github as github_store
 
         factory = get_session_factory()
         async with factory() as session:
-            org_id = await github_store.get_org_for_repo(session, repo_full_name=repo)
+            org_id = await github_store.get_org_for_repo(
+                session, repo_full_name=repo, installation_id=installation_id
+            )
     except Exception as exc:
         logger.warning("Webhook org lookup failed for %s: %r", repo, exc)
         raise HTTPException(status_code=503, detail="temporary lookup failure, retry")
@@ -117,6 +128,56 @@ async def github_webhook(request: Request):
         )
     )
     return {"ok": True, "scheduled": {"repo": repo, "pr": pr_number}}
+
+
+async def _handle_installation_event(event: str, payload: dict) -> dict:
+    """installation / installation_repositories: update the linked row's status
+    and repository scope. Attribution is the delivery's installation id; a row
+    must already exist (webhooks never create or claim installations)."""
+    action = payload.get("action", "")
+    installation_id = (payload.get("installation") or {}).get("id")
+    if not isinstance(installation_id, int) or isinstance(installation_id, bool):
+        raise HTTPException(status_code=400, detail="missing installation id in payload")
+    permissions = (payload.get("installation") or {}).get("permissions")
+    try:
+        from gateway.db.engine import get_session_factory
+        from gateway.store.github_installs import apply_installation_webhook
+
+        factory = get_session_factory()
+        async with factory() as session:
+            result = await apply_installation_webhook(
+                session,
+                event=event,
+                action=action,
+                github_installation_id=installation_id,
+                permissions=permissions if isinstance(permissions, dict) else None,
+            )
+    except Exception as exc:
+        logger.warning("Installation webhook %s/%s failed: %r", event, action, exc)
+        raise HTTPException(status_code=503, detail="temporary lookup failure, retry")
+    return {"ok": True, "event": event, "action": action, **result}
+
+
+async def _handle_pr_closed(payload: dict) -> dict:
+    """pull_request closed: mark agent-opened records merged/closed."""
+    repo = (payload.get("repository") or {}).get("full_name", "")
+    pr = payload.get("pull_request") or {}
+    pr_number = pr.get("number")
+    if not repo or not isinstance(pr_number, int):
+        raise HTTPException(status_code=400, detail="missing repository/pull_request in payload")
+    try:
+        from gateway.db.engine import get_session_factory
+        from gateway.store.github_prs import mark_pull_request_closed
+
+        factory = get_session_factory()
+        async with factory() as session:
+            changed = await mark_pull_request_closed(
+                session, repo_full_name=repo, pr_number=pr_number, merged=bool(pr.get("merged"))
+            )
+    except Exception as exc:
+        logger.warning("PR closed webhook for %s#%s failed: %r", repo, pr_number, exc)
+        raise HTTPException(status_code=503, detail="temporary lookup failure, retry")
+    return {"ok": True, "closed": {"repo": repo, "pr": pr_number, "records": changed}}
 
 
 async def _log_trigger_errors(coro, label: str) -> None:

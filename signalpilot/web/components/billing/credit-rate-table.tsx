@@ -1,29 +1,34 @@
 "use client";
 
-import {
-  DEFAULT_RATE_CARD,
-  type RateCard,
-  creditRatesFrom,
-  creditsToUsd,
-  formatCredits,
-  formatUsd,
-} from "~/lib/billing-rates";
+import { type RateCard, creditRatesFrom, creditsToUsd, formatCredits, formatUsd } from "~/lib/billing-rates";
 
 /**
- * The fixed credit rate card. One credit is one cent, no volume brackets;
- * every plan pays the same rates beyond its allowances. `rates` is the card
- * published by `GET /api/v1/billing/plans`; the local fallback renders while
- * it loads.
+ * The credit rate card. One credit is one cent, no volume brackets; every
+ * plan pays the same per-use rates beyond its allowances, and each plan has
+ * its own seat rate (or none, when seats are contracted). `rates` is the
+ * card published by `GET /api/v1/billing/plans`; until it arrives the table
+ * shows a loading row rather than a guessed number.
  */
 export function CreditRateTable({
-  enterprise = false,
   rates,
+  seatMonthCredits,
 }: {
-  enterprise?: boolean;
-  rates?: RateCard | null;
+  rates: RateCard | null;
+  /** The current plan's seat rate; undefined hides the seat row, null shows "by contract". */
+  seatMonthCredits?: number | null;
 }) {
-  const card = rates ?? DEFAULT_RATE_CARD;
-  const rows = creditRatesFrom(card);
+  if (!rates) {
+    return (
+      <div
+        data-testid="credit-rate-table"
+        className="border border-[var(--color-border)] bg-[var(--color-bg-card)] rounded-[14px] px-5 py-4 text-[12px] text-[var(--color-text-dim)]"
+      >
+        loading rates...
+      </div>
+    );
+  }
+  const card = rates;
+  const rows = creditRatesFrom(card, seatMonthCredits);
   const creditUsd = formatUsd(creditsToUsd(1, card));
   const overageUsd = formatUsd(card.overage_cents_per_credit / 100);
   return (
@@ -50,8 +55,8 @@ export function CreditRateTable({
         </thead>
         <tbody>
           {rows.map((rate) => {
-            const credits =
-              enterprise && rate.enterpriseCredits !== undefined ? rate.enterpriseCredits : rate.credits;
+            const credits = rate.credits;
+            const atCost = rate.unit === "tokens";
             return (
               <tr key={rate.unit} className="border-b border-[var(--color-border)] last:border-b-0">
                 <td className="px-5 py-2.5 text-[var(--color-text-muted)]">
@@ -59,10 +64,10 @@ export function CreditRateTable({
                   <span className="text-[var(--color-text-dim)]"> / {rate.per}</span>
                 </td>
                 <td className="px-5 py-2.5 text-right font-mono tabular-nums text-[var(--color-text)]">
-                  {credits === null ? `cost × ${card.token_credits_per_dollar}` : formatCredits(credits)}
+                  {credits === null ? (atCost ? `cost × ${card.token_credits_per_dollar}` : "by contract") : formatCredits(credits)}
                 </td>
                 <td className="px-5 py-2.5 text-right font-mono tabular-nums text-[var(--color-text-dim)]">
-                  {credits === null ? "at cost" : formatUsd(creditsToUsd(credits, card))}
+                  {credits === null ? (atCost ? "at cost" : "—") : formatUsd(creditsToUsd(credits, card))}
                 </td>
                 <td className="hidden md:table-cell px-5 py-2.5 text-[var(--color-text-dim)] leading-relaxed">
                   {rate.note}

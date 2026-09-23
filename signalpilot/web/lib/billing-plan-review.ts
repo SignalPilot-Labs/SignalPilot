@@ -1,14 +1,15 @@
 /**
  * Pure helpers behind the plan cards and the "Review your plan" dialog.
  *
- * Billing is monthly only: the cards show one published monthly price for
- * everyone, and everything a customer will actually pay (added seats,
- * credits, due today) is computed here from the plan's monthly Stripe price
- * and the rate card, so the dialog and its tests share one source.
+ * Everything a customer will actually pay (the term's fee, added seats,
+ * credits, due today) is computed here from the plan as Stripe publishes it
+ * and the rate card, so the dialog and its tests share one source. A plan
+ * offers the terms whose prices are active in Stripe: "year" is the
+ * published term, "quarter" the three-month option at a premium.
  */
 
-import type { PlanInfo, PlanPrice, RateCard } from "~/lib/backend-client";
-import { DEFAULT_RATE_CARD, formatCredits, formatUsd } from "~/lib/billing-rates";
+import type { BillingInterval, PlanInfo, PlanPrice, RateCard } from "~/lib/backend-client";
+import { formatCredits, formatUsd } from "~/lib/billing-rates";
 
 // ---------------------------------------------------------------------------
 // Money
@@ -26,23 +27,58 @@ export function formatPrice(amountCents: number, currency = "usd"): string {
 }
 
 // ---------------------------------------------------------------------------
-// Prices
+// Prices and terms
 // ---------------------------------------------------------------------------
 
-/** The plan's monthly Stripe price; any other interval the API returns is ignored. */
-export function monthlyPrice(plan: Pick<PlanInfo, "prices">): PlanPrice | null {
-  return plan.prices.find((p) => p.interval === "month") ?? null;
+/** Terms in the order they are offered: the published yearly term first. */
+export const TERM_ORDER: readonly BillingInterval[] = ["year", "quarter", "month"];
+
+export const TERM_LABEL: Record<BillingInterval, string> = {
+  year: "billed yearly",
+  quarter: "billed every 3 months",
+  month: "billed monthly",
+};
+
+export const TERM_NAME: Record<BillingInterval, string> = {
+  year: "Annual",
+  quarter: "3 months",
+  month: "Monthly",
+};
+
+/** The plan's price for one term, or null when Stripe does not offer it. */
+export function priceFor(plan: Pick<PlanInfo, "prices">, interval: BillingInterval): PlanPrice | null {
+  return plan.prices.find((p) => p.interval === interval) ?? null;
 }
 
-/** The published monthly fee: the Stripe monthly price, else the static flat fee. */
-export function monthlyFeeCents(plan: Pick<PlanInfo, "prices" | "monthly_fee_cents">): number {
-  return monthlyPrice(plan)?.amount ?? plan.monthly_fee_cents;
+/** The plan's prices in offer order. */
+export function offeredPrices(plan: Pick<PlanInfo, "prices">): PlanPrice[] {
+  return TERM_ORDER.map((t) => priceFor(plan, t)).filter((p): p is PlanPrice => p !== null);
 }
 
-/** e.g. "$250/mo, billed monthly" */
-export function feeLine(plan: Pick<PlanInfo, "prices" | "monthly_fee_cents">): string {
-  const price = monthlyPrice(plan);
-  return `${formatPrice(monthlyFeeCents(plan), price?.currency ?? "usd")}/mo, billed monthly`;
+/** The term bought by default: the first offered one (yearly when it exists). */
+export function defaultPrice(plan: Pick<PlanInfo, "prices">): PlanPrice | null {
+  return offeredPrices(plan)[0] ?? null;
+}
+
+/** What one payment of ``price`` works out to per month. */
+export function monthlyEquivalentCents(price: PlanPrice): number {
+  return Math.round(price.amount / Math.max(1, price.months));
+}
+
+/** The published fee per month: the yearly term's monthly equivalent, else the plan's figure, else the cheapest term. */
+export function monthlyFeeCents(plan: Pick<PlanInfo, "prices" | "monthly_fee_cents">): number | null {
+  const year = priceFor(plan, "year");
+  if (year) return monthlyEquivalentCents(year);
+  if (plan.monthly_fee_cents !== null) return plan.monthly_fee_cents;
+  const cheapest = offeredPrices(plan).map(monthlyEquivalentCents).sort((a, b) => a - b)[0];
+  return cheapest ?? null;
+}
+
+/** e.g. "$250/mo · $3,000 billed yearly" or "$300/mo · $900 billed every 3 months". */
+export function feeLine(price: PlanPrice): string {
+  const perMonth = formatPrice(monthlyEquivalentCents(price), price.currency);
+  if (price.months <= 1) return `${perMonth}/mo, ${TERM_LABEL[price.interval]}`;
+  return `${perMonth}/mo · ${formatPrice(price.amount, price.currency)} ${TERM_LABEL[price.interval]}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -54,7 +90,8 @@ export interface SeatEstimate {
   members: number | null;
   included: number;
   added: number;
-  seatMonthCredits: number;
+  /** Credits per added seat-month; null when seats are priced in the contract. */
+  seatMonthCredits: number | null;
   creditsPerMonth: number;
   usdPerMonth: number;
 }
@@ -64,17 +101,18 @@ export function seatEstimate(
   members: number | null,
   rates: RateCard | null = null,
 ): SeatEstimate {
-  const card = rates ?? DEFAULT_RATE_CARD;
   const included = plan.included_seats;
   const added = members === null ? 0 : Math.max(0, members - included);
-  const creditsPerMonth = added * plan.seat_month_credits;
+  const rate = plan.seat_month_credits;
+  const creditsPerMonth = rate === null ? 0 : added * rate;
+  const creditCents = rates?.credit_cents ?? 1;
   return {
     members,
     included,
     added,
-    seatMonthCredits: plan.seat_month_credits,
+    seatMonthCredits: rate,
     creditsPerMonth,
-    usdPerMonth: (creditsPerMonth * card.credit_cents) / 100,
+    usdPerMonth: (creditsPerMonth * creditCents) / 100,
   };
 }
 
@@ -82,9 +120,11 @@ export function seatEstimate(
 export function seatLines(est: SeatEstimate): string[] {
   if (est.members === null) {
     return [
-      `Seats are counted daily; members beyond the ${est.included.toLocaleString("en-US")} included use credits (${formatCredits(
-        est.seatMonthCredits,
-      )} credits per seat-month).`,
+      est.seatMonthCredits === null
+        ? `Seats beyond the ${est.included.toLocaleString("en-US")} included are priced in your contract.`
+        : `Seats are counted daily; members beyond the ${est.included.toLocaleString("en-US")} included use credits (${formatCredits(
+            est.seatMonthCredits,
+          )} credits per seat-month).`,
     ];
   }
   const lines = [
@@ -92,12 +132,14 @@ export function seatLines(est: SeatEstimate): string[] {
       "en-US",
     )} included · ${est.added.toLocaleString("en-US")} added ${est.added === 1 ? "seat" : "seats"}`,
   ];
-  if (est.added > 0) {
+  if (est.added > 0 && est.seatMonthCredits !== null) {
     lines.push(
       `${est.added.toLocaleString("en-US")} × ${formatCredits(est.seatMonthCredits)} credits/month (≈ ${formatUsd(
         est.usdPerMonth,
       )}/mo) drawn from your credits`,
     );
+  } else if (est.added > 0) {
+    lines.push("Added seats are priced in your contract.");
   }
   return lines;
 }

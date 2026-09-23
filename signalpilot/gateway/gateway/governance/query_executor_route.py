@@ -20,7 +20,6 @@ from gateway.governance.bindings import BoundQuery, BoundQueryError
 from gateway.governance.pii import PIIRedactor
 from gateway.governance.query_executor_persist import (
     _actual_scan_bytes,
-    _json_safe,
     _stored_result_rows,
     actual_cost_usd,
 )
@@ -28,6 +27,7 @@ from gateway.governance.query_executor_types import (
     GovernedQueryContext,
     GovernedQueryError,
     GovernedQueryResult,
+    encode_rows,
     normalize_sql,
 )
 from gateway.standalone_chat.config import enterprise_chat_feature_flags
@@ -179,6 +179,7 @@ async def resolve_plan(
             "execution_id": prior_execution.id,
             "result_id": prior_result.id,
             "plan_id": context.plan_id,
+            "status": "reused",
             "reused": True,
             "row_count": prior_result.saved_row_count,
             "completeness": prior_result.result_completeness,
@@ -214,6 +215,34 @@ def redact_rows(info: Any, annotations: Any, rows: list[dict[str, Any]]) -> tupl
     return redactor, rows
 
 
+# The route code is stored on the execution, but the agent only ever sees the
+# message text of the raised error (gateway/mcp/tools/query.py turns it into a
+# "Query error: ..." tool error). Each code therefore states its own next step.
+_ROUTE_REJECTION_MESSAGE = {
+    "runtime_required": (
+        "The query ran but returned more than query_database can return, so the result was dropped. "
+        "Run this work in the notebook with the sp SDK instead. Do not send the same query here again."
+    ),
+    "aggregate_required": (
+        "The query ran but returned more than this route allows, so the result was dropped. "
+        "Rewrite it as a bounded warehouse aggregate with GROUP BY, tighter filters, or fewer columns, "
+        "then run it again."
+    ),
+    "result_too_large": (
+        "The query ran but its result is larger than 10 MiB, so it was not returned. "
+        "Reduce the result in SQL with aggregation, tighter filters, or fewer columns, then run it again."
+    ),
+}
+
+
+def _route_rejection_message(route_code: str) -> str:
+    return _ROUTE_REJECTION_MESSAGE.get(
+        route_code,
+        "The query ran but the governed route refused to return its output. "
+        "Reduce the result in SQL with aggregation, tighter filters, or fewer columns, then run it again.",
+    )
+
+
 @dataclass
 class RoutedRows:
     """Rows admitted past the route limits, with their completeness verdict."""
@@ -233,8 +262,15 @@ async def _reject_route(
     execution: GatewayGovernedQueryExecution,
     cost_usd: float,
     proposal_id: str | None,
-    event_payload: dict[str, Any] | None,
+    sql_hash: str,
+    route_code: str,
+    event_extra: dict[str, Any] | None = None,
 ) -> None:
+    """Close a query that ran but whose output the route refuses to return.
+
+    The ``query_completed`` event carries ``status: rejected`` so the worker
+    reports the tool as failed rather than silently empty.
+    """
     await emit_query_credit(store.session, execution)
     await store.session.commit()
     if proposal_id:
@@ -244,12 +280,20 @@ async def _reject_route(
             actual_cost_usd=cost_usd,
             completed=True,
         )
-    if event_payload is not None:
+    if context.run_id:
         await chat_store.append_event(
             store.session,
             run_id=context.run_id,
             event_type="query_completed",
-            payload=event_payload,
+            payload={
+                "execution_id": execution.id,
+                "plan_id": context.plan_id,
+                "proposal_id": proposal_id,
+                "sql_hash": sql_hash,
+                "status": "rejected",
+                "error_code": route_code,
+                **(event_extra or {}),
+            },
         )
 
 
@@ -293,20 +337,11 @@ async def route_rows(
             execution=execution,
             cost_usd=cost_usd,
             proposal_id=proposal_id,
-            event_payload={
-                "execution_id": execution.id,
-                "plan_id": context.plan_id,
-                "status": "rejected",
-                "error_code": route_code,
-                "actual_rows_exceeded": row_limit,
-            },
+            sql_hash=sql_hash,
+            route_code=route_code,
+            event_extra={"actual_rows_exceeded": row_limit},
         )
-        raise GovernedQueryError(
-            route_code,
-            "Actual MCP output requires the notebook SDK; create a fresh plan"
-            if route_code == "runtime_required"
-            else "Actual output exceeds Track A; aggregate, filter, segment, or narrow the query",
-        )
+        raise GovernedQueryError(route_code, _route_rejection_message(route_code))
     explicit_limit = bool(re.search(r"\bLIMIT\s+\d+", normalized_sql, flags=re.IGNORECASE))
     if persisted_plan and persisted_plan.scout_row_limit:
         completeness = "unknown"
@@ -325,7 +360,7 @@ async def route_rows(
         truncation_reason = None
         query_row_count = len(saved_rows)
 
-    serialized_rows = _json_safe(saved_rows)
+    serialized_rows = encode_rows(saved_rows)
     serialized_bytes = json.dumps(serialized_rows, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     if len(serialized_bytes) > 10 * 1024 * 1024:
         cost_usd = actual_cost_usd(native_stats, elapsed_ms)
@@ -351,22 +386,10 @@ async def route_rows(
             execution=execution,
             cost_usd=cost_usd,
             proposal_id=proposal_id,
-            event_payload=(
-                {
-                    "execution_id": execution.id,
-                    "proposal_id": proposal_id,
-                    "sql_hash": sql_hash,
-                    "status": "rejected",
-                    "error_code": route_code,
-                }
-                if context.run_id
-                else None
-            ),
+            sql_hash=sql_hash,
+            route_code=route_code,
         )
-        raise GovernedQueryError(
-            route_code,
-            "Governed result exceeds 10 MiB; aggregate, filter, segment, or narrow the query",
-        )
+        raise GovernedQueryError(route_code, _route_rejection_message(route_code))
     return RoutedRows(
         saved_rows=saved_rows,
         serialized_rows=serialized_rows,

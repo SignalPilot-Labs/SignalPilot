@@ -4,7 +4,7 @@ import { AlertTriangle, ArrowDownRight, ArrowUpRight, CheckCircle2, Users, Zap }
 import type { PaidTier, PlanInfo } from "~/lib/backend-client";
 import { TIER_RANK, type EntitlementTier } from "~/lib/entitlement";
 import { formatCredits } from "~/lib/billing-rates";
-import { formatPrice, monthlyFeeCents, monthlyPrice } from "~/lib/billing-plan-review";
+import { TERM_LABEL, defaultPrice, formatPrice, monthlyEquivalentCents, priceFor } from "~/lib/billing-plan-review";
 
 export { formatPrice } from "~/lib/billing-plan-review";
 
@@ -65,8 +65,9 @@ export function AllowanceList({
 }
 
 // ---------------------------------------------------------------------------
-// Plan card — Team and Scale. One published monthly price for everyone;
-// seats and credits are reviewed in the dialog on click.
+// Plan card — Team and Scale. The published fee is the yearly term shown per
+// month; other terms Stripe offers are listed under it, and seats and credits
+// are reviewed in the dialog on click.
 // ---------------------------------------------------------------------------
 
 export function PlanCard({
@@ -90,9 +91,11 @@ export function PlanCard({
   const isCurrent = plan.tier === currentTier;
   const isHigher = rank(plan.tier) > rank(currentTier);
   const isPendingDowngrade = pendingDowngradeTo === plan.tier;
-  const monthly = monthlyPrice(plan);
-  const hasPrice = monthly !== null;
-  const currency = monthly?.currency ?? "usd";
+  const published = defaultPrice(plan);
+  const hasPrice = published !== null;
+  const currency = published?.currency ?? "usd";
+  const perMonth = published ? monthlyEquivalentCents(published) : (plan.monthly_fee_cents ?? 0);
+  const quarter = priceFor(plan, "quarter");
 
   return (
     <div
@@ -114,13 +117,18 @@ export function PlanCard({
               className="text-xl font-bold font-mono tracking-tight tabular-nums"
               style={{ color }}
             >
-              {formatPrice(monthlyFeeCents(plan), currency)}
+              {formatPrice(perMonth, currency)}
             </span>
             <span className="text-[12px] text-[var(--color-text-dim)]">/mo</span>
           </div>
-          <span className="text-[11px] text-[var(--color-text-dim)] font-mono tabular-nums">
-            billed monthly
+          <span data-testid="plan-term" className="block text-[11px] text-[var(--color-text-dim)] font-mono tabular-nums">
+            {published ? `${formatPrice(published.amount, currency)} ${TERM_LABEL[published.interval]}` : "no published price"}
           </span>
+          {quarter && published?.interval !== "quarter" && (
+            <span className="block text-[11px] text-[var(--color-text-dim)] font-mono tabular-nums">
+              or {formatPrice(quarter.amount, quarter.currency)} every 3 months
+            </span>
+          )}
         </div>
       </div>
 

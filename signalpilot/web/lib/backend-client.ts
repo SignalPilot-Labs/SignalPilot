@@ -36,7 +36,8 @@ export interface MeResponse {
 
 export type SubscriptionTier = "free" | "team" | "scale" | "enterprise";
 
-export type BillingInterval = "month" | "year";
+/** A plan price term. "year" is the published term, "quarter" the three-month option; "month" survives on older subscriptions. */
+export type BillingInterval = "month" | "quarter" | "year";
 
 /** The full entitlement row from `GET /api/v1/billing/subscription`. */
 export interface SubscriptionResponse {
@@ -66,37 +67,49 @@ export type PaidTier = "team" | "scale" | "enterprise";
 export interface PlanPrice {
   price_id: string;
   lookup_key: string | null;
-  amount: number; // cents
+  amount: number; // cents, for the whole term
   currency: string;
   interval: BillingInterval;
+  /** Months one payment covers (1, 3 or 12). */
+  months: number;
 }
 
-/** One plan from `GET /api/v1/billing/plans`: Stripe product joined with the static rate table. */
+/**
+ * One plan from `GET /api/v1/billing/plans`, exactly as Stripe publishes it:
+ * fees from prices, allowances and the seat rate from the product's metadata.
+ * There is no local copy of these numbers; Stripe is the source of truth.
+ */
 export interface PlanInfo {
   tier: PaidTier;
   name: string;
   description: string;
-  monthly_fee_cents: number;
+  rank: number;
+  /** Sales-led: no self-serve price; allowances are the contract's starting point. */
+  custom: boolean;
+  /** Fee per month at the published (yearly) term; null for a custom plan. */
+  monthly_fee_cents: number | null;
   included_seats: number;
   included_models: number;
   included_eval_runs: number;
   included_credits: number;
-  seat_month_credits: number;
-  managed_from_cents: number;
+  /** Credits per added seat-month; null when seats are priced in the contract. */
+  seat_month_credits: number | null;
+  managed_from_cents: number | null;
+  recommended_from_seats: number | null;
+  recommended_from_models: number | null;
   prices: PlanPrice[];
 }
 
-/** The fixed credit rate card as the backend publishes it. */
+/** The per-use credit rate card as the backend reads it from Stripe. */
 export interface RateCard {
   credit_cents: number;
   thread_credits: number;
   query_credits: number;
   model_month_credits: number;
   eval_run_credits: number;
-  seat_month_credits: number;
-  enterprise_seat_month_credits: number;
   token_credits_per_dollar: number;
   overage_cents_per_credit: number;
+  version: string | null;
 }
 
 export interface PlansResponse {

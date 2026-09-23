@@ -114,15 +114,50 @@ describe("completed activity group header", () => {
     expect(cards[1]?.getAttribute("data-density")).toBe("compact");
   });
 
-  it("pins the trailing table open in the final group of a completed run", async () => {
+  it("leaves a completed group closed with every card compact", async () => {
     const steps = [queryStep("q1", "3 rows"), queryStep("q2", "9 rows")];
     await act(async () => {
-      root.render(<ActivityGroup steps={steps} live={false} isFinalGroup runCompleted />);
+      root.render(<ActivityGroup steps={steps} live={false} />);
     });
     const group = container.querySelector('[data-testid="chat-activity-group"]');
-    expect(group?.querySelector("button")?.getAttribute("aria-expanded")).toBe("true");
+    expect(group?.querySelector("button")?.getAttribute("aria-expanded")).toBe("false");
     const cards = group?.querySelectorAll('[data-testid="chat-tool-card"]') ?? [];
-    expect(cards[0]?.getAttribute("data-density")).toBe("compact");
-    expect(cards[1]?.getAttribute("data-density")).toBe("expanded");
+    for (const card of cards) expect(card.getAttribute("data-density")).toBe("compact");
+  });
+});
+
+describe("live group window", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+  beforeEach(() => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+  afterEach(async () => {
+    await act(async () => root.unmount());
+    container.remove();
+  });
+
+  it("shows the latest three one-line rows and folds older ones", async () => {
+    const steps = Array.from({ length: 5 }, (_, index) => ({
+      ...queryStep(`q${index}`, `${index} rows`),
+      sequence: index + 1,
+      status: index === 4 ? ("running" as const) : ("succeeded" as const),
+    }));
+    await act(async () => {
+      root.render(<ActivityGroup steps={steps} live />);
+    });
+    expect(container.querySelectorAll('[data-testid="chat-tool-card"]')).toHaveLength(3);
+    const earlier = container.querySelector(
+      '[data-testid="chat-timeline-earlier"]',
+    ) as HTMLButtonElement;
+    expect(earlier.textContent).toBe("+2 earlier steps");
+    // Nothing is expanded while the chain runs.
+    for (const card of container.querySelectorAll('[data-testid="chat-tool-card"]')) {
+      expect(card.getAttribute("data-density")).not.toBe("expanded");
+    }
+    await act(async () => earlier.click());
+    expect(container.querySelectorAll('[data-testid="chat-tool-card"]')).toHaveLength(5);
   });
 });

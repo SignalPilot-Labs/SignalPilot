@@ -39,18 +39,18 @@ def _execution(**overrides) -> GatewayGovernedQueryExecution:
 
 class TestOutcome:
     def test_completed_costs_one_credit(self) -> None:
-        assert query_outcome(_execution()) == (-1, "ok")
+        assert query_outcome(_execution(), 1) == (-1, "ok")
 
     @pytest.mark.parametrize("code", ["runtime_required", "aggregate_required", "result_too_large"])
     def test_route_rejections_reached_the_warehouse(self, code: str) -> None:
-        assert query_outcome(_execution(status="failed", public_error_code=code)) == (-1, "ok")
+        assert query_outcome(_execution(status="failed", public_error_code=code), 1) == (-1, "ok")
 
     @pytest.mark.parametrize("code", ["query_blocked", "credentials_missing", "query_failed", "query_timeout"])
     def test_blocked_or_refused_is_free(self, code: str) -> None:
-        assert query_outcome(_execution(status="failed", public_error_code=code)) == (0, "blocked")
+        assert query_outcome(_execution(status="failed", public_error_code=code), 1) == (0, "blocked")
 
     def test_cancelled_is_free(self) -> None:
-        assert query_outcome(_execution(status="cancelled", public_error_code="query_cancelled")) == (0, "blocked")
+        assert query_outcome(_execution(status="cancelled", public_error_code="query_cancelled"), 1) == (0, "blocked")
 
 
 class TestSource:

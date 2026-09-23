@@ -46,7 +46,6 @@ function MapNodeInner({ data }: NodeProps<MapNodeData>) {
     return () => cancelAnimationFrame(raf);
   }, []);
   const isSource = model.layer === "source";
-  const failableTests = model.tests.length;
 
   return (
     <div
@@ -107,13 +106,6 @@ function MapNodeInner({ data }: NodeProps<MapNodeData>) {
               )}
             </div>
           </div>
-          {failableTests > 0 && (
-            <div className="flex items-center pr-2" title={`${failableTests} test${failableTests === 1 ? "" : "s"}`}>
-              <span className="rounded-[5px] border border-[var(--color-border)] px-1 py-0.5 text-[9px] leading-none text-[var(--color-text-muted)]">
-                ✓{failableTests}
-              </span>
-            </div>
-          )}
         </div>
       </div>
       <Handle type="source" position={Position.Right} className="!w-1.5 !h-1.5 !border-0" style={{ background: color, opacity: dimmed ? 0 : 0.9 }} />

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from datetime import datetime
+import re
 from typing import Annotated, Literal
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from sqlalchemy import select
@@ -515,7 +517,10 @@ async def download_version(
         content=content,
         media_type=media_type,
         headers={
-            "Content-Disposition": f'attachment; filename="{base}.{selected_format}"',
+            "Content-Disposition": (
+                f'attachment; filename="{re.sub(r"[^ -~]|[\"\;]", "_", base)}.{selected_format}"; '
+                f"filename*=UTF-8''{quote(f'{base}.{selected_format}', safe='')}"
+            ),
             "Cache-Control": "private, no-store",
             "X-Content-Type-Options": "nosniff",
         },

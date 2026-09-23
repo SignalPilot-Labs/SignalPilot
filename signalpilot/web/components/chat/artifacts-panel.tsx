@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useArtifactsWidth } from "~/components/chat/artifacts-panel-width";
 import { ArtifactsResizeHandle } from "~/components/chat/artifacts-resize-handle";
 import {
@@ -31,6 +31,7 @@ import type {
   StandaloneChatEvent,
 } from "~/lib/api";
 import { ChatFileViewer } from "~/components/chat/chat-file-viewer";
+import type { ArtifactOpenRequest } from "~/components/chat/use-open-artifact";
 import { ChatUiContext } from "~/components/chat/chat-ui-context";
 import { SqlTracePanel } from "~/components/chat/sql-trace-panel";
 import { describeQueryExecutions } from "~/lib/chat-query-descriptions";
@@ -221,7 +222,9 @@ function FilesTab({
  */
 const EMPTY_EVENTS: StandaloneChatEvent[] = [];
 
-export function ArtifactsPanel({
+// Memoized: the chat page re-renders on every keystroke, and an open panel
+// (file viewers, CSV tables, dashboards) must not re-render with it.
+export const ArtifactsPanel = memo(function ArtifactsPanel({
   conversationId,
   notebooks,
   files,
@@ -239,9 +242,10 @@ export function ArtifactsPanel({
   /** True while the first resource calls are still in flight. */
   loading?: boolean;
   onClose: () => void;
-  /** External "open this file" request (from an inline artifact card).
-   * A new nonce re-applies the request even for the same file. */
-  openFileRequest?: { fileId: string; nonce: number } | null;
+  /** External "open this" request (from an inline artifact card or an
+   * artifact notice). A new nonce re-applies the request even for the
+   * same target. */
+  openFileRequest?: ArtifactOpenRequest | null;
   /** Test-only: rendered instead of the notebook view (the fixture harness has no gateway). */
   liveViewOverride?: ReactNode;
   /** Test-only: rendered instead of the file viewer (the fixture harness has no gateway). */
@@ -286,6 +290,10 @@ export function ArtifactsPanel({
   }, [conversationId]);
   useEffect(() => {
     if (!openFileRequest) return;
+    if (openFileRequest.kind === "notebook") {
+      setSelectedTab("notebook");
+      return;
+    }
     setSelectedTab("files");
     setSelectedFileId(openFileRequest.fileId);
   }, [openFileRequest]);
@@ -506,4 +514,4 @@ export function ArtifactsPanel({
       </div>
     </aside>
   );
-}
+});

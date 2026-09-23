@@ -34,6 +34,7 @@ import {
 } from "~/lib/standalone-chat-state";
 import { buildStandaloneUiMessages } from "~/lib/standalone-chat-ui-messages";
 import type { UiMessage } from "~/components/chat/chat-ui-context";
+import { useStableMessages } from "~/components/chat/use-chat-ui-value";
 import type { ChatEventArrival } from "~/lib/chat-telemetry";
 import { eventText } from "~/components/chat/standalone-chat-helpers";
 
@@ -199,7 +200,7 @@ export function useStandaloneUiMessages({
   pendingSubmission: OptimisticUserMessage | null;
   setPendingSubmission: (value: OptimisticUserMessage | null) => void;
 }) {
-  const uiMessages = useMemo<UiMessage[]>(
+  const builtMessages = useMemo<UiMessage[]>(
     () =>
       buildStandaloneUiMessages({
         detailMessages,
@@ -210,6 +211,9 @@ export function useStandaloneUiMessages({
       }),
     [currentRun, detailMessages, events, isSubmitting, pendingSubmission],
   );
+  // Keep unchanged rows (and the list itself) referentially stable, so the
+  // memoized transcript rows skip polls and other runs' events.
+  const uiMessages = useStableMessages(builtMessages);
 
   useEffect(() => {
     if (
@@ -340,6 +344,22 @@ export function useChatAutoScroll(
     viewport.scrollTop = viewport.scrollHeight;
   }, [conversationId, uiMessages]);
 
+  // Content also grows inside a message (streamed text, rows pacing in, a
+  // group settling): follow that growth while pinned, so the view glides
+  // with the transcript instead of falling behind until the next message.
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    const transcript = viewport?.querySelector(
+      '[data-testid="standalone-chat-messages"]',
+    );
+    if (!viewport || !transcript || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (shouldStickToBottomRef.current) viewport.scrollTop = viewport.scrollHeight;
+    });
+    observer.observe(transcript);
+    return () => observer.disconnect();
+  }, [conversationId, uiMessages.length]);
+
   const onViewportScroll = useCallback(() => {
     const viewport = viewportRef.current;
     if (!viewport) return;
@@ -352,31 +372,14 @@ export function useChatAutoScroll(
 }
 
 /**
- * Auto-open the notebook panel once per run when the notebook is live.
- * A manual close stays closed for the rest of that run.
+ * The artifacts panel's open state, reset per conversation. The panel
+ * never opens on its own: when the agent starts a notebook or produces a
+ * chart, an artifact notice (useArtifactNotices) offers to open it.
  */
-export function useNotebookPanelState(
-  conversationId: string | undefined,
-  notebookStatus: string | undefined,
-  currentRunId: string | undefined,
-) {
+export function useNotebookPanelState(conversationId: string | undefined) {
   const [notebookPanelOpen, setNotebookPanelOpen] = useState(false);
-  const notebookPanelAutoOpenedRunRef = useRef<string | null>(null);
-  useEffect(() => {
-    // Auto-open once per run when the notebook is live. A manual close
-    // stays closed for the rest of that run.
-    if (
-      notebookStatus === "live" &&
-      currentRunId &&
-      notebookPanelAutoOpenedRunRef.current !== currentRunId
-    ) {
-      notebookPanelAutoOpenedRunRef.current = currentRunId;
-      setNotebookPanelOpen(true);
-    }
-  }, [notebookStatus, currentRunId]);
   useEffect(() => {
     setNotebookPanelOpen(false);
-    notebookPanelAutoOpenedRunRef.current = null;
   }, [conversationId]);
   return [notebookPanelOpen, setNotebookPanelOpen] as const;
 }

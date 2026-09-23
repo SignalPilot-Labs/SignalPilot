@@ -1,9 +1,12 @@
-"""Webhook-driven automation for linked repos.
+"""Webhook-driven automation for linked repos, plus its periodic fallback.
 
 Push to a watched branch  -> pull into the bare repo -> import the tree as the
 branch's next S3 revision -> recompile the dbt map (sandbox job).
 Pull request events       -> optional dbt map compile of the PR head branch,
 plus the (stubbed) agent-run dispatch hook.
+Periodic reconcile        -> the same pull + import for every watched branch of
+every linked project, so a lost or misconfigured webhook can only leave a
+workspace stale for one interval (background/loops.py: repo_sync_loop).
 
 Per-project behavior comes from the workspace project's `settings` JSON:
     watched_branches: list[str]      (default: [default_branch])
@@ -16,11 +19,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 
 from ..db.models import GatewayWorkspaceProject
+from ..git.repos import github_token_remote_url
 from .runner import schedule_compile
+
+if TYPE_CHECKING:
+    from ..workspace_store.github_sync import ImportResult
 
 logger = logging.getLogger(__name__)
 
@@ -43,8 +51,11 @@ async def _load_project(session, org_id: str, project_id: str) -> GatewayWorkspa
     ).scalars().first()
 
 
-async def _pull_and_import(session, link, branch: str) -> bool:
-    """GitHub -> bare repo -> S3 revision for one branch. Returns success."""
+async def _pull_and_import(session, link, branch: str) -> ImportResult | None:
+    """GitHub -> bare repo -> S3 revision for one branch.
+
+    Returns the import result, or None when any step failed. ``imported`` is
+    False when the tree already matched the head revision (nothing new)."""
     from ..git.sync import fetch_all, pull_branch
     from ..store import github as gh_store
     from ..workspace_store import workspace_object_storage
@@ -54,31 +65,30 @@ async def _pull_and_import(session, link, branch: str) -> bool:
         session, org_id=link.org_id, installation_id=link.installation_id
     )
     if not installation or installation.status != "active":
-        logger.warning("push trigger: no active installation for link %s", link.id)
-        return False
+        logger.warning("repo sync: no active installation for link %s", link.id)
+        return None
     token = await gh_store.get_valid_token(session, installation)
-    remote_url = f"https://x-access-token:{token}@github.com/{link.repo_full_name}.git"
+    remote_url = github_token_remote_url(token, link.repo_full_name)
 
     result = await asyncio.to_thread(fetch_all, link.project_id, remote_url)
     if result.get("error"):
-        logger.warning("push trigger: fetch failed for %s: %s", link.project_id, result["error"])
-        return False
+        logger.warning("repo sync: fetch failed for %s: %s", link.project_id, result["error"])
+        return None
     pull = await asyncio.to_thread(pull_branch, link.project_id, remote_url, branch)
     if pull.get("error"):
-        logger.warning("push trigger: pull of %s failed for %s: %s", branch, link.project_id, pull["error"])
-        return False
+        logger.warning("repo sync: pull of %s failed for %s: %s", branch, link.project_id, pull["error"])
+        return None
 
     storage = workspace_object_storage()
     if not storage.enabled:
-        return False
+        return None
     try:
-        await import_repo_to_revisions(
+        return await import_repo_to_revisions(
             session, storage, org_id=link.org_id, project_id=link.project_id, branch=branch
         )
     except Exception:
-        logger.exception("push trigger: workspace import failed for %s@%s", link.project_id, branch)
-        return False
-    return True
+        logger.exception("repo sync: workspace import failed for %s@%s", link.project_id, branch)
+        return None
 
 
 async def handle_push(repo_full_name: str, ref: str) -> dict:
@@ -104,10 +114,56 @@ async def handle_push(repo_full_name: str, ref: str) -> dict:
                 continue
             if settings.get("auto_compile_on_push") is False:
                 continue
-            if await _pull_and_import(session, link, branch):
+            if await _pull_and_import(session, link, branch) is not None:
                 schedule_compile(link.org_id, link.project_id, branch, trigger="push")
                 triggered.append(link.project_id)
     return {"branch": branch, "compiles_triggered": triggered}
+
+
+async def reconcile_watched_branches() -> dict:
+    """Fallback for lost webhooks: pull + import every watched branch of every
+    active linked project. Only a branch whose tree actually changed gets a
+    dbt map compile, so a quiet repo costs one fetch and no sandbox time.
+
+    Returns counts: projects checked, branches imported (new revision),
+    compiles scheduled, failures.
+    """
+    from ..db.engine import get_session_factory
+    from ..store import github as gh_store
+
+    factory = get_session_factory()
+    checked = imported = compiled = failed = 0
+    async with factory() as session:
+        links = await gh_store.list_all_active_repo_links(session)
+    for link in links:
+        try:
+            async with factory() as session:
+                project = await _load_project(session, link.org_id, link.project_id)
+                if project is None or project.status != "active":
+                    continue
+                checked += 1
+                settings = project.settings or {}
+                fallback = project.default_branch or link.default_branch or "main"
+                for branch in _watched_branches(settings, fallback):
+                    result = await _pull_and_import(session, link, branch)
+                    if result is None:
+                        failed += 1
+                        continue
+                    if not result.imported:
+                        continue
+                    imported += 1
+                    logger.info(
+                        "repo sync: %s@%s moved to revision %s without a webhook",
+                        link.project_id, branch, result.revision,
+                    )
+                    if settings.get("auto_compile_on_push") is False:
+                        continue
+                    schedule_compile(link.org_id, link.project_id, branch, trigger="sync")
+                    compiled += 1
+        except Exception:
+            failed += 1
+            logger.exception("repo sync: project %s failed", link.project_id)
+    return {"checked": checked, "imported": imported, "compiles_triggered": compiled, "failed": failed}
 
 
 async def handle_pr_event(repo_full_name: str, pr_number: int, head_branch: str | None) -> dict:
@@ -127,7 +183,7 @@ async def handle_pr_event(repo_full_name: str, pr_number: int, head_branch: str 
                 continue
             settings = project.settings or {}
             if settings.get("compile_on_pr") is True and head_branch:
-                if await _pull_and_import(session, link, head_branch):
+                if await _pull_and_import(session, link, head_branch) is not None:
                     schedule_compile(link.org_id, link.project_id, head_branch, trigger="pr")
                     compiled.append(link.project_id)
             if settings.get("pr_agent_trigger") is True:
@@ -149,6 +205,10 @@ def dispatch_agent_trigger(
     Intentionally a stub: it records the intent so the wiring (webhook ->
     per-project config -> dispatch) is exercised end to end before the actual
     agent execution lands.
+
+    The reverse direction (agent work -> GitHub pull request) is implemented:
+    see gateway/git/agent_pr.py (open_pull_request) and the open_pull_request
+    MCP tool in gateway/mcp/tools/open_pull_request.py.
     """
     logger.info(
         "agent-trigger (stub): org=%s project=%s repo=%s pr=%d",

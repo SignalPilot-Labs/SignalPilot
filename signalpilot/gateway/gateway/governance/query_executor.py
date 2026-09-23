@@ -2,7 +2,8 @@
 
 The phases live in sibling modules:
 
-- ``query_executor_types``: public error, context, and result types plus ``normalize_sql``.
+- ``query_executor_types``: public error, context, and result types, ``normalize_sql``
+  and the typed row encoding shared by fresh and replayed results.
 - ``query_executor_route``: validation, plan requirement, prior-result reuse, size routing.
 - ``query_executor_run``: cost estimate, approval reservation, connector execution.
 - ``query_executor_persist``: execution rows, structured results, chat events.
@@ -14,11 +15,6 @@ from typing import Any
 
 from gateway.governance.bindings import BoundQuery
 from gateway.governance.query_executor_persist import (
-    _actual_scan_bytes,
-    _json_safe,
-    _logical_type,
-    _stored_result_rows,
-    build_columns,
     create_execution,
     fail_execution,
     persist_result,
@@ -34,6 +30,7 @@ from gateway.governance.query_executor_types import (
     GovernedQueryContext,
     GovernedQueryError,
     GovernedQueryResult,
+    describe_columns,
     normalize_sql,
 )
 from gateway.store import Store
@@ -45,10 +42,6 @@ __all__ = [
     "GovernedQueryResult",
     "governed_query_executor",
     "normalize_sql",
-    "_actual_scan_bytes",
-    "_json_safe",
-    "_logical_type",
-    "_stored_result_rows",
 ]
 
 
@@ -126,7 +119,7 @@ class GovernedQueryExecutor:
             elapsed_ms=outcome.elapsed_ms,
             proposal_id=outcome.proposal_id,
         )
-        columns = build_columns(routed.saved_rows)
+        columns = describe_columns(routed.saved_rows)
         result_id = await persist_result(
             store,
             org_id=org_id,
@@ -150,7 +143,7 @@ class GovernedQueryExecutor:
         return GovernedQueryResult(
             execution_id=execution.id,
             result_id=result_id,
-            rows=routed.saved_rows,
+            rows=routed.serialized_rows,
             row_count=len(routed.saved_rows),
             tables=prepared.tables,
             execution_ms=outcome.elapsed_ms,

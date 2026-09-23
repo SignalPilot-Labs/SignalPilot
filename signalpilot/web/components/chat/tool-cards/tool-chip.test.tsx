@@ -106,6 +106,37 @@ describe("mergeChips", () => {
     expect(chips).toHaveLength(3);
   });
 
+  it("treats a Bash probe as a completed chip that merges with its neighbours", () => {
+    const terminal = (command: string, exitCode: number, probe: boolean): ToolResult => ({
+      kind: "terminal",
+      summary: null,
+      resultText: null,
+      resultChars: null,
+      truncated: false,
+      errorMessage: null,
+      command,
+      exitCode,
+      stdout: "",
+      stderr: "",
+      stdoutTruncated: false,
+      stderrTruncated: false,
+      probe,
+    });
+    const bash = (key: string, result: ToolResult) =>
+      step(key, "Bash", { category: "terminal", toolOrigin: "claude-code", title: "Ran a command", result });
+    const single = mergeChips([bash("p", terminal("ls missing.csv", 1, true))]);
+    expect(single[0].ok).toBe(true);
+    expect(single[0].stat).toBe("$ ls missing.csv · not found");
+    const chips = mergeChips([
+      bash("a", terminal("ls out.csv", 0, false)),
+      bash("b", terminal("grep -c region out.csv", 1, true)),
+      bash("c", terminal("test -f other.csv", 1, false)),
+    ]);
+    expect(chips.map((chip) => chip.ok)).toEqual([true, false]);
+    expect(chips[0].title).toBe("2 commands");
+    expect(chips[0].stepKeys).toEqual(["a", "b"]);
+  });
+
   it("gives legacy claude-code rows a neutral chip keyed by category", () => {
     const chips = mergeChips([
       step("w1", "Write", { category: "file-write", toolOrigin: "claude-code", title: "Generated a file", file: "a.py" }),
@@ -168,6 +199,25 @@ describe("ToolChipStrip", () => {
       (more as HTMLButtonElement).click();
     });
     expect(onPick).toHaveBeenLastCalledWith("s6");
+  });
+
+  it("marks a failed chip with an amber icon and keeps the neutral colours", async () => {
+    const steps = [
+      step("q", "query_database", { result: tableResult("10 rows") }),
+      step("v", "validate_sql", { status: "failed", detail: "boom" }),
+    ];
+    await act(async () => {
+      root.render(<ToolChipStrip steps={steps} onPick={() => {}} />);
+    });
+    const chips = container.querySelectorAll('[data-testid="chat-tool-chip"]');
+    expect(chips).toHaveLength(2);
+    const failed = chips[0];
+    expect(failed.getAttribute("data-ok")).toBe("false");
+    expect(failed.className).not.toContain("color-error");
+    expect(failed.className).toContain("border-[var(--color-border)]");
+    const marker = failed.querySelector('[data-testid="chat-tool-chip-failed"]');
+    expect(marker?.getAttribute("class")).toContain("text-[var(--color-warning)]");
+    expect(chips[1].querySelector('[data-testid="chat-tool-chip-failed"]')).toBeNull();
   });
 
   it("shows a table chip first even after five legacy chips, hiding nothing", async () => {

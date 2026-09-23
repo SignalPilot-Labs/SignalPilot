@@ -7,7 +7,7 @@
 import type { EChartsOption } from "echarts";
 
 import type { DatasetRows } from "../datasets";
-import { formatValue } from "../format";
+import { escapeHtml, formatValue } from "../format";
 import type { ComboChart, DashboardFormat, DashboardSeries } from "../schema";
 import type { DashboardTheme, ThemeTokens } from "../theme";
 import {
@@ -93,12 +93,14 @@ export function buildComboOption(
         const firstData = params[0]?.data as { rowIndex?: number } | undefined;
         const rowIndex = firstData?.rowIndex ?? -1;
         const heading =
-          rowIndex >= 0 ? formatXValue(model, rowIndex, rows[rowIndex]?.[chart.x.column]) : "";
+          rowIndex >= 0
+            ? escapeHtml(formatXValue(model, rowIndex, rows[rowIndex]?.[chart.x.column]))
+            : "";
         const entries = params.map((param) => {
           const data = param.data as { value?: unknown; column?: string } | undefined;
           const value = Array.isArray(data?.value) ? data?.value[1] : data?.value;
           const format = data?.column ? formatByColumn.get(data.column) : undefined;
-          return `${param.seriesName ?? ""}: ${formatValue(value, format)}`;
+          return `${escapeHtml(param.seriesName ?? "")}: ${escapeHtml(formatValue(value, format))}`;
         });
         return [heading, ...entries].filter(Boolean).join("<br/>");
       },

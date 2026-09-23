@@ -119,7 +119,8 @@ def project_tool_result(
         if base == "Bash":
             try:
                 projected = ops.project_bash(body, tool_input, is_error=True)
-                projected.summary = summary
+                if projected.error is not False:
+                    projected.summary = summary
                 projected.result_chars = full_length
                 return projected
             except Exception:
@@ -140,6 +141,10 @@ def project_tool_result(
         projected.summary = f"{_humanize(base)} completed"
     if not isinstance(projected.result, dict) or not projected.result.get("kind"):
         projected.result = {"kind": "text"}
+    if projected.error is None and query.is_query_error_text(text):
+        # Belt and braces: a query failure body is an error whichever tool
+        # or projector produced it.
+        projected.error = True
     if full_length > len(text) or projected.result_chars is None:
         projected.result_chars = full_length
     if full_length > len(text):

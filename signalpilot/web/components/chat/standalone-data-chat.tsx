@@ -2,9 +2,9 @@
 
 // Standalone data chat container; UI details live in sibling modules.
 
-import { Bot, PanelLeft } from "lucide-react";
+import { PanelLeft } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import useSWR from "swr";
 import {
   getSavedChatReport,
@@ -22,9 +22,10 @@ import {
 } from "~/lib/standalone-chat-state";
 import { projectSettingsHref } from "~/lib/project-settings-route";
 import { useConversationArtifacts } from "~/components/chat/use-conversation-notebook";
-import { pickDefaultNotebook } from "~/lib/chat-live-notebook";
 import { hasArtifactsContent } from "~/lib/chat-artifacts";
 import { ChatUiContext } from "~/components/chat/chat-ui-context";
+import { useChatUiValue } from "~/components/chat/use-chat-ui-value";
+import { ChatPaywall } from "~/components/billing/chat-paywall";
 import { ChatMessage } from "~/components/chat/chat-message";
 import {
   ChatReplayView,
@@ -38,6 +39,7 @@ import {
   ConversationMessagesSkeleton,
   ConversationNotFoundScreen,
   ConversationRail,
+  ImprovementRunBanner,
   QueryApprovalCard,
   ReadinessNotice,
   StarterQuestions,
@@ -67,6 +69,8 @@ import {
   ChatRightPanels,
 } from "~/components/chat/standalone-chat-panels";
 import { useChatRightSlot } from "~/components/chat/use-chat-right-slot";
+import { useArtifactNotices } from "~/components/chat/use-artifact-notices";
+import { ArtifactNotices } from "~/components/chat/artifact-notices";
 import { useDockScrollCompensation } from "~/components/chat/use-dock-scroll-compensation";
 import { ConnectorsProvider } from "~/components/connectors/connectors-context";
 import { useChatModelSettings } from "~/components/chat/use-chat-model-settings";
@@ -180,13 +184,9 @@ export function StandaloneDataChat({
     executions: sqlTraceExecutions,
     loading: artifactsLoading,
   } = useConversationArtifacts(conversationId ?? null, events);
-  // Panel-open and auto-open follow the DEFAULT (analysis) notebook.
-  const defaultNotebook = pickDefaultNotebook(conversationNotebooks);
-  const [notebookPanelOpen, setNotebookPanelOpen] = useNotebookPanelState(
-    conversationId,
-    defaultNotebook?.status,
-    currentRun?.id,
-  );
+  const [notebookPanelOpen, setNotebookPanelOpen] =
+    useNotebookPanelState(conversationId);
+  const closeArtifacts = useCallback(() => setNotebookPanelOpen(false), [setNotebookPanelOpen]);
   const conversationLoading = Boolean(
     conversationId && !detail && !detailError && detailLoading,
   );
@@ -220,9 +220,22 @@ export function StandaloneDataChat({
     openArtifacts: openArtifactsPanel,
     openFileRequest,
     openArtifact,
+    openNotebook,
   } = useChatRightSlot({
     artifactsOpen: notebookPanelOpen,
     setArtifactsOpen: setNotebookPanelOpen,
+  });
+  // New notebooks, charts, dashboards and reports raise a notice under the
+  // panel toggle instead of opening the panel by themselves.
+  const artifactNotices = useArtifactNotices({
+    conversationId,
+    notebooks: conversationNotebooks,
+    files: conversationFiles,
+    filesLoading: artifactsLoading,
+    currentRunId: currentRun?.id,
+    panelOpen: notebookPanelOpen || settingsPanel.open,
+    openArtifact,
+    openNotebook,
   });
 
   const { viewportRef, shouldStickToBottomRef, onViewportScroll } =
@@ -305,9 +318,23 @@ export function StandaloneDataChat({
   const empty = uiMessages.length === 0;
   const { message: unreadyMessage, showSetup: showSetupCta } =
     readinessNotice(bootstrap, readiness, can("projects.write"));
+  // Stable identity: a fresh literal would re-render every transcript
+  // consumer on each keystroke, poll and streamed event.
+  const chatUi = useChatUiValue({
+    events,
+    conversationId: conversationId ?? null,
+    files: conversationFiles,
+    openArtifact,
+    openChatSettings: settingsPanel.openPanel,
+    onStop,
+    onRetry,
+  });
 
   if (bootstrapLoading) {
     return <ChatBootstrapSpinner />;
+  }
+  if (bootstrap?.plan_locked) {
+    return <ChatPaywall />;
   }
   if (bootstrapError || !bootstrap?.enabled) {
     // A free org gets 200 with `enabled: false` and its entitlement; a gated
@@ -373,17 +400,7 @@ export function StandaloneDataChat({
       running={runIsStreaming}
     >
     <ConnectorsProvider enabled={connectorsEnabled}>
-    <ChatUiContext.Provider
-      value={{
-        events,
-        conversationId: conversationId ?? null,
-        files: conversationFiles,
-        openArtifact,
-        openChatSettings: settingsPanel.openPanel,
-        onStop,
-        onRetry,
-      }}
-    >
+    <ChatUiContext.Provider value={chatUi}>
       <div
         className={chatShellClassName(
           embedded,
@@ -432,15 +449,7 @@ export function StandaloneDataChat({
           <main className="relative flex min-w-0 flex-1 flex-col">
             {conversationId &&
               isImprovementConversation(detail?.conversation) && (
-                <div className="flex-none px-6 pt-4">
-                  <div className="mx-auto flex max-w-3xl items-center gap-2 rounded-xl border border-[var(--color-warning)]/25 bg-[var(--color-warning)]/5 px-4 py-2.5 text-xs text-[var(--color-warning)]">
-                    <Bot className="h-3.5 w-3.5 flex-none" />
-                    Automated improvement run
-                    <span className="text-[var(--color-text-dim)]">
-                      · started by SignalPilot, not a teammate
-                    </span>
-                  </div>
-                </div>
+                <ImprovementRunBanner />
               )}
             {conversationId && unreadyMessage && (
               <div className="flex-none px-6 pt-4">
@@ -552,6 +561,9 @@ export function StandaloneDataChat({
                 onReplay={canReplay ? enterReplay : undefined}
               />
             )}
+            {conversationId && !replaying && (
+              <ArtifactNotices {...artifactNotices} />
+            )}
           </main>
           {settingsPanel.open || conversationId ? (
             <ChatRightPanels
@@ -563,7 +575,7 @@ export function StandaloneDataChat({
                 executions: sqlTraceExecutions,
                 loading: artifactsLoading,
                 openFileRequest,
-                onClose: () => setNotebookPanelOpen(false),
+                onClose: closeArtifacts,
               }}
               settings={{
                 open: settingsPanel.open,

@@ -148,6 +148,7 @@ async def read_notebook(
             ("signalpilot-agent/analysis.py").
     """
     org_id = mcp_org_id_var.get(None) or "local"
+    user_id = mcp_user_id_var.get(None) or "local"
 
     safe_path = PurePosixPath(filename)
     if safe_path.is_absolute() or any(part in {"", ".", ".."} for part in safe_path.parts):
@@ -164,7 +165,7 @@ async def read_notebook(
     ws = get_workspace_store()
     factory = get_session_factory()
     async with factory() as session:
-        store = Store(session, allow_unscoped=True)
+        store = Store(session, org_id=org_id, user_id=user_id)
         projects, _ = await store.list_workspace_projects(status="active", limit=100, offset=0)
         for project in projects:
             project_id = str(getattr(project, "id", None) or project.get("id"))

@@ -51,9 +51,20 @@ async def test_local_native_session_resumes_without_downloading(
 
 
 @pytest.mark.asyncio
-async def test_session_from_different_cwd_falls_back_to_database_context(
+async def test_session_from_a_different_cwd_is_still_resumed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """A working directory that moved between turns must not look like a
+    missing session.
+
+    This asserted `resume is False` until the working directory actually moved
+    in production (the agent went from the checkout root to the configured dbt
+    project subdirectory). Reporting "no session" made the caller create the
+    session again with `--session-id <id>`, which the CLI refuses with
+    "Session ID ... is already in use" and exit 1, so every follow-up failed.
+    `claude --resume <id>` finds a session from any directory (checked against
+    2.1.280), so the right answer is to resume it.
+    """
     monkeypatch.setenv("SP_CHAT_CLAUDE_STATE_ROOT", str(tmp_path))
     config_dir = tmp_path / CONVERSATION_ID
     _write_native_session(config_dir, tmp_path / "old-run-directory")
@@ -64,7 +75,7 @@ async def test_session_from_different_cwd_falls_back_to_database_context(
         transfer=None,
     )
 
-    assert state.resume is False
+    assert state.resume is True
 
 
 @pytest.mark.asyncio

@@ -142,3 +142,60 @@ def test_execution_resolves_the_agent_cwd_before_restoring_the_session() -> None
     assert resolve_at < restore_at
     assert "cwd=Path(agent_cwd)" in src
     assert "cwd=project_directory," not in src
+
+
+# --- a session is found wherever the CLI stored it -----------------------------
+#
+# `claude --resume <id>` finds a session regardless of the directory it runs
+# from (verified against 2.1.280: created in proj_a, resumed from proj_b, exit
+# 0). Keying our own check on cwd made a moved working directory look like a
+# missing session, and the caller then tried to create it again with
+# `--session-id <id>`, which the CLI refuses with "Session ID ... is already in
+# use" and exit 1. That is the failure every follow-up hit.
+
+
+def _write_session(config_dir: Path, slug_for: Path, session_id: str) -> Path:
+    project = config_dir / "projects" / archive._project_storage_name(slug_for)
+    project.mkdir(parents=True, exist_ok=True)
+    path = project / f"{session_id}.jsonl"
+    path.write_text("{}\n", encoding="utf-8")
+    return path
+
+
+def test_session_stored_under_another_cwd_is_still_found(tmp_path) -> None:
+    config_dir = tmp_path / "cfg"
+    root = tmp_path / "checkout"
+    subdir = root / "dumpsters_dbt_simplified"
+    subdir.mkdir(parents=True)
+    session_id = "cccccccc-1111-2222-3333-dddddddddddd"
+
+    # Written when the agent ran at the checkout root, read now that it runs in
+    # the dbt project subdirectory.
+    _write_session(config_dir, root, session_id)
+    assert archive._has_session(config_dir, session_id, subdir) is True
+    assert archive._find_session_file(config_dir, session_id, subdir) is not None
+
+
+def test_the_current_cwd_is_preferred_when_both_exist(tmp_path) -> None:
+    config_dir = tmp_path / "cfg"
+    root = tmp_path / "checkout"
+    subdir = root / "proj"
+    subdir.mkdir(parents=True)
+    session_id = "eeeeeeee-1111-2222-3333-ffffffffffff"
+    _write_session(config_dir, root, session_id)
+    expected = _write_session(config_dir, subdir, session_id)
+    assert archive._find_session_file(config_dir, session_id, subdir) == expected
+
+
+def test_a_genuinely_absent_session_is_absent(tmp_path) -> None:
+    config_dir = tmp_path / "cfg"
+    cwd = tmp_path / "checkout"
+    cwd.mkdir()
+    _write_session(config_dir, cwd, "11111111-1111-1111-1111-111111111111")
+    assert archive._has_session(config_dir, "22222222-2222-2222-2222-222222222222", cwd) is False
+
+
+def test_missing_projects_directory_is_not_an_error(tmp_path) -> None:
+    cwd = tmp_path / "checkout"
+    cwd.mkdir()
+    assert archive._has_session(tmp_path / "empty-cfg", "33333333-3333-3333-3333-333333333333", cwd) is False

@@ -230,8 +230,12 @@ export function deriveArtifactCards(
 ): ArtifactCardModel[] {
   if (!runId) return [];
   const touches = collectTouches(events, runId);
+  // The plan file is shown by the plan dock, never as a transcript card.
   const runFiles = files.filter(
-    (file) => file.status === "active" && file.origin_run_id === runId,
+    (file) =>
+      file.status === "active" &&
+      file.origin_run_id === runId &&
+      !isPlanFilePath(file.path),
   );
   const cards: ArtifactCardModel[] = [];
   const matchedTouches = new Set<PathTouch>();

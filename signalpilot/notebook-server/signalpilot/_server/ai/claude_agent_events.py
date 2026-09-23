@@ -154,6 +154,15 @@ def _is_injected_turn_result(msg: Any, state: _SdkStreamState) -> bool:
     return getattr(msg, "num_turns", None) == 0
 
 
+def _is_steering_echo(msg: Any, agent_state: Any, parent_id: str) -> bool:
+    """True when a user message is the CLI's echo of an accepted steering message."""
+    uuid = getattr(msg, "uuid", None)
+    if not uuid or parent_id:
+        return False
+    with agent_state.steering_lock:
+        return str(uuid) in agent_state.accepted_steering_ids
+
+
 def _result_event(
     msg: Any, state: _SdkStreamState
 ) -> AgentEvent:
@@ -319,6 +328,16 @@ async def _relay_sdk_messages(
         elif isinstance(msg, UserMessage):
             content = msg.content
             parent_id = getattr(msg, "parent_tool_use_id", None) or ""
+            if _is_steering_echo(msg, agent_state, parent_id):
+                # The model just took in a steering message: record where.
+                event_queue.put(
+                    AgentEvent(
+                        type="steering_delivered",
+                        content=str(msg.uuid),
+                        turn=state.turn_count,
+                    )
+                )
+                continue
             if isinstance(content, list):
                 for block in content:
                     if isinstance(block, ToolResultBlock):

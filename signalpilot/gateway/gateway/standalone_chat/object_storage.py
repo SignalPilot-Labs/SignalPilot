@@ -195,6 +195,19 @@ class ChatObjectStorage:
 
         return await asyncio.to_thread(_delete)
 
+    async def exists(self, key: str) -> bool:
+        """True when the object is present. One HEAD, no body transfer."""
+        client = self._require_client()
+
+        def _head() -> bool:
+            try:
+                client.head_object(Bucket=self.bucket, Key=key)
+            except Exception:
+                return False
+            return True
+
+        return await asyncio.to_thread(_head)
+
     async def presign_get(self, key: str, *, expires_seconds: int = 300, download_filename: str | None = None) -> str:
         client = self._require_client()
         params = {"Bucket": self.bucket, "Key": key}

@@ -1,32 +1,12 @@
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { FileText } from "lucide-react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RunStep } from "~/lib/chat-run-steps";
-import type { ToolCardDefinition } from "./registry";
-import {
-  COMPLETION_HOLD_MS,
-  useCardDensity,
-  type CardDensityState,
-} from "./use-card-density";
+import { useCardDensity, type CardDensityState } from "./use-card-density";
 
 (
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
-
-const def: ToolCardDefinition = {
-  kind: "json",
-  Icon: FileText,
-  accent: "neutral",
-  summarize: (step) => ({ title: step.title, stat: null, ok: true }),
-  Running: () => null,
-  Expanded: () => null,
-};
-
-const pinning: ToolCardDefinition = {
-  ...def,
-  stayOpenOnComplete: (_step, isLast) => isLast,
-};
 
 function step(status: RunStep["status"]): RunStep {
   return {
@@ -84,72 +64,33 @@ describe("useCardDensity", () => {
     vi.useRealTimers();
   });
 
-  it("runs, holds expanded on completion, then folds to compact", async () => {
-    await render({ step: step("running"), def, isLastInGroup: true, groupLive: true });
+  it("never opens on its own through running, done or failed", async () => {
+    await render({ step: step("running") });
     expect(latest?.density).toBe("running");
-    await render({ step: step("succeeded"), def, isLastInGroup: true, groupLive: true });
-    expect(latest?.density).toBe("expanded");
-    await act(async () => {
-      vi.advanceTimersByTime(COMPLETION_HOLD_MS - 1);
-    });
-    expect(latest?.density).toBe("expanded");
-    await act(async () => {
-      vi.advanceTimersByTime(1);
-    });
+    expect(latest?.open).toBe(false);
+    await render({ step: step("succeeded") });
     expect(latest?.density).toBe("compact");
-  });
-
-  it("keeps a failed step expanded after the hold", async () => {
-    await render({ step: step("running"), def, isLastInGroup: false, groupLive: true });
-    await render({ step: step("failed"), def, isLastInGroup: false, groupLive: true });
-    await act(async () => {
-      vi.advanceTimersByTime(COMPLETION_HOLD_MS * 2);
-    });
-    expect(latest?.density).toBe("expanded");
-  });
-
-  it("mounts an already-complete step compact with no timers", async () => {
-    await render({ step: step("succeeded"), def, isLastInGroup: true, groupLive: false });
+    await render({ step: step("running") });
+    await render({ step: step("failed") });
     expect(latest?.density).toBe("compact");
+    expect(latest?.open).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("mounts an already-failed step expanded", async () => {
-    await render({ step: step("failed"), def, isLastInGroup: true, groupLive: false });
-    expect(latest?.density).toBe("expanded");
-  });
-
-  it("honours stayOpenOnComplete only while the group is live", async () => {
-    await render({ step: step("running"), def: pinning, isLastInGroup: true, groupLive: true });
-    await render({ step: step("succeeded"), def: pinning, isLastInGroup: true, groupLive: true });
-    await act(async () => {
-      vi.advanceTimersByTime(COMPLETION_HOLD_MS);
-    });
-    expect(latest?.density).toBe("expanded");
-    await render({ step: step("succeeded"), def: pinning, isLastInGroup: true, groupLive: false });
-    expect(latest?.density).toBe("compact");
-  });
-
-  it("toggles by hand and re-opens on a focus request", async () => {
-    await render({ step: step("succeeded"), def, isLastInGroup: true, groupLive: false });
+  it("toggles by hand and opens on a focus request", async () => {
+    await render({ step: step("succeeded") });
     await act(async () => latest?.toggle());
     expect(latest?.density).toBe("expanded");
     await act(async () => latest?.toggle());
     expect(latest?.density).toBe("compact");
-    await render({ step: step("succeeded"), def, isLastInGroup: true, groupLive: false, focusRequested: 1 });
+    await render({ step: step("succeeded"), focusRequested: 1 });
     expect(latest?.density).toBe("expanded");
   });
 
-  it("clears the user toggle when the step re-enters running", async () => {
-    await render({ step: step("succeeded"), def, isLastInGroup: true, groupLive: false });
+  it("keeps a hand-opened card open when its step finishes", async () => {
+    await render({ step: step("running") });
     await act(async () => latest?.setOpen(true));
+    await render({ step: step("succeeded") });
     expect(latest?.density).toBe("expanded");
-    await render({ step: step("running"), def, isLastInGroup: true, groupLive: true });
-    expect(latest?.density).toBe("running");
-    await render({ step: step("succeeded"), def, isLastInGroup: true, groupLive: true });
-    await act(async () => {
-      vi.advanceTimersByTime(COMPLETION_HOLD_MS);
-    });
-    expect(latest?.density).toBe("compact");
   });
 });

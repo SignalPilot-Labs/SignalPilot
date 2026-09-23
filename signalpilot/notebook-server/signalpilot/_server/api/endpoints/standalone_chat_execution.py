@@ -149,6 +149,7 @@ async def execute(*, request: Request) -> StreamingResponse:
         history,
         is_improvement_run,
         sandbox_runtime_enabled,
+        session_context_block,
         system_prompt,
     ) = _execution_prompt_values(
         body,
@@ -395,7 +396,11 @@ async def execute(*, request: Request) -> StreamingResponse:
                             agent_effort=agent_effort,
                             max_turns=MAX_ANALYSIS_AGENT_TURNS,
                             history=history,
-                            system_prompt=system_prompt,
+                            system_prompt=(
+                                system_prompt
+                                if resume_agent_session or not session_context_block
+                                else f"{system_prompt}\n\n{session_context_block}"
+                            ),
                             mcp_config=mcp_config,
                             run_id=run_id,
                             runtime_app=runtime_app,

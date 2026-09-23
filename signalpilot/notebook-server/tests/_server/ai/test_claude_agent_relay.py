@@ -6,7 +6,12 @@ import asyncio
 from typing import TYPE_CHECKING, Any
 
 import pytest
-from claude_agent_sdk import AssistantMessage, ResultMessage, ToolUseBlock
+from claude_agent_sdk import (
+    AssistantMessage,
+    ResultMessage,
+    ToolUseBlock,
+    UserMessage,
+)
 
 from signalpilot._server.ai import claude_agent, claude_agent_events
 from signalpilot._server.ai.claude_agent_events import (
@@ -60,6 +65,7 @@ class FakeClient:
         for message in messages:
             self.messages.put_nowait(message)
         self.queries: list[str] = []
+        self.sent: list[dict[str, Any]] = []
         self.pending_at_query: list[int] = []
         self.agent: _ActiveAgent | None = None
 
@@ -70,7 +76,12 @@ class FakeClient:
                 return
             yield message
 
-    async def query(self, message: str) -> None:
+    async def query(self, message: Any) -> None:
+        if not isinstance(message, str):
+            # A stream-json prompt (steering): record its text and uuid.
+            async for item in message:
+                self.sent.append(item)
+                message = item["message"]["content"]
         self.queries.append(message)
         if self.agent is not None:
             self.pending_at_query.append(self.agent.pending_steering_turns)
@@ -137,6 +148,8 @@ async def test_steering_accepted_during_completion_window_keeps_run_alive(
     done_events = [e for e in _drain(agent.event_queue) if e.type == "done"]
     assert len(done_events) == 2
     assert client.queries == ["also check refunds"]
+    # Sent with its steering id as the uuid, so the CLI's echo names it.
+    assert client.sent[0]["uuid"] == "steer-1"
     assert agent.pending_steering_turns == 0
     assert agent.closing is True
     # Once the relay has closed the client, late steering is refused
@@ -256,3 +269,20 @@ def test_error_text_never_uses_the_repr() -> None:
         claude_agent._error_text(RuntimeError("boom"), operation="agent run")
         == "RuntimeError during agent run: boom"
     )
+
+
+@pytest.mark.asyncio
+async def test_steering_echo_becomes_a_delivered_event() -> None:
+    agent = _ActiveAgent()
+    agent.accepted_steering_ids.add("steer-1")
+    echo = UserMessage(content="also check refunds", uuid="steer-1")
+    unrelated = UserMessage(content="the run prompt", uuid="prompt-1")
+    client = FakeClient([unrelated, echo, _result()])
+    await asyncio.wait_for(
+        _relay_sdk_messages(client, agent, agent.event_queue, _SdkStreamState()),
+        timeout=5,
+    )
+    events = _drain(agent.event_queue)
+    assert [(e.type, e.content) for e in events if e.type != "done"] == [
+        ("steering_delivered", "steer-1")
+    ]

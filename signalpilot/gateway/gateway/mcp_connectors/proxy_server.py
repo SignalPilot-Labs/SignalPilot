@@ -37,7 +37,13 @@ REASON_MESSAGES = {
     "off_for_me": 'Connector "{name}" is turned off in Chat settings',
     "personal_not_allowed": "Your organization does not allow personal connectors",
     "host_not_allowed": 'Your organization does not allow the host of connector "{name}"',
-    "needs_sign_in": 'Connector "{name}" needs you to sign in again from Chat settings',
+    # Keep the phrase "needs you to sign in" intact: the chat prompt and other
+    # call sites still detect this case by matching that text.
+    "needs_sign_in": (
+        'Connector "{name}" needs you to sign in again from Chat settings. '
+        "Only the user can do that, so stop here and tell the user to open Chat settings and sign in "
+        'to "{name}". Do not call this tool again and do not look for another way to reach the service.'
+    ),
     "needs_key": 'Connector "{name}" needs a key from Chat settings',
     "no_tools": 'Connector "{name}" has no tools turned on',
     "tool_off": 'Tool "{tool}" on connector "{name}" is turned off in Chat settings',

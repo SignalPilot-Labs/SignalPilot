@@ -166,3 +166,60 @@
   box-shadow: none;
   color: var(--sp-dim);
 }
+
+/* Local search (@easyops-cn/docusaurus-search-local) renders a plain input
+   rather than the DocSearch button; give it the same pill treatment. */
+.navbar__search {
+  margin-left: 0.5rem;
+}
+
+.navbar__search-input {
+  border-radius: var(--sp-radius-pill);
+  border: 1px solid var(--sp-line);
+  background-color: var(--sp-card);
+  color: var(--sp-text);
+  font-family: var(--sp-font-sans);
+  font-size: 0.85rem;
+  height: 2.1rem;
+  transition: border-color var(--ifm-transition-fast) var(--sp-ease),
+              background-color var(--ifm-transition-fast) var(--sp-ease);
+}
+
+.navbar__search-input::placeholder {
+  color: var(--sp-muted);
+}
+
+.navbar__search-input:hover,
+.navbar__search-input:focus {
+  border-color: var(--sp-line-2);
+  background-color: var(--sp-card-hover);
+  outline: none;
+  box-shadow: none;
+}
+
+.navbar__search .search-bar-shortcut,
+.navbar__search [class*="searchHintContainer"] {
+  font-family: var(--sp-font-mono);
+  color: var(--sp-dim);
+}
+
+.navbar__search [class*="searchHintContainer"] kbd {
+  border-radius: var(--sp-radius-xs);
+  background: var(--sp-card);
+  border: 1px solid var(--sp-line);
+  box-shadow: none;
+  color: var(--sp-dim);
+}
+
+.navbar__search [class*="dropdownMenu_"] {
+  border: 1px solid var(--sp-line);
+  border-radius: var(--sp-radius-ctl);
+  background: var(--sp-card);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+}
+
+.search-result-match {
+  background: color-mix(in srgb, var(--sp-mint) 30%, transparent);
+  color: inherit;
+  padding: 0;
+}

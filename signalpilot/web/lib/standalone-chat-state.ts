@@ -376,7 +376,8 @@ export function applyStandaloneChatEvent(
   const steeringMessageId =
     event.type === "steering_queued" ||
     event.type === "steering_picked_up" ||
-    event.type === "steering_not_delivered"
+    event.type === "steering_not_delivered" ||
+    event.type === "steering_delivered"
       ? event.payload.message_id
       : null;
   const steeringStatus =
@@ -386,7 +387,9 @@ export function applyStandaloneChatEvent(
         ? "picked_up"
         : event.type === "steering_not_delivered"
           ? "not_delivered"
-        : null;
+          : event.type === "steering_delivered"
+            ? "delivered"
+            : null;
   return {
     ...detail,
     conversation:

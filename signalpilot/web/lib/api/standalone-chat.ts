@@ -142,6 +142,7 @@ export type StandaloneChatEvent = {
     | "steering_queued"
     | "steering_picked_up"
     | "steering_not_delivered"
+    | "steering_delivered"
     | "text_delta"
     | "thinking_delta"
     | "tool_started"

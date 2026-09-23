@@ -838,11 +838,32 @@ kbd {
 .chat-code .tok-bool,
 .chat-code .tok-atom { color: #e3ae76; }
 
+/* Chat motion tokens: every transcript entrance, height change and state
+   swap uses these, so items arrive with one rhythm instead of each its own. */
+:root {
+  --chat-motion-ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --chat-motion-enter: 180ms;
+  --chat-motion-height: 220ms;
+  --chat-motion-state: 150ms;
+}
+
 @keyframes chat-step-in {
   from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: translateY(0); }
 }
-.chat-step-in { animation: chat-step-in 0.25s ease-out both; }
+.chat-step-in {
+  animation: chat-step-in var(--chat-motion-enter) var(--chat-motion-ease) both;
+}
+
+/* A status glyph or stat swapping in place: fade only, no movement, so a
+   row's height and position never change when its step finishes. */
+@keyframes chat-state-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.chat-state-in {
+  animation: chat-state-in var(--chat-motion-state) ease-out both;
+}
 
 /* The highlight band is narrow (38%→62% of a 300% image) and the sweep
    overshoots both edges, so the loop restarts on identical frames — no jump. */
@@ -889,7 +910,7 @@ kbd {
 .chat-collapse {
   display: grid;
   grid-template-rows: 0fr;
-  transition: grid-template-rows 0.28s ease;
+  transition: grid-template-rows var(--chat-motion-height) var(--chat-motion-ease);
 }
 .chat-collapse[data-open="true"] { grid-template-rows: 1fr; }
 .chat-collapse > div { overflow: hidden; min-width: 0; }
@@ -995,6 +1016,7 @@ kbd {
 
 @media (prefers-reduced-motion: reduce) {
   .chat-step-in,
+  .chat-state-in,
   .chat-live-label,
   .chat-dot-live,
   .chat-boot-in,

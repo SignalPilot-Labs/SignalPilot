@@ -62,6 +62,7 @@ from gateway.standalone_chat.worker_events import (
     _steering_monitor,
     _update_summary,
     _worker_id,
+    append_tool_side_events,
     empty_answer_error,
     touch_run_session,
 )
@@ -79,6 +80,24 @@ _CLARIFICATION_PREFIX = "CLARIFICATION_REQUESTED:"
 # One batcher per run being executed by this worker. Deltas are coalesced;
 # every other event flushes them first so transcript order is preserved.
 _delta_batchers: dict[str, DeltaBatcher] = {}
+
+
+async def _agent_session_archive_exists(*, org_id: str, conversation_id: str) -> bool:
+    """True when a saved Claude session archive exists for this conversation."""
+    try:
+        from gateway.standalone_chat.agent_sessions import agent_session_archive_key
+        from gateway.standalone_chat.object_storage import chat_object_storage
+
+        storage = chat_object_storage()
+        if not storage.enabled:
+            return False
+        key = agent_session_archive_key(
+            org_id=org_id, conversation_id=conversation_id
+        )
+        return await storage.exists(key)
+    except Exception:
+        # Never let this optimisation break a run: on doubt, build the context.
+        return False
 
 
 async def _write_event(run_id: str, event_type: str, payload: dict[str, Any]) -> None:
@@ -138,7 +157,15 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
             # Tool result handling runs after this session closes.
             run_org_id = run.org_id
             recovering = run.execution_attempt > 1
-            context = await chat_store.worker_context(db, run=run)
+            # A resumed SDK session already carries the conversation-derived
+            # context, so do not pay to rebuild it. The archive's presence is
+            # the same signal the notebook server uses to decide to resume.
+            resume_likely = await _agent_session_archive_exists(
+                org_id=run.org_id, conversation_id=run.conversation_id
+            )
+            context = await chat_store.worker_context(
+                db, run=run, include_query_context=not resume_likely
+            )
             project = context["project"]
             branch = context["conversation"].branch or project.default_branch or "main"
             commit_sha = str(context["conversation"].commit_sha or "")
@@ -334,30 +361,12 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
                         # top-level step in the UI — suppress them for
                         # subagent tools, whose SQL still shows on the child
                         # step from its input.
-                        if parent_tool_call_id:
-                            continue
-                        if tool_name.endswith(("query_database", "explain_query", "validate_sql")):
-                            sql = tool_input.get("sql") if isinstance(tool_input, dict) else None
-                            if sql:
-                                await _append(run_id, "sql", {"sql": sql})
-                        if any(marker in tool_name for marker in ("schema", "table", "relationship", "metric")):
-                            source_refs = {
-                                key: value
-                                for key, value in (tool_input.items() if isinstance(tool_input, dict) else [])
-                                if key
-                                in {
-                                    "metric_name",
-                                    "model_name",
-                                    "schema_name",
-                                    "source_name",
-                                    "table_name",
-                                }
-                            }
-                            await _append(
-                                run_id,
-                                "source",
-                                {"tool": tool_name, **source_refs},
-                            )
+                        if not parent_tool_call_id:
+                            await append_tool_side_events(run_id, tool_name, tool_input)
+                    elif event_type == "steering_delivered":
+                        # The model just read a follow-up: the web places the
+                        # message at this point in the run.
+                        await _append(run_id, "steering_delivered", {"message_id": content})
                     elif event_type == "tool_result":
                         if not parent_tool_call_id:
                             starts_new_text_block = bool(streamed_text)

@@ -1,4 +1,5 @@
 import { act } from "react";
+import { openToolRow } from "../test-utils";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { RunStep, SchemaColumn, SchemaResult } from "~/lib/chat-run-steps";
@@ -137,6 +138,7 @@ describe("schema card", () => {
 
   it("renders the table headline and ghost rows while running", async () => {
     await render(step({ status: "running", endedAt: null, durationMs: null }));
+    await openToolRow(container);
     const card = q(container, '[data-testid="chat-tool-card-schema"]');
     expect(card?.textContent).toContain("analytics.fct_orders");
     expect(card?.textContent).toContain("Reading the catalog…");

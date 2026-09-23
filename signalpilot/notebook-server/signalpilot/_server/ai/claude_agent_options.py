@@ -238,6 +238,11 @@ def _build_agent_options_kwargs(
         agent_options_kwargs["session_id"] = chat_session_id
 
     agent_options_kwargs["include_partial_messages"] = True
+    # Echo each queued user message back into the stream at the point the
+    # model takes it in (not when it was queued). The relay turns the echo
+    # of a steering message into a steering_delivered event, so the chat
+    # places the follow-up exactly where the agent read it.
+    agent_options_kwargs["extra_args"] = {"replay-user-messages": None}
     return agent_options_kwargs
 
 

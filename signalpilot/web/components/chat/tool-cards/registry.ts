@@ -52,11 +52,6 @@ export type ToolCardDefinition = {
   Running: ComponentType<ToolCardContext>;
   /** Body once the result landed (or the failure banner context). */
   Expanded: ComponentType<ToolCardContext>;
-  /**
-   * Keep the card expanded after completion while its group is still live,
-   * e.g. the trailing table of a chain. Errors always stay open regardless.
-   */
-  stayOpenOnComplete?: (step: RunStep, isLastInGroup: boolean) => boolean;
 };
 
 const definitions = new Map<ToolCardKind, ToolCardDefinition>();

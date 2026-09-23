@@ -1,4 +1,5 @@
 import { act } from "react";
+import { openToolRow } from "../test-utils";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { RunStep, TerminalResult } from "~/lib/chat-run-steps";
@@ -143,6 +144,7 @@ describe("terminal card", () => {
 
   it("shows the prompt with a blinking cursor while running", async () => {
     await render(step({ status: "running", endedAt: null, durationMs: null }));
+    await openToolRow(container);
     const body = q(container, '[data-testid="chat-terminal-card"]');
     expect(body?.textContent).toContain(`$${COMMAND}`);
     expect(q(body!, ".chat-tool-cursor-blink")).not.toBeNull();
@@ -180,6 +182,7 @@ describe("terminal card", () => {
         }),
       }),
     );
+    await openToolRow(container);
     expect(q(container, '[data-testid="chat-tool-card"]')?.getAttribute("data-density")).toBe(
       "expanded",
     );

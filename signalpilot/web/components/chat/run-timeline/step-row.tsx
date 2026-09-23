@@ -4,7 +4,6 @@ import {
   AlertCircle,
   TriangleAlert,
   Check,
-  ChevronRight,
   Database,
   FileCode2,
   FileDiff,
@@ -20,18 +19,12 @@ import {
   Waypoints,
 } from "lucide-react";
 import { memo, useState } from "react";
-import {
-  formatStepDuration,
-  type RunStep,
-  type RunStepCategory,
-} from "~/lib/chat-run-steps";
-import {
-  FAILED_TONE_CLASS,
-  FailedBadge,
-} from "~/components/chat/tool-cards/card-primitives";
+import type { RunStep, RunStepCategory } from "~/lib/chat-run-steps";
+import { FAILED_TONE_CLASS } from "~/components/chat/tool-cards/card-primitives";
 import { resolveToolCard } from "~/components/chat/tool-cards/registry";
 import { ToolCard } from "~/components/chat/tool-cards/tool-card";
 import { StepBody, stepHasBody } from "./step-body";
+import { failureLine, StepLine } from "./step-line";
 import {
   formatTelemetryClock,
   formatTelemetryDuration,
@@ -98,7 +91,7 @@ export function stepPreview(step: RunStep): string | null {
 export function StatusDot({ status }: { status: RunStep["status"] }) {
   if (status === "running") {
     return (
-      <span className="relative z-10 flex h-[18px] w-[18px] flex-none items-center justify-center rounded-full border border-[var(--color-success)]/40 bg-[var(--color-bg)]">
+      <span className="chat-state-in relative z-10 flex h-[18px] w-[18px] flex-none items-center justify-center rounded-full border border-[var(--color-success)]/40 bg-[var(--color-bg)]">
         <span className="chat-dot-live h-1.5 w-1.5 rounded-full bg-[var(--color-success)]" />
       </span>
     );
@@ -107,7 +100,7 @@ export function StatusDot({ status }: { status: RunStep["status"] }) {
     return (
       <span
         data-testid="chat-step-status-failed"
-        className="relative z-10 flex h-[18px] w-[18px] flex-none items-center justify-center rounded-full border border-[var(--color-border)] bg-[var(--color-bg)]"
+        className="chat-state-in relative z-10 flex h-[18px] w-[18px] flex-none items-center justify-center rounded-full border border-[var(--color-border)] bg-[var(--color-bg)]"
       >
         <TriangleAlert className={`h-3 w-3 ${FAILED_TONE_CLASS}`} aria-label="Failed" />
       </span>
@@ -115,13 +108,13 @@ export function StatusDot({ status }: { status: RunStep["status"] }) {
   }
   if (status === "succeeded") {
     return (
-      <span className="relative z-10 flex h-[18px] w-[18px] flex-none items-center justify-center rounded-full border border-[var(--color-border)] bg-[var(--color-bg)]">
+      <span className="chat-state-in relative z-10 flex h-[18px] w-[18px] flex-none items-center justify-center rounded-full border border-[var(--color-border)] bg-[var(--color-bg)]">
         <Check className="h-3 w-3 text-[var(--color-success)]/80" />
       </span>
     );
   }
   return (
-    <span className="relative z-10 flex h-[18px] w-[18px] flex-none items-center justify-center rounded-full bg-[var(--color-bg)]">
+    <span className="chat-state-in relative z-10 flex h-[18px] w-[18px] flex-none items-center justify-center rounded-full bg-[var(--color-bg)]">
       <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-border-active)]" />
     </span>
   );
@@ -157,89 +150,39 @@ export const StepRow = memo(function StepRow({
 });
 
 const LegacyStepRow = memo(function LegacyStepRow({ step }: { step: RunStep }) {
-  const expandable = stepHasBody(step);
-  const [userToggle, setUserToggle] = useState<boolean | null>(null);
-  const open = userToggle ?? step.status === "running";
+  const [open, setOpen] = useState(false);
   const Icon = CATEGORY_ICONS[step.category] ?? Play;
-  const duration = formatStepDuration(step.durationMs);
   const preview = stepPreview(step);
   return (
     <li className="chat-step-in relative">
       <div className="flex items-start gap-2.5">
-        <StatusDot status={step.status} />
-        <div className="min-w-0 flex-1 pb-1">
-          <button
-            type="button"
-            disabled={!expandable}
-            aria-expanded={expandable ? open : undefined}
-            onClick={() => setUserToggle(!open)}
-            className={`group flex w-full items-center gap-2 rounded-md px-1 py-0.5 text-left text-[12px] ${
-              expandable
-                ? "cursor-pointer hover:bg-[var(--color-bg-hover)]"
-                : "cursor-default"
-            }`}
-          >
-            <Icon className="h-3.5 w-3.5 flex-none text-[var(--color-text-dim)]" />
-            <span
-              className={`flex-none ${
-                step.status === "running"
-                  ? "chat-live-label font-medium"
-                  : "text-[var(--color-text)]"
-              }`}
-            >
-              {step.title}
-            </span>
-            {step.status === "failed" && <FailedBadge />}
-            {preview && (
-              <span className="min-w-0 truncate font-mono text-[11px] text-[var(--color-text-dim)]">
-                {preview}
-              </span>
-            )}
-            <span className="ml-auto flex flex-none items-center gap-2">
-              <ToolTelemetryTime step={step} />
-              {duration && (
-                <span className="text-[10px] tabular-nums text-[var(--color-text-dim)]">
-                  {duration}
-                </span>
-              )}
-              {expandable && (
-                <ChevronRight
-                  className={`h-3 w-3 text-[var(--color-text-dim)] transition-transform ${
-                    open ? "rotate-90" : ""
-                  }`}
-                />
-              )}
-            </span>
-          </button>
-          {step.status === "failed" && step.detail && (
-            <p className="mt-1 pl-6 text-[11px] leading-4 text-[var(--color-text-muted)]">
-              {step.detail}
-            </p>
-          )}
-          {step.sources.length > 0 && (
-            <div className="mt-1 flex flex-wrap gap-1.5 pl-6">
-              {step.sources.map((source) => (
-                <span
-                  key={source}
-                  className="inline-flex items-center gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-card)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--color-text-muted)]"
-                >
-                  <Waypoints className="h-2.5 w-2.5 text-[var(--color-text-dim)]" />
-                  {source}
-                </span>
-              ))}
-            </div>
-          )}
-          {expandable && (
-            <div className="chat-collapse" data-open={open}>
-              <div>
-                <div className="mt-2 pl-6 pr-1">
-                  <StepBody step={step} />
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
+        <StatusDot key={step.status} status={step.status} />
+        <StepLine
+          step={step}
+          Icon={Icon}
+          title={step.title}
+          stat={preview}
+          failure={failureLine(step.detail) ?? "Failed"}
+          open={open}
+          onToggle={() => setOpen((value) => !value)}
+          trailing={<ToolTelemetryTime step={step} />}
+        >
+          {stepHasBody(step) ? <StepBody step={step} /> : null}
+        </StepLine>
       </div>
+      {step.sources.length > 0 && (
+        <div className="mt-1 flex flex-wrap gap-1.5 pl-[34px]">
+          {step.sources.map((source) => (
+            <span
+              key={source}
+              className="inline-flex items-center gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-card)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--color-text-muted)]"
+            >
+              <Waypoints className="h-2.5 w-2.5 text-[var(--color-text-dim)]" />
+              {source}
+            </span>
+          ))}
+        </div>
+      )}
     </li>
   );
 });

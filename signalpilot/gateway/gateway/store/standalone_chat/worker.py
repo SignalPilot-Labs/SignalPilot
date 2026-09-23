@@ -133,7 +133,7 @@ async def get_worker_run(db: AsyncSession, *, run_id: str, worker_id: str) -> Ga
     ).scalar_one_or_none()
 
 
-async def worker_context(db: AsyncSession, *, run: GatewayChatRun) -> dict[str, Any]:
+async def worker_context(db: AsyncSession, *, run: GatewayChatRun, include_query_context: bool = True) -> dict[str, Any]:
     conversation = (
         await db.execute(
             select(GatewayChatConversation).where(
@@ -163,6 +163,21 @@ async def worker_context(db: AsyncSession, *, run: GatewayChatRun) -> dict[str, 
         .scalars()
         .all()
     )
+    # The governed-query tables are read only to build the conversation-derived
+    # half of the warm context. On a resumed turn the SDK replays the transcript
+    # that already contains them, so the caller skips this and these four
+    # selects (which grow with the conversation) never run.
+    if not include_query_context:
+        return {
+            "conversation": conversation,
+            "project": project,
+            "messages": messages,
+            "query_proposals": [],
+            "query_approvals": [],
+            "query_executions": [],
+            "query_results": [],
+        }
+
     proposals = list(
         (
             await db.execute(

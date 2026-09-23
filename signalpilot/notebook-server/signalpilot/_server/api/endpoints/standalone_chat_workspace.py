@@ -10,6 +10,9 @@ from signalpilot import _loggers
 from signalpilot._server.ai.claude_session_archive import (
     prepare_claude_session,
 )
+from signalpilot._server.api.endpoints.standalone_chat_dbt_manifest import (
+    seed_dbt_manifest,
+)
 from signalpilot._server.api.endpoints.standalone_chat_runtime import (
     _execution_project_directory,
     _scratch_directory,
@@ -77,21 +80,33 @@ async def prepare_execution_workspace(
         )
     seeded_source = notebook_path.read_text(encoding="utf-8")
     try:
-        project_directory, remove_project_directory = (
-            await _execution_project_directory(
-                # Claude Agent SDK sessions are scoped to cwd. Keep this path
-                # stable across turns while still rematerializing its contents
-                # from the frozen snapshot for every run.
-                run_id=conversation_id,
-                project_id=project_id,
-                branch=branch,
-                gateway_url=gateway_url,
-                gateway_token=gateway_token,
-            )
+        (
+            project_directory,
+            remove_project_directory,
+        ) = await _execution_project_directory(
+            # Claude Agent SDK sessions are scoped to cwd. Keep this path
+            # stable across turns while still rematerializing its contents
+            # from the frozen snapshot for every run.
+            run_id=conversation_id,
+            project_id=project_id,
+            branch=branch,
+            gateway_url=gateway_url,
+            gateway_token=gateway_token,
         )
     except Exception:
         shutil.rmtree(scratch, ignore_errors=True)
         raise
+    # The source snapshot has no target/; verifiers need the compiled
+    # manifest. Seeded on every run so warm checkouts from before a dbt map
+    # existed pick it up; an existing manifest is left untouched.
+    await asyncio.to_thread(
+        seed_dbt_manifest,
+        project_directory,
+        project_id=project_id,
+        branch=branch,
+        gateway_url=gateway_url,
+        gateway_token=gateway_token,
+    )
     baseline_digest = await asyncio.to_thread(_tree_digest, project_directory)
     return (
         scratch,

@@ -82,6 +82,24 @@ _CLARIFICATION_PREFIX = "CLARIFICATION_REQUESTED:"
 _delta_batchers: dict[str, DeltaBatcher] = {}
 
 
+async def _agent_session_archive_exists(*, org_id: str, conversation_id: str) -> bool:
+    """True when a saved Claude session archive exists for this conversation."""
+    try:
+        from gateway.standalone_chat.agent_sessions import agent_session_archive_key
+        from gateway.standalone_chat.object_storage import chat_object_storage
+
+        storage = chat_object_storage()
+        if not storage.enabled:
+            return False
+        key = agent_session_archive_key(
+            org_id=org_id, conversation_id=conversation_id
+        )
+        return await storage.exists(key)
+    except Exception:
+        # Never let this optimisation break a run: on doubt, build the context.
+        return False
+
+
 async def _write_event(run_id: str, event_type: str, payload: dict[str, Any]) -> None:
     factory = get_session_factory()
     async with factory() as db:
@@ -139,7 +157,15 @@ async def _execute_claimed_run(run_id: str, worker_id: str) -> None:
             # Tool result handling runs after this session closes.
             run_org_id = run.org_id
             recovering = run.execution_attempt > 1
-            context = await chat_store.worker_context(db, run=run)
+            # A resumed SDK session already carries the conversation-derived
+            # context, so do not pay to rebuild it. The archive's presence is
+            # the same signal the notebook server uses to decide to resume.
+            resume_likely = await _agent_session_archive_exists(
+                org_id=run.org_id, conversation_id=run.conversation_id
+            )
+            context = await chat_store.worker_context(
+                db, run=run, include_query_context=not resume_likely
+            )
             project = context["project"]
             branch = context["conversation"].branch or project.default_branch or "main"
             commit_sha = str(context["conversation"].commit_sha or "")

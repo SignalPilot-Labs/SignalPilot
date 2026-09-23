@@ -2,9 +2,9 @@
 
 // Standalone data chat container; UI details live in sibling modules.
 
-import { Bot, PanelLeft } from "lucide-react";
+import { PanelLeft } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import useSWR from "swr";
 import {
   getSavedChatReport,
@@ -24,6 +24,7 @@ import { projectSettingsHref } from "~/lib/project-settings-route";
 import { useConversationArtifacts } from "~/components/chat/use-conversation-notebook";
 import { hasArtifactsContent } from "~/lib/chat-artifacts";
 import { ChatUiContext } from "~/components/chat/chat-ui-context";
+import { useChatUiValue } from "~/components/chat/use-chat-ui-value";
 import { ChatPaywall } from "~/components/billing/chat-paywall";
 import { ChatMessage } from "~/components/chat/chat-message";
 import {
@@ -38,6 +39,7 @@ import {
   ConversationMessagesSkeleton,
   ConversationNotFoundScreen,
   ConversationRail,
+  ImprovementRunBanner,
   QueryApprovalCard,
   ReadinessNotice,
   StarterQuestions,
@@ -184,6 +186,7 @@ export function StandaloneDataChat({
   } = useConversationArtifacts(conversationId ?? null, events);
   const [notebookPanelOpen, setNotebookPanelOpen] =
     useNotebookPanelState(conversationId);
+  const closeArtifacts = useCallback(() => setNotebookPanelOpen(false), [setNotebookPanelOpen]);
   const conversationLoading = Boolean(
     conversationId && !detail && !detailError && detailLoading,
   );
@@ -315,6 +318,17 @@ export function StandaloneDataChat({
   const empty = uiMessages.length === 0;
   const { message: unreadyMessage, showSetup: showSetupCta } =
     readinessNotice(bootstrap, readiness, can("projects.write"));
+  // Stable identity: a fresh literal would re-render every transcript
+  // consumer on each keystroke, poll and streamed event.
+  const chatUi = useChatUiValue({
+    events,
+    conversationId: conversationId ?? null,
+    files: conversationFiles,
+    openArtifact,
+    openChatSettings: settingsPanel.openPanel,
+    onStop,
+    onRetry,
+  });
 
   if (bootstrapLoading) {
     return <ChatBootstrapSpinner />;
@@ -386,17 +400,7 @@ export function StandaloneDataChat({
       running={runIsStreaming}
     >
     <ConnectorsProvider enabled={connectorsEnabled}>
-    <ChatUiContext.Provider
-      value={{
-        events,
-        conversationId: conversationId ?? null,
-        files: conversationFiles,
-        openArtifact,
-        openChatSettings: settingsPanel.openPanel,
-        onStop,
-        onRetry,
-      }}
-    >
+    <ChatUiContext.Provider value={chatUi}>
       <div
         className={chatShellClassName(
           embedded,
@@ -445,15 +449,7 @@ export function StandaloneDataChat({
           <main className="relative flex min-w-0 flex-1 flex-col">
             {conversationId &&
               isImprovementConversation(detail?.conversation) && (
-                <div className="flex-none px-6 pt-4">
-                  <div className="mx-auto flex max-w-3xl items-center gap-2 rounded-xl border border-[var(--color-warning)]/25 bg-[var(--color-warning)]/5 px-4 py-2.5 text-xs text-[var(--color-warning)]">
-                    <Bot className="h-3.5 w-3.5 flex-none" />
-                    Automated improvement run
-                    <span className="text-[var(--color-text-dim)]">
-                      · started by SignalPilot, not a teammate
-                    </span>
-                  </div>
-                </div>
+                <ImprovementRunBanner />
               )}
             {conversationId && unreadyMessage && (
               <div className="flex-none px-6 pt-4">
@@ -579,7 +575,7 @@ export function StandaloneDataChat({
                 executions: sqlTraceExecutions,
                 loading: artifactsLoading,
                 openFileRequest,
-                onClose: () => setNotebookPanelOpen(false),
+                onClose: closeArtifacts,
               }}
               settings={{
                 open: settingsPanel.open,

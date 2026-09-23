@@ -15,7 +15,7 @@ import {
   Sparkles,
   Wrench,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import { ChatMarkdown } from "~/components/chat/chat-markdown";
 import {
   openStandaloneNotebookArchive,
@@ -39,7 +39,13 @@ import {
 } from "~/lib/chat-run-steps";
 import { LivePill } from "~/components/chat/live-pill";
 import { useToast } from "~/components/ui/toast";
-import { useChatUi, type UiMessage } from "~/components/chat/chat-ui-context";
+import {
+  ChatUiContext,
+  useChatUi,
+  type ChatUiContextValue,
+  type UiMessage,
+} from "~/components/chat/chat-ui-context";
+import { useRunScopedChatUi } from "~/components/chat/use-chat-ui-value";
 import {
   deriveArtifactCards,
   groupCardsByAnchor,
@@ -56,28 +62,51 @@ function WorkTimeline({ runId }: { runId: string }) {
 const ACTION_BUTTON =
   "inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] text-[var(--color-text-dim)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]";
 
-export function AssistantMessage({
-  message,
-  previousMessageAt,
-  replayMode = false,
-}: {
+type AssistantMessageProps = {
   message: UiMessage;
   previousMessageAt?: number;
   /** Rendered by the conversation replay: no action row. */
   replayMode?: boolean;
-}) {
-  const runId =
+};
+
+function messageRunId(message: UiMessage): string {
+  return (
     message.runId ??
     (typeof message.metadata.run_id === "string"
       ? message.metadata.run_id
-      : "");
+      : "")
+  );
+}
+
+/**
+ * Reads the chat context and hands the body a copy scoped to this
+ * message's run. The body is memoized: a streamed event for another run,
+ * or a page re-render (a keystroke, a poll), leaves a finished message
+ * and its whole activity timeline untouched.
+ */
+export function AssistantMessage(props: AssistantMessageProps) {
+  const runId = messageRunId(props.message);
+  const ui = useRunScopedChatUi(useChatUi(), runId);
+  return <AssistantMessageBody {...props} runId={runId} ui={ui} />;
+}
+
+const AssistantMessageBody = memo(function AssistantMessageBody({
+  message,
+  previousMessageAt,
+  replayMode = false,
+  runId,
+  ui,
+}: AssistantMessageProps & {
+  runId: string;
+  /** The chat context with `events` holding only this run's events. */
+  ui: ChatUiContextValue;
+}) {
   const runStatus =
     message.runStatus ??
     (typeof message.metadata.status === "string"
       ? (message.metadata.status as StandaloneChatRunStatus)
       : "completed");
   const [showWork, setShowWork] = useState(false);
-  const ui = useChatUi();
   const { events, files, onRetry, onStop } = ui;
   // A read-only surface (the shared page) keeps Copy and Replay but has no
   // run to stop or retry. Read defensively: the flag is optional.
@@ -132,6 +161,7 @@ export function AssistantMessage({
   const runtimeArchiveAvailable =
     message.metadata.runtime_archive_available === true;
   return (
+    <ChatUiContext.Provider value={ui}>
     <article
       data-chat-message-id={message.id}
       className="group mx-auto w-full max-w-3xl px-6 py-5"
@@ -265,5 +295,6 @@ export function AssistantMessage({
         </MessageRunContext.Provider>
       </div>
     </article>
+    </ChatUiContext.Provider>
   );
-}
+});

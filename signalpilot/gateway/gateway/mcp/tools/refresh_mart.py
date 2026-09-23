@@ -60,13 +60,25 @@ async def _lock_for(key: str) -> asyncio.Lock:
         return lock
 
 
+# Every refresh_mart failure carries its own next step, because the agent that
+# reads it must not loop on the tool and must not abandon the question either.
+_UNAVAILABLE_NEXT_STEP = (
+    "Do not call refresh_mart again in this run. Answer from the mart as it is now, "
+    "and tell the user the data may be behind."
+)
+_FAILED_NEXT_STEP = (
+    "The refresh did not finish, so the mart is unchanged. Do not call refresh_mart again. "
+    "Tell the user this error, then answer from the mart as it is now and say the data may be behind."
+)
+
+
 def _denial() -> str | None:
     capabilities = mcp_capabilities_var.get(None) or []
     if DBT_EXECUTE_CAPABILITY not in capabilities:
-        return "Error: refresh_mart is not enabled for this session"
+        return f"Error: refresh_mart is not enabled for this session. {_UNAVAILABLE_NEXT_STEP}"
     identity = mcp_execution_identity_var.get(None) or ""
     if not identity.startswith("chat:"):
-        return "Error: refresh_mart requires a chat execution identity"
+        return f"Error: refresh_mart requires a chat execution identity. {_UNAVAILABLE_NEXT_STEP}"
     return None
 
 
@@ -95,7 +107,10 @@ async def refresh_mart(mart: str, database: str | None = None) -> str:
 
     mart = (mart or "").strip()
     if not _MART_RE.match(mart):
-        return "Error: mart must be a bare dbt model name (letters, digits, underscore)"
+        return (
+            "Error: mart must be a bare dbt model name (letters, digits, underscore). "
+            'Pass the model name on its own, for example "fct_daily_sales", then call refresh_mart once more.'
+        )
 
     identity = mcp_execution_identity_var.get(None) or ""
     org_id = mcp_org_id_var.get(None) or "local"
@@ -103,12 +118,18 @@ async def refresh_mart(mart: str, database: str | None = None) -> str:
     branch = mcp_branch_var.get(None) or "main"
     connection_name = mcp_allowed_connection_var.get(None)
     if not project_id or not connection_name:
-        return "Error: this session has no project/connection binding"
+        return f"Error: this session has no project/connection binding. {_UNAVAILABLE_NEXT_STEP}"
+
+    # Argument problems are separated from build failures: the agent can fix an
+    # argument and call once more, but it must never re-run a failed build.
+    try:
+        target = resolve_refresh_target(connection_name, database)
+    except DbtExecutorError as exc:
+        return f"Error: {exc}. Correct the argument, then call refresh_mart once more."
 
     lock = await _lock_for(f"{org_id}:{project_id}:{branch}:{mart}")
     async with lock:
         try:
-            target = resolve_refresh_target(connection_name, database)
             async with _store_session() as store:
                 sandbox_id, dbt_dir, schema = await ensure_executor(
                     store.session,
@@ -129,6 +150,6 @@ async def refresh_mart(mart: str, database: str | None = None) -> str:
                 )
                 return f"refreshed {mart} into {where} (schema default {schema})\n{result}"
         except DbtExecutorError as exc:
-            return f"Error: {exc}"
+            return f"Error refreshing {mart}: {exc}\n{_FAILED_NEXT_STEP}"
         except Exception as exc:  # never leak provider/credential internals
-            return f"Error refreshing mart: {sanitize_mcp_error(str(exc))}"
+            return f"Error refreshing {mart}: {sanitize_mcp_error(str(exc))}\n{_FAILED_NEXT_STEP}"

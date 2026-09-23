@@ -373,7 +373,11 @@ async def _update_summary(run_id: str) -> None:
         run = await db.get(GatewayChatRun, run_id)
         if run is None:
             return
-        context = await _worker().chat_store.worker_context(db, run=run)
+        # Summarisation reads only the messages, so the four governed-query
+        # selects would be pure waste here.
+        context = await _worker().chat_store.worker_context(
+            db, run=run, include_query_context=False
+        )
     messages = _message_context(context)
     selection = select_context_for_summary(
         messages,

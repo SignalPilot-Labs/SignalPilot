@@ -34,6 +34,7 @@ import {
 } from "~/lib/standalone-chat-state";
 import { buildStandaloneUiMessages } from "~/lib/standalone-chat-ui-messages";
 import type { UiMessage } from "~/components/chat/chat-ui-context";
+import { useStableMessages } from "~/components/chat/use-chat-ui-value";
 import type { ChatEventArrival } from "~/lib/chat-telemetry";
 import { eventText } from "~/components/chat/standalone-chat-helpers";
 
@@ -199,7 +200,7 @@ export function useStandaloneUiMessages({
   pendingSubmission: OptimisticUserMessage | null;
   setPendingSubmission: (value: OptimisticUserMessage | null) => void;
 }) {
-  const uiMessages = useMemo<UiMessage[]>(
+  const builtMessages = useMemo<UiMessage[]>(
     () =>
       buildStandaloneUiMessages({
         detailMessages,
@@ -210,6 +211,9 @@ export function useStandaloneUiMessages({
       }),
     [currentRun, detailMessages, events, isSubmitting, pendingSubmission],
   );
+  // Keep unchanged rows (and the list itself) referentially stable, so the
+  // memoized transcript rows skip polls and other runs' events.
+  const uiMessages = useStableMessages(builtMessages);
 
   useEffect(() => {
     if (

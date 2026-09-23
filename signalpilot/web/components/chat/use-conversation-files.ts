@@ -11,6 +11,14 @@ import {
 /** Delay before a refetch so bursts of events cause one request. */
 const REFETCH_DEBOUNCE_MS = 400;
 
+function sameJson(left: unknown, right: unknown): boolean {
+  try {
+    return JSON.stringify(left) === JSON.stringify(right);
+  } catch {
+    return false;
+  }
+}
+
 /** A conversation resource plus whether its first fetch has resolved. */
 export type ConversationResource<T> = {
   data: T;
@@ -60,7 +68,9 @@ export function useConversationResource<T>(
         fetchResource(conversationId)
           .then((result) => {
             if (!cancelled && latestRequestRef.current === requestId) {
-              setValue(result);
+              // An unchanged refetch keeps the old identity, so the
+              // transcript's inline artifact cards do not re-render.
+              setValue((current) => (sameJson(current, result) ? current : result));
               setLoaded(true);
             }
           })

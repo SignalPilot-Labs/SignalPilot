@@ -37,6 +37,41 @@ from gateway.mcp.tools.query_debug import (
 )
 from gateway.mcp.validation import _validate_connection_name, _validate_sql
 
+# A route other than "mcp" is the agent's only notice that this query will not
+# run here. The route code alone says nothing, so every code carries its own
+# next step in the tool result instead of in the system prompt.
+_ROUTE_NEXT_STEP = {
+    "aggregate_required": (
+        "This query would return more data than query_database can return, so it did not run. "
+        "Rewrite it as a bounded warehouse aggregate with GROUP BY, tighter filters, or fewer "
+        "columns, then call query_database again."
+    ),
+    "notebook_sdk": (
+        "This query is too large for query_database or needs Python, so it did not run. "
+        "Run it in the notebook with the sp SDK instead."
+    ),
+    "dataset_ref": (
+        "This result is too large to return here and is available as a dataset reference. "
+        "Read it in the notebook with the sp SDK instead of query_database."
+    ),
+    "refuse": (
+        "Governance refused this query, so it will not run here or anywhere else. "
+        "Stop this line of work and tell the user that governance refused the query."
+    ),
+}
+
+
+def _route_payload(plan) -> dict[str, object]:
+    """The plan decision plus the next step the route calls for."""
+    payload = dict(plan.as_agent_dict())
+    if plan.route != "mcp":
+        payload["next_step"] = _ROUTE_NEXT_STEP.get(
+            plan.route,
+            f"This query was routed to {plan.route} and cannot run here. "
+            "Tell the user that query_database cannot run this query.",
+        )
+    return payload
+
 
 def _selected_connection(connection_name: str | None) -> tuple[str | None, str | None]:
     """Resolve a run-bound connection without making the agent repeat it."""
@@ -110,7 +145,7 @@ async def plan_query(
             # A ToolError becomes an isError result, so the SDK and the chat
             # UI count the failure instead of recording a successful call.
             raise ToolError(f"Planning error: {sanitize_mcp_error(str(exc), cap=DB_ERROR_CAP)}") from exc
-    return json.dumps(plan.as_agent_dict(), default=str)
+    return json.dumps(_route_payload(plan), default=str)
 
 
 @audited_tool(mcp)
@@ -169,12 +204,7 @@ async def query_database(
                     context=context,
                 )
                 if plan.route != "mcp":
-                    return json.dumps(
-                        {
-                            "route": plan.route,
-                            "approval_required": plan.approval_required,
-                        }
-                    )
+                    return json.dumps(_route_payload(plan), default=str)
                 context = await _chat_query_context(store, path="mcp", plan_id=plan.plan_id)
             result = await governed_query_executor.execute(
                 store,

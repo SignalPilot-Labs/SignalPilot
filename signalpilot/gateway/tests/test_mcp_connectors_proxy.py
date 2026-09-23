@@ -266,7 +266,11 @@ async def test_proxy_401_without_refresh_signs_member_out(db: AsyncSession, monk
     proxy = ConnectorProxy(db, connector, ProxyCaller(org_id="org-a", user_id="user-a", run_id=None, conversation_id=None))
     monkeypatch.setattr(proxy, "_upstream", AsyncMock(return_value=FakeUpstream(fail=UpstreamError("401", status=401))))
     result = await proxy.call_tool("search", {})
-    assert result.is_error and result.content[0].text == 'Connector "Vendor" needs you to sign in again from Chat settings'
+    # The leading sentence is the contract other code and the chat prompt match on;
+    # the rest of the message is the agent's next step.
+    assert result.is_error and result.content[0].text.startswith(
+        'Connector "Vendor" needs you to sign in again from Chat settings'
+    )
     await db.refresh(member)
     assert member_store.oauth_tokens(member) is None
     rows = list((await db.execute(select(GatewayMcpToolCall))).scalars())

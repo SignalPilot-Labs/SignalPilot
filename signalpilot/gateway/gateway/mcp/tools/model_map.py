@@ -330,6 +330,21 @@ _COLUMNAR = {"duckdb", "sqlite", "clickhouse"}  # exact is cheap; DuckDB stays 1
 _BIG = 2_000_000                                # above this, sample row-store tables
 _SAMPLE = 200_000                               # bounded sample size for the exact path
 
+# Profiling cost is rows x columns, not rows. `_profile_exact` emits one
+# COUNT(DISTINCT col) per column in a single statement, and each of those is its
+# own aggregation, so a 267-column table at 317k rows costs roughly 40x a
+# one-column table at 2M rows while sailing under a rows-only gate. That is what
+# made map_columns run for 9m44s on core_transaction_line (267 cols x 316,874
+# rows = 84.6M cells) until the MCP transport dropped the call and the whole
+# result was lost. Gate on cells instead.
+_BIG_CELLS = 8_000_000
+# Cap on COUNT(DISTINCT) aggregates per statement. 267 in one query is
+# pathological on any row store, sampled or not; chunks are unioned by the caller.
+_MAX_DISTINCTS_PER_QUERY = 40
+# Wall-clock budget for profiling one table. On expiry we return what we have
+# rather than outliving the transport: partial evidence beats none.
+_PROFILE_BUDGET_SECONDS = 90.0
+
 
 async def _profile_pg_stats(connector, schema, key, columns, rows) -> dict[str, dict]:
     """Postgres/Redshift: read null_frac + n_distinct from the catalog (no scan)."""
@@ -362,14 +377,39 @@ async def _profile_pg_stats(connector, schema, key, columns, rows) -> dict[str, 
     return out
 
 
-async def _profile_exact(connector, schema, key, columns, sample_rows: int | None = None) -> dict[str, dict]:
-    """One batched scan: exact null + COUNT(DISTINCT). Optionally over a sample.
+async def _profile_exact(
+    connector,
+    schema,
+    key,
+    columns,
+    sample_rows: int | None = None,
+    *,
+    deadline: float | None = None,
+) -> dict[str, dict]:
+    """Batched scans: exact null + COUNT(DISTINCT). Optionally over a sample.
+
+    Columns are profiled in chunks of `_MAX_DISTINCTS_PER_QUERY` so no single
+    statement carries hundreds of distinct aggregations. When `deadline` (a
+    `time.monotonic()` stamp) passes, profiling stops and the columns done so
+    far are returned; the caller reports the rest as unprofiled.
 
     Identifier quoting uses the connector's own dialect rules (double-quote /
     backtick / brackets), so this is correct on every supported database.
     """
     if sample_rows is not None:
         sample_rows = int(sample_rows)
+    if len(columns) > _MAX_DISTINCTS_PER_QUERY:
+        merged: dict[str, dict] = {}
+        for start in range(0, len(columns), _MAX_DISTINCTS_PER_QUERY):
+            if deadline is not None and time.monotonic() >= deadline:
+                break
+            chunk = columns[start : start + _MAX_DISTINCTS_PER_QUERY]
+            merged.update(
+                await _profile_exact(
+                    connector, schema, key, chunk, sample_rows, deadline=deadline
+                )
+            )
+        return merged
     qt = connector.quote_table(key)
     qc = connector.quote_identifier
     src = qt
@@ -417,8 +457,25 @@ async def _profile_columns(connector, schema: _Schema, table_name: str,
     rows = schema.row_count(table_name)
     if schema.dialect in _PG_STATS and rows > _BIG:
         return await _profile_pg_stats(connector, schema, key, columns, rows)
-    sample = _SAMPLE if (rows > _BIG and schema.dialect not in _COLUMNAR) else None
-    return await _profile_exact(connector, schema, key, columns, sample_rows=sample)
+    # Cost is rows x columns. A wide table is expensive at a row count that no
+    # rows-only threshold would ever catch.
+    cells = rows * max(1, len(columns))
+    sample = (
+        _SAMPLE
+        if (cells > _BIG_CELLS and schema.dialect not in _COLUMNAR)
+        else None
+    )
+    deadline = time.monotonic() + _PROFILE_BUDGET_SECONDS
+    profile = await _profile_exact(
+        connector, schema, key, columns, sample_rows=sample, deadline=deadline
+    )
+    if sample:
+        # Sampled distinct counts are estimates. Say so, so a caller cannot read
+        # "distinct_count == total" off a sample and call the column a key.
+        for stats in profile.values():
+            stats["estimated"] = True
+            stats["sampled_rows"] = sample
+    return profile
 
 
 def _detect_lookups(connector, schema: _Schema) -> dict[str, tuple[str, str, str]]:
@@ -726,7 +783,9 @@ async def map_columns(
         return f"Error: {err}"
     if not model_name or not _MODEL_NAME_RE.match(model_name):
         return f"Error: Invalid model name '{model_name}'."
-    work_dir, err = _validated_project_dir(project_dir)
+    from gateway.mcp.tools.model_map_workspace import resolve_project_dir
+
+    work_dir, err = await resolve_project_dir(project_dir)
     if err:
         return err
     exclude_set = {c.strip().lower() for c in exclude.split(",") if c.strip()}
@@ -1032,7 +1091,9 @@ async def find_column_producers(
     """
     if err := _validate_connection_name(connection_name):
         return f"Error: {err}"
-    work_dir, err = _validated_project_dir(project_dir)
+    from gateway.mcp.tools.model_map_workspace import resolve_project_dir
+
+    work_dir, err = await resolve_project_dir(project_dir)
     if err:
         return err
     columns = [c.strip() for c in column_names.split(",") if c.strip()]

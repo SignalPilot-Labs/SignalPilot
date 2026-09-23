@@ -107,6 +107,12 @@ def _distill_node(node: dict) -> dict:
             name: _distill_column(name, col) for name, col in (node.get("columns") or {}).items()
         },
     }
+    # A project can declare a model's layer explicitly (meta: {layer: ...});
+    # the lineage page prefers it over schema, folder and name inference.
+    meta = node.get("meta") or config.get("meta") or {}
+    layer = meta.get("layer") if isinstance(meta, dict) else None
+    if isinstance(layer, str) and layer.strip():
+        slim["layer"] = layer.strip()[:40]
     if node.get("test_metadata") is not None:
         slim["test_metadata"] = node["test_metadata"]
     return slim

@@ -147,6 +147,26 @@ async def test_sweep_skips_ignored_paths_and_symlinks(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_sweep_skips_a_copied_dbt_project_and_dependency_dirs(
+    tmp_path: Path,
+) -> None:
+    # A verifier copies the project into scratch to compile it in isolation.
+    capture = _capture(tmp_path)
+    await capture.baseline()
+    project = tmp_path / "proj"
+    _write(project / "dbt_project.yml", b"name: x\n")
+    _write(project / "README.md", b"readme")
+    _write(project / "dbt_packages" / "dbt_utils" / "macros" / "star.sql", b"x")
+    _write(project / "target" / "manifest.json", b"{}")
+    _write(tmp_path / "work" / "node_modules" / "pkg" / "index.js", b"x")
+    _write(tmp_path / "work" / "target" / "run.sql", b"x")
+    _write(tmp_path / "artifacts" / "summary.md", b"# ok")
+
+    captured = await capture.sweep(reason="tool", tool_call_id="t1")
+    assert [file.path for file in captured] == ["artifacts/summary.md"]
+
+
+@pytest.mark.asyncio
 async def test_size_cap_skips_large_files_until_they_change(
     tmp_path: Path,
 ) -> None:

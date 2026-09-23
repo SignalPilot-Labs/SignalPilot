@@ -53,7 +53,10 @@ def _validated_project_dir(project_dir: str) -> tuple[Path | None, str | None]:
     if _os.environ.get("SP_DEPLOYMENT_MODE") == "cloud" and not _os.environ.get(
         "SP_WORKSPACE_ROOT"
     ):
-        return None, "Error: project_dir not permitted — SP_WORKSPACE_ROOT not configured."
+        return None, (
+            "Error: map_columns reads the dbt project on the gateway and cannot read a "
+            "sandbox project_dir. Inspect each upstream relation with describe_table instead."
+        )
     root = _resolve_workspace_root()
     try:
         candidate = Path(project_dir).resolve()

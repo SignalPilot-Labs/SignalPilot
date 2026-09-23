@@ -15,6 +15,7 @@ import logging
 from typing import Any
 
 from ..base import BaseConnector
+from .mssql_errors import sql_server_error_text
 
 try:
     import pymssql
@@ -291,7 +292,7 @@ class MSSQLConnector(BaseConnector):
             async with self._conn_lock:
                 return await self._run_in_thread(_run, effective_timeout, label="SQL Server")
         except pymssql.Error as e:
-            raise RuntimeError(f"SQL Server query error: {e}") from e
+            raise RuntimeError(f"SQL Server query error: {sql_server_error_text(e)}") from e
 
     async def cancel_current_query(self) -> bool:
         # pymssql handles must not be used from two threads simultaneously.

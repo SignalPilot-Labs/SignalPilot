@@ -123,6 +123,35 @@ class _SdkStreamState:
     # The plan file (artifacts/plan.md) the agent wrote this run, if any.
     plan_file_path: str | None = None
     plan_continuations: int = 0
+    skipped_empty_results: int = 0
+
+
+# A resumed session can open with a turn the CLI injects itself, before the
+# queued user message: an unfinished background task from the previous run
+# makes it add "Continue from where you left off." The model answers without
+# an API turn and the CLI emits a result for that turn. Our message is still
+# queued behind it, so the run must keep reading. Bounded so a CLI that never
+# answers cannot hold the run open.
+MAX_SKIPPED_EMPTY_RESULTS = 2
+
+
+def _is_injected_turn_result(msg: Any, state: _SdkStreamState) -> bool:
+    """True for a result that answers a turn the CLI injected, not our message.
+
+    The SDK stamps ``origin`` on results of injected turns (background-task
+    notifications, scheduled prompts); our own prompt has no origin or
+    ``human``. The resume turn carries no origin, so a zero-turn result also
+    counts: a real answer to the user's message always takes an API turn.
+    """
+    if bool(getattr(msg, "is_error", False)):
+        return False
+    if state.skipped_empty_results >= MAX_SKIPPED_EMPTY_RESULTS:
+        return False
+    origin = getattr(msg, "origin", None)
+    kind = origin.get("kind") if isinstance(origin, dict) else None
+    if kind is not None and kind != "human":
+        return True
+    return getattr(msg, "num_turns", None) == 0
 
 
 def _result_event(
@@ -317,6 +346,12 @@ async def _relay_sdk_messages(
                         )
 
         elif isinstance(msg, ResultMessage):
+            if _is_injected_turn_result(msg, state):
+                state.skipped_empty_results += 1
+                LOGGER.warning(
+                    "Skipping a zero-turn SDK result; the user message is still queued"
+                )
+                continue
             if await _continue_open_plan(client, msg, state):
                 continue
             event_queue.put(_result_event(msg, state))

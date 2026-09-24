@@ -62,7 +62,8 @@ Use a width of 1600. Use card row height 150 to 160, chart rows 300 to 420.
 
 ## Review every render
 
-Render the dashboard with `tableau_view_image` after each publish. Look at the
+Render the dashboard with `tableau_view_image` after each publish. The tool
+saves the PNG and returns its path. Open the PNG with the Read tool. Look at the
 image. Fix each item and publish again:
 
 - [ ] No `####` in a card. If you see it, make the row taller.

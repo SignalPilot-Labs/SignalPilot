@@ -14,7 +14,6 @@ server marks the tool result as an error.
 
 from __future__ import annotations
 
-import base64
 import json
 import re
 from pathlib import Path
@@ -383,7 +382,7 @@ def build_tableau_handlers(
         )
 
     async def view_image(arguments: dict[str, Any]) -> list[Any]:
-        from mcp.types import ImageContent, TextContent
+        from mcp.types import TextContent
 
         root = scratch()
         raw_ref = str(arguments.get("view") or "").strip()
@@ -400,19 +399,16 @@ def build_tableau_handlers(
         target = resolve_scratch_path(root, f"artifacts/tableau-{slug}.png")
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(png)
-        status = {
+        status: dict[str, Any] = {
             "view": raw_ref,
             "path": _relative(root, target),
             "bytes": len(png),
         }
-        return [
-            TextContent(type="text", text=json.dumps(status)),
-            ImageContent(
-                type="image",
-                data=base64.b64encode(png).decode("ascii"),
-                mimeType="image/png",
-            ),
-        ]
+        # Return the path, not the image: the file is on this machine, and the
+        # agent opens it with the Read tool when it needs to look at it. An
+        # inline image can exceed the SDK's per-message JSON limit.
+        status["next"] = f"Open {status['path']} with the Read tool to look at the render."
+        return [TextContent(type="text", text=json.dumps(status))]
 
     async def view_data(arguments: dict[str, Any]) -> list[Any]:
         raw_ref = str(arguments.get("view") or "").strip()

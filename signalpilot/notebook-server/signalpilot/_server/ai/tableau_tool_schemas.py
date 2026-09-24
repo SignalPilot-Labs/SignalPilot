@@ -242,8 +242,9 @@ def tableau_tools() -> list[Tool]:
                 f"{_SKILL} Render one view or dashboard on the Tableau server "
                 "to a PNG image. Give the view id or name. A large dashboard "
                 "can take two minutes. The tool saves the image as "
-                "artifacts/tableau-<name>.png and returns the image. Look at "
-                "the image to check the result."
+                "artifacts/tableau-<name>.png and returns the path. It does "
+                "not return the image. To check the result, open the file with "
+                "the Read tool."
             ),
             inputSchema=_object(
                 {

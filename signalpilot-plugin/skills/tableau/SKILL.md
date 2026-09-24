@@ -43,7 +43,7 @@ Read these files in this skill directory:
 | `tableau_publish_datasource` | Publish a live data source on a SignalPilot connection (a table or a SQL query). |
 | `tableau_datasource_fields` | List the fields and types of a published data source. |
 | `tableau_query_datasource` | Run an aggregate query through Tableau on a published data source. |
-| `tableau_view_image` | Render a view or dashboard to PNG. It saves `artifacts/tableau-<name>.png` and shows you the image. |
+| `tableau_view_image` | Render a view or dashboard to PNG. It saves `artifacts/tableau-<name>.png` and returns the path, not the image. Open the file with the Read tool to look at it. |
 | `tableau_view_data` | Get the data behind a view as CSV. |
 | `tableau_connection_info` | Get the server, port, database, and user name Tableau must use for a SignalPilot connection. No password. |
 
@@ -54,7 +54,7 @@ Read these files in this skill directory:
 2. Render before you change. Before you edit a dashboard, render it with
    `tableau_view_image`. Keep that image to compare.
 3. Render after you publish. Render every dashboard you changed or built.
-   Look at the image. Fix empty sheets, errors, and wrong labels before you
+   Open the saved PNG with the Read tool and look at it. Fix empty sheets, errors, and wrong labels before you
    report.
 4. Check the numbers. For each headline number, compare
    `tableau_query_datasource` (or `tableau_view_data`) with a SignalPilot SQL

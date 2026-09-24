@@ -206,6 +206,11 @@ def _build_agent_options_kwargs(
         },
         "cwd": effective_cwd,
         "env": agent_env,
+        # One CLI message (a tool result with an image, a large file read)
+        # can pass the SDK's 1 MB default and kill the whole run with
+        # CLIJSONDecodeError. Tools keep their own results small; this is
+        # the backstop. Override with SP_AGENT_MAX_BUFFER_BYTES.
+        "max_buffer_size": int(os.environ.get("SP_AGENT_MAX_BUFFER_BYTES") or 16 * 1024 * 1024),
         # Transport breaker: deny gateway tool calls with a concrete wait
         # after a transport failure; stop the run after three in a row.
         "hooks": build_transport_breaker_hooks(chat_session_id),

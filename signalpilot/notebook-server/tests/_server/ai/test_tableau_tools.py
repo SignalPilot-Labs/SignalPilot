@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import json
 from typing import TYPE_CHECKING, Any
 
@@ -11,7 +10,6 @@ import pytest
 from mcp.types import (
     CallToolRequest,
     CallToolRequestParams,
-    ImageContent,
     ListToolsRequest,
 )
 
@@ -313,7 +311,7 @@ async def test_publish_rejects_a_missing_or_wrong_file(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_view_image_saves_the_png_and_returns_an_image(
+async def test_view_image_saves_the_png_and_returns_only_the_path(
     tmp_path: Path,
 ) -> None:
     seen: list[httpx.Request] = []
@@ -331,9 +329,9 @@ async def test_view_image_saves_the_png_and_returns_an_image(
     status = json.loads(result[0].text)
     assert status["path"] == "artifacts/tableau-executive-overview.png"
     assert (tmp_path / status["path"]).read_bytes() == PNG
-    assert isinstance(result[1], ImageContent)
-    assert result[1].mimeType == "image/png"
-    assert base64.b64decode(result[1].data) == PNG
+    # Only text comes back: an inline image can exceed the SDK message limit.
+    assert len(result) == 1
+    assert "Read tool" in status["next"]
     assert seen[0].url.params["max_age"] == "1"
     assert seen[0].url.params["width"] == "1600"
 

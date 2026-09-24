@@ -95,8 +95,12 @@ async def resolve(client: TableauClient, kind: str, ref: str) -> dict[str, Any]:
         matches = [p for p in await list_paged(client, path, plural, single) if p.get("name") == ref]
     else:
         matches = await list_paged(client, path, plural, single, params={"filter": f"name:eq:{ref}"}, max_items=50)
+    if not matches and kind in ("datasource", "workbook") and "," not in ref:
+        # Agents often pass the content_url that publish returned (for example
+        # "SPdbt-fct_sales_lines") instead of the display name.
+        matches = await list_paged(client, path, plural, single, params={"filter": f"contentUrl:eq:{ref}"}, max_items=50)
     if not matches:
-        raise TableauError(f"No Tableau {kind} named {ref!r}", status_code=404)
+        raise TableauError(f"No Tableau {kind} with the id, name, or content URL {ref!r}", status_code=404)
     if len(matches) > 1:
         options = ", ".join(
             f"{m.get('id')} (project {((m.get('project') or {}).get('name')) or '?'})" for m in matches[:10]

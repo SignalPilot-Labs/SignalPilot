@@ -284,6 +284,29 @@ async def test_resolve_by_name_ambiguous_is_409_and_download_extracts_twb() -> N
     assert download.url.params["includeExtract"] == "false"
 
 
+async def test_resolve_datasource_falls_back_to_content_url() -> None:
+    """Agents pass the content_url that publish returned; it must resolve like the name."""
+    fake = FakeTableau()
+
+    def datasources(request: httpx.Request) -> httpx.Response:
+        flt = request.url.params.get("filter", "")
+        hits = [{"id": "ds-9", "name": "SP dbt - planning_2027b_repeat", "contentUrl": "SPdbt-planning_2027b_repeat"}]
+        found = flt == "contentUrl:eq:SPdbt-planning_2027b_repeat" or flt == "name:eq:SP dbt - planning_2027b_repeat"
+        return httpx.Response(200, json={"pagination": {"totalAvailable": str(len(hits) if found else 0)},
+                                         "datasources": {"datasource": hits if found else []}})
+
+    fake.routes[("GET", f"/api/3.29/sites/{SITE_ID}/datasources")] = datasources
+    async with fake.client() as client:
+        by_url = await content.resolve(client, "datasource", "SPdbt-planning_2027b_repeat")
+        by_name = await content.resolve(client, "datasource", "SP dbt - planning_2027b_repeat")
+        with pytest.raises(TableauError) as missing:
+            await content.resolve(client, "datasource", "nope")
+    assert by_url["id"] == by_name["id"] == "ds-9"
+    filters = [r.url.params.get("filter") for r in fake.requests if r.url.path.endswith("/datasources")]
+    assert filters[:2] == ["name:eq:SPdbt-planning_2027b_repeat", "contentUrl:eq:SPdbt-planning_2027b_repeat"]
+    assert missing.value.status_code == 404 and "content URL" in missing.value.message
+
+
 async def test_vds_query_limits_rows() -> None:
     fake = FakeTableau()
     ds_id = "cf9dd0c5-05a5-4b0c-8887-189bfa01c2c7"

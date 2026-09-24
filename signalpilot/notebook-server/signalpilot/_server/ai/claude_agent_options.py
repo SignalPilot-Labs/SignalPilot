@@ -169,6 +169,7 @@ def _build_agent_options_kwargs(
     notebook_session_authorizer: Callable[[str], bool] | None,
     chat_session_id: str,
     is_resume: bool,
+    stderr_sink: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Assemble the kwargs passed to ``ClaudeAgentOptions``."""
     from signalpilot._server.ai.transport_breaker import (
@@ -206,6 +207,11 @@ def _build_agent_options_kwargs(
         },
         "cwd": effective_cwd,
         "env": agent_env,
+        # One CLI message (a tool result with an image, a large file read)
+        # can pass the SDK's 1 MB default and kill the whole run with
+        # CLIJSONDecodeError. Tools keep their own results small; this is
+        # the backstop. Override with SP_AGENT_MAX_BUFFER_BYTES.
+        "max_buffer_size": int(os.environ.get("SP_AGENT_MAX_BUFFER_BYTES") or 16 * 1024 * 1024),
         # Transport breaker: deny gateway tool calls with a concrete wait
         # after a transport failure; stop the run after three in a row.
         "hooks": build_transport_breaker_hooks(chat_session_id),
@@ -265,6 +271,14 @@ def _build_agent_options_kwargs(
         agent_options_kwargs["resume"] = chat_session_id
     else:
         agent_options_kwargs["session_id"] = chat_session_id
+
+    # Without this callback the transport does not even pipe the CLI's stderr
+    # (subprocess_cli only passes PIPE when `stderr` is set), so a CLI that
+    # exits non-zero during startup reports nothing but "Check stderr output
+    # for details". That blindness cost three rounds of guesswork on the
+    # follow-up failures; the text the CLI already prints is the diagnosis.
+    if stderr_sink is not None:
+        agent_options_kwargs["stderr"] = stderr_sink
 
     agent_options_kwargs["include_partial_messages"] = True
     # Echo each queued user message back into the stream at the point the

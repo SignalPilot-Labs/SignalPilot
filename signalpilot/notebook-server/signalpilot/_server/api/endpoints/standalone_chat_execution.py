@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import uuid
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from starlette.authentication import requires
@@ -17,6 +18,7 @@ from signalpilot._server.ai.claude_agent import (
     run_notebook_agent,
     stop_agent,
 )
+from signalpilot._server.ai.claude_agent_options import resolve_agent_cwd
 from signalpilot._server.ai.claude_session_archive import (
     persist_claude_session,
 )
@@ -52,8 +54,9 @@ from signalpilot._server.api.endpoints.standalone_chat_handover import (
     take_over_run,
 )
 from signalpilot._server.api.endpoints.standalone_chat_prompt import (
-    STANDALONE_ALLOWED_TOOLS,
     _execution_prompt_values,
+    execution_allowed_tools,
+    tableau_enabled,
 )
 from signalpilot._server.api.endpoints.standalone_chat_response import (
     stream_response,
@@ -103,7 +106,6 @@ from signalpilot._types.ids import SessionId
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
-    from pathlib import Path
 
     from starlette.requests import Request
     from starlette.responses import StreamingResponse
@@ -139,10 +141,9 @@ async def execute(*, request: Request) -> StreamingResponse:
     # mcp_config and the redaction list below, never in the process env.
     connectors = parse_mcp_connectors(body)
     mcp_config = gateway_mcp_config(authorization, connectors)
-    allowed_tools = [
-        *STANDALONE_ALLOWED_TOOLS,
-        *connector_allowed_tools(connectors),
-    ]
+    allowed_tools = execution_allowed_tools(
+        body, connector_allowed_tools(connectors)
+    )
     runtime_app = request.scope.get("app")
     (
         prompt,
@@ -258,10 +259,19 @@ async def execute(*, request: Request) -> StreamingResponse:
     after_tool_result = build_after_tool_result_hook(
         capture=capture, uploader=uploader
     )
+    # The CLI stores each session under its working directory
+    # (~/.claude/projects/<slug of cwd>/<session id>.jsonl), so the session
+    # bookkeeping has to use the SAME directory the agent will run in. Passing
+    # the checkout root here while the agent ran in the dbt project
+    # subdirectory meant the session was written under one slug and looked for
+    # under another: nothing to archive, and the next message asked the CLI to
+    # resume a session it could not find ("No conversation found with session
+    # ID", exit 1). Resolve once, here, and use it for both.
+    agent_cwd, _agent_project_dir = resolve_agent_cwd(str(project_directory))
     agent_session = await restore_agent_session(
         run_id=run_id,
         conversation_id=conversation_id,
-        cwd=project_directory,
+        cwd=Path(agent_cwd),
         transfer=body.get("agent_session"),
     )
 
@@ -273,15 +283,23 @@ async def execute(*, request: Request) -> StreamingResponse:
         resume_agent_session = agent_session.resume
         run_end_captured = False
 
-        async def save_agent_session() -> None:
+        async def save_agent_session() -> bool:
+            """True when the native session is stored and can be resumed.
+
+            The next message may only pass `--resume` when this returns True.
+            The CLI exits 1 with "No conversation found with session ID" if it
+            is asked to resume a session that was never archived, which fails
+            the whole follow-up.
+            """
             try:
-                await persist_claude_session(agent_session)
+                return await persist_claude_session(agent_session)
             except Exception:
                 LOGGER.warning(
                     "Claude session persistence failed run_id=%s",
                     run_id,
                     exc_info=True,
                 )
+                return False
 
         async def final_capture() -> list[bytes]:
             # Runs once: before the final payload, or from `finally`.
@@ -372,6 +390,8 @@ async def execute(*, request: Request) -> StreamingResponse:
                     ),
                     gateway_url=gateway_api_url,
                     gateway_token=scoped_token,
+                    tableau_enabled=tableau_enabled(body),
+                    workspace_directory=working_scratch,
                 )
                 attempt_prompt = prompt
                 if recovery_failure is not None:
@@ -434,8 +454,15 @@ async def execute(*, request: Request) -> StreamingResponse:
                         execution_record.sequence,
                     )
                     return
-                await save_agent_session()
-                resume_agent_session = True
+                # Resume only what was actually stored: see save_agent_session.
+                resume_agent_session = await save_agent_session()
+                if not resume_agent_session:
+                    LOGGER.warning(
+                        "Claude session not stored; the next message starts a new "
+                        "agent session run_id=%s session_id=%s",
+                        run_id,
+                        agent_session.session_id,
+                    )
                 if state.agent_failed:
                     return
                 transport_error = gateway_unavailable_line(

@@ -387,6 +387,19 @@ version.
 
 Save a file again after you change it. The chat shows the newest version.
 
+<!-- @if tableau -->
+## Tableau
+
+The Tableau integration is on for this org. When the user asks about Tableau,
+load the skill `signalpilot-dbt:tableau` first. This includes a request to
+find, build, edit, or check a workbook, a dashboard, or a data source. Then
+use the `tableau_*` tools.
+
+Do not ask the user for Tableau credentials. The gateway holds them.
+Refer to data by SignalPilot connection names. The gateway adds the warehouse
+credentials when it publishes a data source or a workbook.
+<!-- @endif -->
+
 ## Ask rarely, disclose always
 
 Ask for clarification only when exploration leaves an ambiguity that changes

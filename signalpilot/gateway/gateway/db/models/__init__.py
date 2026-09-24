@@ -118,6 +118,7 @@ from .workspace import (
     GatewayWorkspaceProject,
     GatewayWorkspaceRevision,
 )
+from .tableau import GatewayTableauIntegration
 from .xata import GatewayXataBranchOwner
 
 __all__ = [
@@ -187,6 +188,7 @@ __all__ = [
     "GatewaySetting",
     "GatewaySlackThreadWatch",
     "GatewayStructuredQueryResult",
+    "GatewayTableauIntegration",
     "GatewayUploadSession",
     "GatewayUserSecrets",
     "GatewayUserSession",

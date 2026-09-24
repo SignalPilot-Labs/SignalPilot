@@ -290,6 +290,8 @@ def _runtime_archive_body_limit() -> int:
 # Path-prefix overrides for the request body cap. Everything else stays at 2 MB.
 BODY_SIZE_PATH_OVERRIDES: dict[str, int] = {
     "/api/chat/runtime-archives": _runtime_archive_body_limit(),
+    # Tableau workbook publish: single-request publish allows 64 MB, plus multipart framing.
+    "/api/tableau/runtime/workbooks": 64 * 1024 * 1024 + 256 * 1024,
 }
 _CSRF_ENABLED = is_cloud_mode()
 

@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING, Any
 
 from starlette.exceptions import HTTPException
 
+from signalpilot._server.ai.tableau_tools import TABLEAU_ALLOWED_TOOLS
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
@@ -118,6 +120,30 @@ _SESSION_CONTEXT_KEYS = frozenset(
 )
 
 _PROMPTS_DIR = Path(__file__).resolve().parents[2] / "ai" / "prompts"
+
+
+def _features(body: dict[str, Any]) -> dict[str, Any]:
+    features = body.get("features")
+    return features if isinstance(features, dict) else {}
+
+
+def tableau_enabled(body: dict[str, Any]) -> bool:
+    """True when the gateway turned the org's Tableau integration on.
+
+    The gateway sets ``features.tableau`` only when the integration is
+    configured, enabled, and verified, and it also grants the run token the
+    ``tableau`` capability. The tools, their allowlist entries, and the
+    prompt section follow this one flag.
+    """
+    return _features(body).get("tableau") is True
+
+
+def execution_allowed_tools(
+    body: dict[str, Any], extra: Sequence[str] = ()
+) -> list[str]:
+    """The run's allowlist: the static tools, Tableau when on, then ``extra``."""
+    tableau = list(TABLEAU_ALLOWED_TOOLS) if tableau_enabled(body) else []
+    return [*STANDALONE_ALLOWED_TOOLS, *tableau, *extra]
 
 
 @lru_cache(maxsize=8)
@@ -238,9 +264,7 @@ def _execution_prompt_values(
         if session_half
         else ""
     )
-    features = (
-        body.get("features") if isinstance(body.get("features"), dict) else {}
-    )
+    features = _features(body)
     is_improvement_run = str(body.get("run_origin") or "user") == "improvement"
     sandbox_runtime_enabled = (
         bool(features.get("sandbox_runtime")) and not is_improvement_run
@@ -255,6 +279,8 @@ def _execution_prompt_values(
         section_flags.add("improvement")
     if connector_slugs:
         section_flags.add("connectors")
+    if tableau_enabled(body):
+        section_flags.add("tableau")
     prompt_parts = [_apply_sections(STANDALONE_SYSTEM_PROMPT, section_flags)]
     connectors_line = ", ".join(connector_slugs) if connector_slugs else "none"
     system_prompt = (

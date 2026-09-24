@@ -169,6 +169,7 @@ def _build_agent_options_kwargs(
     notebook_session_authorizer: Callable[[str], bool] | None,
     chat_session_id: str,
     is_resume: bool,
+    stderr_sink: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Assemble the kwargs passed to ``ClaudeAgentOptions``."""
     from signalpilot._server.ai.transport_breaker import (
@@ -270,6 +271,14 @@ def _build_agent_options_kwargs(
         agent_options_kwargs["resume"] = chat_session_id
     else:
         agent_options_kwargs["session_id"] = chat_session_id
+
+    # Without this callback the transport does not even pipe the CLI's stderr
+    # (subprocess_cli only passes PIPE when `stderr` is set), so a CLI that
+    # exits non-zero during startup reports nothing but "Check stderr output
+    # for details". That blindness cost three rounds of guesswork on the
+    # follow-up failures; the text the CLI already prints is the diagnosis.
+    if stderr_sink is not None:
+        agent_options_kwargs["stderr"] = stderr_sink
 
     agent_options_kwargs["include_partial_messages"] = True
     # Echo each queued user message back into the stream at the point the

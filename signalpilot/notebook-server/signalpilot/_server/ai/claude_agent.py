@@ -23,9 +23,11 @@ from __future__ import annotations
 import asyncio
 import os
 import queue
+import re
 import sys
 import threading
 import traceback
+from collections import deque
 from typing import TYPE_CHECKING, Any
 
 from signalpilot import _loggers
@@ -121,6 +123,37 @@ def _error_text(exc: BaseException, *, operation: str) -> str:
     return f"{text}: {message}" if message else text
 
 
+# The CLI refuses `--session-id <id>` for an id it already holds, and refuses
+# `--resume <id>` for one it has never seen. Neither flag is safe to pick blind,
+# so the exact wording of both refusals is what selects the other flag.
+_SESSION_IN_USE = re.compile(r"session id\s+\S+\s+is already in use", re.IGNORECASE)
+_NO_CONVERSATION = re.compile(r"no conversation found with session id", re.IGNORECASE)
+
+# Enough stderr to hold a CLI stack trace, bounded so a chatty run cannot grow
+# the process memory.
+_STDERR_CAPTURE_LINES = 200
+
+
+def _session_lost_message(session_id: str) -> str:
+    return (
+        "The saved state for this conversation is gone, so the agent cannot "
+        "continue it. Its earlier messages are still on screen but the agent "
+        "can no longer read them. Start a new conversation to continue. "
+        f"(session {session_id})"
+    )
+
+
+def _retry_with_resume(stderr_text: str, *, is_resume: bool, started: bool) -> bool:
+    """True when this failure means the other session flag was the right one.
+
+    Only before any output: re-running a turn that already streamed would
+    duplicate it.
+    """
+    if is_resume or started:
+        return False
+    return bool(_SESSION_IN_USE.search(stderr_text))
+
+
 def _run_agent_in_thread(
     agent_state: _ActiveAgent,
     message: str,
@@ -175,24 +208,27 @@ def _run_agent_in_thread(
         stream = _SdkStreamState()
 
         agent_env = _build_agent_env(auth_config, agent_env_overrides)
-        agent_options_kwargs = _build_agent_options_kwargs(
-            model=model,
-            effort=effort,
-            max_turns=max_turns,
-            system_prompt=system_prompt,
-            cwd=cwd,
-            agent_env=agent_env,
-            disallowed_tools=disallowed_tools,
-            allowed_tools=allowed_tools,
-            mcp_servers=mcp_servers,
-            app=app,
-            notebook_session_authorizer=notebook_session_authorizer,
-            chat_session_id=chat_session_id,
-            is_resume=is_resume,
-        )
-        options = ClaudeAgentOptions(**agent_options_kwargs)
+        stderr_lines: deque[str] = deque(maxlen=_STDERR_CAPTURE_LINES)
 
-        try:
+        async def _attempt(resume_now: bool) -> None:
+            options = ClaudeAgentOptions(
+                **_build_agent_options_kwargs(
+                    model=model,
+                    effort=effort,
+                    max_turns=max_turns,
+                    system_prompt=system_prompt,
+                    cwd=cwd,
+                    agent_env=agent_env,
+                    disallowed_tools=disallowed_tools,
+                    allowed_tools=allowed_tools,
+                    mcp_servers=mcp_servers,
+                    app=app,
+                    notebook_session_authorizer=notebook_session_authorizer,
+                    chat_session_id=chat_session_id,
+                    is_resume=resume_now,
+                    stderr_sink=stderr_lines.append,
+                )
+            )
             async with ClaudeSDKClient(options=options) as client:
                 agent_state.client = client
                 await client.query(message)
@@ -200,20 +236,67 @@ def _run_agent_in_thread(
                     client, agent_state, event_queue, stream
                 )
 
+        resume_used = is_resume
+        try:
+            try:
+                await _attempt(resume_used)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                if not _retry_with_resume(
+                    "\n".join(stderr_lines),
+                    is_resume=resume_used,
+                    started=stream.turn_count > 0,
+                ):
+                    raise
+                # The CLI already holds this session id, so the state we failed
+                # to detect is there after all. Resuming continues the
+                # conversation the user is looking at; creating a new session
+                # would answer them with no memory of it.
+                LOGGER.warning(
+                    "The CLI already holds session_id=%s, so creating it was "
+                    "refused; resuming that session instead",
+                    chat_session_id,
+                )
+                resume_used = True
+                stderr_lines.clear()
+                await _attempt(resume_used)
+
         except asyncio.CancelledError:
             LOGGER.info("Agent task cancelled by user")
             raise
         except Exception as e:
             tb = traceback.format_exc()
-            stderr = getattr(e, "stderr", None) or ""
-            full_error = f"{type(e).__name__}: {e}\nstderr: {stderr}\n{tb}"
-            LOGGER.error(f"Agent error: {full_error}")
+            sdk_stderr = (getattr(e, "stderr", None) or "").strip()
+            captured = "\n".join(stderr_lines).strip()
+            flag = "resume" if resume_used else "session-id"
+            # The SDK's own `stderr` attribute carries only its placeholder
+            # string; the captured lines are what the CLI actually printed.
+            detail = captured or sdk_stderr or "(the CLI wrote nothing to stderr)"
+            full_error = (
+                f"{type(e).__name__}: {e}\n"
+                f"session_flag: {flag} session_id={chat_session_id}\n"
+                f"cli stderr:\n{detail}\n{tb}"
+            )
+            LOGGER.error("Agent error: %s", full_error)
+            if resume_used and _NO_CONVERSATION.search(captured or sdk_stderr):
+                # Degrade loudly. Retrying as a new session here would answer
+                # the user in a conversation the agent cannot read.
+                content = _session_lost_message(chat_session_id)
+            elif captured:
+                content = f"{_error_text(e, operation='agent run')}\n{captured.splitlines()[-1]}"
+            else:
+                content = _error_text(e, operation="agent run")
             event_queue.put(
                 AgentEvent(
                     type="error",
-                    content=_error_text(e, operation="agent run"),
+                    content=content,
                     full_trace=full_error,
-                    diagnostic_context={"error_type": type(e).__name__},
+                    diagnostic_context={
+                        "error_type": type(e).__name__,
+                        "session_flag": flag,
+                        "cli_stderr_tail": "\n".join(list(stderr_lines)[-20:]),
+                    },
                     is_error=True,
                     turn=stream.turn_count,
                 )

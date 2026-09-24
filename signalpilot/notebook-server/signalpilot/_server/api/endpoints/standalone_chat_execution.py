@@ -54,8 +54,9 @@ from signalpilot._server.api.endpoints.standalone_chat_handover import (
     take_over_run,
 )
 from signalpilot._server.api.endpoints.standalone_chat_prompt import (
-    STANDALONE_ALLOWED_TOOLS,
     _execution_prompt_values,
+    execution_allowed_tools,
+    tableau_enabled,
 )
 from signalpilot._server.api.endpoints.standalone_chat_response import (
     stream_response,
@@ -140,10 +141,9 @@ async def execute(*, request: Request) -> StreamingResponse:
     # mcp_config and the redaction list below, never in the process env.
     connectors = parse_mcp_connectors(body)
     mcp_config = gateway_mcp_config(authorization, connectors)
-    allowed_tools = [
-        *STANDALONE_ALLOWED_TOOLS,
-        *connector_allowed_tools(connectors),
-    ]
+    allowed_tools = execution_allowed_tools(
+        body, connector_allowed_tools(connectors)
+    )
     runtime_app = request.scope.get("app")
     (
         prompt,
@@ -390,6 +390,8 @@ async def execute(*, request: Request) -> StreamingResponse:
                     ),
                     gateway_url=gateway_api_url,
                     gateway_token=scoped_token,
+                    tableau_enabled=tableau_enabled(body),
+                    workspace_directory=working_scratch,
                 )
                 attempt_prompt = prompt
                 if recovery_failure is not None:

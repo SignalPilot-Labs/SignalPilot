@@ -25,6 +25,9 @@ vi.mock("~/lib/hooks/use-permissions", () => ({
   }),
 }));
 
+// The Tableau chip fetches the org integration; keep this suite offline.
+vi.mock("~/components/chat/tableau-chip", () => ({ TableauChip: () => null }));
+
 const bootstrap = {
   enabled: true,
   projects: [],

@@ -1,7 +1,9 @@
 "use client";
 
-// Composer block for the standalone data chat: input, project picker, and
-// the gear that opens the right-side Chat settings panel.
+// Composer block for the standalone data chat: input, project picker, the
+// Tableau status chip, and the gear that opens the right-side Chat settings
+// panel. The fixture harness renders the bare composer, so the chip (and
+// its fetch) never appears there.
 
 import {
   useContext,
@@ -24,6 +26,7 @@ import {
   ProjectPicker,
 } from "~/components/chat/project-picker";
 import { DefaultProjectControl } from "~/components/chat/default-project-control";
+import { TableauChip } from "~/components/chat/tableau-chip";
 
 const EMPTY_EVENTS: StandaloneChatEvent[] = [];
 
@@ -128,6 +131,7 @@ export function ChatComposerPanel({
           <ProjectChip project={selectedProject} />
         )
       }
+      toolbarExtras={<TableauChip />}
       onOpenSettings={onOpenSettings}
       settingsOpen={settingsOpen}
       liveState={live.state}

@@ -16,6 +16,10 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from signalpilot import _loggers
+
+LOGGER = _loggers.sp_logger()
+
 _SAFE_ID = re.compile(r"^[a-zA-Z0-9-]{1,160}$")
 _MAX_COMPRESSED_BYTES = 64 * 1024 * 1024
 _MAX_UNCOMPRESSED_BYTES = 256 * 1024 * 1024
@@ -64,13 +68,34 @@ def _project_storage_name(cwd: Path) -> str:
     return re.sub(r"[^a-zA-Z0-9]", "-", str(cwd.resolve()))
 
 
+def _find_session_file(config_dir: Path, session_id: str, cwd: Path) -> Path | None:
+    """The CLI's session file for this id, wherever it is stored.
+
+    The CLI writes `projects/<slug of cwd>/<id>.jsonl`, but `claude --resume
+    <id>` finds a session no matter which directory it is run from (verified
+    against 2.1.280). Keying this check on cwd therefore reported "no session"
+    whenever the working directory moved between turns, and the caller then
+    tried to CREATE the session again with `--session-id <id>`, which the CLI
+    refuses: "Session ID ... is already in use", exit 1. Look under the current
+    cwd first, then anywhere.
+    """
+    projects = config_dir / "projects"
+    preferred = projects / _project_storage_name(cwd) / f"{session_id}.jsonl"
+    if preferred.is_file():
+        return preferred
+    if not projects.is_dir():
+        return None
+    for project in sorted(projects.iterdir()):
+        if not project.is_dir():
+            continue
+        candidate = project / f"{session_id}.jsonl"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def _has_session(config_dir: Path, session_id: str, cwd: Path) -> bool:
-    return (
-        config_dir
-        / "projects"
-        / _project_storage_name(cwd)
-        / f"{session_id}.jsonl"
-    ).is_file()
+    return _find_session_file(config_dir, session_id, cwd) is not None
 
 
 def _extract_archive(data: bytes, config_dir: Path) -> None:
@@ -157,10 +182,28 @@ async def prepare_claude_session(
 
 
 async def persist_claude_session(state: ClaudeSessionState) -> bool:
-    """Upload the complete native SDK state after a turn."""
-    if not state.upload_url or not _has_session(
-        state.config_dir, state.session_id, state.cwd
-    ):
+    """Upload the complete native SDK state after a turn.
+
+    False means the session cannot be resumed later. The caller must not pass
+    `--resume` after a False: the CLI exits 1 with "No conversation found with
+    session ID" and the next message fails instead of answering.
+    """
+    if not state.upload_url:
+        LOGGER.warning(
+            "No upload URL for the Claude session; it cannot be resumed "
+            "session_id=%s storage=%s",
+            state.session_id,
+            state.storage,
+        )
+        return False
+    if not _has_session(state.config_dir, state.session_id, state.cwd):
+        LOGGER.warning(
+            "Claude wrote no session file for session_id=%s (cwd=%s, searched "
+            "every project directory); nothing to archive and the next message "
+            "cannot resume",
+            state.session_id,
+            state.cwd,
+        )
         return False
     data = await asyncio.to_thread(_create_archive, state.config_dir)
     async with httpx.AsyncClient(timeout=60.0, follow_redirects=False) as client:

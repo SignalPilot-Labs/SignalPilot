@@ -5,6 +5,7 @@
 // chat-replay-view.tsx.
 
 import { Loader2 } from "lucide-react";
+import { memo } from "react";
 import type { UiMessage } from "~/components/chat/chat-ui-context";
 import { AssistantMessage } from "~/components/chat/assistant-message";
 import { MessageTiming } from "~/components/chat/chat-message-timing";
@@ -42,7 +43,12 @@ export function UserMessage({ message }: { message: UiMessage }) {
   );
 }
 
-export function ChatMessage({
+/**
+ * One transcript row. Memoized: the page re-renders on every keystroke and
+ * streamed event, and an unchanged message (same object, see
+ * useStableMessages) must not re-render with it.
+ */
+export const ChatMessage = memo(function ChatMessage({
   message,
   previousMessageAt,
 }: {
@@ -54,4 +60,4 @@ export function ChatMessage({
   ) : (
     <AssistantMessage message={message} previousMessageAt={previousMessageAt} />
   );
-}
+});

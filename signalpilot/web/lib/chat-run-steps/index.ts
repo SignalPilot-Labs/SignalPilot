@@ -52,4 +52,9 @@ export {
   shouldShowRuntimeBoot,
   summarizeRunSteps,
 } from "./run-extras";
+export {
+  PLAN_FILE_PATH,
+  isPlanFilePath,
+  parsePlanMarkdown,
+} from "./plan-file";
 export { formatCount, formatMs, toCsv } from "./format";

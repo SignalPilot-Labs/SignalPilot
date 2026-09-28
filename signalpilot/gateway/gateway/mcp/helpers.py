@@ -13,14 +13,24 @@ async def _get_column_names(connector, db_type: str, table_name: str, connection
     if db_type in ("sqlite", "duckdb"):
         rows = await connector.execute(f"PRAGMA table_info('{table_name}')")
         return [r.get("name", "") for r in rows if r.get("name")]
+    # Callers validate the name with _MODEL_NAME_RE (letters, digits, "_"),
+    # so the parts are safe to inline.
     parts = table_name.split(".")
-    if len(parts) == 2:
-        schema, tbl = parts
+    catalog = parts[0] if len(parts) == 3 else None
+    schema = parts[-2] if len(parts) >= 2 else ("dbo" if db_type == "mssql" else "public")
+    tbl = parts[-1]
+    # SQL Server and Snowflake scope information_schema to one database, so a
+    # model in another database (Analytics.marts.x on a master connection) is
+    # only visible through that database's own information_schema.
+    if catalog and db_type in ("mssql", "snowflake"):
+        columns_view = f"{catalog}.information_schema.columns"
+        catalog_filter = ""
     else:
-        schema, tbl = "public", parts[0]
+        columns_view = "information_schema.columns"
+        catalog_filter = f"AND table_catalog = '{catalog}' " if catalog else ""
     sql = (
-        f"SELECT column_name FROM information_schema.columns "
-        f"WHERE table_schema = '{schema}' AND table_name = '{tbl}' "
+        f"SELECT column_name FROM {columns_view} "
+        f"WHERE table_schema = '{schema}' AND table_name = '{tbl}' {catalog_filter}"
         f"ORDER BY ordinal_position"
     )
     rows = await connector.execute(sql)

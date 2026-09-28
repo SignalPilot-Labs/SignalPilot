@@ -5,6 +5,7 @@
 
 import {
   AlertCircle,
+  Bot,
   Loader2,
   MessageSquarePlus,
   MoreHorizontal,
@@ -23,6 +24,21 @@ import {
   statusLabel,
   statusTone,
 } from "~/components/chat/standalone-chat-helpers";
+
+/** Banner above a transcript the improvement scheduler started. */
+export function ImprovementRunBanner() {
+  return (
+    <div className="flex-none px-6 pt-4">
+      <div className="mx-auto flex max-w-3xl items-center gap-2 rounded-xl border border-[var(--color-warning)]/25 bg-[var(--color-warning)]/5 px-4 py-2.5 text-xs text-[var(--color-warning)]">
+        <Bot className="h-3.5 w-3.5 flex-none" />
+        Automated improvement run
+        <span className="text-[var(--color-text-dim)]">
+          · started by SignalPilot, not a teammate
+        </span>
+      </div>
+    </div>
+  );
+}
 
 export function StarterQuestions({
   questions,

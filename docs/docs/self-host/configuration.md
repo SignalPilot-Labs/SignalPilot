@@ -131,7 +131,7 @@ Each lease keeps query state and cancellation isolated from other requests. Thes
 |---|---|---|
 | `ANTHROPIC_API_KEY` | unset | Anthropic API key for chat and agent runs. |
 | `CLAUDE_CODE_OAUTH_TOKEN` | unset | Alternative credential for chat and agent runs. |
-| `SP_CHAT_AGENT_MODEL` | provider default | Model used by the chat agent. |
+| `SP_CHAT_AGENT_MODEL` | `claude-opus-5-5` | Default model for new chat conversations. Must be one of the models offered in the chat model selector; an unknown value falls back to the default. |
 | `SP_CHAT_DATASET_CONNECTORS` | `postgres,snowflake` | Connector types that expose dataset references in chat. |
 | `SP_CHAT_APPROVAL_WARM_SECONDS` | `900` | How long a sandbox stays warm while a query approval is pending. |
 | `SP_CHAT_DEV_DATABASE` | unset | Default database for the chat `refresh_mart` tool, on the same server as the chat's connection. Unset, refreshes build into the connection's own database; the agent can always name a database explicitly. |

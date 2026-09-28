@@ -9,6 +9,7 @@ from signalpilot._server.ai.dashboard.schema import (
     CHART_ID_PATTERN,
     DASHBOARD_PATH_PATTERN,
 )
+from signalpilot._server.ai.tableau_tool_schemas import tableau_tools
 
 _DASHBOARD_PATH_SCHEMA = {
     "type": "string",
@@ -21,7 +22,10 @@ _DASHBOARD_PATH_SCHEMA = {
 _CHART_ID_ITEMS_SCHEMA = {"type": "string", "pattern": CHART_ID_PATTERN}
 
 
-def standalone_chat_tools(*, notebook_enabled: bool) -> list[Tool]:
+def standalone_chat_tools(
+    *, notebook_enabled: bool, tableau_enabled: bool = False
+) -> list[Tool]:
+    """Tools listed to the agent; Tableau tools only when the org enabled it."""
     tools = [
         Tool(
             name="start_analysis_notebook",
@@ -170,5 +174,7 @@ def standalone_chat_tools(*, notebook_enabled: bool) -> list[Tool]:
         tools = [
             tool for tool in tools if tool.name != "start_analysis_notebook"
         ]
+    if tableau_enabled:
+        tools.extend(tableau_tools())
 
     return tools

@@ -40,12 +40,14 @@ export function StandaloneChatComposer({
   onStop,
   placeholder,
   projectPicker,
+  toolbarExtras,
   onOpenSettings,
   settingsOpen = false,
   liveState = "idle",
   liveLabel,
   plan = null,
   planRunning = false,
+  onOpenPlan,
 }: {
   value: string;
   onValueChange: (value: string) => void;
@@ -58,6 +60,8 @@ export function StandaloneChatComposer({
   onStop?: () => void;
   placeholder: string;
   projectPicker?: ReactNode;
+  /** Status chips left of the gear (e.g. "Tableau connected"). */
+  toolbarExtras?: ReactNode;
   /** Shows the gear; it toggles the right-side Chat settings panel. */
   onOpenSettings?: () => void;
   /** Whether that panel is open (drives aria-expanded on the gear). */
@@ -68,8 +72,10 @@ export function StandaloneChatComposer({
   liveLabel?: string;
   /** The current run's plan, docked above the input. Null renders no dock. */
   plan?: RunPlan | null;
-  /** The plan's run is streaming: the dock opens by default. */
+  /** The plan's run is streaming: styles the current step as live. */
   planRunning?: boolean;
+  /** Opens the plan file in the artifacts panel, when there is one. */
+  onOpenPlan?: () => void;
 }) {
   const canSubmit = Boolean(value.trim()) && !submitDisabled;
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -112,7 +118,7 @@ export function StandaloneChatComposer({
           so the two read as one control. It grows upward as items land. */}
       {plan && (
         <div data-testid="chat-composer-plan-dock" className="relative z-10">
-          <PlanTracker plan={plan} running={planRunning} />
+          <PlanTracker plan={plan} running={planRunning} onOpen={onOpenPlan} />
         </div>
       )}
       {/* Single field: textarea on top, one borderless control bar beneath.
@@ -148,6 +154,7 @@ export function StandaloneChatComposer({
         <div className="flex items-center gap-2 px-2.5 pb-2.5 pt-1">
           {projectPicker && <div className="min-w-0 flex-1">{projectPicker}</div>}
           <div className="ml-auto flex items-center gap-1.5">
+            {toolbarExtras}
             {onOpenSettings && (
               <button
                 type="button"

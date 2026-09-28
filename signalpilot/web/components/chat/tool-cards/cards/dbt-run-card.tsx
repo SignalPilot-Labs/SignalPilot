@@ -233,8 +233,4 @@ registerToolCard({
   summarize: summarizeDbtRun,
   Running: DbtRunRunning,
   Expanded: DbtRunExpanded,
-  stayOpenOnComplete: (step) => {
-    const result = dbtResult(step);
-    return result ? tallyStatuses(result.statuses).error > 0 : false;
-  },
 });

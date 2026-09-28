@@ -1,9 +1,10 @@
 "use client";
 
 import { Brain, ChevronRight } from "lucide-react";
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useState } from "react";
 import { AgentLiveIndicator } from "~/components/chat/agent-thinking-indicator";
 import { ChatMarkdown } from "~/components/chat/chat-markdown";
+import { useRevealCount } from "~/components/chat/use-reveal-count";
 import { useSettled } from "~/components/chat/use-settled";
 import { useSmoothedStreamingText } from "~/components/chat/use-smoothed-streaming-text";
 import {
@@ -12,7 +13,9 @@ import {
   type RunLiveInfo,
 } from "~/lib/chat-run-steps";
 import type { ArtifactCardModel } from "~/lib/chat-artifact-cards";
+import type { StandaloneChatMessage } from "~/lib/api";
 import { ActivityGroup } from "./activity-group";
+import { InterjectionBubble } from "./interjection";
 import { ArtifactCardBlock } from "./step-artifact-cards";
 
 const IDLE_LIVE: RunLiveInfo = { state: "idle", label: "", step: null };
@@ -60,12 +63,8 @@ function StreamingTextBlock({
  * so reasoning is inspectable without crowding the answer.
  */
 export function ThinkingBlockView({ text, live }: { text: string; live: boolean }) {
-  const [userToggle, setUserToggle] = useState<boolean | null>(null);
-  // Streaming shows the thought as it forms; once done it folds closed.
-  useEffect(() => {
-    if (live) setUserToggle(null);
-  }, [live]);
-  const open = userToggle ?? live;
+  // One quiet line, live or finished; the thought opens only on a click.
+  const [open, setOpen] = useState(false);
   return (
     <section
       data-testid="chat-thinking-block"
@@ -74,7 +73,7 @@ export function ThinkingBlockView({ text, live }: { text: string; live: boolean 
       <button
         type="button"
         aria-expanded={open}
-        onClick={() => setUserToggle(!open)}
+        onClick={() => setOpen(!open)}
         className="flex items-center gap-2 rounded-md px-1 py-0.5 text-left text-[11px] text-[var(--color-text-dim)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-muted)]"
       >
         <Brain className="h-3.5 w-3.5 flex-none" />
@@ -114,8 +113,11 @@ export function RunActivityBlocks({
   live: liveProp,
   trailingCards = [],
   instantText = false,
+  interjections = [],
 }: {
   blocks: RunBlock[];
+  /** Follow-ups sent during the run (see `nestInterjections`). */
+  interjections?: StandaloneChatMessage[];
   running?: boolean;
   live?: RunLiveInfo;
   /** Cards no step claims; rendered after the last tool group. */
@@ -141,6 +143,8 @@ export function RunActivityBlocks({
   const showThinking =
     shouldShowAgentThinking(blocks, running) &&
     (live.state === "thinking" || live.state === "booting");
+  // New blocks (a tool chain, a text stretch) pace in one at a time.
+  const revealed = useRevealCount(blocks.length, running && !instantText);
   const trailing = (
     <ArtifactCardBlock
       cards={trailingCards}
@@ -148,10 +152,21 @@ export function RunActivityBlocks({
       className="my-3"
     />
   );
+  const interjectionById = new Map(interjections.map((message) => [message.id, message]));
+  const placedIds = new Set(
+    blocks.flatMap((block) => (block.kind === "interjection" ? [block.messageId] : [])),
+  );
+  // Not read by the agent yet (or never): the bottom of the run.
+  const pending = interjections
+    .filter((message) => !placedIds.has(message.id))
+    .map((message) => (
+      <InterjectionBubble key={message.id} message={message} placed={false} />
+    ));
   if (!blocks.length) {
     return (
       <>
         {trailing}
+        {pending}
         {showThinking && <AgentLiveIndicator live={live} />}
       </>
     );
@@ -166,7 +181,7 @@ export function RunActivityBlocks({
     <>
       {/* No tool group at all: the unclaimed files lead the narration. */}
       {lastStepsIndex === -1 && trailing}
-      {blocks.map((block, index) =>
+      {blocks.slice(0, revealed).map((block, index) =>
         block.kind === "text" ? (
           <StreamingTextBlock
             key={block.key}
@@ -175,6 +190,14 @@ export function RunActivityBlocks({
             flush={index !== blocks.length - 1 || instantText}
             caret={index === blocks.length - 1 ? caret : false}
           />
+        ) : block.kind === "interjection" ? (
+          interjectionById.has(block.messageId) ? (
+            <InterjectionBubble
+              key={block.key}
+              message={interjectionById.get(block.messageId)!}
+              placed
+            />
+          ) : null
         ) : block.kind === "thinking" ? (
           <ThinkingBlockView
             key={block.key}
@@ -186,13 +209,12 @@ export function RunActivityBlocks({
             <ActivityGroup
               steps={block.steps}
               live={running && trailingSteps && index === lastStepsIndex}
-              isFinalGroup={index === lastStepsIndex}
-              runCompleted={!running}
             />
             {index === lastStepsIndex && trailing}
           </Fragment>
         ),
       )}
+      {pending}
       {showThinking && <AgentLiveIndicator live={live} />}
     </>
   );

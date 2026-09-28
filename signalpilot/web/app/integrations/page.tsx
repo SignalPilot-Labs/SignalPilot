@@ -32,6 +32,7 @@ import { useSubscription } from "~/lib/subscription-context";
 import { AnthropicKeySection } from "./_components/anthropic-key-section";
 import { NotionInstallationCard } from "./_components/notion-installation-card";
 import { SlackInstallationCard } from "./_components/slack-installation-card";
+import { TableauIntegrationSection } from "./_components/tableau-integration-section";
 import { useOrgSecrets } from "./_components/use-org-secrets";
 
 const IS_CLOUD_MODE = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "cloud";
@@ -336,7 +337,7 @@ function IntegrationsContent() {
     <div className="p-8 max-w-3xl animate-fade-in">
       <PageHeader
         title="integrations"
-        subtitle="notion + slack"
+        subtitle="notion + slack + tableau"
         description="connect external services to signalpilot"
       />
 
@@ -439,6 +440,8 @@ function IntegrationsContent() {
           />
         ))}
       </section>
+
+      <TableauIntegrationSection readOnly={!canWriteIntegrations} />
 
       {canManageSecrets ? (
         <AnthropicKeySection {...orgSecretsState} />

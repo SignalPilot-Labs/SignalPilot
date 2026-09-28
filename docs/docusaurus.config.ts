@@ -70,6 +70,26 @@ const config: Config = {
     ],
   ],
 
+  // Offline, build-time search index (no Algolia account or API key needed).
+  // The index is generated during `docusaurus build`, so `docusaurus start`
+  // shows the search box but returns no results until a build has run.
+  themes: [
+    [
+      '@easyops-cn/docusaurus-search-local',
+      {
+        hashed: true,
+        indexDocs: true,
+        indexBlog: false,
+        indexPages: false,
+        docsRouteBasePath: '/docs',
+        highlightSearchTermsOnTargetPage: true,
+        searchResultLimits: 8,
+        searchBarShortcutHint: true,
+        explicitSearchResultPath: true,
+      },
+    ],
+  ],
+
   presets: [
     [
       'classic',

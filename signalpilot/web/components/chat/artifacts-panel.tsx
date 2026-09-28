@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useArtifactsWidth } from "~/components/chat/artifacts-panel-width";
 import { ArtifactsResizeHandle } from "~/components/chat/artifacts-resize-handle";
 import {
@@ -222,7 +222,9 @@ function FilesTab({
  */
 const EMPTY_EVENTS: StandaloneChatEvent[] = [];
 
-export function ArtifactsPanel({
+// Memoized: the chat page re-renders on every keystroke, and an open panel
+// (file viewers, CSV tables, dashboards) must not re-render with it.
+export const ArtifactsPanel = memo(function ArtifactsPanel({
   conversationId,
   notebooks,
   files,
@@ -512,4 +514,4 @@ export function ArtifactsPanel({
       </div>
     </aside>
   );
-}
+});

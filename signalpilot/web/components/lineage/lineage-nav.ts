@@ -196,52 +196,116 @@ export interface StagedColumns {
   stages: { label: string; ids: string[] }[];
   /** id -> index into `stages`. */
   columnOf: Map<string, number>;
+  /**
+   * Drawing columns, left to right. A stage holding a dependency chain spans
+   * several lanes (one per chain depth), so every edge runs strictly left to
+   * right: never backward, never between two nodes in one column.
+   */
+  lanes: { stage: number; ids: string[] }[];
+  /** id -> index into `lanes`. */
+  laneOf: Map<string, number>;
 }
 
+const LAST_STAGE = STAGE_LABELS.length - 1;
+
 /**
- * Assign every node in a lineage cone to a labeled stage column. Layered
- * projects map directly; `other` nodes are placed one stage past their
- * deepest in-cone parent (graph depth), so unconventional projects still get
- * a sensible left-to-right story.
+ * Assign every node in a lineage cone to a labeled stage and a drawing lane.
+ *
+ * Layered projects map by layer. An `other` node goes one stage past its
+ * deepest in-cone parent, but never past the stage of a layered child, so an
+ * unclassified chain feeding a fact stays left of that fact. Then every edge
+ * is made monotone (a child's stage is never below its parent's), and each
+ * stage is split into lanes by dependency depth inside the stage. The dbt
+ * graph is acyclic, so every fixed point below terminates.
  */
 export function stageColumns(parsed: ParsedMap, coneIds: Set<string>): StagedColumns {
-  const stageOf = new Map<string, number>();
+  const parentsIn = (id: string) =>
+    (parsed.models.get(id)?.parents ?? []).filter((p) => coneIds.has(p) && p !== id);
+  const childrenIn = (id: string) =>
+    (parsed.models.get(id)?.children ?? []).filter((c) => coneIds.has(c) && c !== id);
+
+  const fixed = new Map<string, number>();
   const pending: string[] = [];
   for (const id of coneIds) {
     const layer = parsed.models.get(id)?.layer;
     const stage = layer !== undefined ? LAYER_STAGE[layer] : undefined;
-    if (stage !== undefined) stageOf.set(id, stage);
+    if (stage !== undefined) fixed.set(id, stage);
     else pending.push(id);
   }
-  // Graph-depth placement for `other`, iterated to a fixed point (cones are small).
-  let changed = true;
-  let guard = 0;
-  while (changed && guard++ < 50) {
+  const stageOf = new Map(fixed);
+  const limit = coneIds.size + 5;
+
+  // `other`: one past the deepest parent, capped by the first layered child.
+  for (let changed = true, round = 0; changed && round < limit; round++) {
     changed = false;
     for (const id of pending) {
-      const parents = (parsed.models.get(id)?.parents ?? []).filter((p) => coneIds.has(p));
-      const known = parents.map((p) => stageOf.get(p)).filter((s): s is number => s !== undefined);
-      const next = known.length ? Math.min(4, Math.max(...known) + 1) : 1;
+      const known = parentsIn(id)
+        .map((p) => stageOf.get(p))
+        .filter((s): s is number => s !== undefined);
+      const deepest = known.length ? Math.max(...known) : 0;
+      const childCaps = childrenIn(id)
+        .map((c) => fixed.get(c))
+        .filter((s): s is number => s !== undefined);
+      const cap = Math.min(LAST_STAGE, ...childCaps);
+      const next = Math.max(deepest, Math.min(deepest + 1, cap), known.length ? 0 : 1);
       if (stageOf.get(id) !== next) {
         stageOf.set(id, next);
         changed = true;
       }
     }
   }
+  // Monotone stages: a child never sits in an earlier stage than a parent.
+  for (let changed = true, round = 0; changed && round < limit; round++) {
+    changed = false;
+    for (const id of coneIds) {
+      for (const p of parentsIn(id)) {
+        if ((stageOf.get(p) ?? 0) > (stageOf.get(id) ?? 0)) {
+          stageOf.set(id, stageOf.get(p)!);
+          changed = true;
+        }
+      }
+    }
+  }
+  // Lanes: longest dependency path inside each stage.
+  const depthOf = new Map<string, number>();
+  const depth = (id: string, seen: Set<string>): number => {
+    const memo = depthOf.get(id);
+    if (memo !== undefined) return memo;
+    if (seen.has(id)) return 0; // defensive: a malformed graph must not hang
+    seen.add(id);
+    const same = parentsIn(id).filter((p) => stageOf.get(p) === stageOf.get(id));
+    const value = same.length ? 1 + Math.max(...same.map((p) => depth(p, seen))) : 0;
+    depthOf.set(id, value);
+    return value;
+  };
+  for (const id of coneIds) depth(id, new Set());
 
-  const present = [...new Set([...stageOf.values()])].sort((a, b) => a - b);
+  const byName = (a: string, b: string) =>
+    parsed.models.get(a)!.name.localeCompare(parsed.models.get(b)!.name);
+  const present = [...new Set(stageOf.values())].sort((a, b) => a - b);
   const columnIndex = new Map(present.map((stage, i) => [stage, i]));
   const stages = present.map((stage) => ({ label: STAGE_LABELS[stage], ids: [] as string[] }));
   const columnOf = new Map<string, number>();
+  const laneKeys = new Map<string, { stage: number; ids: string[] }>();
   for (const [id, stage] of stageOf) {
     const col = columnIndex.get(stage)!;
     stages[col].ids.push(id);
     columnOf.set(id, col);
+    const key = `${stage}:${depthOf.get(id) ?? 0}`;
+    if (!laneKeys.has(key)) laneKeys.set(key, { stage, ids: [] });
+    laneKeys.get(key)!.ids.push(id);
   }
-  for (const s of stages) {
-    s.ids.sort((a, b) => parsed.models.get(a)!.name.localeCompare(parsed.models.get(b)!.name));
-  }
-  return { stages, columnOf };
+  for (const s of stages) s.ids.sort(byName);
+  const lanes = [...laneKeys.entries()]
+    .sort(([a], [b]) => {
+      const [sa, da] = a.split(":").map(Number);
+      const [sb, db] = b.split(":").map(Number);
+      return sa - sb || da - db;
+    })
+    .map(([, lane]) => ({ ...lane, ids: lane.ids.sort(byName) }));
+  const laneOf = new Map<string, number>();
+  lanes.forEach((lane, i) => lane.ids.forEach((id) => laneOf.set(id, i)));
+  return { stages, columnOf, lanes, laneOf };
 }
 
 // ── Raw Tables rollup ────────────────────────────────────────────────────────

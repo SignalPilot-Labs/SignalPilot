@@ -63,6 +63,7 @@ export type StandaloneChatModel =
   | "claude-opus-4-6"
   | "claude-sonnet-4-6"
   | "claude-opus-5"
+  | "claude-opus-5-5"
   | "claude-fable-5-1";
 
 export type StandaloneChatModelOption = {
@@ -141,6 +142,7 @@ export type StandaloneChatEvent = {
     | "steering_queued"
     | "steering_picked_up"
     | "steering_not_delivered"
+    | "steering_delivered"
     | "text_delta"
     | "thinking_delta"
     | "tool_started"

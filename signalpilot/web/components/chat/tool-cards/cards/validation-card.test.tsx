@@ -1,4 +1,5 @@
 import { act } from "react";
+import { openToolRow } from "../test-utils";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { RunStep, ValidationResult } from "~/lib/chat-run-steps";
@@ -130,6 +131,7 @@ describe("validation card", () => {
 
   it("shows the SQL and a validating rail while running", async () => {
     await render(step({ status: "running", endedAt: null, durationMs: null }));
+    await openToolRow(container);
     const body = q(container, '[data-testid="chat-validation-card"]');
     expect(q(container, '[data-testid="chat-tool-card-validation"]')).not.toBeNull();
     expect(body?.textContent).toContain("Validating…");
@@ -168,6 +170,7 @@ describe("validation card", () => {
         }),
       }),
     );
+    await openToolRow(container);
     expect(q(container, '[data-testid="chat-tool-card"]')?.getAttribute("data-density")).toBe(
       "expanded",
     );
@@ -184,8 +187,9 @@ describe("validation card", () => {
     expect(fix?.textContent).toContain("Suggested fix");
     expect(fix?.querySelector("pre")?.textContent).toContain("dim_regions");
     expect(q(container, '[data-testid="chat-tool-error"]')).not.toBeNull();
-    // The banner owns the message; the headline does not repeat it.
-    expect(container.textContent?.split(MESSAGE)).toHaveLength(2);
+    // The row's one-line reason and the banner carry the message; the
+    // headline does not repeat it.
+    expect(container.textContent?.split(MESSAGE)).toHaveLength(3);
     expect(q(container, '[data-testid="chat-validation-verdict"] + p')).toBeNull();
   });
 
@@ -209,6 +213,7 @@ describe("validation card", () => {
         }),
       }),
     );
+    await openToolRow(container);
     expect(q(container, '[data-testid="chat-validation-verdict"] + p')).toBeNull();
     expect(q(container, '[data-testid="chat-tool-error"]')?.textContent).toContain("validate_sql raised");
   });

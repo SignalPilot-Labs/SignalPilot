@@ -1,4 +1,5 @@
 import { act } from "react";
+import { openToolRow } from "../test-utils";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DashboardListResult, RunStep } from "~/lib/chat-run-steps";
@@ -142,6 +143,7 @@ describe("dashboard list card", () => {
 
   it("shows the input pills and a progress rail while running", async () => {
     await render(step({ status: "running", endedAt: null, durationMs: null }));
+    await openToolRow(container);
     const body = q(container, '[data-testid="chat-dashboard-list-card"]');
     expect(body?.textContent).toContain("20");
     expect(body?.textContent).toContain("Listing dashboards…");

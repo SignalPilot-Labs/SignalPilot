@@ -18,7 +18,14 @@ LOGGER = _loggers.sp_logger()
 DEFAULT_MAX_BYTES = 25 * 1024 * 1024
 # Directories that hold generated tooling output, never user artifacts.
 _IGNORED_TOP_LEVEL_DIRS = frozenset({"dbt-target", "dbt-logs", "dbt-profiles"})
-_IGNORED_SEGMENTS = frozenset({"__pycache__"})
+# Installed dependencies and dbt build output, at any depth.
+_IGNORED_SEGMENTS = frozenset(
+    {"__pycache__", "dbt_packages", "node_modules", "site-packages", "target", "logs"}
+)
+# A nested directory with this file is a copied dbt project (an agent copies
+# the project into scratch to compile it in isolation). Its files are working
+# state, not artifacts, and a copy holds hundreds of them.
+_PROJECT_MARKER = "dbt_project.yml"
 
 
 def max_file_bytes() -> int:
@@ -98,7 +105,8 @@ def _walk(scratch: Path) -> dict[str, Fingerprint]:
                 if entry.is_symlink():
                     continue
                 if entry.is_dir(follow_symlinks=False):
-                    pending.append(Path(entry.path))
+                    if not (Path(entry.path) / _PROJECT_MARKER).is_file():
+                        pending.append(Path(entry.path))
                     continue
                 if not entry.is_file(follow_symlinks=False):
                     continue

@@ -324,12 +324,33 @@ async def get_dbt_map_model_sql(
 async def get_dbt_map_manifest(
     project_id: str, store: StoreD, branch: str | None = Query(None)
 ):
-    """Presigned URL for the raw (gzipped) manifest.json artifact."""
-    row = await _row_for(store, project_id, branch)
-    if row is None or row.status != "success" or not row.manifest_key:
+    """Presigned URL for the raw (gzipped) manifest.json of the newest
+    successful compile. A queued or failed compile of a newer revision does
+    not hide the last good manifest: chat sandboxes seed target/ from it."""
+    resolved = await _resolve_branch(store, project_id, branch)
+    row = (
+        await store.session.execute(
+            select(GatewayDbtManifest)
+            .where(
+                GatewayDbtManifest.org_id == (store.org_id or "local"),
+                GatewayDbtManifest.project_id == project_id,
+                GatewayDbtManifest.branch == resolved,
+                GatewayDbtManifest.status == "success",
+                GatewayDbtManifest.manifest_key.is_not(None),
+            )
+            .order_by(GatewayDbtManifest.revision.desc())
+            .limit(1)
+        )
+    ).scalars().first()
+    if row is None:
         raise HTTPException(status_code=404, detail="No compiled manifest for this branch")
     storage = workspace_object_storage()
     if not storage.enabled:
         raise HTTPException(status_code=503, detail="Workspace storage not configured")
     url = await storage.presign_get(row.manifest_key, expires_seconds=3600)
-    return {"manifest_url": url, "revision": row.revision, "bytes": row.manifest_bytes}
+    return {
+        "manifest_url": url,
+        "revision": row.revision,
+        "bytes": row.manifest_bytes,
+        "dbt_project_dir": row.dbt_project_dir,
+    }

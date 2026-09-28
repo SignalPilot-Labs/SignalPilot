@@ -362,7 +362,8 @@ def test_agent_contract_includes_default_signalpilot_mcp_tools():
     # The prompt file wraps lines; compare against whitespace-collapsed text.
     _prompt_flat = " ".join(STANDALONE_SYSTEM_PROMPT.split())
     assert "Answer data questions with evidence" in _prompt_flat
-    assert "`TodoWrite`: a first plan" in _prompt_flat
+    assert "`Write` the plan file: a first plan" in _prompt_flat
+    assert "TodoWrite" not in _prompt_flat
     assert "Make no other tool call before the skill loads" in _prompt_flat
     assert "`signalpilot-dbt:dbt-workflow`" in _prompt_flat
     assert "SP_CHAT_SCRATCH_DIRECTORY" in _prompt_flat

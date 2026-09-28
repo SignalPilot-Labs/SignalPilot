@@ -18,6 +18,8 @@ export type UiMessage = StandaloneChatMessage & {
   runStatus?: StandaloneChatRunStatus;
   activity?: StandaloneRunActivity;
   synthetic?: boolean;
+  /** Follow-ups the user sent during this run; rendered inside the run. */
+  interjections?: StandaloneChatMessage[];
 };
 
 export type ChatUiContextValue = {

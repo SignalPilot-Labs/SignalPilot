@@ -20,6 +20,16 @@ def _qid(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
+def _for_dialect(sql: str, db_type: object) -> str:
+    """Rewrite Postgres-style profiling SQL for the connection's dialect
+    (LIMIT becomes TOP and "x" becomes [x] on SQL Server, backticks on
+    BigQuery/MySQL)."""
+    dialect = sqlglot_dialect(db_type)
+    if dialect == "postgres":
+        return sql
+    return sqlglot.transpile(sql, read="postgres", write=dialect)[0]
+
+
 # Strict grammar for one join key pair: qualified column = qualified column.
 # No functions, subqueries, comments, or operators other than a single '='.
 _JOIN_KEY_PAIR_RE = re.compile(
@@ -120,7 +130,10 @@ async def check_model_schema(connection_name: str, model_name: str, yml_columns:
         return f"Error: {sanitize_mcp_error(str(e))}"
 
     if not actual:
-        return f"Error: Model '{model_name}' not found in database. Has it been materialized yet?"
+        return (
+            f"Error: Model '{model_name}' not found in database. Has it been materialized yet? "
+            "If the model lives outside the connection's default database, pass database.schema.model."
+        )
 
     comparison = compare_columns(expected, actual)
 
@@ -451,11 +464,12 @@ async def audit_model_sources(
                     async with pool_manager.connection(
                         conn_info.db_type, conn_str, credential_extras=extras, connection_name=connection_name
                     ) as connector:
-                        col_result = await connector.execute(
-                            f'SELECT COUNT(*) FILTER (WHERE "{col}" IS NULL) as nulls, '
-                            f'COUNT(DISTINCT "{col}") as dist '
-                            f"FROM {_quote_table(model_name)}"
-                        )
+                        col_result = await connector.execute(_for_dialect(
+                            f'SELECT COUNT(*) - COUNT("{col}") AS nulls, '
+                            f'COUNT(DISTINCT "{col}") AS dist '
+                            f"FROM {_quote_table(model_name)}",
+                            conn_info.db_type,
+                        ))
                     null_count: int = col_result[0].get("nulls", 0) if col_result else 0
                     dist_count: int = col_result[0].get("dist", 0) if col_result else 0
                     null_frac = null_count / model_rows if model_rows > 0 else 0.0
@@ -488,9 +502,9 @@ async def audit_model_sources(
             async with pool_manager.connection(
                 conn_info.db_type, conn_str, credential_extras=extras, connection_name=connection_name
             ) as connector:
-                sample_result = await connector.execute(
-                    f"SELECT * FROM {_quote_table(model_name)} LIMIT 5"
-                )
+                sample_result = await connector.execute(_for_dialect(
+                    f"SELECT * FROM {_quote_table(model_name)} LIMIT 5", conn_info.db_type
+                ))
             if sample_result:
                 cols = list(sample_result[0].keys())
                 sample_lines.append(f"Sample rows (5 of {model_rows:,}):")
@@ -535,9 +549,11 @@ async def audit_model_sources(
                         async with pool_manager.connection(
                             conn_info.db_type, conn_str, credential_extras=extras, connection_name=connection_name
                         ) as connector:
-                            val_result = await connector.execute(
-                                f'SELECT DISTINCT "{col}" as val FROM {_quote_table(model_name)} ORDER BY 1 LIMIT 15'
-                            )
+                            val_result = await connector.execute(_for_dialect(
+                                f'SELECT DISTINCT "{col}" AS val FROM {_quote_table(model_name)} '
+                                "ORDER BY val LIMIT 15",
+                                conn_info.db_type,
+                            ))
                         vals = [str(r["val"]) for r in val_result] if val_result else []
                         value_lines.append(f"  {col}: [{', '.join(vals)}]")
                     except Exception:
@@ -847,6 +863,15 @@ async def verify_model_values(connection_name: str, model_name: str) -> str:
             conn = await store.get_connection(connection_name)
             if not conn:
                 return f"Error: Connection '{connection_name}' not found."
+            # The checks below use DuckDB SQL (SHOW TABLES, LIMIT) and an
+            # unscoped catalog lookup.
+            db_type = getattr(conn.db_type, "value", conn.db_type)
+            if db_type != "duckdb":
+                return (
+                    f"Error: verify_model_values supports DuckDB connections only; "
+                    f"'{connection_name}' is {db_type}. Use audit_model_sources, "
+                    "or compare the model against its sources with query_database."
+                )
 
             from gateway.connectors.pool_manager import pool_manager
 

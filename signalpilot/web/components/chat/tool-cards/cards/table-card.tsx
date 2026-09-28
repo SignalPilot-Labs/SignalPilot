@@ -234,5 +234,4 @@ registerToolCard({
   summarize: summarizeTable,
   Running: TableRunning,
   Expanded: TableExpanded,
-  stayOpenOnComplete: (_step, isLast) => isLast,
 });

@@ -1,0 +1,516 @@
+{
+ "name": "Team scorecard (design example)",
+ "theme": {
+  "name": "sp"
+ },
+ "datasources": [
+  {
+   "alias": "team",
+   "content_url": "SPdbt-team_scorecard_monthly",
+   "caption": "SP dbt - team_scorecard_monthly",
+   "fields": [
+    {
+     "name": "sales_manager",
+     "type": "string"
+    },
+    {
+     "name": "month_start",
+     "type": "date"
+    },
+    {
+     "name": "gm",
+     "type": "real",
+     "format": "currency"
+    },
+    {
+     "name": "net_revenue",
+     "type": "real",
+     "format": "currency"
+    },
+    {
+     "name": "units",
+     "type": "real",
+     "format": "number"
+    },
+    {
+     "name": "plan_gm",
+     "type": "real",
+     "format": "currency"
+    }
+   ]
+  }
+ ],
+ "parameters": [
+  {
+   "name": "Sales Manager",
+   "type": "string",
+   "value": "Team Donna Morris",
+   "values": [
+    "Team Donna Morris",
+    "Team Caleb Lopez",
+    "Team John Flaherty",
+    "All Teams"
+   ]
+  },
+  {
+   "name": "Report Month",
+   "type": "date",
+   "value": "2026-06-01"
+  }
+ ],
+ "calculations": [
+  {
+   "name": "Team Filter",
+   "formula": "[Parameters].[Sales Manager] = \"All Teams\" OR [sales_manager] = [Parameters].[Sales Manager]",
+   "type": "boolean",
+   "role": "dimension"
+  },
+  {
+   "name": "Is Month",
+   "formula": "[month_start] = DATETRUNC('month', [Parameters].[Report Month])",
+   "type": "boolean",
+   "role": "dimension"
+  },
+  {
+   "name": "Is Month PY",
+   "formula": "[month_start] = DATEADD('year', -1, DATETRUNC('month', [Parameters].[Report Month]))",
+   "type": "boolean",
+   "role": "dimension"
+  },
+  {
+   "name": "Is YTD",
+   "formula": "YEAR([month_start]) = YEAR(DATETRUNC('month', [Parameters].[Report Month])) AND [month_start] <= DATETRUNC('month', [Parameters].[Report Month])",
+   "type": "boolean",
+   "role": "dimension"
+  },
+  {
+   "name": "Is PYTD",
+   "formula": "YEAR([month_start]) = YEAR(DATETRUNC('month', [Parameters].[Report Month])) - 1 AND [month_start] <= DATEADD('year', -1, DATETRUNC('month', [Parameters].[Report Month]))",
+   "type": "boolean",
+   "role": "dimension"
+  },
+  {
+   "name": "Report Month Label",
+   "formula": "UPPER(DATENAME('month', DATETRUNC('month', [Parameters].[Report Month]))) + ' ' + STR(YEAR(DATETRUNC('month', [Parameters].[Report Month])))",
+   "type": "string",
+   "role": "dimension"
+  },
+  {
+   "name": "PY Month Label",
+   "formula": "LEFT(DATENAME('month', DATETRUNC('month', [Parameters].[Report Month])), 3) + ' ' + STR(YEAR(DATETRUNC('month', [Parameters].[Report Month])) - 1)",
+   "type": "string",
+   "role": "dimension"
+  },
+  {
+   "name": "GM Month",
+   "formula": "SUM(IF [Is Month] THEN [gm] END)",
+   "type": "real",
+   "format": "currency"
+  },
+  {
+   "name": "GM Month PY",
+   "formula": "SUM(IF [Is Month PY] THEN [gm] END)",
+   "type": "real",
+   "format": "currency"
+  },
+  {
+   "name": "GM YTD",
+   "formula": "SUM(IF [Is YTD] THEN [gm] END)",
+   "type": "real",
+   "format": "currency"
+  },
+  {
+   "name": "GM PYTD",
+   "formula": "SUM(IF [Is PYTD] THEN [gm] END)",
+   "type": "real",
+   "format": "currency"
+  },
+  {
+   "name": "Revenue Month",
+   "formula": "SUM(IF [Is Month] THEN [net_revenue] END)",
+   "type": "real",
+   "format": "currency"
+  },
+  {
+   "name": "Revenue Month PY",
+   "formula": "SUM(IF [Is Month PY] THEN [net_revenue] END)",
+   "type": "real",
+   "format": "currency"
+  },
+  {
+   "name": "Revenue YTD",
+   "formula": "SUM(IF [Is YTD] THEN [net_revenue] END)",
+   "type": "real",
+   "format": "currency"
+  },
+  {
+   "name": "Revenue PYTD",
+   "formula": "SUM(IF [Is PYTD] THEN [net_revenue] END)",
+   "type": "real",
+   "format": "currency"
+  },
+  {
+   "name": "Units Month",
+   "formula": "SUM(IF [Is Month] THEN [units] END)",
+   "type": "real",
+   "format": "number"
+  },
+  {
+   "name": "Units Month PY",
+   "formula": "SUM(IF [Is Month PY] THEN [units] END)",
+   "type": "real",
+   "format": "number"
+  },
+  {
+   "name": "Units YTD",
+   "formula": "SUM(IF [Is YTD] THEN [units] END)",
+   "type": "real",
+   "format": "number"
+  },
+  {
+   "name": "Units PYTD",
+   "formula": "SUM(IF [Is PYTD] THEN [units] END)",
+   "type": "real",
+   "format": "number"
+  },
+  {
+   "name": "Plan YTD",
+   "formula": "SUM(IF [Is YTD] THEN [plan_gm] END)",
+   "type": "real",
+   "format": "currency"
+  },
+  {
+   "name": "GM Rate Month",
+   "formula": "[GM Month] / [Revenue Month]",
+   "type": "real",
+   "format": "percent"
+  },
+  {
+   "name": "GM Rate Month PY",
+   "formula": "[GM Month PY] / [Revenue Month PY]",
+   "type": "real",
+   "format": "percent"
+  },
+  {
+   "name": "GM Rate YTD",
+   "formula": "[GM YTD] / [Revenue YTD]",
+   "type": "real",
+   "format": "percent"
+  },
+  {
+   "name": "GM Rate PYTD",
+   "formula": "[GM PYTD] / [Revenue PYTD]",
+   "type": "real",
+   "format": "percent"
+  },
+  {
+   "name": "Attainment YTD",
+   "formula": "[GM YTD] / [Plan YTD]",
+   "type": "real",
+   "format": "p0.0%"
+  },
+  {
+   "name": "GM This Year",
+   "formula": "SUM(IF YEAR([month_start]) = YEAR(DATETRUNC('month', [Parameters].[Report Month])) AND [month_start] <= DATETRUNC('month', [Parameters].[Report Month]) THEN [gm] END)",
+   "type": "real",
+   "format": "c\"$\"#,##0,K"
+  },
+  {
+   "name": "GM Last Year",
+   "formula": "SUM(IF YEAR([month_start]) = YEAR(DATETRUNC('month', [Parameters].[Report Month])) - 1 THEN [gm] END)",
+   "type": "real",
+   "format": "c\"$\"#,##0,K"
+  },
+  {
+   "name": "Plan This Year",
+   "formula": "SUM(IF YEAR([month_start]) = YEAR(DATETRUNC('month', [Parameters].[Report Month])) AND [month_start] <= DATETRUNC('month', [Parameters].[Report Month]) THEN [plan_gm] END)",
+   "type": "real",
+   "format": "c\"$\"#,##0,K"
+  },
+  {
+   "name": "Pct of Plan",
+   "formula": "[GM This Year] / [Plan This Year]",
+   "type": "real",
+   "format": "p0%"
+  },
+  {
+   "name": "GM Rate This Year",
+   "formula": "SUM(IF YEAR([month_start]) = YEAR(DATETRUNC('month', [Parameters].[Report Month])) AND [month_start] <= DATETRUNC('month', [Parameters].[Report Month]) THEN [gm] END) / SUM(IF YEAR([month_start]) = YEAR(DATETRUNC('month', [Parameters].[Report Month])) AND [month_start] <= DATETRUNC('month', [Parameters].[Report Month]) THEN [net_revenue] END)",
+   "type": "real",
+   "format": "p0%"
+  },
+  {
+   "name": "GM Rate Last Year",
+   "formula": "SUM(IF YEAR([month_start]) = YEAR(DATETRUNC('month', [Parameters].[Report Month])) - 1 THEN [gm] END) / SUM(IF YEAR([month_start]) = YEAR(DATETRUNC('month', [Parameters].[Report Month])) - 1 THEN [net_revenue] END)",
+   "type": "real",
+   "format": "p0%"
+  }
+ ],
+ "worksheets": [
+  {
+   "name": "Card GM",
+   "kind": "card",
+   "label": "Gross margin",
+   "label_field": "Report Month Label",
+   "value": "GM Month",
+   "compare": {
+    "current": "GM Month",
+    "previous": "GM Month PY",
+    "text": "vs",
+    "text_field": "PY Month Label"
+   },
+   "secondary": {
+    "label": "YTD",
+    "value": "GM YTD",
+    "compare": {
+     "current": "GM YTD",
+     "previous": "GM PYTD"
+    }
+   },
+   "filters": [
+    {
+     "field": "Team Filter",
+     "values": [
+      true
+     ]
+    }
+   ]
+  },
+  {
+   "name": "Card Revenue",
+   "kind": "card",
+   "label": "Net revenue",
+   "label_field": "Report Month Label",
+   "value": "Revenue Month",
+   "compare": {
+    "current": "Revenue Month",
+    "previous": "Revenue Month PY",
+    "text": "vs",
+    "text_field": "PY Month Label"
+   },
+   "secondary": {
+    "label": "YTD",
+    "value": "Revenue YTD",
+    "compare": {
+     "current": "Revenue YTD",
+     "previous": "Revenue PYTD"
+    }
+   },
+   "filters": [
+    {
+     "field": "Team Filter",
+     "values": [
+      true
+     ]
+    }
+   ]
+  },
+  {
+   "name": "Card GM Rate",
+   "kind": "card",
+   "label": "Gross margin %",
+   "label_field": "Report Month Label",
+   "value": "GM Rate Month",
+   "compare": {
+    "current": "GM Rate Month",
+    "previous": "GM Rate Month PY",
+    "text": "vs",
+    "text_field": "PY Month Label",
+    "unit": "points"
+   },
+   "secondary": {
+    "label": "YTD",
+    "value": "GM Rate YTD",
+    "compare": {
+     "current": "GM Rate YTD",
+     "previous": "GM Rate PYTD",
+     "unit": "points"
+    }
+   },
+   "filters": [
+    {
+     "field": "Team Filter",
+     "values": [
+      true
+     ]
+    }
+   ]
+  },
+  {
+   "name": "Card Units",
+   "kind": "card",
+   "label": "Dumpster units",
+   "label_field": "Report Month Label",
+   "value": "Units Month",
+   "compare": {
+    "current": "Units Month",
+    "previous": "Units Month PY",
+    "text": "vs",
+    "text_field": "PY Month Label"
+   },
+   "secondary": {
+    "label": "YTD",
+    "value": "Units YTD",
+    "compare": {
+     "current": "Units YTD",
+     "previous": "Units PYTD"
+    }
+   },
+   "filters": [
+    {
+     "field": "Team Filter",
+     "values": [
+      true
+     ]
+    }
+   ]
+  },
+  {
+   "name": "Card Plan",
+   "kind": "card",
+   "label": "Plan attainment · YTD",
+   "value": "Attainment YTD",
+   "secondary": {
+    "label": "GM YTD",
+    "value": "GM YTD"
+   },
+   "note": "Plan = annual team quota / 12",
+   "filters": [
+    {
+     "field": "Team Filter",
+     "values": [
+      true
+     ]
+    }
+   ]
+  },
+  {
+   "name": "GM vs Plan",
+   "kind": "combo",
+   "title": "Monthly gross margin vs plan",
+   "x": "mname(month_start)",
+   "bar": "GM This Year",
+   "line": "Plan This Year",
+   "label": "Pct of Plan",
+   "colors": [
+    "accent",
+    "plan"
+   ],
+   "legend": [
+    "Gross margin",
+    "Plan"
+   ],
+   "filters": [
+    {
+     "field": "Team Filter",
+     "values": [
+      true
+     ]
+    },
+    {
+     "field": "Is YTD",
+     "values": [
+      true
+     ]
+    }
+   ]
+  },
+  {
+   "name": "GM vs PY",
+   "kind": "combo",
+   "title": "Monthly gross margin vs last year",
+   "x": "mname(month_start)",
+   "bar": "GM This Year",
+   "line": "GM Last Year",
+   "label": "GM This Year",
+   "legend": [
+    "This year",
+    "Last year"
+   ],
+   "filters": [
+    {
+     "field": "Team Filter",
+     "values": [
+      true
+     ]
+    }
+   ]
+  },
+  {
+   "name": "GM Rate Trend",
+   "kind": "combo",
+   "title": "Gross margin % by month",
+   "x": "mname(month_start)",
+   "bar": "GM Rate This Year",
+   "line": "GM Rate Last Year",
+   "label": "GM Rate This Year",
+   "marks": [
+    "line",
+    "line"
+   ],
+   "range": [
+    0.2,
+    0.55
+   ],
+   "legend": [
+    "This year",
+    "Last year"
+   ],
+   "filters": [
+    {
+     "field": "Team Filter",
+     "values": [
+      true
+     ]
+    }
+   ]
+  }
+ ],
+ "dashboards": [
+  {
+   "name": "Team Scorecard",
+   "width": 1600,
+   "header": {
+    "title": "Team Scorecard",
+    "subtitle": "gross margin, plan, revenue, rate and units, month and year to date against last year",
+    "subtitle_param": "Sales Manager",
+    "controls": [
+     "Sales Manager",
+     "Report Month"
+    ]
+   },
+   "rows": [
+    {
+     "height": 158,
+     "cells": [
+      "Card GM",
+      "Card Plan",
+      "Card Revenue",
+      "Card GM Rate",
+      "Card Units"
+     ]
+    },
+    {
+     "height": 356,
+     "cells": [
+      {
+       "sheet": "GM vs Plan",
+       "width": 0.44
+      },
+      {
+       "sheet": "GM vs PY",
+       "width": 0.56
+      }
+     ]
+    },
+    {
+     "height": 300,
+     "cells": [
+      "GM Rate Trend"
+     ]
+    }
+   ],
+   "footer": "Gross margin = dbt gm_sm_amount + extension GM. Plan = annual team quota / 12. Source: SP dbt - team_scorecard_monthly over dbt marts."
+  }
+ ]
+}

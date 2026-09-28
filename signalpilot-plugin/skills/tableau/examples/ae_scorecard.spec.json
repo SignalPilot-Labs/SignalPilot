@@ -1,0 +1,336 @@
+{
+ "name": "AE scorecard (design example)",
+ "theme": {
+  "name": "sp"
+ },
+ "datasources": [
+  {
+   "alias": "ae",
+   "content_url": "SPdbt-ae_scorecard_monthly",
+   "caption": "SP dbt - ae_scorecard_monthly",
+   "fields": [
+    {
+     "name": "ae_name",
+     "type": "string"
+    },
+    {
+     "name": "sales_manager",
+     "type": "string"
+    },
+    {
+     "name": "month_start",
+     "type": "date"
+    },
+    {
+     "name": "gm",
+     "type": "real"
+    },
+    {
+     "name": "plan_gm",
+     "type": "real"
+    },
+    {
+     "name": "closed_opps",
+     "type": "real"
+    },
+    {
+     "name": "won_opps",
+     "type": "real"
+    }
+   ]
+  }
+ ],
+ "parameters": [
+  {
+   "name": "Sales Manager",
+   "type": "string",
+   "value": "Team Donna Morris",
+   "values": [
+    "Team Donna Morris",
+    "Team John Flaherty",
+    "All Teams"
+   ]
+  },
+  {
+   "name": "Report Month",
+   "type": "date",
+   "value": "2026-06-01"
+  }
+ ],
+ "calculations": [
+  {
+   "name": "Team Filter",
+   "formula": "[Parameters].[Sales Manager] = \"All Teams\" OR [sales_manager] = [Parameters].[Sales Manager]",
+   "type": "boolean",
+   "role": "dimension"
+  },
+  {
+   "name": "Is Month",
+   "formula": "[month_start] = DATETRUNC('month', [Parameters].[Report Month])",
+   "type": "boolean",
+   "role": "dimension"
+  },
+  {
+   "name": "Is YTD",
+   "formula": "YEAR([month_start]) = YEAR(DATETRUNC('month', [Parameters].[Report Month])) AND [month_start] <= DATETRUNC('month', [Parameters].[Report Month])",
+   "type": "boolean",
+   "role": "dimension"
+  },
+  {
+   "name": "Is PYTD",
+   "formula": "YEAR([month_start]) = YEAR(DATETRUNC('month', [Parameters].[Report Month])) - 1 AND [month_start] <= DATEADD('year', -1, DATETRUNC('month', [Parameters].[Report Month]))",
+   "type": "boolean",
+   "role": "dimension"
+  },
+  {
+   "name": "Two Year Window",
+   "formula": "YEAR([month_start]) >= YEAR(DATETRUNC('month', [Parameters].[Report Month])) - 1 AND [month_start] <= DATETRUNC('month', [Parameters].[Report Month])",
+   "type": "boolean",
+   "role": "dimension"
+  },
+  {
+   "name": "GM YTD",
+   "formula": "SUM(IF [Is YTD] THEN [gm] END)",
+   "type": "real",
+   "format": "currency"
+  },
+  {
+   "name": "GM PYTD",
+   "formula": "SUM(IF [Is PYTD] THEN [gm] END)",
+   "type": "real",
+   "format": "currency"
+  },
+  {
+   "name": "vs PY",
+   "formula": "([GM YTD] - [GM PYTD]) / ABS([GM PYTD])",
+   "type": "real",
+   "format": "*▲ 0%;▼ 0%;0%"
+  },
+  {
+   "name": "Plan YTD",
+   "formula": "IF SUM(IF [Is YTD] THEN [plan_gm] END) > 0 THEN SUM(IF [Is YTD] THEN [plan_gm] END) END",
+   "type": "real",
+   "format": "currency"
+  },
+  {
+   "name": "Attainment",
+   "formula": "IF [Plan YTD] > 0 THEN [GM YTD] / [Plan YTD] END",
+   "type": "real",
+   "format": "p0%"
+  },
+  {
+   "name": "Gap to plan",
+   "formula": "IF [Plan YTD] > 0 THEN [GM YTD] - [Plan YTD] END",
+   "type": "real",
+   "format": "c\"$\"#,##0;-\"$\"#,##0"
+  },
+  {
+   "name": "GM (month)",
+   "formula": "SUM(IF [Is Month] THEN [gm] END)",
+   "type": "real",
+   "format": "currency"
+  },
+  {
+   "name": "Won",
+   "formula": "SUM(IF [Is YTD] THEN [won_opps] END)",
+   "type": "real",
+   "format": "number"
+  },
+  {
+   "name": "Closed",
+   "formula": "SUM(IF [Is YTD] THEN [closed_opps] END)",
+   "type": "real",
+   "format": "number"
+  },
+  {
+   "name": "Win rate",
+   "formula": "IF [Closed] > 0 THEN [Won] / [Closed] END",
+   "type": "real",
+   "format": "p0%"
+  }
+ ],
+ "worksheets": [
+  {
+   "name": "Card Win",
+   "kind": "card",
+   "label": "Win rate · YTD",
+   "value": "Win rate",
+   "secondary": {
+    "label": "Won",
+    "value": "Won"
+   },
+   "filters": [
+    {
+     "field": "Team Filter",
+     "values": [
+      true
+     ]
+    },
+    {
+     "field": "Two Year Window",
+     "values": [
+      true
+     ]
+    }
+   ]
+  },
+  {
+   "name": "Card Plan",
+   "kind": "card",
+   "label": "Plan attainment · YTD",
+   "value": "Attainment",
+   "secondary": {
+    "label": "Gap",
+    "value": "Gap to plan"
+   },
+   "filters": [
+    {
+     "field": "Team Filter",
+     "values": [
+      true
+     ]
+    },
+    {
+     "field": "Two Year Window",
+     "values": [
+      true
+     ]
+    }
+   ]
+  },
+  {
+   "name": "AE table",
+   "kind": "table",
+   "title": "Account executive scorecard",
+   "rows": [
+    "ae_name"
+   ],
+   "columns": [
+    "GM YTD",
+    "vs PY",
+    "Plan YTD",
+    "Attainment",
+    "Gap to plan",
+    "GM (month)",
+    "Win rate",
+    "Won",
+    "Closed"
+   ],
+   "sort": {
+    "field": "ae_name",
+    "by": "GM YTD",
+    "direction": "desc"
+   },
+   "filters": [
+    {
+     "field": "Team Filter",
+     "values": [
+      true
+     ]
+    },
+    {
+     "field": "Two Year Window",
+     "values": [
+      true
+     ]
+    }
+   ]
+  },
+  {
+   "name": "Attainment by AE",
+   "kind": "status_bars",
+   "title": "Plan attainment YTD",
+   "category": "ae_name",
+   "value": "Attainment",
+   "bands": [
+    {
+     "label": "On plan",
+     "min": 1,
+     "color": "good"
+    },
+    {
+     "label": "Near plan",
+     "min": 0.8,
+     "color": "warn"
+    },
+    {
+     "label": "Behind plan",
+     "color": "bad"
+    }
+   ],
+   "filters": [
+    {
+     "field": "Team Filter",
+     "values": [
+      true
+     ]
+    },
+    {
+     "field": "Two Year Window",
+     "values": [
+      true
+     ]
+    }
+   ]
+  },
+  {
+   "name": "Win rate by AE",
+   "kind": "ranked_bars",
+   "title": "Win rate YTD",
+   "category": "ae_name",
+   "value": "Win rate",
+   "filters": [
+    {
+     "field": "Team Filter",
+     "values": [
+      true
+     ]
+    },
+    {
+     "field": "Two Year Window",
+     "values": [
+      true
+     ]
+    }
+   ]
+  }
+ ],
+ "dashboards": [
+  {
+   "name": "AE Scorecard",
+   "width": 1600,
+   "header": {
+    "title": "AE Scorecard",
+    "subtitle": "each account executive's margin, plan and win rate",
+    "subtitle_param": "Sales Manager",
+    "controls": [
+     "Sales Manager",
+     "Report Month"
+    ]
+   },
+   "rows": [
+    {
+     "height": 150,
+     "cells": [
+      "Card Plan",
+      "Card Win"
+     ]
+    },
+    {
+     "height": 410,
+     "cells": [
+      "AE table"
+     ]
+    },
+    {
+     "height": 320,
+     "cells": [
+      "Attainment by AE",
+      "Win rate by AE"
+     ]
+    }
+   ],
+   "footer": "Plan = AE annual quota / 12. Win rate = won / closed opportunities by close date."
+  }
+ ]
+}

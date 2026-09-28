@@ -17,6 +17,10 @@ FROM node:22-slim
 # job is to mutate the task's warehouse branch. Without psql every such
 # script dies with "psql: not found" after the branch has already been forked.
 #
+# Pinned so every eval run uses a known Claude Code build. Bump with
+# `npm view @anthropic-ai/claude-code version`.
+ARG CLAUDE_CODE_VERSION=2.1.280
+
 # msodbcsql18 + unixodbc back dbt-sqlserver (SQL Server customers), mirroring
 # Dockerfile.notebook: node:22-slim is Debian bookworm, so the same apt repo
 # applies.
@@ -28,7 +32,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       > /etc/apt/sources.list.d/mssql-release.list && \
     apt-get update && ACCEPT_EULA=Y apt-get install -y --no-install-recommends msodbcsql18 unixodbc && \
     rm -rf /var/lib/apt/lists/* && \
-    npm install -g @anthropic-ai/claude-code
+    npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
 
 # dbt toolchain in its own venv. Same adapter set as Dockerfile.notebook so an
 # eval task can `dbt run` against any warehouse the chat sandbox can. Installed

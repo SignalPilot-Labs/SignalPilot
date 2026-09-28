@@ -5,6 +5,10 @@ import { useEffect, useRef, useState } from "react";
 export const STREAM_WORDS_PER_SECOND = 28;
 export const STREAM_MAX_WORDS_PER_SECOND = 55;
 const BACKLOG_WORDS_AT_MAX_RATE = 80;
+/** The visible text never trails the streamed text by more than this. */
+export const STREAM_MAX_LAG_SECONDS = 1.5;
+/** Once the run ends, what is left of the backlog lands within this. */
+export const STREAM_FINISH_SECONDS = 0.35;
 const MAX_FRAME_ELAPSED_MS = 100;
 
 /** Character offsets immediately after each whitespace-delimited word. */
@@ -15,16 +19,25 @@ export function streamingWordEnds(text: string): number[] {
   );
 }
 
-/** Increase the drain speed as a backlog grows, without exceeding the cap. */
+/**
+ * Words per second to reveal. The rate rises with the backlog toward the
+ * reading cap; past that, it drains fast enough that the visible text never
+ * falls more than STREAM_MAX_LAG_SECONDS behind (a model writing a long
+ * report outpaces any fixed reading rate, and the answer must not keep
+ * typing after the run has finished).
+ */
 export function streamingWordRate(backlogWords: number): number {
-  const pressure = Math.min(
-    1,
-    Math.max(0, backlogWords) / BACKLOG_WORDS_AT_MAX_RATE,
-  );
-  return (
+  const backlog = Math.max(0, backlogWords);
+  const pressure = Math.min(1, backlog / BACKLOG_WORDS_AT_MAX_RATE);
+  const reading =
     STREAM_WORDS_PER_SECOND +
-    pressure * (STREAM_MAX_WORDS_PER_SECOND - STREAM_WORDS_PER_SECOND)
-  );
+    pressure * (STREAM_MAX_WORDS_PER_SECOND - STREAM_WORDS_PER_SECOND);
+  return Math.max(reading, backlog / STREAM_MAX_LAG_SECONDS);
+}
+
+/** Rate after the run ends: finish the backlog in STREAM_FINISH_SECONDS. */
+export function finishingWordRate(backlogWords: number): number {
+  return Math.max(STREAM_MAX_WORDS_PER_SECOND, Math.max(0, backlogWords) / STREAM_FINISH_SECONDS);
 }
 
 function sliceToWord(text: string, ends: number[], wordCount: number): string {
@@ -58,6 +71,9 @@ export function useSmoothedStreamingText({
   const frameRef = useRef<number | null>(null);
   const lastFrameRef = useRef<number | null>(null);
   const wordBudgetRef = useRef(0);
+  // Fixed once the run ends so the rest lands in STREAM_FINISH_SECONDS
+  // (a rate re-derived from the shrinking backlog would only decay).
+  const finishRateRef = useRef<number | null>(null);
   const [visibleText, setVisibleText] = useState(visibleTextRef.current);
   const [smoothing, setSmoothing] = useState(
     streaming && initialEnds.length > 1,
@@ -112,9 +128,14 @@ export function useSmoothedStreamingText({
           Math.max(0, timestamp - previousTimestamp),
         );
         const backlog = ends.length - visibleWordsRef.current;
-        const rate = streaming
-          ? streamingWordRate(backlog)
-          : STREAM_MAX_WORDS_PER_SECOND;
+        let rate: number;
+        if (streaming) {
+          finishRateRef.current = null;
+          rate = streamingWordRate(backlog);
+        } else {
+          finishRateRef.current ??= finishingWordRate(backlog);
+          rate = finishRateRef.current;
+        }
         wordBudgetRef.current += (elapsedMs / 1_000) * rate;
         const advance = Math.min(backlog, Math.floor(wordBudgetRef.current));
         if (advance > 0) {

@@ -1,4 +1,5 @@
 import { act } from "react";
+import { openToolRow } from "../test-utils";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { KnowledgeResult, RunStep } from "~/lib/chat-run-steps";
@@ -138,6 +139,7 @@ describe("knowledge card", () => {
 
   it("shows the query pill and ghost lines while running", async () => {
     await render(step({ status: "running", endedAt: null, durationMs: null }));
+    await openToolRow(container);
     const body = q(container, '[data-testid="chat-knowledge-card"]');
     expect(body?.textContent).toContain(QUERY);
     expect(body?.querySelectorAll(".animate-shimmer").length).toBe(3);

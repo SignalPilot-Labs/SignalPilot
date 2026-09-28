@@ -1,0 +1,151 @@
+{
+  "name": "PPC Overview",
+  "datasources": [
+    {
+      "alias": "ppc",
+      "content_url": "DumpstersRDS-fct_ppc_spend",
+      "caption": "Dumpsters RDS - fct_ppc_spend",
+      "fields": [
+        {
+          "name": "spend_amount",
+          "type": "real",
+          "caption": "Spend",
+          "format": "currency"
+        },
+        {
+          "name": "clicks",
+          "type": "integer",
+          "caption": "Clicks",
+          "format": "number"
+        },
+        {
+          "name": "impressions",
+          "type": "integer",
+          "caption": "Impressions",
+          "format": "number"
+        },
+        {
+          "name": "platform",
+          "type": "string",
+          "caption": "Platform"
+        },
+        {
+          "name": "campaign_type",
+          "type": "string",
+          "caption": "Campaign Type"
+        },
+        {
+          "name": "market_name",
+          "type": "string",
+          "caption": "Market"
+        },
+        {
+          "name": "activity_date",
+          "type": "date",
+          "caption": "Activity Date"
+        }
+      ]
+    }
+  ],
+  "calculations": [
+    {
+      "datasource": "ppc",
+      "name": "CPC",
+      "formula": "SUM([spend_amount]) / SUM([clicks])",
+      "type": "real",
+      "format": "currency2"
+    }
+  ],
+  "worksheets": [
+    {
+      "name": "Total Spend",
+      "mark": "text",
+      "text": "sum(spend_amount)",
+      "kpi": true,
+      "kpi_caption": "Total spend"
+    },
+    {
+      "name": "Total Clicks",
+      "mark": "text",
+      "text": "sum(clicks)",
+      "kpi": true,
+      "kpi_caption": "Total clicks"
+    },
+    {
+      "name": "Spend by Campaign Type",
+      "mark": "bar",
+      "rows": [
+        "campaign_type"
+      ],
+      "cols": [
+        "sum(spend_amount)"
+      ],
+      "color": "platform",
+      "sort": {
+        "field": "campaign_type",
+        "by": "sum(spend_amount)",
+        "direction": "desc"
+      },
+      "show_labels": true
+    },
+    {
+      "name": "Spend over Time",
+      "mark": "line",
+      "cols": [
+        "tmonth(activity_date)"
+      ],
+      "rows": [
+        "sum(spend_amount)"
+      ],
+      "color": "platform"
+    },
+    {
+      "name": "CPC by Market",
+      "mark": "bar",
+      "rows": [
+        "market_name"
+      ],
+      "cols": [
+        "CPC"
+      ],
+      "filters": [
+        {
+          "field": "platform",
+          "values": [
+            "Google"
+          ]
+        }
+      ],
+      "sort": {
+        "field": "market_name",
+        "by": "CPC"
+      }
+    }
+  ],
+  "dashboards": [
+    {
+      "name": "PPC Overview",
+      "title": "PPC Overview",
+      "width": 1200,
+      "height": 900,
+      "layout": [
+        [
+          "Total Spend",
+          "Total Clicks"
+        ],
+        [
+          "Spend by Campaign Type",
+          "CPC by Market"
+        ],
+        [
+          "Spend over Time"
+        ]
+      ],
+      "row_heights": [
+        1,
+        3,
+        3
+      ]
+    }
+  ]
+}

@@ -35,7 +35,12 @@ def test_real_migration_chain_is_the_tracked_head() -> None:
     config = build_alembic_config("postgresql://unused:unused@localhost/unused")
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_current_head() == "0037"
+    assert scripts.get_current_head() == "0038"
+
+    # 0038 adds the org-scoped Tableau integration table.
+    revision_0038 = scripts.get_revision("0038")
+    assert revision_0038 is not None
+    assert revision_0038.down_revision == "0037"
 
     # 0036 links the dbt project repository and branch to the eval configuration.
     revision_0036 = scripts.get_revision("0036")

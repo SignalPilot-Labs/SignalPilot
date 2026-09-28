@@ -174,7 +174,19 @@ allowed. Any other difference is `snapshot_stale`.
 - `version` is always `1`.
 - `datasets` keys match `^[a-z][a-z0-9_]{0,63}$`. Each dataset is
   `{ "connection": "<name>", "sql": "<query>" }` or `{ "rows": [ ... ] }`.
-  No other keys are allowed.
+  No other keys are allowed: there is no `file`, `path` or `source` key, and a
+  dataset can never point at a CSV you wrote yourself.
+- Every SQL dataset in the file must correspond to one
+  `sp.dashboard_dataset(<same name>, connection=<same connection>, sql=<same
+  SQL>)` call already run in the notebook. That call alone writes
+  `artifacts/datasets/<name>.csv`. Derive one list of dataset definitions
+  first, then emit both the notebook cells and this file from it, so the two
+  cannot diverge: a file whose recorded SQL differs from the query that built
+  the data renders correctly today and breaks on the next refresh.
+- `sp.dashboard_dataset` runs on the governed path and raises inside the cell
+  when the SQL is refused. Read every `run_cells` result and confirm each
+  dataset printed its row count before you write this file. The dashboard check
+  tools cannot see a dataset that never ran.
 - Use ISO dates: `YYYY-MM-DD` or a full ISO datetime. Cast in SQL when the
   warehouse returns another format.
 - Write numbers as numbers, not as formatted strings.
@@ -350,6 +362,16 @@ with `dataset` must find its column there.
 The grid has 12 columns. `grid: { "x", "y", "w", "h" }` places a tile at
 column `x` (0 to 11), row `y`, with width `w` (1 to 12) and height `h` rows.
 One row is `layout.rowHeight` pixels (default 72).
+
+Place every tile explicitly. Never mix placed and unplaced tiles. Use this
+default page unless the user asks for another shape, so the layout is right in
+one pass rather than after a screenshot:
+
+- KPIs: `y: 0, h: 2, w: 3` at `x` 0, 3, 6, 9.
+- Primary time series: `y: 2, w: 12, h: 4`.
+- Supporting pair: `y: 6, w: 6, h: 4` at `x` 0 and 6.
+- Second supporting pair: the same at `y: 10`.
+- Table last: `x: 0, w: 12, h: 6`.
 
 Tiles without `grid` flow after the placed tiles, left to right, and wrap at
 12 columns:

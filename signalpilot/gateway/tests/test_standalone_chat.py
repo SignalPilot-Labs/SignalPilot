@@ -266,6 +266,7 @@ def test_state_machine_and_title_contracts():
     with pytest.raises(ValueError):
         StandaloneConversationPatch(title="Renamed", project_id="another-project")
     assert StandaloneConversationModelUpdate(model="claude-fable-5-1").model == "claude-fable-5-1"
+    assert StandaloneConversationModelUpdate(model="claude-opus-5-5").model == "claude-opus-5-5"
     assert StandaloneConversationEffortUpdate(effort="max").effort == "max"
     with pytest.raises(ValueError, match="Unsupported chat model"):
         StandaloneConversationModelUpdate(model="claude-imaginary-9")

@@ -29,6 +29,7 @@ from signalpilot._server.ai.standalone_chat_lifecycle import (
 from signalpilot._server.ai.standalone_chat_tool_schemas import (
     standalone_chat_tools,
 )
+from signalpilot._server.ai.tableau_tools import build_tableau_handlers
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -57,11 +58,16 @@ def build_standalone_chat_mcp_server(
     notebook_seeder: Callable[[str], Path] | None = None,
     gateway_url: str = "",
     gateway_token: str = "",
+    tableau_enabled: bool = False,
+    workspace_directory: Path | None = None,
 ) -> Any:
     """Build the isolated in-process tool server used by one run.
 
     ``gateway_url`` and ``gateway_token`` are the run's scoped gateway
     identity; the published-dashboard tools read ``/api/dashboards`` with it.
+    ``tableau_enabled`` lists and registers the Tableau tools; they read and
+    write files in ``workspace_directory`` (the scratch the agent works in,
+    ``$SP_CHAT_SCRATCH_DIRECTORY``), which defaults to ``scratch_directory``.
     """
     from claude_agent_sdk import McpSdkServerConfig
     from mcp.server import Server
@@ -69,7 +75,8 @@ def build_standalone_chat_mcp_server(
 
     server = Server("standalone-chat", version="1.0.0")
     tools = standalone_chat_tools(
-        notebook_enabled=notebook_mcp_app is not None
+        notebook_enabled=notebook_mcp_app is not None,
+        tableau_enabled=tableau_enabled,
     )
 
     @server.list_tools()
@@ -241,6 +248,14 @@ def build_standalone_chat_mcp_server(
         "dashboard_list_published": dashboard_list_published_tool,
         "dashboard_load_published": dashboard_load_published_tool,
     }
+    if tableau_enabled:
+        handlers.update(
+            build_tableau_handlers(
+                scratch_directory=workspace_directory or scratch_directory,
+                gateway_url=gateway_url,
+                gateway_token=gateway_token,
+            )
+        )
 
     @server.call_tool()
     async def call_tool(

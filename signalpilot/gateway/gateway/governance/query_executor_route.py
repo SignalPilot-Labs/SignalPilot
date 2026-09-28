@@ -215,6 +215,34 @@ def redact_rows(info: Any, annotations: Any, rows: list[dict[str, Any]]) -> tupl
     return redactor, rows
 
 
+# The route code is stored on the execution, but the agent only ever sees the
+# message text of the raised error (gateway/mcp/tools/query.py turns it into a
+# "Query error: ..." tool error). Each code therefore states its own next step.
+_ROUTE_REJECTION_MESSAGE = {
+    "runtime_required": (
+        "The query ran but returned more than query_database can return, so the result was dropped. "
+        "Run this work in the notebook with the sp SDK instead. Do not send the same query here again."
+    ),
+    "aggregate_required": (
+        "The query ran but returned more than this route allows, so the result was dropped. "
+        "Rewrite it as a bounded warehouse aggregate with GROUP BY, tighter filters, or fewer columns, "
+        "then run it again."
+    ),
+    "result_too_large": (
+        "The query ran but its result is larger than 10 MiB, so it was not returned. "
+        "Reduce the result in SQL with aggregation, tighter filters, or fewer columns, then run it again."
+    ),
+}
+
+
+def _route_rejection_message(route_code: str) -> str:
+    return _ROUTE_REJECTION_MESSAGE.get(
+        route_code,
+        "The query ran but the governed route refused to return its output. "
+        "Reduce the result in SQL with aggregation, tighter filters, or fewer columns, then run it again.",
+    )
+
+
 @dataclass
 class RoutedRows:
     """Rows admitted past the route limits, with their completeness verdict."""
@@ -313,12 +341,7 @@ async def route_rows(
             route_code=route_code,
             event_extra={"actual_rows_exceeded": row_limit},
         )
-        raise GovernedQueryError(
-            route_code,
-            "Actual MCP output requires the notebook SDK; create a fresh plan"
-            if route_code == "runtime_required"
-            else "Actual output exceeds Track A; aggregate, filter, segment, or narrow the query",
-        )
+        raise GovernedQueryError(route_code, _route_rejection_message(route_code))
     explicit_limit = bool(re.search(r"\bLIMIT\s+\d+", normalized_sql, flags=re.IGNORECASE))
     if persisted_plan and persisted_plan.scout_row_limit:
         completeness = "unknown"
@@ -366,10 +389,7 @@ async def route_rows(
             sql_hash=sql_hash,
             route_code=route_code,
         )
-        raise GovernedQueryError(
-            route_code,
-            "Governed result exceeds 10 MiB; aggregate, filter, segment, or narrow the query",
-        )
+        raise GovernedQueryError(route_code, _route_rejection_message(route_code))
     return RoutedRows(
         saved_rows=saved_rows,
         serialized_rows=serialized_rows,

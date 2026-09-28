@@ -20,10 +20,51 @@ export function shouldShowAgentThinking(
 }
 
 /**
+ * Where each follow-up sent during the run belongs: the sequence of its
+ * `steering_delivered` event (the moment the model read it, exact). A
+ * finished run recorded before that event existed falls back to its
+ * `steering_picked_up` event (when it was handed to the agent); a live run
+ * never does, so a message cannot jump from one anchor to the other. A
+ * message with no anchor yet renders at the bottom of the run.
+ */
+const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
+
+export function steeringAnchors(
+  events: StandaloneChatEvent[],
+  runId: string,
+): Map<number, string[]> {
+  const delivered = new Map<string, number>();
+  const pickedUp = new Map<string, number>();
+  let finished = false;
+  for (const event of events) {
+    if (event.run_id !== runId) continue;
+    if (event.type === "status" && TERMINAL_STATUSES.has(String(event.payload.status))) {
+      finished = true;
+    }
+    const messageId = text(event.payload.message_id);
+    if (!messageId) continue;
+    if (event.type === "steering_delivered" && !delivered.has(messageId)) {
+      delivered.set(messageId, event.sequence);
+    } else if (event.type === "steering_picked_up" && !pickedUp.has(messageId)) {
+      pickedUp.set(messageId, event.sequence);
+    }
+  }
+  const anchors = new Map<number, string[]>();
+  const ids = finished ? new Set([...delivered.keys(), ...pickedUp.keys()]) : delivered.keys();
+  for (const messageId of ids) {
+    const sequence = delivered.get(messageId) ?? pickedUp.get(messageId)!;
+    anchors.set(sequence, [...(anchors.get(sequence) ?? []), messageId]);
+  }
+  return anchors;
+}
+
+/**
  * Reconstructs the natural interleaving of an agent run: contiguous streamed
  * text becomes a markdown block, contiguous tool work becomes a step group.
  * A run that narrates between tool chains therefore renders as
- * [steps] → [text] → [steps] → [text] in stream order.
+ * [steps] → [text] → [steps] → [text] in stream order. A follow-up the user
+ * sent mid-run becomes an interjection block at the point the agent read it,
+ * so the work that answers it flows below it.
  */
 export function foldRunBlocks(
   events: StandaloneChatEvent[],
@@ -34,6 +75,7 @@ export function foldRunBlocks(
   const runEvents = events
     .filter((event) => event.run_id === runId)
     .sort((a, b) => a.sequence - b.sequence);
+  const anchors = steeringAnchors(runEvents, runId);
   const blocks: RunBlock[] = [];
   let textBuffer = "";
   let textKey = "";
@@ -60,6 +102,15 @@ export function foldRunBlocks(
     thinkingBuffer = "";
   };
   for (const event of runEvents) {
+    const interjections = anchors.get(event.sequence);
+    if (interjections) {
+      flushThinking();
+      flushText();
+      for (const messageId of interjections) {
+        blocks.push({ kind: "interjection", key: `interjection-${messageId}`, messageId });
+      }
+      continue;
+    }
     // Subagent-internal streams belong to their spawn card, never to the
     // run's own narration or thinking.
     if (

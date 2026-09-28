@@ -591,7 +591,7 @@ class TestMapColumnsWorkspaceContainment:
 
         _, err = _validated_project_dir("/some/path")
         assert err is not None
-        assert "SP_WORKSPACE_ROOT not configured" in err
+        assert "cannot read a sandbox project_dir" in err
 
 
 # Verify knowledge upsert : archived doc stays archived.

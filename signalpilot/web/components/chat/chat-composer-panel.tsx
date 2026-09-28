@@ -1,7 +1,9 @@
 "use client";
 
-// Composer block for the standalone data chat: input, project picker, and
-// the gear that opens the right-side Chat settings panel.
+// Composer block for the standalone data chat: input, project picker, the
+// Tableau status chip, and the gear that opens the right-side Chat settings
+// panel. The fixture harness renders the bare composer, so the chip (and
+// its fetch) never appears there.
 
 import {
   useContext,
@@ -10,6 +12,7 @@ import {
   type SetStateAction,
 } from "react";
 import { selectComposerPlan } from "~/lib/chat-composer-plan";
+import { PLAN_FILE_PATH } from "~/lib/chat-run-steps";
 import type {
   StandaloneChatBootstrap,
   StandaloneChatEvent,
@@ -23,6 +26,7 @@ import {
   ProjectPicker,
 } from "~/components/chat/project-picker";
 import { DefaultProjectControl } from "~/components/chat/default-project-control";
+import { TableauChip } from "~/components/chat/tableau-chip";
 
 const EMPTY_EVENTS: StandaloneChatEvent[] = [];
 
@@ -68,7 +72,8 @@ export function ChatComposerPanel({
   // The run's live state for the Stop ring and hint. The panel renders
   // inside the chat UI provider on the live page; without one (harness,
   // tests) there are no events and the state stays idle.
-  const events = useContext(ChatUiContext)?.events ?? EMPTY_EVENTS;
+  const ui = useContext(ChatUiContext);
+  const events = ui?.events ?? EMPTY_EVENTS;
   const live = useRunLiveState(
     events,
     currentRun?.id,
@@ -79,6 +84,14 @@ export function ChatComposerPanel({
   const composerPlan = useMemo(
     () => selectComposerPlan(events, currentRun),
     [events, currentRun],
+  );
+  // A plan kept in artifacts/plan.md opens in the artifacts panel.
+  const planFileId = ui?.files.find((file) => file.path === PLAN_FILE_PATH)?.id;
+  const openArtifact = ui?.openArtifact;
+  const onOpenPlan = useMemo(
+    () =>
+      planFileId && openArtifact ? () => openArtifact(planFileId) : undefined,
+    [planFileId, openArtifact],
   );
   return (
     <StandaloneChatComposer
@@ -118,12 +131,14 @@ export function ChatComposerPanel({
           <ProjectChip project={selectedProject} />
         )
       }
+      toolbarExtras={<TableauChip />}
       onOpenSettings={onOpenSettings}
       settingsOpen={settingsOpen}
       liveState={live.state}
       liveLabel={live.label}
       plan={composerPlan?.plan ?? null}
       planRunning={composerPlan?.running ?? false}
+      onOpenPlan={onOpenPlan}
     />
   );
 }

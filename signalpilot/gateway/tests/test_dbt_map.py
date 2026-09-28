@@ -115,6 +115,26 @@ def test_distill_graph_is_manifest_shaped_subset():
     assert graph["metadata"]["dbt_version"] == "1.8.0"
 
 
+def test_distill_graph_keeps_an_explicit_meta_layer():
+    def model(**extra):
+        return {"name": "x", "resource_type": "model", **extra}
+
+    graph = distill_graph(
+        {
+            "nodes": {
+                "model.d.a": model(meta={"layer": " Intermediate ", "owner": "dropped"}),
+                "model.d.b": model(config={"meta": {"layer": "mart"}}),
+                "model.d.c": model(meta={"owner": "x"}),
+            }
+        }
+    )
+    nodes = graph["nodes"]
+    assert nodes["model.d.a"]["layer"] == "Intermediate"
+    assert "meta" not in nodes["model.d.a"]
+    assert nodes["model.d.b"]["layer"] == "mart"
+    assert "layer" not in nodes["model.d.c"]
+
+
 def test_classify_failure():
     assert classify_failure("Runtime Error: Could not find profile named x") == "profile_missing"
     assert classify_failure("Compilation Error in model foo") == "parse_error"

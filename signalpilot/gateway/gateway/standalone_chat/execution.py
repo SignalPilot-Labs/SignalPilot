@@ -36,6 +36,7 @@ from gateway.standalone_chat.config import enterprise_chat_feature_flags
 from gateway.standalone_chat.object_storage import chat_object_storage
 from gateway.store import notebook_sessions as notebook_session_store
 from gateway.store import org_secrets as org_secrets_store
+from gateway.store import tableau as tableau_store
 from gateway.store.standalone_chat import set_execution_session
 
 logger = logging.getLogger(__name__)
@@ -118,6 +119,22 @@ class PreparedExecution:
     # Which credential the run bills to: platform | org (BYOK) | improvement | none.
     # Read by the token credit emitter when the run reports its cost.
     key_source: str = "none"
+
+
+async def tableau_active_for_org(db: AsyncSession, org_id: str) -> bool:
+    """True when the org's Tableau integration is enabled and verified.
+
+    One indexed lookup inside a savepoint, so a failure (for example the table
+    missing before the migration ran) rolls back only this lookup. A database
+    error here must never break a chat run: it is logged and the run simply
+    gets no Tableau tools.
+    """
+    try:
+        async with db.begin_nested():
+            return await tableau_store.is_active(db, org_id)
+    except Exception:
+        logger.warning("Tableau integration lookup failed for org=%s; Tableau tools disabled", org_id, exc_info=True)
+        return False
 
 
 async def ensure_execution_runtime(
@@ -218,6 +235,11 @@ async def prepare_execution(
     # connection, SQL-governance, and dev-database boundaries.
     capabilities.extend(["sandbox:execute", "dbt:execute"])
     run_origin = "improvement" if is_improvement_run else "user"
+    # Tableau tools reach the agent only when the org integration is active;
+    # the runtime routes re-check the capability and the integration per call.
+    tableau_enabled = await tableau_active_for_org(db, run.org_id)
+    if tableau_enabled:
+        capabilities.append("tableau")
     # Connectors (external MCP servers). Remote entries point at the gateway
     # proxy, which authenticates the run's session token below (capability
     # mcp_proxy) and enforces tool policy per call. Sandbox entries carry
@@ -290,6 +312,7 @@ async def prepare_execution(
             "runtime_results": enterprise_chat_feature_flags().runtime_results,
             "dataset_refs": enterprise_chat_feature_flags().dataset_refs,
             "mcp_connectors": enterprise_chat_feature_flags().mcp_connectors,
+            "tableau": tableau_enabled,
         },
         # Native Claude Agent SDK continuity. The sandbox restores this archive
         # before a cold resume and saves it after every run. Database history

@@ -1,4 +1,5 @@
 import { act } from "react";
+import { openToolRow } from "../test-utils";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ColumnProfileResult, ProfiledColumn, RunStep } from "~/lib/chat-run-steps";
@@ -173,6 +174,7 @@ describe("column_profile card", () => {
 
   it("renders the requested columns as pills over ghost bars while running", async () => {
     await render(step({ status: "running", endedAt: null, durationMs: null }));
+    await openToolRow(container);
     const card = q(container, '[data-testid="chat-tool-card-column_profile"]');
     expect(card?.textContent).toContain("analytics.fct_orders");
     expect(card?.textContent).toContain("net_revenue");
@@ -227,7 +229,6 @@ describe("column_profile card", () => {
     expect(card?.textContent).toContain("2,143,882 rows");
     expect(card?.textContent).toContain("where tier = 'smb'");
     expect(card?.textContent).toContain("more columns not shown");
-    expect(q(container, '[data-testid="chat-tool-chip"]')).toBeNull();
   });
 
   it("degrades a legacy result to the input list", async () => {

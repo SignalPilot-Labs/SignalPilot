@@ -1,0 +1,643 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "twb_build.py workbook spec",
+  "type": "object",
+  "required": [
+    "datasources",
+    "worksheets"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Workbook name (information only; the publish tool sets the real name)."
+    },
+    "server": {
+      "type": "string",
+      "description": "Optional. Tableau host. The publish tool rewrites it to the org site."
+    },
+    "site": {
+      "type": "string",
+      "description": "Optional. Site content URL. The publish tool rewrites it."
+    },
+    "datasources": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "alias",
+          "content_url",
+          "fields"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "alias": {
+            "type": "string",
+            "description": "Short name you use in worksheets and calculations."
+          },
+          "content_url": {
+            "type": "string",
+            "description": "content_url of the published data source (from tableau_publish_datasource or tableau_search)."
+          },
+          "caption": {
+            "type": "string",
+            "description": "Display name, usually the data source name."
+          },
+          "fields": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": [
+                "name",
+                "type"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "Exact field name from tableau_datasource_fields."
+                },
+                "type": {
+                  "enum": [
+                    "string",
+                    "integer",
+                    "real",
+                    "date",
+                    "datetime",
+                    "boolean"
+                  ]
+                },
+                "caption": {
+                  "type": "string",
+                  "description": "Label on axes and headers."
+                },
+                "format": {
+                  "type": "string",
+                  "description": "number, decimal, currency, currency2, percent, compact, or a Tableau format string such as n#,##0.0"
+                },
+                "role": {
+                  "enum": [
+                    "measure",
+                    "dimension"
+                  ],
+                  "description": "Override the default. Use dimension for integer ids and codes."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "calculations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "formula"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "datasource": {
+            "type": "string",
+            "description": "Alias. Default: the first data source."
+          },
+          "name": {
+            "type": "string",
+            "description": "Caption. Use this name in worksheets."
+          },
+          "formula": {
+            "type": "string",
+            "description": "Tableau formula. Write fields as [field_name] and other calculations as [Their Name]."
+          },
+          "type": {
+            "enum": [
+              "string",
+              "integer",
+              "real",
+              "date",
+              "datetime",
+              "boolean"
+            ]
+          },
+          "role": {
+            "enum": [
+              "measure",
+              "dimension"
+            ]
+          },
+          "format": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "worksheets": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string",
+            "description": "Optional title text. Default: the sheet name."
+          },
+          "datasource": {
+            "type": "string",
+            "description": "Alias. Default: the first data source."
+          },
+          "mark": {
+            "enum": [
+              "bar",
+              "line",
+              "area",
+              "circle",
+              "square",
+              "text",
+              "pie",
+              "shape",
+              "automatic",
+              "gantt"
+            ]
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Field references (see the twb_build.py header)."
+          },
+          "cols": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "color": {
+            "type": [
+              "string",
+              "array"
+            ],
+            "description": "Encoding field, or for ranked_bars a theme color name."
+          },
+          "size": {
+            "type": [
+              "string",
+              "array"
+            ]
+          },
+          "label": {
+            "type": "string",
+            "description": "card: small label; combo: measure shown as mark labels."
+          },
+          "detail": {
+            "type": [
+              "string",
+              "array"
+            ]
+          },
+          "tooltip": {
+            "type": [
+              "string",
+              "array"
+            ]
+          },
+          "text": {
+            "type": [
+              "string",
+              "array"
+            ],
+            "description": "Text encoding. For a KPI tile use one measure and kpi true."
+          },
+          "shape": {
+            "type": [
+              "string",
+              "array"
+            ]
+          },
+          "measure_values": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Measures to show when :measure_names is used."
+          },
+          "kpi": {
+            "type": "boolean",
+            "description": "Large centered single number. Needs mark text and a text measure."
+          },
+          "kpi_caption": {
+            "type": "string"
+          },
+          "kpi_font_size": {
+            "type": "integer"
+          },
+          "show_labels": {
+            "type": "boolean",
+            "description": "Show values on the marks."
+          },
+          "sort": {
+            "type": "object",
+            "required": [
+              "field"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "field": {
+                "type": "string"
+              },
+              "by": {
+                "type": "string"
+              },
+              "direction": {
+                "enum": [
+                  "asc",
+                  "desc"
+                ]
+              },
+              "order": {
+                "type": "array",
+                "description": "Manual order of members, top to bottom. Use instead of by."
+              }
+            }
+          },
+          "filters": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "field"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "field": {
+                  "type": "string"
+                },
+                "values": {
+                  "type": "array",
+                  "description": "Keep only these members."
+                },
+                "exclude": {
+                  "type": "boolean",
+                  "description": "With values: drop these members."
+                },
+                "min": {},
+                "max": {},
+                "last_n": {
+                  "type": "integer",
+                  "description": "Relative date: the last N periods including the current one."
+                },
+                "unit": {
+                  "enum": [
+                    "year",
+                    "quarter",
+                    "month",
+                    "week",
+                    "day"
+                  ]
+                }
+              }
+            }
+          },
+          "kind": {
+            "enum": [
+              "card",
+              "combo",
+              "ranked_bars",
+              "status_bars",
+              "table"
+            ],
+            "description": "Design component (needs theme). See DESIGN.md."
+          },
+          "label_field": {
+            "type": "string",
+            "description": "card: dimension calc shown after the label (for example the report month)."
+          },
+          "value": {
+            "type": "string",
+            "description": "card/ranked_bars/status_bars: the measure (calc name or agg(field))."
+          },
+          "compare": {
+            "type": "object",
+            "required": [
+              "current",
+              "previous"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "current": {
+                "type": "string"
+              },
+              "previous": {
+                "type": "string"
+              },
+              "unit": {
+                "enum": [
+                  "percent",
+                  "points"
+                ]
+              },
+              "text": {
+                "type": "string"
+              },
+              "text_field": {
+                "type": "string"
+              }
+            }
+          },
+          "secondary": {
+            "type": "object",
+            "required": [
+              "value"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "label": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              },
+              "compare": {
+                "type": "object",
+                "required": [
+                  "current",
+                  "previous"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "current": {
+                    "type": "string"
+                  },
+                  "previous": {
+                    "type": "string"
+                  },
+                  "unit": {
+                    "enum": [
+                      "percent",
+                      "points"
+                    ]
+                  },
+                  "text": {
+                    "type": "string"
+                  },
+                  "text_field": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "note": {
+            "type": "string"
+          },
+          "x": {
+            "type": "string",
+            "description": "combo: category axis, for example mname(month_start)."
+          },
+          "bar": {
+            "type": "string"
+          },
+          "line": {
+            "type": "string"
+          },
+          "marks": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "bar",
+                "line"
+              ]
+            }
+          },
+          "colors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Theme color names or #hex."
+          },
+          "legend": {
+            "type": "array",
+            "description": "Labels shown in the title with colored dots."
+          },
+          "range": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "category": {
+            "type": "string"
+          },
+          "direction": {
+            "enum": [
+              "asc",
+              "desc"
+            ]
+          },
+          "bands": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "label"
+              ],
+              "properties": {
+                "label": {
+                  "type": "string"
+                },
+                "min": {
+                  "type": "number"
+                },
+                "color": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "columns": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "format": {
+            "type": "string"
+          },
+          "direct_labels": {
+            "type": "boolean",
+            "description": "Plain chart: hide the value axis (label the marks)."
+          }
+        }
+      }
+    },
+    "dashboards": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "width": {
+            "type": "integer"
+          },
+          "height": {
+            "type": "integer"
+          },
+          "layout": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "description": "Rows top to bottom. Each cell is a worksheet name, \"param:<Parameter>\" for a parameter control, or \"text:<Text>\" for a header."
+          },
+          "row_heights": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "description": "Relative row heights, same length as layout."
+          },
+          "sheets": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Shortcut: one sheet per row."
+          },
+          "header": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "title": {
+                "type": "string"
+              },
+              "subtitle": {
+                "type": "string"
+              },
+              "subtitle_param": {
+                "type": "string"
+              },
+              "controls": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "rows": {
+            "type": "array",
+            "description": "Card-grid layout (needs theme). Each row: height in px and cells (sheet names or {sheet, width, title}).",
+            "items": {
+              "type": "object",
+              "required": [
+                "height",
+                "cells"
+              ],
+              "properties": {
+                "height": {
+                  "type": "integer"
+                },
+                "cells": {
+                  "type": "array"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "footer": {
+            "type": "string",
+            "description": "Definitions line at the bottom."
+          }
+        }
+      }
+    },
+    "parameters": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "type",
+          "value"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Caption. Use it in formulas as [Parameters].[Name]. Show it on a dashboard with a layout cell \"param:Name\"."
+          },
+          "type": {
+            "enum": [
+              "string",
+              "integer",
+              "real",
+              "date",
+              "datetime",
+              "boolean"
+            ]
+          },
+          "value": {
+            "description": "Default value. Dates as YYYY-MM-DD."
+          },
+          "values": {
+            "type": "array",
+            "description": "Allowed values (list control)."
+          },
+          "range": {
+            "type": "object",
+            "properties": {
+              "min": {},
+              "max": {},
+              "step": {}
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "show_sheets": {
+      "type": "boolean",
+      "description": "Default false: sheets placed on a dashboard are hidden, so only dashboards publish as views. Set true to show every sheet as a tab."
+    },
+    "theme": {
+      "type": "object",
+      "description": "Turns on the design layer. {\"name\": \"sp\"} plus optional color overrides: accent, reference, plan, good, bad, warn, canvas, card, ink, ink2, ink3.",
+      "properties": {
+        "name": {
+          "enum": [
+            "sp"
+          ]
+        }
+      },
+      "additionalProperties": {
+        "type": "string"
+      }
+    }
+  }
+}

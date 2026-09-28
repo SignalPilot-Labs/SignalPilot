@@ -51,6 +51,7 @@ from .security import router as security_router
 from .settings import router as settings_router
 from .slack import router as slack_router
 from .standalone_chat import router as standalone_chat_router
+from .tableau import router as tableau_router
 from .uploads import router as uploads_router
 from .usage import router as usage_router
 from .user_secrets import router as user_secrets_router
@@ -126,6 +127,7 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(usage_router)
     app.include_router(user_secrets_router)
     app.include_router(mcp_connectors_router)
+    app.include_router(tableau_router)
     app.include_router(git_http_router)
     from ..notebook_proxy import router as notebook_proxy_router
 

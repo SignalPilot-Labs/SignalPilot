@@ -36,6 +36,10 @@ __all__ = [
 ]
 
 FILE_EDIT_TOOLS = ["Write", "Edit", "MultiEdit", "NotebookEdit", "Bash"]
+# Tools that defer work past the end of the turn. A run ends at its result
+# and the CLI process exits, so nothing ever wakes the agent back up; the
+# deferred work is lost and poisons the next resume (see _build_agent_env).
+DEFERRED_WORK_TOOLS = ["ScheduleWakeup", "CronCreate", "CronDelete", "CronList", "Monitor"]
 _EFFORT_LEVELS = {"low", "medium", "high", "xhigh", "max"}
 
 
@@ -43,6 +47,32 @@ def _agent_effort(override: str | None = None) -> str:
     """Reasoning effort for the agent CLI. Defaults to medium."""
     effort = (override or os.getenv("SP_AGENT_EFFORT", "medium")).strip().lower()
     return effort if effort in _EFFORT_LEVELS else "medium"
+
+
+def _configured_project_subdir(root: Path) -> Path | None:
+    """The org's configured dbt project directory under ``root``.
+
+    Without this, a repo holding several dbt projects falls through to the
+    repository root, and everything downstream (the agent's own file reads,
+    scan_project.py) has to guess which project is the one. Best effort: no
+    gateway session, no setting, or a directory missing from this checkout
+    returns None and the caller keeps its previous behaviour.
+    """
+    try:
+        from signalpilot._dbt.materialize import resolve_dbt_project_dir
+
+        configured = resolve_dbt_project_dir()
+    except Exception:
+        return None
+    if not configured:
+        return None
+    try:
+        candidate = (root / configured).resolve()
+        if not candidate.is_relative_to(root.resolve()):
+            return None
+    except OSError:
+        return None
+    return candidate if (candidate / "dbt_project.yml").is_file() else None
 
 
 def resolve_agent_cwd(workspace: str | None) -> tuple[str, str]:
@@ -54,6 +84,9 @@ def resolve_agent_cwd(workspace: str | None) -> tuple[str, str]:
     A ``dbt_project.yml`` at the root, none, or several keep the root.
     """
     root = Path(workspace or os.getcwd())
+    configured = _configured_project_subdir(root)
+    if configured is not None:
+        return str(configured), str(configured)
     try:
         if (root / "dbt_project.yml").is_file():
             return str(root), str(root)
@@ -76,6 +109,12 @@ def _build_agent_env(
 ) -> dict[str, str]:
     """Environment for the agent subprocess: os.environ + auth + overrides."""
     agent_env = dict(os.environ)
+    # Run subagents and shell commands in the foreground. Since Claude Code
+    # 2.1.280 the Agent tool launches subagents in the background by default.
+    # The run ends at the main agent's result, so the agent reports without
+    # the subagents' results, and the next resume finds the unfinished task,
+    # injects its own turn and ends the run before the user's message.
+    agent_env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "1"
     _apply_auth_config(agent_env, auth_config)
     if agent_env_overrides:
         agent_env.update(agent_env_overrides)
@@ -95,6 +134,26 @@ def _build_agent_env(
     return agent_env
 
 
+def claude_code_cli_path() -> str | None:
+    """The pinned Claude Code CLI to run, or None for the SDK's bundled one.
+
+    The SDK always prefers the CLI bundled in its wheel, which can lag the
+    newest Claude Code; a new model can require a newer CLI than the SDK
+    ships. The notebook image installs a pinned CLI and names it in
+    SP_CLAUDE_CODE_CLI; a missing file falls back to the bundled CLI.
+    """
+    configured = os.getenv("SP_CLAUDE_CODE_CLI", "").strip()
+    if not configured:
+        return None
+    if not Path(configured).is_file():
+        LOGGER.warning(
+            "SP_CLAUDE_CODE_CLI does not exist: %s; using the SDK's bundled CLI",
+            configured,
+        )
+        return None
+    return configured
+
+
 def _build_agent_options_kwargs(
     *,
     model: str,
@@ -110,6 +169,7 @@ def _build_agent_options_kwargs(
     notebook_session_authorizer: Callable[[str], bool] | None,
     chat_session_id: str,
     is_resume: bool,
+    stderr_sink: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Assemble the kwargs passed to ``ClaudeAgentOptions``."""
     from signalpilot._server.ai.transport_breaker import (
@@ -147,6 +207,11 @@ def _build_agent_options_kwargs(
         },
         "cwd": effective_cwd,
         "env": agent_env,
+        # One CLI message (a tool result with an image, a large file read)
+        # can pass the SDK's 1 MB default and kill the whole run with
+        # CLIJSONDecodeError. Tools keep their own results small; this is
+        # the backstop. Override with SP_AGENT_MAX_BUFFER_BYTES.
+        "max_buffer_size": int(os.environ.get("SP_AGENT_MAX_BUFFER_BYTES") or 16 * 1024 * 1024),
         # Transport breaker: deny gateway tool calls with a concrete wait
         # after a transport failure; stop the run after three in a row.
         "hooks": build_transport_breaker_hooks(chat_session_id),
@@ -155,6 +220,9 @@ def _build_agent_options_kwargs(
         # SP_AGENT_EFFORT (low|medium|high|xhigh|max).
         "effort": _agent_effort(effort),
     }
+    cli_path = claude_code_cli_path()
+    if cli_path:
+        agent_options_kwargs["cli_path"] = cli_path
     plugin_path = os.getenv("SP_AGENT_PLUGIN_PATH", "").strip()
     if plugin_path:
         if Path(plugin_path).is_dir():
@@ -204,7 +272,20 @@ def _build_agent_options_kwargs(
     else:
         agent_options_kwargs["session_id"] = chat_session_id
 
+    # Without this callback the transport does not even pipe the CLI's stderr
+    # (subprocess_cli only passes PIPE when `stderr` is set), so a CLI that
+    # exits non-zero during startup reports nothing but "Check stderr output
+    # for details". That blindness cost three rounds of guesswork on the
+    # follow-up failures; the text the CLI already prints is the diagnosis.
+    if stderr_sink is not None:
+        agent_options_kwargs["stderr"] = stderr_sink
+
     agent_options_kwargs["include_partial_messages"] = True
+    # Echo each queued user message back into the stream at the point the
+    # model takes it in (not when it was queued). The relay turns the echo
+    # of a steering message into a steering_delivered event, so the chat
+    # places the follow-up exactly where the agent read it.
+    agent_options_kwargs["extra_args"] = {"replay-user-messages": None}
     return agent_options_kwargs
 
 
@@ -212,11 +293,10 @@ def _build_disallowed_tools(
     *,
     disallow_file_edits: bool,
     additional_disallowed_tools: list[str] | None = None,
-) -> list[str] | None:
+) -> list[str]:
     disallowed = [
+        *DEFERRED_WORK_TOOLS,
         *(FILE_EDIT_TOOLS if disallow_file_edits else []),
         *(additional_disallowed_tools or []),
     ]
-    if not disallowed:
-        return None
     return list(dict.fromkeys(disallowed))
